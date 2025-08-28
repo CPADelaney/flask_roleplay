@@ -170,7 +170,8 @@ class NyxAgentSDK:
         self._locks: Dict[str, asyncio.Lock] = {}
         self._result_cache: Dict[str, Tuple[float, NyxResponse]] = {}
         self._post_hooks: List[PostHook] = []
-        self._filter = ResponseFilter() if (ResponseFilter and self.config.enable_response_filter) else None
+        # Store the ResponseFilter class instead of an instance
+        self._filter_class = ResponseFilter if (ResponseFilter and self.config.enable_response_filter) else None
         # optional per-conversation context kept only when explicitly warmed
         self._warm_contexts: Dict[str, NyxContext] = {}
 
@@ -288,9 +289,14 @@ class NyxAgentSDK:
                     logger.debug("post-moderation failed (non-fatal)", exc_info=True)
 
             # 4) Response filter (optional)
-            if self._filter and resp.narrative:
+            if self._filter_class and resp.narrative:
                 try:
-                    filtered = self._filter.filter_text(resp.narrative)
+                    # Create filter instance with proper user_id and conversation_id
+                    filter_instance = self._filter_class(
+                        user_id=int(user_id),
+                        conversation_id=int(conversation_id)
+                    )
+                    filtered = filter_instance.filter_text(resp.narrative)
                     if filtered != resp.narrative:
                         resp.narrative = filtered
                         resp.metadata.setdefault("filters", {})["response_filter"] = True
@@ -339,9 +345,15 @@ class NyxAgentSDK:
                     except Exception:
                         logger.debug("post-moderation failed (non-fatal)", exc_info=True)
 
-                if self._filter and resp.narrative:
+                # Response filter on fallback path
+                if self._filter_class and resp.narrative:
                     try:
-                        filtered = self._filter.filter_text(resp.narrative)
+                        # Create filter instance with proper user_id and conversation_id
+                        filter_instance = self._filter_class(
+                            user_id=int(user_id),
+                            conversation_id=int(conversation_id)
+                        )
+                        filtered = filter_instance.filter_text(resp.narrative)
                         if filtered != resp.narrative:
                             resp.narrative = filtered
                             resp.metadata.setdefault("filters", {})["response_filter"] = True
@@ -550,7 +562,7 @@ class NyxAgentSDK:
 
     def _error_response(self, error_message: str, trace_id: str, t0: float) -> NyxResponse:
         return NyxResponse(
-            narrative="*Nyx’s form flickers* Something interfered with our connection…",
+            narrative="*Nyx's form flickers* Something interfered with our connection…",
             metadata={"error": error_message},
             success=False,
             trace_id=trace_id,
