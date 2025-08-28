@@ -614,13 +614,13 @@ class NyxAgentRunner:
         await self.sdk.initialize_agent()
 
 
- __all__ = [
-     "NyxSDKConfig",
-     "NyxAgentSDK",
-     "NyxAgentRunner",
-     "NyxResponse",
+__all__ = [
+    "NyxSDKConfig",
+    "NyxAgentSDK",
+    "NyxAgentRunner",
+    "NyxResponse",
     "process_user_input",
- ]
+]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Back-compat top-level function (what routes.story_routes expects)
