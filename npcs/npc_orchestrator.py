@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from collections import defaultdict
 import random
+from types import SimpleNamespace
 
 # Import core subsystems
 from npcs.npc_agent_system import NPCAgentSystem
@@ -119,7 +120,11 @@ class NPCOrchestrator:
         self._decision_engine = NPCDecisionEngine(self.user_id, self.conversation_id)
         self._creation_handler = NPCCreationHandler(self.user_id, self.conversation_id)
         self._preset_handler = PresetNPCHandler(self.user_id, self.conversation_id)
-        
+
+        # Belief consolidation throttling
+        self._last_belief_consolidation: Dict[int, float] = {}
+        self._consolidation_cooldown = float(self.config.get('belief_consolidation_cooldown_s', 180.0))  # 3 minutes default
+
         # Agent systems - use normalized IDs
         self._agent_system = NPCAgentSystem(self.user_id, self.conversation_id)
         self._agent_coordinator = NPCAgentCoordinator(self.user_id, self.conversation_id)
@@ -868,15 +873,57 @@ class NPCOrchestrator:
             logger.exception("report_world_event_for_beliefs failed: %s", e)
             return {"event_processed": False, "error": str(e)}
 
+    async def consolidate_beliefs_for_npcs(self, npc_ids: List[int], topic_filter: Optional[str] = None):
+        """
+        Ask each NPC to form a narrative from their recent memories (meso layer),
+        which indirectly influences their macro/worldview stance over time.
+        """
+        from types import SimpleNamespace
+        for npc_id in npc_ids:
+            try:
+                ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                await self._belief_system.form_narrative_from_recent_events(
+                    ctx=ctx_obj,
+                    npc_id=npc_id,
+                    max_events=5,
+                    topic_filter=topic_filter
+                )
+            except Exception as e:
+                logger.warning(f"[Beliefs] consolidate failed for NPC {npc_id}: {e}")
+
+    async def _maybe_consolidate_beliefs(
+        self,
+        npc_ids: List[int],
+        topic_filter: Optional[str] = None,
+        reason: str = ""
+    ):
+        """Throttle and run belief consolidation for a set of NPCs."""
+        now = time.time()
+        to_run = []
+        for nid in npc_ids:
+            last = self._last_belief_consolidation.get(nid, 0.0)
+            if now - last >= self._consolidation_cooldown:
+                to_run.append(nid)
+                self._last_belief_consolidation[nid] = now
+    
+        if not to_run:
+            return
+    
+        try:
+            await self.consolidate_beliefs_for_npcs(to_run, topic_filter=topic_filter)
+            if reason:
+                logger.debug(f"[Beliefs] Consolidated for {to_run} ({reason})")
+        except Exception as e:
+            logger.warning(f"[Beliefs] Consolidation failed ({reason}): {e}")
+
     
     async def process_calendar_events_for_all_npcs(self) -> Dict[str, Any]:
-        """Process current calendar events for all NPCs (and form beliefs from witnessed events)."""
+        """Process current calendar events for all NPCs and feed them into belief formation."""
         results = {
             "processed_events": [],
             "missed_events": [],
             "npc_statuses": {}
         }
-    
         calendar = await self._get_calendar_system()
     
         # Fetch real in-game time once
@@ -899,16 +946,11 @@ class NPCOrchestrator:
     
         # Auto-process missed events using real game time
         try:
-            await calendar["auto_process"](
-                self.user_id,
-                self.conversation_id,
-                year, month, day, time_of_day
-            )
+            await calendar["auto_process"](self.user_id, self.conversation_id, year, month, day, time_of_day)
         except Exception as e:
             logger.exception(f"Auto-process missed events failed: {e}")
     
-        # Deduper so we form beliefs once per event id
-        seen_event_ids: Set[Any] = set()
+        touched_npcs: Set[int] = set()
     
         # Check current events for each NPC
         for npc_id in list(self._active_npcs):
@@ -918,95 +960,77 @@ class NPCOrchestrator:
                 logger.exception(f"check_npc_current_events failed for NPC {npc_id}: {e}")
                 continue
     
-            if events:
-                results["npc_statuses"][npc_id] = "has_events"
-                # after mark_completed / mark_missed
-                self._notify_npc_changed(npc_id)
+            if not events:
+                continue
     
-                for event in events:
-                    try:
-                        if event.get("can_participate"):
-                            await calendar["mark_completed"](
-                                self.user_id,
-                                self.conversation_id,
-                                event["event_id"],
-                                {"npc_id": npc_id}
-                            )
-                            results["processed_events"].append({
-                                "npc_id": npc_id,
-                                "event_id": event.get("event_id"),
-                                "event_name": event.get("event_name"),
-                                "time_of_day": event.get("time_of_day"),
-                            })
-                        else:
-                            await calendar["mark_missed"](
-                                self.user_id,
-                                self.conversation_id,
-                                event["event_id"]
-                            )
-                            results["missed_events"].append({
-                                "npc_id": npc_id,
-                                "event_id": event.get("event_id"),
-                                "event_name": event.get("event_name"),
-                                "time_of_day": event.get("time_of_day"),
-                                "reason": event.get("missing_requirements", []),
-                            })
-                    except Exception as e:
-                        logger.exception(
-                            f"Failed to process calendar event {event.get('event_id')} for NPC {npc_id}: {e}"
+            results["npc_statuses"][npc_id] = "has_events"
+            self._notify_npc_changed(npc_id)
+            touched_npcs.add(npc_id)
+    
+            for event in events:
+                try:
+                    if event.get("can_participate"):
+                        await calendar["mark_completed"](
+                            self.user_id,
+                            self.conversation_id,
+                            event["event_id"],
+                            {"npc_id": npc_id}
                         )
-    
-                    # === Belief-system witness hook (deduped by event_id) ===
-                    try:
-                        ev_id = event.get("event_id")
-                        if ev_id in seen_event_ids:
-                            continue
-                        seen_event_ids.add(ev_id)
-    
-                        event_text = event.get("event_name", "Event")
-                        event_type = (event.get("event_type") or "calendar_event").lower()
-                        loc = event.get("location")
-    
-                        # Who likely witnessed this event? Start with same-location NPCs.
-                        witness_ids: List[int] = []
-                        if loc:
-                            nearby = self._location_index.get(loc)
-                            if nearby:
-                                witness_ids = list(nearby)
-                            else:
-                                try:
-                                    snapshots = await self.get_npcs_at_location(loc)
-                                    witness_ids = [s.npc_id for s in snapshots]
-                                except Exception:
-                                    witness_ids = []
-    
-                        # Ensure primary NPC is in witnesses
-                        primary_npc = next(
-                            (n.get("npc_id") for n in event.get("involved_npcs", []) if n.get("role") == "primary"),
-                            None
-                        )
-                        if primary_npc is not None:
-                            try:
-                                p_id = int(primary_npc)
-                                if p_id not in witness_ids:
-                                    witness_ids.append(p_id)
-                            except Exception:
-                                pass
-    
-                        if witness_ids:
+                        results["processed_events"].append({
+                            "npc_id": npc_id,
+                            "event_id": event.get("event_id"),
+                            "event_name": event.get("event_name"),
+                            "time_of_day": event.get("time_of_day"),
+                        })
+                        # Feed into beliefs: happened event
+                        try:
+                            ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                            event_text = event.get("event_name") or f"NPC {npc_id} participated in an event"
                             await self._belief_system.process_event_for_beliefs(
-                                None,  # ctx
+                                ctx=ctx_obj,
                                 event_text=event_text,
-                                event_type=event_type,
-                                npc_ids=[int(n) for n in witness_ids[:10]],  # cap for perf
-                                factuality=1.0,
+                                event_type=event.get("event_type", "calendar_event"),
+                                npc_ids=[npc_id],
+                                factuality=1.0
                             )
-                    except Exception as e:
-                        logger.warning("Belief hook (calendar) failed: %s", e)
-                    # === end belief hook ===
+                        except Exception as be:
+                            logger.warning(f"[Beliefs] calendar belief hook failed for NPC {npc_id}: {be}")
+    
+                    else:
+                        await calendar["mark_missed"](self.user_id, self.conversation_id, event["event_id"])
+                        results["missed_events"].append({
+                            "npc_id": npc_id,
+                            "event_id": event.get("event_id"),
+                            "event_name": event.get("event_name"),
+                            "time_of_day": event.get("time_of_day"),
+                            "reason": event.get("missing_requirements", []),
+                        })
+                        # Feed into beliefs: missed event
+                        try:
+                            ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                            event_text = f"Missed: {event.get('event_name', 'scheduled event')}"
+                            await self._belief_system.process_event_for_beliefs(
+                                ctx=ctx_obj,
+                                event_text=event_text,
+                                event_type="missed_calendar_event",
+                                npc_ids=[npc_id],
+                                factuality=0.9
+                            )
+                        except Exception as be:
+                            logger.warning(f"[Beliefs] missed-calendar belief hook failed for NPC {npc_id}: {be}")
+    
+                except Exception as e:
+                    logger.exception(f"Failed to process calendar event {event.get('event_id')} for NPC {npc_id}: {e}")
+    
+        # Throttled consolidation after an event wave
+        if touched_npcs:
+            await self._maybe_consolidate_beliefs(
+                list(touched_npcs),
+                topic_filter="calendar_event",
+                reason="post_calendar_processing"
+            )
     
         return results
-
     
     # ==================== RELATIONSHIP INTEGRATION ====================
     
@@ -1427,64 +1451,57 @@ class NPCOrchestrator:
         action: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Handle player action and generate NPC responses (now feeds the belief system)."""
-        # Use bridge system if available
+        """
+        Handle player action and generate NPC responses, then route the utterance/event
+        into the belief system for affected NPCs and (throttled) consolidate.
+        """
+        # Use bridge if available
         if self._npc_bridge:
             result = await self._npc_bridge.handle_player_action(action, context)
         else:
             result = await self._agent_system.process_player_action(action, context)
     
-        # === Belief-system hook for conversational actions ===
+        # --- Belief integration for conversational actions ---
         try:
             action_type = (action.get("type") or "").lower()
-            # Expand this set if you classify more talk-like actions
-            if action_type in {
-                "talk", "say", "speak", "chat", "gossip",
-                "threaten", "compliment", "persuade", "intimidate"
-            }:
-                # Work out listeners
-                listener_ids: List[int] = []
-                if action.get("target_npc_id") is not None:
-                    try:
-                        listener_ids = [int(action["target_npc_id"])]
-                    except Exception:
-                        listener_ids = []
-                elif context.get("affected_npcs"):
-                    try:
-                        listener_ids = [int(n) for n in context["affected_npcs"]]
-                    except Exception:
-                        listener_ids = []
-                else:
-                    # Fallback: pull nearby NPCs by location
-                    loc = action.get("target_location") or context.get("location")
-                    if loc:
-                        try:
-                            snapshots = await self.get_npcs_at_location(loc)
-                            listener_ids = [s.npc_id for s in snapshots]
-                        except Exception:
-                            listener_ids = []
+            is_conversation = action_type in {
+                "talk", "say", "speak", "ask", "persuade", "deceive",
+                "intimidate", "flirt", "confess", "negotiate"
+            }
+            text = action.get("description", "") or ""
     
-                if listener_ids:
-                    topic = (action.get("metadata") or {}).get("topic", "general")
-                    text = action.get("description", "") or ""
-                    credibility = float((action.get("metadata") or {}).get("credibility", 0.75))
+            if is_conversation and text:
+                # Resolve affected NPCs
+                try:
+                    npc_ids = await self._agent_system.determine_affected_npcs(action, context)
+                except Exception as e:
+                    logger.warning(f"[Beliefs] could not resolve affected NPCs; fallback to active set: {e}")
+                    npc_ids = list(self._active_npcs)[:3]
     
-                    # Cap for perf; each listener forms their *own* subjective belief
-                    for nid in listener_ids[:5]:
+                if npc_ids:
+                    for npc_id in npc_ids:
+                        ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
                         try:
                             await self._belief_system.process_conversation_for_beliefs(
-                                None,  # ctx (governance decorator can ignore/handle None)
+                                ctx=ctx_obj,
                                 conversation_text=text,
                                 speaker_id="player",
-                                listener_id=int(nid),
-                                topic=topic,
-                                credibility=credibility,
+                                listener_id=npc_id,
+                                topic=context.get("topic", "general"),
+                                credibility=float(context.get("credibility", 0.7))
                             )
-                        except Exception as inner_e:
-                            logger.debug("Belief (conversation) failed for listener %s: %s", nid, inner_e)
+                        except Exception as e:
+                            logger.warning(f"[Beliefs] conversation belief hook failed for NPC {npc_id}: {e}")
+    
+                    # Throttled consolidation right after conversation bursts
+                    await self._maybe_consolidate_beliefs(
+                        npc_ids,
+                        topic_filter=context.get("topic"),
+                        reason="post_conversation"
+                    )
+    
         except Exception as e:
-            logger.warning("Belief hook (conversation) failed: %s", e)
-        # === end belief hook ===
+            logger.exception(f"[Beliefs] post-action belief routing failed: {e}")
     
         return result
 
