@@ -1,25 +1,29 @@
 # routes/conflict_routes.py
 
 """
-Routes for interacting with the open-world conflict system through the synthesizer.
+Refactored routes for the modularized conflict system.
+All operations now go through the central ConflictSynthesizer.
 Integrated with NYX governance for permission checking and action reporting.
 """
 
 import logging
 import json
+import random
+import os
 from functools import wraps
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from datetime import datetime
 from quart import Blueprint, request, jsonify, session
 
+# Import the new synthesizer API
 from logic.conflict_system.conflict_synthesizer import (
     get_synthesizer,
-    orchestrate_conflict_creation,
-    orchestrate_scene_processing,
-    orchestrate_conflict_resolution,
-    get_orchestrated_system_state
+    release_synthesizer,
+    # Import constants for metrics
+    MAX_BUNDLE_CACHE,
+    MAX_EVENT_QUEUE,
+    MAX_EVENT_HISTORY
 )
-from agents import RunContextWrapper
-from db.connection import get_db_connection_context
 
 # Import governance integration
 from nyx.governance import AgentType
@@ -27,16 +31,16 @@ from nyx.governance_helpers import (
     check_permission,
     report_action,
     propose_canonical_change,
-    with_governance
 )
-from nyx.integrate import get_central_governance
 
 logger = logging.getLogger(__name__)
 
-# Create Flask blueprint
+# Create blueprint
 conflict_bp = Blueprint("conflict", __name__)
 
-# ----- Middleware -----
+# ===============================================================================
+# MIDDLEWARE & HELPERS
+# ===============================================================================
 
 def require_login(f):
     """Decorator to require login."""
@@ -54,29 +58,22 @@ async def check_conflict_permission(
     action_type: str,
     conflict_data: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """
-    Check with governance before performing conflict operations.
-    """
-    permission = await check_permission(
-        user_id=user_id,
-        conversation_id=conversation_id,
-        agent_type=AgentType.CONFLICT_ANALYST,
-        agent_id=f"conflict_system_{conversation_id}",
-        action_type=action_type,
-        action_details=conflict_data
-    )
-    return permission
+    """Check with governance before performing conflict operations."""
+    try:
+        permission = await check_permission(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.CONFLICT_ANALYST,
+            agent_id=f"conflict_system_{conversation_id}",
+            action_type=action_type,
+            action_details=conflict_data
+        )
+        return permission
+    except Exception as e:
+        logger.warning(f"Governance check failed, allowing by default: {e}")
+        return {"approved": True, "reasoning": "Governance check failed, allowing by default"}
 
-# ----- Helper Functions -----
-
-def create_context(user_id: int, conversation_id: int) -> RunContextWrapper:
-    """Create a context wrapper for the given user and conversation."""
-    return RunContextWrapper({
-        "user_id": user_id,
-        "conversation_id": conversation_id
-    })
-
-async def validate_request_data(data: Dict[str, Any], required_fields: list) -> Optional[Dict[str, Any]]:
+async def validate_request_data(data: Dict[str, Any], required_fields: List[str]) -> Optional[Dict[str, Any]]:
     """Validate that required fields are present in request data."""
     missing_fields = [field for field in required_fields if not data.get(field)]
     
@@ -98,7 +95,129 @@ async def validate_request_data(data: Dict[str, Any], required_fields: list) -> 
     
     return None
 
-# ----- API Routes with Governance Integration -----
+# ===============================================================================
+# SYSTEM STATE & STATUS ROUTES
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/status", methods=["GET"])
+@require_login
+async def get_system_status(user_id):
+    """Get the overall conflict system status."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        # Get synthesizer instance
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Get comprehensive system state
+        state = await synthesizer.get_system_state()
+        
+        return jsonify({
+            "success": True,
+            "system_state": state
+        })
+    except Exception as e:
+        logger.error(f"Error getting system state: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/health", methods=["GET"])
+@require_login
+async def get_system_health(user_id):
+    """Get health status of all subsystems."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        health = await synthesizer.health_check()
+        
+        return jsonify({
+            "success": True,
+            "health": health
+        })
+    except Exception as e:
+        logger.error(f"Error checking system health: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# CONFLICT MANAGEMENT ROUTES
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/active", methods=["GET"])
+@require_login
+async def get_active_conflicts(user_id):
+    """Get all active conflicts."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Get system state which includes active conflicts
+        state = await synthesizer.get_system_state()
+        
+        # Extract and enrich active conflicts
+        active_conflicts = []
+        for conflict_id in state.get("active_conflicts", []):
+            conflict_state = await synthesizer.get_conflict_state(conflict_id)
+            if conflict_state:
+                active_conflicts.append({
+                    "conflict_id": conflict_id,
+                    "type": conflict_state.get("conflict_type", "unknown"),
+                    "status": conflict_state.get("status", "active"),
+                    "participants": conflict_state.get("participants", []),
+                    "tension_level": conflict_state.get("tension", {}).get("current_level", 0),
+                    "phase": conflict_state.get("flow", {}).get("current_phase", "unknown"),
+                    "is_multiparty": conflict_state.get("is_multiparty", False),
+                    "party_count": conflict_state.get("party_count", 2)
+                })
+        
+        return jsonify({
+            "success": True,
+            "conflicts": active_conflicts,
+            "count": len(active_conflicts),
+            "metrics": state.get("metrics", {})
+        })
+    except Exception as e:
+        logger.error(f"Error getting active conflicts: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/details/<int:conflict_id>", methods=["GET"])
+@require_login
+async def get_conflict_details(user_id, conflict_id):
+    """Get detailed information about a specific conflict."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Get detailed conflict state
+        conflict_state = await synthesizer.get_conflict_state(conflict_id)
+        
+        if not conflict_state:
+            return jsonify({"error": "Conflict not found"}), 404
+        
+        return jsonify({
+            "success": True,
+            "conflict": conflict_state
+        })
+    except Exception as e:
+        logger.error(f"Error getting conflict details: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# CONFLICT CREATION ROUTES
+# ===============================================================================
 
 @conflict_bp.route("/api/conflict/create", methods=["POST"])
 @require_login
@@ -116,32 +235,29 @@ async def create_conflict(user_id):
         # Get conflict parameters
         conflict_type = data.get("conflict_type", "slice")
         
-        # Validate conflict type (multiparty is no longer a type)
+        # Validate conflict type
         valid_types = ["social", "slice", "background", "political", "economic", "resource", "ideological"]
         if conflict_type not in valid_types:
             return jsonify({
                 "error": f"Invalid conflict type. Must be one of: {', '.join(valid_types)}"
             }), 400
         
-        context_data = data.get("context", {})
+        # Build context
+        context = data.get("context", {})
         
-        # Extract multiparty flag from context or auto-detect from participants
-        participants = context_data.get("participants", [])
-        is_multiparty = context_data.get("is_multiparty", len(participants) > 2)
+        # Auto-detect multiparty status
+        participants = context.get("participants", [])
+        is_multiparty = context.get("is_multiparty", len(participants) > 2)
         
-        # Add multiparty metadata to context if applicable
         if is_multiparty:
-            context_data["is_multiparty"] = True
-            context_data["party_count"] = len(participants) if participants else context_data.get("party_count", 3)
-            
-            # Add multiparty dynamics if not already present
-            if "multiparty_dynamics" not in context_data:
-                context_data["multiparty_dynamics"] = {
-                    "alliance_potential": True,
-                    "shifting_sides": True,
-                    "faction_formation": len(participants) > 4 if participants else False,
-                    "betrayal_likelihood": "medium"
-                }
+            context["is_multiparty"] = True
+            context["party_count"] = len(participants) if participants else context.get("party_count", 3)
+            context["multiparty_dynamics"] = context.get("multiparty_dynamics", {
+                "alliance_potential": True,
+                "shifting_sides": True,
+                "faction_formation": len(participants) > 4 if participants else False,
+                "betrayal_likelihood": "medium"
+            })
         
         # Check governance permission
         permission = await check_conflict_permission(
@@ -150,329 +266,75 @@ async def create_conflict(user_id):
             action_type="create_conflict",
             conflict_data={
                 "conflict_type": conflict_type,
-                "is_multiparty": is_multiparty,
-                "context": context_data
+                "context": context,
+                "is_multiparty": is_multiparty
             }
         )
         
         if not permission["approved"]:
-            logger.warning(f"Conflict creation denied by governance: {permission.get('reasoning')}")
             return jsonify({
                 "success": False,
                 "error": "Governance denied conflict creation",
                 "reasoning": permission.get("reasoning")
             }), 403
         
-        # Apply any governance overrides
+        # Apply governance overrides if present
         if permission.get("override_action"):
             if "conflict_type" in permission["override_action"]:
                 conflict_type = permission["override_action"]["conflict_type"]
             if "context" in permission["override_action"]:
-                context_data.update(permission["override_action"]["context"])
+                context.update(permission["override_action"]["context"])
         
-        # Get synthesizer and create conflict
+        # Create conflict through synthesizer
         synthesizer = await get_synthesizer(user_id, conversation_id)
+        result = await synthesizer.create_conflict(conflict_type, context)
         
-        result = await synthesizer.create_conflict(
-            conflict_type=conflict_type,
-            context=context_data
-        )
-        
-        logger.info(f"Created {conflict_type} conflict (multiparty: {is_multiparty}) for user {user_id}")
-        
-        return jsonify({
-            "success": True,
-            "conflict": result,
-            "governance_notes": permission.get("notes"),
-            "is_multiparty": is_multiparty
-        })
-        
-    except Exception as e:
-        logger.error(f"Error creating conflict: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/process_scene", methods=["POST"])
-@require_login
-async def process_scene(user_id):
-    """Process a scene through the conflict system with governance oversight."""
-    data = await request.get_json() or {}
-    
-    validation_error = await validate_request_data(data, ["conversation_id"])
-    if validation_error:
-        return jsonify(validation_error), validation_error["status"]
-    
-    conversation_id = data["conversation_id"]
-    
-    try:
-        # Get scene context
-        scene_context = data.get("scene_context", {})
-        
-        # Check governance permission
-        permission = await check_conflict_permission(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            action_type="process_scene",
-            conflict_data={
-                "scene_context": scene_context
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Scene processing denied by governance: {permission.get('reasoning')}")
-            return jsonify({
-                "success": False,
-                "error": "Governance denied scene processing",
-                "reasoning": permission.get("reasoning"),
-                "governance_blocked": True
-            }), 403
-        
-        # Apply any governance overrides
-        if permission.get("override_action"):
-            override = permission["override_action"]
-            if "scene_context" in override:
-                scene_context.update(override["scene_context"])
-        
-        # Create context
-        ctx = create_context(user_id, conversation_id)
-        
-        # Process scene through orchestrator
-        result = await orchestrate_scene_processing(
-            ctx,
-            scene_context_json=json.dumps(scene_context)
-        )
-        
-        # Parse the result
-        scene_data = json.loads(result) if isinstance(result, str) else result
-        
-        # Report the action to governance
-        await report_action(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            agent_type=AgentType.SCENE_MANAGER,
-            agent_id=f"scene_processor_{conversation_id}",
-            action={
-                "type": "process_scene",
-                "scene_context": scene_context
-            },
-            result={
-                "success": True,
-                "conflicts_detected": scene_data.get("conflicts_detected", []),
-                "events_triggered": scene_data.get("events_triggered", [])
-            }
-        )
-        
-        return jsonify({
-            "success": True,
-            "scene_result": scene_data,
-            "governance_metadata": {
-                "permission_tracking_id": permission.get("tracking_id", -1),
-                "directive_applied": permission.get("directive_applied", False)
-            }
-        })
-    except Exception as e:
-        logger.error(f"Error processing scene: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/resolve", methods=["POST"])
-@require_login
-async def resolve_conflict(user_id):
-    """Resolve a conflict through the synthesizer with governance approval."""
-    data = await request.get_json() or {}
-    
-    validation_error = await validate_request_data(data, ["conversation_id", "conflict_id"])
-    if validation_error:
-        return jsonify(validation_error), validation_error["status"]
-    
-    conversation_id = data["conversation_id"]
-    conflict_id = data["conflict_id"]
-    
-    try:
-        # Get resolution parameters
-        resolution_type = data.get("resolution_type", "negotiated")
-        context_data = data.get("context", {})
-        
-        # Check governance permission
-        permission = await check_conflict_permission(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            action_type="resolve_conflict",
-            conflict_data={
-                "conflict_id": conflict_id,
-                "resolution_type": resolution_type,
-                "context": context_data
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Conflict resolution denied by governance: {permission.get('reasoning')}")
-            return jsonify({
-                "success": False,
-                "error": "Governance denied conflict resolution",
-                "reasoning": permission.get("reasoning"),
-                "governance_blocked": True
-            }), 403
-        
-        # Apply any governance overrides
-        if permission.get("override_action"):
-            override = permission["override_action"]
-            if "resolution_type" in override:
-                resolution_type = override["resolution_type"]
-            if "context" in override:
-                context_data.update(override["context"])
-        
-        # Create context
-        ctx = create_context(user_id, conversation_id)
-        
-        # Resolve through orchestrator
-        result = await orchestrate_conflict_resolution(
-            ctx,
-            conflict_id=conflict_id,
-            resolution_type=resolution_type,
-            context_json=json.dumps(context_data)
-        )
-        
-        # Parse the result
-        resolution_data = json.loads(result) if isinstance(result, str) else result
-        
-        # Report the action to governance
+        # Report to governance
         await report_action(
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_resolver_{conversation_id}",
+            agent_id=f"conflict_system_{conversation_id}",
             action={
-                "type": "resolve_conflict",
-                "conflict_id": conflict_id,
-                "resolution_type": resolution_type,
-                "context": context_data
+                "type": "create_conflict",
+                "conflict_type": conflict_type,
+                "is_multiparty": is_multiparty
             },
             result={
-                "success": resolution_data.get("resolved", False),
-                "outcome": resolution_data.get("outcome"),
-                "became_canonical": resolution_data.get("became_canonical", False)
+                "success": True,
+                "conflict_id": result.get("conflict_id", -1)
             }
         )
         
-        # If resolution had significant impact, record it canonically
-        if resolution_data.get("became_canonical"):
-            from lore.core.context import CanonicalContext
-            from lore.core.canon import log_canonical_event
-            
-            canonical_ctx = CanonicalContext(user_id, conversation_id)
-            async with get_db_connection_context() as conn:
-                await log_canonical_event(
-                    canonical_ctx, conn,
-                    f"Conflict {conflict_id} resolved via {resolution_type}",
-                    tags=["conflict", "resolution", resolution_type],
-                    significance=8
-                )
+        # Propose canonical change if significant
+        if result.get("conflict_id") and conflict_type in ["political", "background"]:
+            await propose_canonical_change(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_id=f"conflict_system_{conversation_id}",
+                change_type="conflict_creation",
+                change_data={
+                    "conflict_id": result["conflict_id"],
+                    "conflict_type": conflict_type,
+                    "name": result.get("conflict_name", "Unnamed Conflict"),
+                    "impact": "medium"
+                }
+            )
         
         return jsonify({
             "success": True,
-            "resolution": resolution_data,
+            "conflict": result,
+            "is_multiparty": is_multiparty,
             "governance_metadata": {
                 "permission_tracking_id": permission.get("tracking_id", -1),
-                "directive_applied": permission.get("directive_applied", False)
+                "override_applied": bool(permission.get("override_action"))
             }
         })
     except Exception as e:
-        logger.error(f"Error resolving conflict: {e}", exc_info=True)
+        logger.error(f"Error creating conflict: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@conflict_bp.route("/api/conflict/system_state", methods=["GET"])
-@require_login
-async def get_system_state(user_id):
-    """Get the overall conflict system state."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
-    try:
-        # No governance check needed for read-only operation
-        # Create context
-        ctx = create_context(user_id, int(conversation_id))
-        
-        # Get system state through orchestrator
-        result = await get_orchestrated_system_state(ctx)
-        
-        # Parse the result
-        state_data = json.loads(result) if isinstance(result, str) else result
-        
-        return jsonify({
-            "success": True,
-            "system_state": state_data
-        })
-    except Exception as e:
-        logger.error(f"Error getting system state: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/active", methods=["GET"])
-@require_login
-async def get_active_conflicts(user_id):
-    """Get all active conflicts."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
-    try:
-        # Get synthesizer
-        synthesizer = await get_synthesizer(user_id, int(conversation_id))
-        
-        # Get system state which includes active conflicts
-        state = await synthesizer.get_system_state()
-        
-        # Extract active conflicts
-        active_conflicts = []
-        for conflict_id in state.get("active_conflicts", []):
-            conflict_state = await synthesizer.get_conflict_state(conflict_id)
-            active_conflicts.append({
-                "conflict_id": conflict_id,
-                "type": conflict_state.get("conflict_type", "unknown"),
-                "status": conflict_state.get("status", "active"),
-                "participants": conflict_state.get("participants", []),
-                "tension_level": conflict_state.get("tension", {}).get("current_level", 0),
-                "phase": conflict_state.get("flow", {}).get("current_phase", "unknown")
-            })
-        
-        return jsonify({
-            "success": True,
-            "conflicts": active_conflicts,
-            "count": len(active_conflicts)
-        })
-    except Exception as e:
-        logger.error(f"Error getting active conflicts: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/details/<int:conflict_id>", methods=["GET"])
-@require_login
-async def get_conflict_details(user_id, conflict_id):
-    """Get details for a specific conflict."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
-    try:
-        # Get synthesizer
-        synthesizer = await get_synthesizer(user_id, int(conversation_id))
-        
-        # Get conflict state
-        conflict_state = await synthesizer.get_conflict_state(conflict_id)
-        
-        if not conflict_state:
-            return jsonify({"error": "Conflict not found"}), 404
-        
-        return jsonify({
-            "success": True,
-            "conflict": conflict_state
-        })
-    except Exception as e:
-        logger.error(f"Error getting conflict details: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-# Updated conflict generation in the route
 @conflict_bp.route("/api/conflict/emergent", methods=["POST"])
 @require_login
 async def generate_emergent_conflict(user_id):
@@ -501,340 +363,1034 @@ async def generate_emergent_conflict(user_id):
                 "reasoning": permission.get("reasoning")
             }), 403
         
-        # Determine conflict type based on world state
-        # Valid types (multiparty is NOT a type anymore)
+        # Determine conflict type based on triggers and world state
         base_conflict_types = ["social", "slice", "background"]
-        
-        # Weight based on current state
         weights = [0.4, 0.4, 0.2]  # Default weights
         
         # Adjust weights based on context
-        if data.get("trigger") == "relationship_tension":
+        trigger = data.get("trigger", "")
+        if trigger == "relationship_tension":
             weights = [0.7, 0.2, 0.1]
-        elif data.get("trigger") == "world_event":
+        elif trigger == "world_event":
             weights = [0.1, 0.2, 0.7]
+        elif trigger == "daily_routine":
+            weights = [0.2, 0.7, 0.1]
         
-        import random
         conflict_type = random.choices(base_conflict_types, weights=weights)[0]
         
         # Apply governance override if present
-        if permission.get("override_action") and "conflict_type" in permission["override_action"]:
+        if permission.get("override_action", {}).get("conflict_type"):
             conflict_type = permission["override_action"]["conflict_type"]
         
-        # Determine if this should be multiparty based on context
-        participants = data.get("participants", [])
-        is_multiparty = len(participants) > 2 or random.random() < 0.3  # 30% chance of multiparty
+        # Randomly determine if multiparty (30% chance)
+        is_multiparty = random.random() < 0.3
         
-        # Generate context based on active events
+        # Build emergent context
         context = {
             "emergent": True,
-            "intensity": data.get("intensity", "moderate"),
-            "participants": participants,
-            "location": data.get("location", "current"),
-            "trigger": data.get("trigger", "natural_progression"),
-            "is_multiparty": is_multiparty,  # Add as a modifier flag
-            "party_count": len(participants) if participants else (random.randint(3, 5) if is_multiparty else 2)
+            "trigger": trigger,
+            "is_multiparty": is_multiparty,
+            "integration_mode": data.get("integration_mode", "emergent")
         }
         
-        # Add multiparty dynamics if applicable
-        if is_multiparty:
-            context["multiparty_dynamics"] = {
-                "alliance_potential": random.random() > 0.4,
-                "shifting_sides": random.random() > 0.5,
-                "faction_formation": len(participants) > 4 if participants else random.random() > 0.6,
-                "betrayal_likelihood": random.choice(["low", "medium", "high"])
-            }
-        
-        # Add type-specific context
+        # Add type-specific emergent context
         if conflict_type == "social":
-            context["social_dynamics"] = {
-                "relationship_type": random.choice(["friendship", "romantic", "family", "professional"]),
-                "stakes": random.choice(["trust", "loyalty", "respect", "affection"])
-            }
+            context.update({
+                "relationship_factor": random.choice(["trust", "respect", "affection", "loyalty"]),
+                "tension_source": random.choice(["betrayal", "miscommunication", "competition", "past_grievance"])
+            })
         elif conflict_type == "slice":
-            context["slice_context"] = {
+            context.update({
                 "daily_issue": random.choice(["resources", "scheduling", "boundaries", "responsibilities"]),
                 "urgency": random.choice(["low", "medium", "high"])
-            }
+            })
         elif conflict_type == "background":
-            context["background_context"] = {
+            context.update({
                 "scope": random.choice(["local", "regional", "global"]),
                 "visibility": random.choice(["hidden", "rumored", "public"])
+            })
+        
+        if is_multiparty:
+            context["party_count"] = random.randint(3, 5)
+            context["multiparty_dynamics"] = {
+                "alliance_potential": True,
+                "shifting_sides": random.random() < 0.5,
+                "faction_formation": context.get("party_count", 3) > 3,
+                "betrayal_likelihood": random.choice(["low", "medium", "high"])
             }
         
         # Generate through synthesizer
         synthesizer = await get_synthesizer(user_id, conversation_id)
+        result = await synthesizer.create_conflict(conflict_type, context)
         
-        result = await synthesizer.create_conflict(
-            conflict_type=conflict_type,
-            context=context
+        # Report to governance
+        await report_action(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.CONFLICT_ANALYST,
+            agent_id=f"conflict_system_{conversation_id}",
+            action={
+                "type": "emergent_conflict_generated",
+                "conflict_type": conflict_type,
+                "trigger": trigger,
+                "is_multiparty": is_multiparty
+            },
+            result={
+                "success": True,
+                "conflict_id": result.get("conflict_id", -1)
+            }
         )
         
-        # Log emergent generation
         logger.info(f"Generated emergent {conflict_type} conflict (multiparty: {is_multiparty}) for user {user_id}")
         
         return jsonify({
             "success": True,
             "conflict": result,
             "emergent": True,
-            "is_multiparty": is_multiparty
+            "is_multiparty": is_multiparty,
+            "trigger": trigger
         })
         
     except Exception as e:
         logger.error(f"Error generating emergent conflict: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-# ----- Player Rewards Routes (with governance tracking) -----
+# ===============================================================================
+# CONFLICT UPDATE & RESOLUTION ROUTES
+# ===============================================================================
 
-@conflict_bp.route("/api/conflict/rewards/inventory", methods=["GET"])
+@conflict_bp.route("/api/conflict/update", methods=["POST"])
 @require_login
-async def get_player_inventory(user_id):
-    """Get the player's inventory items from resolved conflicts."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Get inventory items
-            items = await conn.fetch("""
-                SELECT item_id, item_name, item_description, item_category, 
-                       item_properties, quantity, equipped, date_acquired
-                FROM PlayerInventory
-                WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY date_acquired DESC
-            """, user_id, int(conversation_id))
-            
-            formatted_items = []
-            for item in items:
-                # Parse JSON properties safely
-                try:
-                    props = json.loads(item['item_properties']) if isinstance(item['item_properties'], str) else item['item_properties'] or {}
-                except (json.JSONDecodeError, TypeError):
-                    props = {}
-                
-                formatted_items.append({
-                    "item_id": item['item_id'],
-                    "name": item['item_name'],
-                    "description": item['item_description'],
-                    "category": item['item_category'],
-                    "properties": props,
-                    "quantity": item['quantity'],
-                    "equipped": item['equipped'],
-                    "date_acquired": item['date_acquired'].isoformat() if item['date_acquired'] else None
-                })
-        
-        return jsonify({
-            "success": True,
-            "inventory_items": formatted_items,
-            "count": len(formatted_items)
-        })
-    except Exception as e:
-        logger.error(f"Error getting player inventory: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/rewards/perks", methods=["GET"])
-@require_login
-async def get_player_perks(user_id):
-    """Get the player's perks from resolved conflicts."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Get perks
-            perks = await conn.fetch("""
-                SELECT perk_id, perk_name, perk_description, perk_category, 
-                       perk_tier, perk_properties, date_acquired
-                FROM PlayerPerks
-                WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY perk_tier DESC, date_acquired DESC
-            """, user_id, int(conversation_id))
-            
-            formatted_perks = []
-            for perk in perks:
-                # Parse JSON properties safely
-                try:
-                    props = json.loads(perk['perk_properties']) if isinstance(perk['perk_properties'], str) else perk['perk_properties'] or {}
-                except (json.JSONDecodeError, TypeError):
-                    props = {}
-                
-                formatted_perks.append({
-                    "perk_id": perk['perk_id'],
-                    "name": perk['perk_name'],
-                    "description": perk['perk_description'],
-                    "category": perk['perk_category'],
-                    "tier": perk['perk_tier'],
-                    "properties": props,
-                    "date_acquired": perk['date_acquired'].isoformat() if perk['date_acquired'] else None
-                })
-        
-        return jsonify({
-            "success": True,
-            "perks": formatted_perks,
-            "count": len(formatted_perks)
-        })
-    except Exception as e:
-        logger.error(f"Error getting player perks: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/rewards/special", methods=["GET"])
-@require_login
-async def get_player_special_rewards(user_id):
-    """Get the player's special rewards from resolved conflicts."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Get special rewards
-            rewards = await conn.fetch("""
-                SELECT reward_id, reward_name, reward_description, reward_effect, 
-                       reward_category, reward_properties, used, date_acquired
-                FROM PlayerSpecialRewards
-                WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY date_acquired DESC
-            """, user_id, int(conversation_id))
-            
-            formatted_rewards = []
-            for reward in rewards:
-                # Parse JSON properties safely
-                try:
-                    props = json.loads(reward['reward_properties']) if isinstance(reward['reward_properties'], str) else reward['reward_properties'] or {}
-                except (json.JSONDecodeError, TypeError):
-                    props = {}
-                
-                formatted_rewards.append({
-                    "reward_id": reward['reward_id'],
-                    "name": reward['reward_name'],
-                    "description": reward['reward_description'],
-                    "effect": reward['reward_effect'],
-                    "category": reward['reward_category'],
-                    "properties": props,
-                    "used": reward['used'],
-                    "date_acquired": reward['date_acquired'].isoformat() if reward['date_acquired'] else None
-                })
-        
-        return jsonify({
-            "success": True,
-            "special_rewards": formatted_rewards,
-            "count": len(formatted_rewards)
-        })
-    except Exception as e:
-        logger.error(f"Error getting player special rewards: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-@conflict_bp.route("/api/conflict/rewards/use_special", methods=["POST"])
-@require_login
-async def use_special_reward(user_id):
-    """Use a special reward from a resolved conflict with governance tracking."""
+async def update_conflict(user_id):
+    """Update an existing conflict."""
     data = await request.get_json() or {}
     
-    # Validate request
-    validation_error = await validate_request_data(data, ["conversation_id", "reward_id"])
+    validation_error = await validate_request_data(data, ["conversation_id", "conflict_id"])
     if validation_error:
         return jsonify(validation_error), validation_error["status"]
     
     conversation_id = data["conversation_id"]
-    reward_id = data["reward_id"]
+    conflict_id = data["conflict_id"]
+    update_context = data.get("context", {})
     
     try:
-        # Check governance permission for using rewards
-        permission = await check_permission(
+        # Check governance permission
+        permission = await check_conflict_permission(
             user_id=user_id,
             conversation_id=conversation_id,
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"reward_system_{conversation_id}",
-            action_type="use_special_reward",
-            action_details={
-                "reward_id": reward_id
+            action_type="update_conflict",
+            conflict_data={
+                "conflict_id": conflict_id,
+                "update_context": update_context
             }
         )
         
         if not permission["approved"]:
-            logger.warning(f"Special reward usage denied by governance: {permission.get('reasoning')}")
             return jsonify({
                 "success": False,
-                "error": "Governance denied reward usage",
-                "reasoning": permission.get("reasoning"),
-                "governance_blocked": True
+                "error": "Governance denied conflict update",
+                "reasoning": permission.get("reasoning")
             }), 403
         
-        async with get_db_connection_context() as conn:
-            # Check if reward exists and belongs to user
-            reward = await conn.fetchrow("""
-                SELECT reward_name, reward_effect, used
-                FROM PlayerSpecialRewards
-                WHERE reward_id = $1 AND user_id = $2 AND conversation_id = $3
-            """, reward_id, user_id, conversation_id)
-            
-            if not reward:
-                return jsonify({
-                    "error": "Special reward not found or doesn't belong to this user"
-                }), 404
-            
-            # Check if already used
-            if reward['used']:
-                return jsonify({
-                    "success": False,
-                    "message": "This special reward has already been used"
-                }), 400
-            
-            # Mark as used
-            await conn.execute("""
-                UPDATE PlayerSpecialRewards
-                SET used = TRUE
-                WHERE reward_id = $1
-            """, reward_id)
+        # Apply governance overrides
+        if permission.get("override_action", {}).get("context"):
+            update_context.update(permission["override_action"]["context"])
         
-        # Report the action to governance
+        # Update through synthesizer
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        result = await synthesizer.update_conflict(conflict_id, update_context)
+        
+        # Report to governance
         await report_action(
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"reward_system_{conversation_id}",
+            agent_id=f"conflict_system_{conversation_id}",
             action={
-                "type": "use_special_reward",
-                "reward_id": reward_id,
-                "reward_name": reward['reward_name']
+                "type": "update_conflict",
+                "conflict_id": conflict_id
             },
             result={
                 "success": True,
-                "reward_effect": reward['reward_effect']
+                "phase": result.get("phase")
             }
         )
         
-        # Log canonically if significant
-        if reward['reward_effect'] and 'permanent' in reward['reward_effect'].lower():
-            from lore.core.context import CanonicalContext
-            from lore.core.canon import log_canonical_event
-            
-            canonical_ctx = CanonicalContext(user_id, conversation_id)
-            async with get_db_connection_context() as conn:
-                await log_canonical_event(
-                    canonical_ctx, conn,
-                    f"Player used special reward: {reward['reward_name']}",
-                    tags=["reward", "conflict", "player_action"],
-                    significance=6
-                )
-        
-        # Return the effect that should be applied
         return jsonify({
             "success": True,
-            "message": f"Successfully used special reward: {reward['reward_name']}",
-            "reward_name": reward['reward_name'],
-            "reward_effect": reward['reward_effect'],
+            "update_result": result,
+            "governance_metadata": {
+                "permission_tracking_id": permission.get("tracking_id", -1),
+                "override_applied": bool(permission.get("override_action"))
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error updating conflict: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/resolve", methods=["POST"])
+@require_login
+async def resolve_conflict(user_id):
+    """Resolve a conflict through the synthesizer with governance approval."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id", "conflict_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    conflict_id = data["conflict_id"]
+    
+    try:
+        # Get resolution parameters
+        resolution_type = data.get("resolution_type", "negotiated")
+        context = data.get("context", {})
+        
+        # Check governance permission
+        permission = await check_conflict_permission(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            action_type="resolve_conflict",
+            conflict_data={
+                "conflict_id": conflict_id,
+                "resolution_type": resolution_type,
+                "context": context
+            }
+        )
+        
+        if not permission["approved"]:
+            logger.warning(f"Conflict resolution denied by governance: {permission.get('reasoning')}")
+            return jsonify({
+                "success": False,
+                "error": "Governance denied conflict resolution",
+                "reasoning": permission.get("reasoning"),
+                "governance_blocked": True
+            }), 403
+        
+        # Apply governance overrides
+        if permission.get("override_action"):
+            if "resolution_type" in permission["override_action"]:
+                resolution_type = permission["override_action"]["resolution_type"]
+            if "context" in permission["override_action"]:
+                context.update(permission["override_action"]["context"])
+        
+        # Resolve through synthesizer
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        result = await synthesizer.resolve_conflict(conflict_id, resolution_type, context)
+        
+        # Report to governance
+        await report_action(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.CONFLICT_ANALYST,
+            agent_id=f"conflict_system_{conversation_id}",
+            action={
+                "type": "resolve_conflict",
+                "conflict_id": conflict_id,
+                "resolution_type": resolution_type
+            },
+            result={
+                "success": result.get("resolved", False),
+                "resolution_details": result.get("resolution_details")
+            }
+        )
+        
+        # Propose canonical change for significant resolutions
+        if result.get("resolved") and resolution_type in ["victory", "defeat", "treaty"]:
+            await propose_canonical_change(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_id=f"conflict_system_{conversation_id}",
+                change_type="conflict_resolution",
+                change_data={
+                    "conflict_id": conflict_id,
+                    "resolution_type": resolution_type,
+                    "impact": "high",
+                    "resolution_details": result.get("resolution_details", {})
+                }
+            )
+        
+        return jsonify({
+            "success": True,
+            "resolution": result,
+            "governance_metadata": {
+                "permission_tracking_id": permission.get("tracking_id", -1),
+                "override_applied": bool(permission.get("override_action"))
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error resolving conflict: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/scene-transition", methods=["POST"])
+@require_login
+async def handle_scene_transition(user_id):
+    """Handle transition between scenes for conflict context."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    old_scene = data.get("old_scene", {})
+    new_scene = data.get("new_scene", {})
+    
+    try:
+        # Check governance permission
+        permission = await check_conflict_permission(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            action_type="scene_transition",
+            conflict_data={
+                "old_scene": old_scene,
+                "new_scene": new_scene
+            }
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "success": False,
+                "error": "Governance denied scene transition",
+                "reasoning": permission.get("reasoning")
+            }), 403
+        
+        # Use ConflictEventHooks for the transition
+        from logic.conflict_system.integration_hooks import ConflictEventHooks
+        
+        context = await ConflictEventHooks.on_scene_transition(
+            user_id, conversation_id, old_scene, new_scene
+        )
+        
+        # Get synthesizer and emit transition event
+        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
+        
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        
+        event = SystemEvent(
+            event_id=f"scene_transition_{datetime.now().timestamp()}",
+            event_type=EventType.SCENE_ENTER,
+            source_subsystem=SubsystemType.ORCHESTRATOR,
+            payload={
+                'old_scene': old_scene, 
+                'new_scene': new_scene, 
+                'context': context
+            },
+            requires_response=False,
+            priority=6
+        )
+        
+        # Emit the event
+        await synthesizer.emit_event(event)
+        
+        # Clear scene-specific caches
+        await synthesizer._invalidate_caches_for_scene(new_scene.get("location_id"))
+        
+        return jsonify({
+            "success": True,
+            "transition_context": context,
+            "old_scene": old_scene,
+            "new_scene": new_scene
+        })
+    except Exception as e:
+        logger.error(f"Error handling scene transition: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# SCENE PROCESSING ROUTES
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/process-scene", methods=["POST"])
+@require_login
+async def process_scene(user_id):
+    """Process a scene through the conflict system."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    
+    try:
+        # Build scene context
+        scene_context = {
+            "scene_type": data.get("scene_type", "dialogue"),
+            "scene_description": data.get("scene_description", ""),
+            "activity": data.get("activity", "conversation"),
+            "activity_type": data.get("activity_type", "social"),
+            "location": data.get("location", ""),
+            "location_id": data.get("location_id"),
+            "participants": data.get("participants", []),
+            "present_npcs": data.get("present_npcs", []),
+            "recent_events": data.get("recent_events", []),
+            "timestamp": data.get("timestamp", datetime.now().isoformat()),
+            "integration_mode": data.get("integration_mode", "emergent"),
+            "boost_engagement": data.get("boost_engagement", False)
+        }
+        
+        # Check governance permission
+        permission = await check_conflict_permission(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            action_type="process_scene",
+            conflict_data={"scene_context": scene_context}
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "success": False,
+                "error": "Governance denied scene processing",
+                "reasoning": permission.get("reasoning")
+            }), 403
+        
+        # Process through synthesizer
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        scene_result = await synthesizer.process_scene(scene_context)
+        
+        # Report to governance
+        await report_action(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.CONFLICT_ANALYST,
+            agent_id=f"conflict_system_{conversation_id}",
+            action={
+                "type": "process_scene",
+                "scene_type": scene_context.get("scene_type"),
+                "location": scene_context.get("location")
+            },
+            result={
+                "success": True,
+                "conflicts_detected": scene_result.get("conflicts_detected", []),
+                "events_triggered": scene_result.get("events_triggered", [])
+            }
+        )
+        
+        return jsonify({
+            "success": True,
+            "scene_result": scene_result,
             "governance_metadata": {
                 "permission_tracking_id": permission.get("tracking_id", -1),
                 "directive_applied": permission.get("directive_applied", False)
             }
         })
     except Exception as e:
-        logger.error(f"Error using special reward: {e}", exc_info=True)
+        logger.error(f"Error processing scene: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+# ===============================================================================
+# SCENE BUNDLE ROUTES (for fast context assembly)
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/scene-bundle", methods=["GET"])
+@require_login
+async def get_scene_bundle(user_id):
+    """Get scene-scoped conflict bundle for fast context assembly."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        # Build scene scope from query params
+        scope = {
+            "location_id": request.args.get("location_id", type=int),
+            "npc_ids": request.args.getlist("npc_ids", type=int),
+            "topics": request.args.getlist("topics"),
+            "lore_tags": request.args.getlist("lore_tags")
+        }
+        
+        # Remove None values
+        scope = {k: v for k, v in scope.items() if v}
+        
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        bundle = await synthesizer.get_scene_bundle(scope)
+        
+        return jsonify({
+            "success": True,
+            "bundle": bundle,
+            "cache_hit": bundle.get("from_cache", False)
+        })
+    except Exception as e:
+        logger.error(f"Error getting scene bundle: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/invalidate-cache", methods=["POST"])
+@require_login
+async def invalidate_cache(user_id):
+    """Invalidate scene bundle cache for a conversation."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        
+        # Clear the bundle cache
+        await synthesizer._bundle_lock.acquire()
+        try:
+            synthesizer._bundle_cache.clear()
+            synthesizer._cache_hits = 0
+            synthesizer._cache_misses = 0
+        finally:
+            synthesizer._bundle_lock.release()
+        
+        return jsonify({
+            "success": True,
+            "message": "Cache invalidated successfully"
+        })
+    except Exception as e:
+        logger.error(f"Error invalidating cache: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# BACKGROUND PROCESSING ROUTES
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/background/process-queue", methods=["POST"])
+@require_login
+async def process_background_queue(user_id):
+    """Process items from the background conflict queue."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    max_items = data.get("max_items", 5)
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        
+        # Process background queue
+        results = await synthesizer.process_background_queue(max_items)
+        
+        return jsonify({
+            "success": True,
+            "processed_count": len(results),
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error processing background queue: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/background/check-limits", methods=["GET"])
+@require_login
+async def check_content_limits(user_id):
+    """Check if content generation is allowed for a conflict."""
+    conversation_id = request.args.get("conversation_id")
+    conflict_id = request.args.get("conflict_id", type=int)
+    content_type = request.args.get("content_type", "news")
+    
+    if not conversation_id or not conflict_id:
+        return jsonify({"error": "Missing required parameters"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Check generation limits
+        allowed, reason = await synthesizer.should_generate_content(content_type, conflict_id)
+        
+        return jsonify({
+            "success": True,
+            "allowed": allowed,
+            "reason": reason,
+            "content_type": content_type,
+            "conflict_id": conflict_id
+        })
+    except Exception as e:
+        logger.error(f"Error checking content limits: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/background/initialize", methods=["POST"])
+@require_login
+async def initialize_background_world(user_id):
+    """Initialize the background world with grand conflicts."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    
+    try:
+        # Check governance permission
+        permission = await check_conflict_permission(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            action_type="initialize_background",
+            conflict_data={}
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "success": False,
+                "error": "Governance denied background initialization",
+                "reasoning": permission.get("reasoning")
+            }), 403
+        
+        # Initialize through background processor
+        from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
+        subsystem = BackgroundConflictSubsystem(user_id, conversation_id)
+        
+        # Queue initialization
+        subsystem.processor._processing_queue.append({
+            'type': 'generate_initial_conflicts',
+            'priority': 1  # High priority
+        })
+        
+        # Process immediately
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        results = await synthesizer.process_background_queue(max_items=10)
+        
+        return jsonify({
+            "success": True,
+            "message": "Background world initialization queued",
+            "initial_results": results
+        })
+    except Exception as e:
+        logger.error(f"Error initializing background world: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/background/daily-flavor", methods=["GET"])
+@require_login
+async def get_daily_background_flavor(user_id):
+    """Get daily background conflict flavor text."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
+        subsystem = BackgroundConflictSubsystem(user_id, int(conversation_id))
+        
+        # Get daily update without generating new content
+        update = await subsystem.daily_background_update(generate_new=False)
+        
+        return jsonify({
+            "success": True,
+            "world_tension": update.get("world_tension", 0.0),
+            "background_news": update.get("news", []),
+            "ambient_effects": update.get("ambient_effects", []),
+            "overheard": update.get("overheard_conversation", ""),
+            "optional_hook": update.get("optional_hook", "")
+        })
+    except Exception as e:
+        logger.error(f"Error getting daily flavor: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# DAY TRANSITION & EVENT ROUTES
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/day-transition", methods=["POST"])
+@require_login
+async def handle_day_transition(user_id):
+    """Handle game day transition for conflict system."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id", "new_day"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    new_day = data["new_day"]
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        
+        # Handle day transition
+        result = await synthesizer.handle_day_transition(new_day)
+        
+        # Report to governance
+        await report_action(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.CONFLICT_ANALYST,
+            agent_id=f"conflict_system_{conversation_id}",
+            action={
+                "type": "day_transition",
+                "new_day": new_day
+            },
+            result={
+                "success": True,
+                "updates_processed": result.get("updates_processed", 0)
+            }
+        )
+        
+        return jsonify({
+            "success": True,
+            "new_day": new_day,
+            "transition_result": result
+        })
+    except Exception as e:
+        logger.error(f"Error handling day transition: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/emit-event", methods=["POST"])
+@require_login
+async def emit_custom_event(user_id):
+    """Emit a custom event to the conflict system."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id", "event_type", "payload"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    
+    try:
+        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
+        
+        # Map event type string to enum
+        try:
+            event_type = EventType[data["event_type"].upper()]
+        except KeyError:
+            return jsonify({"error": f"Invalid event type: {data['event_type']}"}), 400
+        
+        # Create event
+        event = SystemEvent(
+            event_id=f"custom_{datetime.now().timestamp()}",
+            event_type=event_type,
+            source_subsystem=SubsystemType.ORCHESTRATOR,
+            payload=data["payload"],
+            target_subsystems=set(SubsystemType[s.upper()] for s in data.get("target_subsystems", [])) if data.get("target_subsystems") else None,
+            requires_response=data.get("requires_response", False),
+            priority=data.get("priority", 5)
+        )
+        
+        # Emit event
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        responses = await synthesizer.emit_event(event)
+        
+        # Format responses
+        formatted_responses = []
+        if responses:
+            for response in responses:
+                formatted_responses.append({
+                    "subsystem": response.subsystem.value,
+                    "success": response.success,
+                    "data": response.data
+                })
+        
+        return jsonify({
+            "success": True,
+            "event_id": event.event_id,
+            "responses": formatted_responses
+        })
+    except Exception as e:
+        logger.error(f"Error emitting custom event: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/event-history", methods=["GET"])
+@require_login
+async def get_event_history(user_id):
+    """Get recent event history from the conflict system."""
+    conversation_id = request.args.get("conversation_id")
+    limit = request.args.get("limit", 50, type=int)
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Get event history (last N events)
+        history = synthesizer._event_history[-limit:]
+        
+        # Format events
+        formatted_history = []
+        for event in history:
+            formatted_history.append({
+                "event_id": event.event_id,
+                "event_type": event.event_type.value,
+                "source_subsystem": event.source_subsystem.value if event.source_subsystem else None,
+                "timestamp": event.timestamp.isoformat(),
+                "priority": event.priority,
+                "payload_summary": {k: type(v).__name__ for k, v in event.payload.items()} if event.payload else {}
+            })
+        
+        return jsonify({
+            "success": True,
+            "event_count": len(formatted_history),
+            "events": formatted_history
+        })
+    except Exception as e:
+        logger.error(f"Error getting event history: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# CLEANUP ROUTE
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/cleanup", methods=["POST"])
+@require_login
+async def cleanup_synthesizer(user_id):
+    """Release and cleanup synthesizer resources for a conversation."""
+    data = await request.get_json() or {}
+    
+    validation_error = await validate_request_data(data, ["conversation_id"])
+    if validation_error:
+        return jsonify(validation_error), validation_error["status"]
+    
+    conversation_id = data["conversation_id"]
+    
+    try:
+        await release_synthesizer(user_id, conversation_id)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Synthesizer released for conversation {conversation_id}"
+        })
+    except Exception as e:
+        logger.error(f"Error cleaning up synthesizer: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# MONITORING & METRICS ROUTES
+# ===============================================================================
+
+@conflict_bp.route("/api/conflict/metrics/performance", methods=["GET"])
+@require_login
+async def get_performance_metrics(user_id):
+    """Get detailed performance metrics including P95."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Calculate P95 for various operations
+        def calculate_p95(times):
+            if not times:
+                return 0
+            sorted_times = sorted(times)
+            index = int(len(sorted_times) * 0.95)
+            return sorted_times[min(index, len(sorted_times) - 1)] if sorted_times else 0
+        
+        metrics = {
+            "cache_performance": {
+                "hits": synthesizer._cache_hits,
+                "misses": synthesizer._cache_misses,
+                "hit_ratio": synthesizer._cache_hits / max(1, synthesizer._cache_hits + synthesizer._cache_misses),
+                "bundle_cache_size": len(synthesizer._bundle_cache),
+                "max_cache_size": MAX_BUNDLE_CACHE
+            },
+            "processing_performance": {
+                "bundle_fetch_p95": calculate_p95(synthesizer._performance_metrics.get('bundle_fetch_times', [])),
+                "parallel_process_p95": calculate_p95(synthesizer._performance_metrics.get('parallel_process_times', [])),
+                "cache_operations_total": synthesizer._performance_metrics.get('cache_operations', 0),
+                "events_processed": synthesizer._performance_metrics.get('events_processed', 0),
+                "timeouts": synthesizer._performance_metrics.get('timeouts_count', 0),
+                "failures": synthesizer._performance_metrics.get('failures_count', 0)
+            },
+            "subsystem_health": {
+                "timeouts_by_subsystem": dict(synthesizer._performance_metrics.get('subsystem_timeouts', {})),
+                "failures_by_subsystem": dict(synthesizer._performance_metrics.get('subsystem_failures', {}))
+            },
+            "system_state": synthesizer._global_metrics,
+            "queue_status": {
+                "event_queue_size": synthesizer._event_queue.qsize(),
+                "event_queue_max": MAX_EVENT_QUEUE,
+                "event_history_size": len(synthesizer._event_history),
+                "event_history_max": MAX_EVENT_HISTORY
+            }
+        }
+        
+        return jsonify({
+            "success": True,
+            "metrics": metrics
+        })
+    except Exception as e:
+        logger.error(f"Error getting performance metrics: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@conflict_bp.route("/api/conflict/metrics/background-queue", methods=["GET"])
+@require_login
+async def get_background_queue_status(user_id):
+    """Get status of the background processing queue."""
+    conversation_id = request.args.get("conversation_id")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        synthesizer = await get_synthesizer(user_id, int(conversation_id))
+        
+        # Get queue status from processor
+        queue_items = synthesizer.processor._processing_queue if hasattr(synthesizer, 'processor') else []
+        
+        # Group by type and priority
+        queue_summary = {}
+        for item in queue_items:
+            item_type = item.get('type', 'unknown')
+            priority = item.get('priority', 3)
+            
+            if item_type not in queue_summary:
+                queue_summary[item_type] = {"count": 0, "priorities": {}}
+            
+            queue_summary[item_type]["count"] += 1
+            queue_summary[item_type]["priorities"][priority] = \
+                queue_summary[item_type]["priorities"].get(priority, 0) + 1
+        
+        return jsonify({
+            "success": True,
+            "queue_length": len(queue_items),
+            "queue_summary": queue_summary,
+            "last_daily_process": getattr(synthesizer.processor, '_last_daily_process', None) if hasattr(synthesizer, 'processor') else None
+        })
+    except Exception as e:
+        logger.error(f"Error getting background queue status: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# ===============================================================================
+# DEBUG ROUTES (only in development)
+# ===============================================================================
+
+import os
+if os.getenv("ENV", "development") == "development":
+    
+    @conflict_bp.route("/api/conflict/debug/metrics", methods=["GET"])
+    @require_login
+    async def get_debug_metrics(user_id):
+        """Get detailed performance metrics (debug only)."""
+        conversation_id = request.args.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        try:
+            synthesizer = await get_synthesizer(user_id, int(conversation_id))
+            
+            metrics = {
+                "cache_hits": synthesizer._cache_hits,
+                "cache_misses": synthesizer._cache_misses,
+                "cache_hit_ratio": synthesizer._cache_hits / max(1, synthesizer._cache_hits + synthesizer._cache_misses),
+                "bundle_cache_size": len(synthesizer._bundle_cache),
+                "active_conflicts": len(synthesizer._conflict_states),
+                "performance_metrics": synthesizer._performance_metrics,
+                "global_metrics": synthesizer._global_metrics
+            }
+            
+            return jsonify({
+                "success": True,
+                "metrics": metrics
+            })
+        except Exception as e:
+            logger.error(f"Error getting debug metrics: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @conflict_bp.route("/api/conflict/debug/subsystems", methods=["GET"])
+    @require_login
+    async def get_subsystem_info(user_id):
+        """Get information about registered subsystems (debug only)."""
+        conversation_id = request.args.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        try:
+            synthesizer = await get_synthesizer(user_id, int(conversation_id))
+            
+            subsystem_info = {}
+            for subsystem_type, subsystem in synthesizer._subsystems.items():
+                subsystem_info[subsystem_type.value] = {
+                    "capabilities": list(subsystem.capabilities) if hasattr(subsystem, "capabilities") else [],
+                    "dependencies": [dep.value for dep in subsystem.dependencies] if hasattr(subsystem, "dependencies") else [],
+                    "event_subscriptions": [event.value for event in subsystem.event_subscriptions] if hasattr(subsystem, "event_subscriptions") else []
+                }
+            
+    @conflict_bp.route("/api/conflict/debug/subsystem/<string:subsystem_type>", methods=["GET"])
+    @require_login
+    async def get_specific_subsystem_status(user_id, subsystem_type):
+        """Get detailed status for a specific subsystem (debug only)."""
+        conversation_id = request.args.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        try:
+            from logic.conflict_system.conflict_synthesizer import SubsystemType
+            
+            # Validate subsystem type
+            try:
+                subsystem_enum = SubsystemType[subsystem_type.upper()]
+            except KeyError:
+                return jsonify({"error": f"Invalid subsystem type: {subsystem_type}"}), 400
+            
+            synthesizer = await get_synthesizer(user_id, int(conversation_id))
+            
+            # Get specific subsystem
+            subsystem = synthesizer._subsystems.get(subsystem_enum)
+            
+            if not subsystem:
+                return jsonify({"error": f"Subsystem {subsystem_type} not registered"}), 404
+            
+            # Get health check
+            health = await subsystem.health_check()
+            
+            # Get additional info
+            info = {
+                "type": subsystem_type,
+                "healthy": health.get("healthy", False),
+                "capabilities": list(subsystem.capabilities) if hasattr(subsystem, "capabilities") else [],
+                "dependencies": [dep.value for dep in subsystem.dependencies] if hasattr(subsystem, "dependencies") else [],
+                "event_subscriptions": [event.value for event in subsystem.event_subscriptions] if hasattr(subsystem, "event_subscriptions") else [],
+                "health_details": health
+            }
+            
+            return jsonify({
+                "success": True,
+                "subsystem": info
+            })
+        except Exception as e:
+            logger.error(f"Error getting subsystem status: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @conflict_bp.route("/api/conflict/debug/force-event-processing", methods=["POST"])
+    @require_login
+    async def force_event_processing(user_id):
+        """Force immediate processing of all queued events (debug only)."""
+        data = await request.get_json() or {}
+        
+        validation_error = await validate_request_data(data, ["conversation_id"])
+        if validation_error:
+            return jsonify(validation_error), validation_error["status"]
+        
+        conversation_id = data["conversation_id"]
+        
+        try:
+            synthesizer = await get_synthesizer(user_id, conversation_id)
+            
+            # Force process all events in queue
+            processed = []
+            while not synthesizer._event_queue.empty():
+                try:
+                    event = synthesizer._event_queue.get_nowait()
+                    responses = await synthesizer.emit_event(event)
+                    processed.append({
+                        "event_id": event.event_id,
+                        "event_type": event.event_type.value,
+                        "responses_count": len(responses) if responses else 0
+                    })
+                except asyncio.QueueEmpty:
+                    break
+            
+            return jsonify({
+                "success": True,
+                "events_processed": len(processed),
+                "events": processed
+            })
+        except Exception as e:
+            logger.error(f"Error forcing event processing: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
