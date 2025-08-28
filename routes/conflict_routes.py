@@ -1266,132 +1266,122 @@ if os.getenv("ENV", "development") == "development":
     async def get_debug_metrics(user_id):
         """Get detailed performance metrics (debug only)."""
         conversation_id = request.args.get("conversation_id")
-        
         if not conversation_id:
             return jsonify({"error": "Missing conversation_id parameter"}), 400
-        
+
         try:
             synthesizer = await get_synthesizer(user_id, int(conversation_id))
-            
+
+            cache_hits = getattr(synthesizer, "_cache_hits", 0)
+            cache_misses = getattr(synthesizer, "_cache_misses", 0)
             metrics = {
-                "cache_hits": synthesizer._cache_hits,
-                "cache_misses": synthesizer._cache_misses,
-                "cache_hit_ratio": synthesizer._cache_hits / max(1, synthesizer._cache_hits + synthesizer._cache_misses),
-                "bundle_cache_size": len(synthesizer._bundle_cache),
-                "active_conflicts": len(synthesizer._conflict_states),
-                "performance_metrics": synthesizer._performance_metrics,
-                "global_metrics": synthesizer._global_metrics
+                "cache_hits": cache_hits,
+                "cache_misses": cache_misses,
+                "cache_hit_ratio": cache_hits / max(1, cache_hits + cache_misses),
+                "bundle_cache_size": len(getattr(synthesizer, "_bundle_cache", {})),
+                "active_conflicts": len(getattr(synthesizer, "_conflict_states", {})),
+                "performance_metrics": getattr(synthesizer, "_performance_metrics", {}),
+                "global_metrics": getattr(synthesizer, "_global_metrics", {}),
             }
-            
-            return jsonify({
-                "success": True,
-                "metrics": metrics
-            })
+
+            return jsonify({"success": True, "metrics": metrics})
         except Exception as e:
             logger.error(f"Error getting debug metrics: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
-    
+
     @conflict_bp.route("/api/conflict/debug/subsystems", methods=["GET"])
     @require_login
     async def get_subsystem_info(user_id):
         """Get information about registered subsystems (debug only)."""
         conversation_id = request.args.get("conversation_id")
-        
         if not conversation_id:
             return jsonify({"error": "Missing conversation_id parameter"}), 400
-        
+
         try:
             synthesizer = await get_synthesizer(user_id, int(conversation_id))
-            
+
             subsystem_info = {}
-            for subsystem_type, subsystem in synthesizer._subsystems.items():
-                subsystem_info[subsystem_type.value] = {
-                    "capabilities": list(subsystem.capabilities) if hasattr(subsystem, "capabilities") else [],
-                    "dependencies": [dep.value for dep in subsystem.dependencies] if hasattr(subsystem, "dependencies") else [],
-                    "event_subscriptions": [event.value for event in subsystem.event_subscriptions] if hasattr(subsystem, "event_subscriptions") else []
+            for subsystem_type, subsystem in getattr(synthesizer, "_subsystems", {}).items():
+                subsystem_info[getattr(subsystem_type, "value", str(subsystem_type))] = {
+                    "capabilities": list(getattr(subsystem, "capabilities", [])),
+                    "dependencies": [getattr(dep, "value", str(dep)) for dep in getattr(subsystem, "dependencies", [])],
+                    "event_subscriptions": [getattr(evt, "value", str(evt)) for evt in getattr(subsystem, "event_subscriptions", [])],
                 }
-            
+
+            return jsonify({"success": True, "subsystems": subsystem_info})
+        except Exception as e:
+            logger.error(f"Error getting subsystem info: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
     @conflict_bp.route("/api/conflict/debug/subsystem/<string:subsystem_type>", methods=["GET"])
     @require_login
     async def get_specific_subsystem_status(user_id, subsystem_type):
         """Get detailed status for a specific subsystem (debug only)."""
         conversation_id = request.args.get("conversation_id")
-        
         if not conversation_id:
             return jsonify({"error": "Missing conversation_id parameter"}), 400
-        
+
         try:
             from logic.conflict_system.conflict_synthesizer import SubsystemType
-            
+
             # Validate subsystem type
             try:
                 subsystem_enum = SubsystemType[subsystem_type.upper()]
             except KeyError:
                 return jsonify({"error": f"Invalid subsystem type: {subsystem_type}"}), 400
-            
+
             synthesizer = await get_synthesizer(user_id, int(conversation_id))
-            
-            # Get specific subsystem
-            subsystem = synthesizer._subsystems.get(subsystem_enum)
-            
+
+            subsystem = getattr(synthesizer, "_subsystems", {}).get(subsystem_enum)
             if not subsystem:
                 return jsonify({"error": f"Subsystem {subsystem_type} not registered"}), 404
-            
-            # Get health check
+
+            # Health check can be async
             health = await subsystem.health_check()
-            
-            # Get additional info
+
             info = {
                 "type": subsystem_type,
                 "healthy": health.get("healthy", False),
-                "capabilities": list(subsystem.capabilities) if hasattr(subsystem, "capabilities") else [],
-                "dependencies": [dep.value for dep in subsystem.dependencies] if hasattr(subsystem, "dependencies") else [],
-                "event_subscriptions": [event.value for event in subsystem.event_subscriptions] if hasattr(subsystem, "event_subscriptions") else [],
-                "health_details": health
+                "capabilities": list(getattr(subsystem, "capabilities", [])),
+                "dependencies": [getattr(dep, "value", str(dep)) for dep in getattr(subsystem, "dependencies", [])],
+                "event_subscriptions": [getattr(evt, "value", str(evt)) for evt in getattr(subsystem, "event_subscriptions", [])],
+                "health_details": health,
             }
-            
-            return jsonify({
-                "success": True,
-                "subsystem": info
-            })
+
+            return jsonify({"success": True, "subsystem": info})
         except Exception as e:
             logger.error(f"Error getting subsystem status: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
-    
+
     @conflict_bp.route("/api/conflict/debug/force-event-processing", methods=["POST"])
     @require_login
     async def force_event_processing(user_id):
         """Force immediate processing of all queued events (debug only)."""
         data = await request.get_json() or {}
-        
+
         validation_error = await validate_request_data(data, ["conversation_id"])
         if validation_error:
             return jsonify(validation_error), validation_error["status"]
-        
-        conversation_id = data["conversation_id"]
-        
+
+        conversation_id = int(data["conversation_id"])
         try:
             synthesizer = await get_synthesizer(user_id, conversation_id)
-            
-            # Force process all events in queue
+
             processed = []
+            # Drain the queue
             while not synthesizer._event_queue.empty():
                 try:
                     event = synthesizer._event_queue.get_nowait()
                     responses = await synthesizer.emit_event(event)
                     processed.append({
-                        "event_id": event.event_id,
-                        "event_type": event.event_type.value,
-                        "responses_count": len(responses) if responses else 0
+                        "event_id": getattr(event, "event_id", None),
+                        "event_type": getattr(getattr(event, "event_type", None), "value", None),
+                        "responses_count": len(responses) if responses else 0,
                     })
                 except asyncio.QueueEmpty:
                     break
-            
-            return jsonify({
-                "success": True,
-                "events_processed": len(processed),
-                "events": processed
-            })
+
+            return jsonify({"success": True, "events_processed": len(processed), "events": processed})
         except Exception as e:
             logger.error(f"Error forcing event processing: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
