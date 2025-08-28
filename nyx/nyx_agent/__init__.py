@@ -179,7 +179,7 @@ from .guardrails import (
 
 # Compatibility layer
 # NOTE: your file is named 'compatability.py' in the repo you shared
-from .compatability import (
+from .compatibility import (
     AgentContext,
 
     # Legacy function mappings
