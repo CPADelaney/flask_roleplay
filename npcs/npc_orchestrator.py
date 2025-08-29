@@ -22,7 +22,6 @@ from npcs.npc_agent_system import NPCAgentSystem
 from npcs.npc_coordinator import NPCAgentCoordinator
 from npcs.npc_memory import NPCMemoryManager
 from npcs.npc_perception import EnvironmentPerception
-from npcs.npc_relationship import NPCRelationshipManager
 from npcs.npc_learning_adaptation import NPCLearningManager
 
 from nyx.scene_keys import generate_scene_cache_key
@@ -1028,6 +1027,20 @@ class NPCOrchestrator:
             logger.exception(f"group interaction coordination failed: {e}")
             return {"error": str(e)}
 
+    async def apply_relationship_drift(self) -> Dict[str, Any]:
+        try:
+            mgr = await self._get_dynamic_relationship_manager()
+            await mgr.apply_daily_drift()
+            # Flush any pending relationship writes
+            await mgr._flush_updates()
+            # Mark active NPCs as changed for deltas (lightweight)
+            for nid in list(self._active_npcs):
+                self._notify_npc_changed(nid)
+            return {"success": True}
+        except Exception as e:
+            logger.debug(f"[Relationships] apply_relationship_drift failed: {e}")
+            return {"success": False, "error": str(e)}
+
     async def handle_group_player_action(
         self,
         action: Dict[str, Any],
@@ -1752,6 +1765,11 @@ class NPCOrchestrator:
                 await self.run_learning_adaptation_cycle(list(touched_npcs))
         except Exception as e:
             logger.debug(f"[Learning] post-calendar cycle failed: {e}")
+
+        try:
+            await self.apply_relationship_drift()
+        except Exception as e:
+            logger.debug(f"[Relationships] drift pass failed: {e}")
     
         return results
     
