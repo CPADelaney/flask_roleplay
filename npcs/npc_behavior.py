@@ -172,7 +172,8 @@ class BehaviorEvolution:
                 # Extract NPCs who failed loyalty tests
                 weak_targets = []
                 for memory in loyalty_tests.get("memories", []):
-                    memory_text = memory.get("text", "").lower()
+                    raw = memory.get("text") or memory.get("content") or memory.get("memory_text") or ""
+                    memory_text = str(raw).lower()
                     # Extract NPC IDs from text (requires consistent memory format)
                     if "npc_" in memory_text and "failed" in memory_text:
                         for word in memory_text.split():
