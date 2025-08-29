@@ -276,14 +276,10 @@ class MemoryOrchestrator:
             UnifiedMemoryManager, _, _, _, _, _ = _lazy_import_memory_core()
             
             # Initialize unified manager
-            self.unified_manager = UnifiedMemoryManager(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-            await self.unified_manager.initialize()
+            self.unified_manager = None
             
             # Initialize cache
-            from memory.cache import MemoryCache
+            from memory.core import MemoryCache
             self.cache = MemoryCache(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
@@ -317,7 +313,7 @@ class MemoryOrchestrator:
                 unified_manager=self.unified_manager
             )
             
-            from memory.emotional_memory import EmotionalMemoryManager
+            from memory.emotional import EmotionalMemoryManager
             self.emotional_manager = EmotionalMemoryManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
@@ -335,7 +331,7 @@ class MemoryOrchestrator:
                 conversation_id=self.conversation_id
             )
             
-            from memory.flashback_manager import FlashbackManager
+            from memory.flashbacks import FlashbackManager
             self.flashback_manager = FlashbackManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
@@ -652,11 +648,76 @@ class MemoryOrchestrator:
             scope=scope,
             last_changed_at=time.time()
         )
+
+        # Emotion-aware augmentation (mood congruent recall)
+        try:
+            bundle = await self._augment_bundle_with_emotion(bundle)
+        except Exception as e:
+            logger.debug(f"Emotion augmentation skipped: {e}")
     
         # Trim to token budget and finalize token size
         bundle = self._trim_to_token_budget(bundle, token_budget)
         bundle.bundle_size_tokens = self._estimate_bundle_tokens(bundle)
     
+        return bundle
+
+    async def _augment_bundle_with_emotion(self, bundle: MemoryBundle) -> MemoryBundle:
+        """Append mood-congruent memories for player and NPCs into scene_memories (deduped)."""
+        scope = bundle.scope or SceneScope()
+        seen_ids = set()
+        def _add_unique(mem_dicts: List[Dict[str, Any]]):
+            for m in mem_dicts:
+                mid = m.get('id') or m.get('memory_id')
+                if mid and mid in seen_ids:
+                    continue
+                if mid:
+                    seen_ids.add(mid)
+                bundle.scene_memories.append(m)
+        # seed seen with existing
+        for s in bundle.scene_memories:
+            mid = s.get('id') or s.get('memory_id')
+            if mid:
+                seen_ids.add(mid)
+
+        # Player
+        try:
+            state = await self.emotional_manager.get_entity_emotional_state(
+                entity_type=EntityType.PLAYER.value, entity_id=self.user_id
+            )
+            mood = {
+                "primary_emotion": (state.get("current_emotion") or {}).get("primary", "neutral"),
+                "intensity": (state.get("current_emotion") or {}).get("intensity", 0.3),
+                "valence": (state.get("current_emotion") or {}).get("valence", 0.0),
+                "arousal": (state.get("current_emotion") or {}).get("arousal", 0.0),
+            }
+            congruent = await self.emotional_manager.retrieve_mood_congruent_memories(
+                entity_type=EntityType.PLAYER.value, entity_id=self.user_id, current_mood=mood, limit=3
+            )
+            # adapt shape
+            mems = [{"id": x["id"], "text": x["text"], "tags": ["mood_congruent","player"]} for x in (congruent or [])]
+            _add_unique(mems)
+        except Exception:
+            pass
+
+        # NPCs
+        for npc_id in (scope.npc_ids or []):
+            try:
+                state = await self.emotional_manager.get_entity_emotional_state(
+                    entity_type=EntityType.NPC.value, entity_id=npc_id
+                )
+                mood = {
+                    "primary_emotion": (state.get("current_emotion") or {}).get("primary", "neutral"),
+                    "intensity": (state.get("current_emotion") or {}).get("intensity", 0.3),
+                    "valence": (state.get("current_emotion") or {}).get("valence", 0.0),
+                    "arousal": (state.get("current_emotion") or {}).get("arousal", 0.0),
+                }
+                congruent = await self.emotional_manager.retrieve_mood_congruent_memories(
+                    entity_type=EntityType.NPC.value, entity_id=npc_id, current_mood=mood, limit=2
+                )
+                mems = [{"id": x["id"], "text": x["text"], "tags": ["mood_congruent","npc"]} for x in (congruent or [])]
+                _add_unique(mems)
+            except Exception:
+                continue
         return bundle
     
     async def _get_player_memories_for_scope(self, scope: SceneScope) -> List[Dict[str, Any]]:
@@ -814,14 +875,32 @@ class MemoryOrchestrator:
         
         for mem in memories:
             # Count themes
-            for tag in mem.get('tags', []):
+            for tag in (mem.get('tags') or []):
                 theme_counts[tag] += 1
-            
-            # Count emotions
-            emotional_state = mem.get('emotional_state', {})
+
+            # Count emotions: support both flat 'emotional_state' and metadata.emotions
+            emotional_state = mem.get('emotional_state') or {}
+            if not emotional_state:
+                md = mem.get('metadata') or {}
+                emo = md.get('emotions') or {}
+                # try primary first
+                primary = (emo.get('primary') or {})
+                pname = primary.get('name')
+                pinten = float(primary.get('intensity', 0.0) or 0.0)
+                if pname:
+                    emotional_state[pname] = pinten
+                # include secondaries
+                for k, v in (emo.get('secondary') or {}).items():
+                    try:
+                        emotional_state[k] = max(emotional_state.get(k, 0.0), float(v or 0.0))
+                    except Exception:
+                        pass
             for emotion, intensity in emotional_state.items():
-                if intensity > 0.5:
-                    emotion_counts[emotion] += 1
+                try:
+                    if float(intensity) > 0.5:
+                        emotion_counts[emotion] += 1
+                except Exception:
+                    continue
         
         # Build pattern objects
         for theme, count in sorted(theme_counts.items(), key=lambda x: x[1], reverse=True)[:3]:
@@ -1140,19 +1219,48 @@ class MemoryOrchestrator:
             # Get entity manager
             manager = await self._get_entity_manager(entity_type, entity_id)
             
-            # Retrieve memories
+            # Retrieve memories with robust fallbacks
+            mem_list = []
             if query:
-                memories = await self.search_vector_store(
+                # Vector search first (embedding-service output must be normalized downstream)
+                vs = await self.search_vector_store(
                     query=query,
                     entity_type=entity_type,
                     top_k=limit,
                     filter_dict=filters
                 )
-                mem_list = self._as_mem_list(memories)
+                mem_list = self._as_mem_list(vs)
             else:
-                # Prefer a query-capable API if available
-                mem_list = None
-                if hasattr(manager, "query_memories"):
+                if hasattr(manager, "retrieve_memories"):
+                    # Use core UnifiedMemoryManager API
+                    # Map filters we understand (created_after) via python-side filtering
+                    raw = await manager.retrieve_memories(
+                        query=None,
+                        tags=tags,
+                        limit=max(limit, 20)  # fetch extra to allow post-filtering
+                    )
+                    # Convert Memory objects to dicts
+                    mem_list = [m.to_dict() if hasattr(m, "to_dict") else m for m in raw]
+                    # Post-filter by created_after if present
+                    ca = (filters or {}).get("created_after")
+                    if ca:
+                        try:
+                            from datetime import datetime
+                            cutoff = datetime.fromisoformat(str(ca).replace("Z", "+00:00"))
+                            def _p_ts(x):
+                                s = x.get("timestamp") or x.get("created_at") or x.get("created")
+                                if not s: return None
+                                return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+                            mem_list = [m for m in mem_list if (_p_ts(m) and _p_ts(m) >= cutoff)]
+                        except Exception:
+                            pass
+                    # Filter by memory_type if requested
+                    if memory_type:
+                        mt = str(memory_type).lower()
+                        mem_list = [m for m in mem_list if str(m.get("memory_type","")).lower() == mt]
+                    # Trim to limit after filtering
+                    mem_list = mem_list[:limit]
+                elif hasattr(manager, "query_memories"):
                     res = await manager.query_memories(
                         filters=filters or {},
                         limit=limit,
@@ -1160,7 +1268,7 @@ class MemoryOrchestrator:
                         tags=tags
                     )
                     mem_list = res if isinstance(res, list) else res.get('memories', [])
-                else:
+                elif hasattr(manager, "get_recent_memories"):
                     res = await manager.get_recent_memories(limit=limit)
                     mem_list = res if isinstance(res, list) else res.get('memories', [])
             
@@ -1272,7 +1380,14 @@ class MemoryOrchestrator:
                 )
                 await manager.initialize()
             else:
-                manager = self.unified_manager  # already initialized in initialize()
+                # Fallback: core UnifiedMemoryManager (per-entity instance)
+                from memory.core import UnifiedMemoryManager
+                manager = UnifiedMemoryManager(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
             self.memory_managers[key] = manager
         return self.memory_managers[key]
     
@@ -1419,6 +1534,36 @@ class MemoryOrchestrator:
         
         # Get scene bundle
         bundle = await self.get_scene_bundle(scope)
+
+        # Trauma triggers → add to linked if any
+        try:
+            trig_player = await self.emotional_manager.process_traumatic_triggers(
+                entity_type=EntityType.PLAYER.value, entity_id=self.user_id, text=user_input
+            )
+            linked_extra = []
+            if trig_player.get("triggered"):
+                for tm in trig_player.get("triggered_memories", []):
+                    linked_extra.append({
+                        "id": tm.get("id"),
+                        "text": tm.get("text"),
+                        "tags": ["trauma_trigger","player"]
+                    })
+            for npc_id in context.get('active_npcs', []):
+                trig_npc = await self.emotional_manager.process_traumatic_triggers(
+                    entity_type=EntityType.NPC.value, entity_id=npc_id, text=user_input
+                )
+                if trig_npc.get("triggered"):
+                    for tm in trig_npc.get("triggered_memories", []):
+                        linked_extra.append({
+                            "id": tm.get("id"),
+                            "text": tm.get("text"),
+                            "tags": ["trauma_trigger","npc"]
+                        })
+            if linked_extra:
+                bundle['linked'] = (bundle.get('linked') or []) + linked_extra
+        except Exception:
+            pass
+
         
         # Merge bundle into context
         context['memories'] = {
@@ -1665,6 +1810,32 @@ class MemoryOrchestrator:
             entity_id=entity_id,
             trigger=trigger
         )
+
+    async def remember_emotional(
+        self,
+        entity_type: str,
+        entity_id: int,
+        memory_text: str,
+        primary_emotion: str,
+        emotion_intensity: float,
+        secondary_emotions: Optional[Dict[str, float]] = None,
+        significance: int = 3,
+        tags: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Store a memory with emotional data and invalidate affected caches."""
+        res = await self.emotional_manager.add_emotional_memory(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_text=memory_text,
+            primary_emotion=primary_emotion,
+            emotion_intensity=emotion_intensity,
+            secondary_emotions=secondary_emotions,
+            significance=significance,
+            tags=tags or []
+        )
+        # Invalidate caches for the entity
+        await self._invalidate_caches_for_entity(entity_type, entity_id)
+        return res
     
     async def apply_mask(
         self,
