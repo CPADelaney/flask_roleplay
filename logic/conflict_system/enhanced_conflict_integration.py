@@ -131,87 +131,134 @@ class EnhancedIntegrationSubsystem:
         return True
     
     async def handle_event(self, event) -> Any:
-        """Handle an event from the synthesizer"""
+        """Handle an event from the synthesizer (orchestrator-aware)."""
         from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
-        
+    
         try:
             if event.event_type == EventType.STATE_SYNC:
-                # Analyze for emerging tensions
-                scene_context = event.payload
+                # Accept either raw scene-context shape or {scene_context: {...}}
+                payload = event.payload or {}
+                scene_context = payload.get('scene_context') or payload
+    
                 tensions = await self.analyze_scene_tensions(scene_context)
-                
+    
                 side_effects = []
-                if tensions and tensions['should_generate_conflict']:
-                    # Request conflict creation through synthesizer
-                    side_effects.append(SystemEvent(
-                        event_id=f"tension_{event.event_id}",
-                        event_type=EventType.CONFLICT_CREATED,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'conflict_type': tensions['suggested_type'],
-                            'context': tensions['context'],
-                            'tension_source': tensions['source']
-                        },
-                        priority=5
-                    ))
-                
+                if tensions and tensions.get('should_generate_conflict'):
+                    # Suggest conflict creation as a side-effect (orchestrator will route)
+                    try:
+                        suggested_type = tensions.get('suggested_type') or 'slice_of_life'
+                        side_effects.append(SystemEvent(
+                            event_id=f"tension_{event.event_id}",
+                            event_type=EventType.CONFLICT_CREATED,
+                            source_subsystem=self.subsystem_type,
+                            payload={
+                                'conflict_type': suggested_type,
+                                'context': tensions.get('context', {}),
+                                'tension_source': tensions.get('tensions', []),
+                            },
+                            priority=6
+                        ))
+                    except Exception:
+                        pass
+    
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
                     data={
-                        'tensions_found': len(tensions.get('tensions', [])),
-                        'manifestation': tensions.get('manifestation', [])
+                        'tensions': tensions.get('tensions', []),
+                        'should_generate_conflict': bool(tensions.get('should_generate_conflict', False)),
+                        'suggested_type': tensions.get('suggested_type'),
+                        'manifestations': tensions.get('manifestation', []),
                     },
                     side_effects=side_effects
                 )
-                
-            elif event.event_type == EventType.PLAYER_CHOICE:
-                # Process how choice affects conflicts
-                choice_impact = await self._analyze_choice_impact(event.payload)
-                
+    
+            if event.event_type == EventType.PLAYER_CHOICE:
+                choice_impact = await self._analyze_choice_impact(event.payload or {})
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data=choice_impact
+                    data=choice_impact,
+                    side_effects=[]
                 )
-                
-            elif event.event_type == EventType.NPC_REACTION:
-                # Integrate NPC reactions into conflicts
-                reaction_integration = await self._integrate_npc_reaction(event.payload)
-                
+    
+            if event.event_type == EventType.NPC_REACTION:
+                reaction_integration = await self._integrate_npc_reaction(event.payload or {})
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data=reaction_integration
+                    data=reaction_integration,
+                    side_effects=[]
                 )
-                
-            elif event.event_type == EventType.HEALTH_CHECK:
+    
+            if event.event_type == EventType.HEALTH_CHECK:
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data=await self.health_check()
+                    data=await self.health_check(),
+                    side_effects=[]
                 )
-            
+    
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=True,
-                data={}
+                data={},
+                side_effects=[]
             )
-            
+    
         except Exception as e:
             logger.error(f"Enhanced integration error: {e}")
+            from logic.conflict_system.conflict_synthesizer import SubsystemResponse
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=False,
-                data={'error': str(e)}
+                data={'error': str(e)},
+                side_effects=[]
             )
+
+    async def get_scene_bundle(self, scope) -> Dict[str, Any]:
+        """
+        Provide a small, cheap bundle for the scene. The synthesizer will merge these.
+        """
+        try:
+            scene_context = {
+                'location': getattr(scope, "location_id", None),
+                'present_npcs': getattr(scope, "npc_ids", []) or [],
+                'npcs': getattr(scope, "npc_ids", []) or [],
+                'topics': getattr(scope, "topics", []) or [],
+                'scene_type': getattr(scope, "scene_type", "unknown"),
+            }
+            tensions = await self.analyze_scene_tensions(scene_context)
+            manifestations = tensions.get('manifestation', []) or []
     
+            # Surface subtle ambient effects for slice-of-life vibes
+            ambient = []
+            for m in manifestations[:3]:
+                ambient.append(f"subtle_{str(m).lower().replace(' ', '_')}")
+            opportunity = []
+            if tensions.get('should_generate_conflict'):
+                stype = tensions.get('suggested_type') or 'slice_of_life'
+                opportunity.append({
+                    'type': f"tension_{stype}",
+                    'description': 'Emerging tension could become a small conflict',
+                })
+    
+            return {
+                'manifestations': manifestations,
+                'ambient_effects': ambient,
+                'opportunities': opportunity,
+                'last_changed_at': datetime.now().timestamp(),
+            }
+        except Exception as e:
+            logger.debug(f"get_scene_bundle failed: {e}")
+            return {}
+        
     async def health_check(self) -> Dict[str, Any]:
         """Return health status of the subsystem"""
         return {
@@ -423,49 +470,29 @@ class EnhancedIntegrationSubsystem:
         active_conflicts: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Generate how conflicts integrate into an activity"""
-        
         if not active_conflicts:
             return {'conflicts_active': False}
-        
+    
         prompt = f"""
         Integrate these conflicts into the activity:
-        
+    
         Activity: {activity}
         Conflicts: {json.dumps(active_conflicts[:3], indent=2)}
-        
-        Generate:
-        1. How conflicts subtly manifest
-        2. Environmental cues
-        3. NPC behavior changes
-        4. Player choice opportunities
-        
+    
         Return JSON:
         {{
-            "manifestations": ["specific details"],
-            "environmental_cues": ["atmosphere changes"],
-            "npc_behaviors": {{"npc_id": "behavior"}},
-            "choices": [
-                {{
-                    "text": "choice text",
-                    "subtext": "hidden meaning"
-                }}
-            ]
+          "manifestations": ["specific details"],
+          "environmental_cues": ["atmosphere changes"],
+          "npc_behaviors": {{"npc_id": "behavior"}},
+          "choices": [{{"text": "choice text","subtext": "hidden meaning"}}]
         }}
         """
-        
         response = await Runner.run(self.integration_narrator, prompt)
-        
         try:
-            result = json.loads(response.output)
-            return {
-                'conflicts_active': True,
-                **result
-            }
-        except json.JSONDecodeError:
-            return {
-                'conflicts_active': True,
-                'manifestations': ["Tension colors the interaction"]
-            }
+            result = json.loads(extract_runner_response(response))
+            return {'conflicts_active': True, **result}
+        except Exception:
+            return {'conflicts_active': True, 'manifestations': ["Tension colors the interaction"]}
     
     # ========== Helper Methods ==========
     
@@ -723,10 +750,15 @@ async def integrate_daily_conflicts(
     )
     synthesizer = await get_synthesizer(user_id, conversation_id)
 
-    # Check if there are any active conflicts first
-    sys_state = await synthesizer.get_system_state() or {}
-    active_conflict_ids = sys_state.get('active_conflicts', []) or []
-    conflicts_active = len(active_conflict_ids) > 0
+    # Check if there are any active conflicts via DB (since synthesizer.get_system_state() is not available)
+    async with get_db_connection_context() as conn:
+        has_active = await conn.fetchval("""
+            SELECT EXISTS (
+              SELECT 1 FROM Conflicts
+              WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
+            )
+        """, user_id, conversation_id)
+    conflicts_active = bool(has_active)
 
     if not conflicts_active:
         return {
@@ -791,7 +823,6 @@ async def integrate_daily_conflicts(
         synth_result.get('atmospheric_elements', synth_result.get('atmosphere', [])) or []
     )
 
-    # If nothing interesting happened, the activity may proceed normally even with conflicts present
     activity_proceeds_normally = (not manifestations) and (not player_choices) and (not npc_reactions)
 
     return {
