@@ -401,7 +401,7 @@ class ConflictSynthesizer:
                 TensionSubsystem(self.user_id, self.conversation_id),
                 StakeholderAutonomySystem(self.user_id, self.conversation_id),
                 PhaseSubsystem(self.user_id, self.conversation_id),
-                FlowControlSubsystem(self.user_id, self.conversation_id),
+                ConflictFlowSubsystem(self.user_id, self.conversation_id),
                 SocialDynamicsSubsystem(self.user_id, self.conversation_id),
                 LeverageSubsystem(self.user_id, self.conversation_id),
                 BackgroundConflictSubsystem(self.user_id, self.conversation_id),
