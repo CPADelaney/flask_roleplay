@@ -171,7 +171,7 @@ class BackgroundConflictOrchestrator:
             )
         return self._evolution_agent
     
-    async def generate_background_conflict(self) -> BackgroundConflict:
+    async def generate_background_conflict(self) -> Optional[BackgroundConflict]:
         """Generate a new background conflict"""
         # First check if we need a new conflict
         async with get_db_connection_context() as conn:
@@ -292,7 +292,7 @@ class BackgroundConflictOrchestrator:
         
         return conflict
     
-    async def advance_background_conflict(self, conflict: BackgroundConflict) -> WorldEvent:
+    async def advance_background_conflict(self, conflict: BackgroundConflict) -> Optional[WorldEvent]:
         """Advance a background conflict's state"""
         # Check if we should actually advance (not every time)
         should_advance = random.random() < 0.3  # 30% chance
@@ -467,7 +467,7 @@ class BackgroundNewsGenerator:
         self,
         conflict: BackgroundConflict,
         news_type: str = "random",
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Generate dynamic news about a conflict - respecting limits"""
         
         # Check if we should generate news
@@ -745,6 +745,9 @@ class BackgroundConflictSubsystem:
         
         # Reference to synthesizer (set during initialization)
         self.synthesizer = None
+
+        # Provide manager interface expected by ConflictSynthesizer fast-path
+        self.manager = self
         
         # Caches
         self._context_cache = {}
@@ -782,7 +785,51 @@ class BackgroundConflictSubsystem:
             EventType.HEALTH_CHECK,
             EventType.STATE_SYNC,
             EventType.CONFLICT_CREATED,
-            EventType.PHASE_TRANSITION
+            EventType.PHASE_TRANSITION,
+            EventType.SCENE_ENTER,
+            EventType.DAY_TRANSITION
+         }
+
+    
+    async def get_scene_context(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fast-path for ConflictSynthesizer.get_scene_bundle().
+        Returns:
+          {
+            'active_conflicts': [ { 'id': int, 'type': 'background', 'intensity': float, 'name': str } ],
+            'ambient_atmosphere': [str, ...],
+            'world_tension': float,
+            'last_changed_at': float
+          }
+        """
+        update = await self.daily_background_update(generate_new=False)
+        # Build ambient list from ripples
+        ripples = ((update.get('ripple_effects') or {}).get('ripples') or {})
+        ambient = ripples.get('ambient_mood') or []
+        if not isinstance(ambient, list):
+            ambient = [str(ambient)]
+        
+        # Represent active conflicts lightly for the bundle
+        active_conflicts_list = []
+        conflicts = await self._get_active_background_conflicts()
+        for c in conflicts[:5]:
+            try:
+                intensity_enum = BackgroundIntensity[c['intensity'].upper()]
+                intensity_level = float(INTENSITY_TO_FLOAT[intensity_enum])
+            except Exception:
+                intensity_level = 0.4
+            active_conflicts_list.append({
+                'id': c['id'],
+                'type': 'background',
+                'name': c.get('name', 'Background Conflict'),
+                'intensity': intensity_level
+            })
+        
+        return {
+            'active_conflicts': active_conflicts_list,
+            'ambient_atmosphere': ambient,
+            'world_tension': float(update.get('world_tension') or 0.0),
+            'last_changed_at': datetime.utcnow().timestamp()
         }
     
     async def initialize(self, synthesizer) -> bool:
@@ -804,7 +851,7 @@ class BackgroundConflictSubsystem:
     async def handle_event(self, event) -> Any:
         """Handle an event from the synthesizer"""
         from logic.conflict_system.conflict_synthesizer import EventType, SubsystemResponse, SystemEvent
-        
+    
         try:
             if event.event_type == EventType.HEALTH_CHECK:
                 health = await self.health_check()
@@ -813,14 +860,15 @@ class BackgroundConflictSubsystem:
                     event_id=event.event_id,
                     success=True,
                     data=health,
+                    side_effects=[]
                 )
-            
+    
             elif event.event_type == EventType.STATE_SYNC:
                 # Don't generate new content, just return cached/existing
                 daily_update = await self.daily_background_update(generate_new=False)
-                
+    
                 # Only create news events if we have actual news
-                side_effects = []
+                side_effects: List[SystemEvent] = []
                 if daily_update.get("news"):
                     for news in daily_update.get("news", [])[:1]:  # Max 1 news event
                         side_effects.append(
@@ -832,7 +880,7 @@ class BackgroundConflictSubsystem:
                                 priority=8,  # Low priority
                             )
                         )
-                
+    
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
@@ -842,53 +890,117 @@ class BackgroundConflictSubsystem:
                         'news_count': len(daily_update.get("news", [])),
                         'active_conflicts': daily_update.get('active_conflicts', 0)
                     },
-                    side_effects=side_effects if side_effects else None
+                    side_effects=side_effects
                 )
-            
+    
             elif event.event_type == EventType.CONFLICT_CREATED:
-                # Handle new conflict creation
-                conflict_data = event.payload
-                if conflict_data.get('is_background', False):
+                # Handle new conflict creation (only if flagged as background)
+                payload = event.payload or {}
+                if payload.get('is_background', False):
                     conflict = await self.orchestrator.generate_background_conflict()
                     if conflict:
                         return SubsystemResponse(
                             subsystem=self.subsystem_type,
                             event_id=event.event_id,
                             success=True,
-                            data={'conflict': conflict.__dict__}
+                            data={'conflict': conflict.__dict__},
+                            side_effects=[]
                         )
-                
+                    else:
+                        return SubsystemResponse(
+                            subsystem=self.subsystem_type,
+                            event_id=event.event_id,
+                            success=False,
+                            data={'error': 'Max active conflicts reached or generation skipped'},
+                            side_effects=[]
+                        )
+                # If not a background conflict, we don't handle it here
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=False,
+                    data={'error': 'Event not relevant for background subsystem'},
+                    side_effects=[]
+                )
+    
             elif event.event_type == EventType.PHASE_TRANSITION:
                 # Handle conflict phase transitions
-                conflict_id = event.payload.get('conflict_id')
+                payload = event.payload or {}
+                conflict_id = payload.get('conflict_id')
                 if conflict_id:
                     conflicts = await self._get_active_background_conflicts()
                     for conf_data in conflicts:
                         if conf_data['id'] == conflict_id:
                             conflict = self._db_to_background_conflict(conf_data)
-                            event = await self.orchestrator.advance_background_conflict(conflict)
-                            if event:
+                            adv_event = await self.orchestrator.advance_background_conflict(conflict)
+                            if adv_event:
                                 return SubsystemResponse(
                                     subsystem=self.subsystem_type,
                                     event_id=event.event_id,
                                     success=True,
-                                    data={'event': event.__dict__}
+                                    data={'event': adv_event.__dict__},
+                                    side_effects=[]
                                 )
-            
+                    # Conflict not found or no advancement occurred
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=False,
+                        data={'error': 'Conflict not found or no advancement occurred'},
+                        side_effects=[]
+                    )
+    
+            elif event.event_type == EventType.SCENE_ENTER:
+                scene_ctx = (event.payload or {}).get('scene_context', {}) or {}
+                relevant = await self.is_relevant_to_scene(scene_ctx)
+                # Light scene context; do not force generation
+                bg = await self.get_scene_context(scene_ctx) if relevant else {
+                    'active_conflicts': [],
+                    'ambient_atmosphere': [],
+                    'world_tension': 0.0,
+                    'last_changed_at': datetime.utcnow().timestamp()
+                }
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'scene_context': bg},
+                    side_effects=[]
+                )
+    
+            elif event.event_type == EventType.DAY_TRANSITION:
+                # Advance background world; permit generation
+                await self.daily_background_update(generate_new=True)
+                # Optionally let processor tick asynchronously (kept lightweight)
+                try:
+                    asyncio.create_task(self.processor.process_queued_items(max_items=5))
+                except Exception:
+                    pass
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'day_transition': True},
+                    side_effects=[]
+                )
+    
+            # Default: not handled
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=False,
-                error="Event not handled"
+                data={'error': 'Event not handled'},
+                side_effects=[]
             )
-            
+    
         except Exception as e:
             logger.error(f"Error handling event {event.event_type}: {e}")
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=False,
-                error=str(e)
+                data={'error': str(e)},
+                side_effects=[]
             )
     
     async def health_check(self) -> Dict[str, Any]:
@@ -956,21 +1068,22 @@ class BackgroundConflictSubsystem:
             )
             news_items = [dict(n) for n in recent_news]
         
-        # Get cached ripple effects
-        ripples = {}
+        # Get cached ripple effects (normalized object with 'ripples' key)
+        ripples_obj = {'ripples': {}}
         if active_conflicts:
             # Use cached ripples if available
             ripple_key = "daily_ripples"
             if ripple_key in self._context_cache:
                 cached_ripple = self._context_cache[ripple_key]
                 if datetime.utcnow().timestamp() - cached_ripple['timestamp'] < 3600:
-                    ripples = cached_ripple['data']
+                    ripples_obj = cached_ripple['data']
                 elif generate_new:
                     ripple_result = await self.ripple_manager.generate_daily_ripples(active_conflicts)
                     ripples = ripple_result.get('ripples', {})
+                    ripples_obj = {'ripples': ripples}
                     self._context_cache[ripple_key] = {
                         'timestamp': datetime.utcnow().timestamp(),
-                        'data': ripples
+                        'data': ripples_obj
                     }
         
         # Check for opportunities (rarely)
@@ -984,7 +1097,7 @@ class BackgroundConflictSubsystem:
             'active_conflicts': len(active_conflicts),
             'events_today': events,
             'news': news_items,
-            'ripple_effects': ripples,
+            'ripple_effects': ripples_obj,
             'optional_opportunities': opportunities,
             'world_tension': sum(c.progress for c in active_conflicts) / (len(active_conflicts) * 100) if active_conflicts else 0
         }
@@ -1027,23 +1140,19 @@ class BackgroundConflictSubsystem:
         return topics
     
     async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
-        """Check if background system is relevant to scene"""
         # Background is always somewhat relevant for atmosphere
-        # But more relevant in certain contexts
-        location = scene_context.get('location', '')
-        
-        # More relevant in public spaces where news spreads
+        location_raw = scene_context.get('location', '')
+        location = str(location_raw or '')
+    
         public_locations = ['market', 'tavern', 'plaza', 'court']
         if any(loc in location.lower() for loc in public_locations):
             return True
-        
-        # Check for high-intensity conflicts
+    
         conflicts = await self._get_active_background_conflicts()
         for conflict in conflicts:
             if conflict.get('intensity') in ['visible_effects', 'ambient_tension']:
                 return True
-        
-        # Default: low relevance
+    
         return random.random() < 0.3
     
     async def _get_active_background_conflicts(self) -> List[Dict[str, Any]]:
@@ -1099,7 +1208,7 @@ async def initialize_background_world(
     
     # The subsystem will handle initialization
     from logic.conflict_system.conflict_synthesizer import SubsystemType
-    subsystem = synthesizer.subsystems.get(SubsystemType.BACKGROUND)
+    subsystem = getattr(synthesizer, "_subsystems", {}).get(SubsystemType.BACKGROUND)
     
     if subsystem:
         # Queue initial conflict generation if needed
