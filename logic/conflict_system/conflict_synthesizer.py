@@ -393,7 +393,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
             from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
             from logic.conflict_system.dynamic_conflict_template import TemplateGeneratorSubsystem
-            from logic.conflict_system.edge_case_handler import EdgeCaseHandlerSubsystem
+            from logic.conflict_system.edge_cases import ConflictEdgeCaseSubsystem
             from logic.conflict_system.slice_of_life_conflicts import SliceOfLifeConflictSubsystem
             from logic.conflict_system.enhanced_conflict_integration import EnhancedIntegrationSubsystem
             from logic.conflict_system.conflict_victory import ConflictVictorySubsystem
@@ -409,7 +409,7 @@ class ConflictSynthesizer:
                 ConflictVictorySubsystem(self.user_id, self.conversation_id),
                 ConflictCanonSubsystem(self.user_id, self.conversation_id),
                 TemplateGeneratorSubsystem(self.user_id, self.conversation_id),
-                EdgeCaseHandlerSubsystem(self.user_id, self.conversation_id),
+                ConflictEdgeCaseSubsystem(self.user_id, self.conversation_id),
                 SliceOfLifeConflictSubsystem(self.user_id, self.conversation_id),
                 EnhancedIntegrationSubsystem(self.user_id, self.conversation_id),
             ]
