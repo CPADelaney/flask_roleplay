@@ -391,7 +391,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.social_circle import SocialDynamicsSubsystem
             from logic.conflict_system.leverage import LeverageSubsystem
             from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
-            from logic.conflict_system.conflict_canon import CanonIntegrationSubsystem
+            from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
             from logic.conflict_system.dynamic_conflict_template import TemplateGeneratorSubsystem
             from logic.conflict_system.edge_case_handler import EdgeCaseHandlerSubsystem
             from logic.conflict_system.slice_of_life_conflicts import SliceOfLifeConflictSubsystem
@@ -406,7 +406,7 @@ class ConflictSynthesizer:
                 LeverageSubsystem(self.user_id, self.conversation_id),
                 BackgroundConflictSubsystem(self.user_id, self.conversation_id),
                 VictoryConditionSubsystem(self.user_id, self.conversation_id),
-                CanonIntegrationSubsystem(self.user_id, self.conversation_id),
+                ConflictCanonSubsystem(self.user_id, self.conversation_id),
                 TemplateGeneratorSubsystem(self.user_id, self.conversation_id),
                 EdgeCaseHandlerSubsystem(self.user_id, self.conversation_id),
                 SliceOfLifeConflictSubsystem(self.user_id, self.conversation_id),
