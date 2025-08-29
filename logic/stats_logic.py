@@ -1425,7 +1425,7 @@ async def check_relationship_milestones(user_id: int, conversation_id: int, play
             
             state = await manager.get_relationship_state(
                 entity1_type='player',
-                entity1_id=1,
+                entity1_id=user_id,
                 entity2_type=entity_type,
                 entity2_id=entity_id
             )
