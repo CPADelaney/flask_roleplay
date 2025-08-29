@@ -12,7 +12,7 @@ NEW: Scene-scoped bundle methods for optimized context assembly.
 
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple, Set, AsyncGenerator, Protocol
+from typing import Dict, List, Any, Optional, Union, Tuple, Set, AsyncGenerator, Protocol, Iterable
 from datetime import datetime, timedelta
 import json
 from enum import Enum
@@ -21,6 +21,8 @@ import os
 import asyncpg
 import hashlib
 import time
+import inspect
+import re
 
 # Core imports
 from db.connection import get_db_connection_context
@@ -76,6 +78,55 @@ DB_DSN = os.getenv("DB_DSN")
 # Singleton instance storage
 _ORCHESTRATOR_INSTANCES: Dict[Tuple[int, int], "LoreOrchestrator"] = {}
 
+# ===== CANONICAL LORE BUNDLE SCHEMA CONTRACT =====
+# All orchestrator-facing data should conform to these shapes.
+#
+# Nation (politics):
+#   { id: int, name: str, government: str, culture: dict|str, matriarchy_level?: int }
+#
+# Conflict (international or local):
+#   {
+#       id: int, type: str, description: str,
+#       stakeholders: [{type: 'nation'|'faction'|'npc'|'location'|..., id: int, name?: str}], 
+#       intensity: float (0..1), phase: str, resolution_status: 'ongoing'|'resolved'|...
+#   }
+#
+# Religion:
+#   { id: int, name: str, deities?: [str], beliefs?: str, influence?: float }
+#
+# Pantheon:
+#   { id: int, name: str, description?: str, matriarchal_elements?: any }
+#
+# Deity:
+#   { id: int, name: str, domains?: [str], description?: str }
+#
+# ReligiousPractice:
+#   { id: int, name: str, practice_type?: str, description?: str, purpose?: str }
+#
+# HolySite:
+#   { id: int, name: str, location_id?: int, description?: str }
+#
+# ReligiousOrder:
+#   { id: int, name: str, doctrine?: str, hierarchy?: any }
+#
+# NationReligionDistribution:
+#   {
+#     id: int, nation_id: int, state_religion: bool,
+#     primary_pantheon_id?: int,
+#     pantheon_distribution?: { [pantheon_id: str]: number },
+#     religiosity_level?: int, religious_tolerance?: int,
+#     religious_laws?: dict, religious_holidays?: [str],
+#     religious_conflicts?: [str], religious_minorities?: [str]
+#   }
+#
+# Location:
+#   { id: int, name: str, description?: str, nation_id?: int, ... }
+#
+# Myth:
+#   { id: int, title: str, description?: str, origin?: str, belief_level?: float, has_variants?: bool }
+#
+# World Lore (free-form, but keys inside bundles should be simple scalars/arrays/dicts)
+# ================================================
 
 class SceneScope(Protocol):
     """Protocol for scene scope objects."""
@@ -833,27 +884,28 @@ class LoreOrchestrator:
         return self._pool
 
     async def get_location_context(self, location_ref: Union[int, str]) -> Dict[str, Any]:
-        """
-        Retrieve a lightweight location context by id OR name.
-        """
         try:
             async with get_db_connection_context() as conn:
                 if isinstance(location_ref, int):
                     row = await conn.fetchrow("""
-                        SELECT location_id, location_name, description,
-                               nation_id, governance, culture, population,
-                               canonical_rules, tags
+                        SELECT 
+                            COALESCE(id, location_id) AS id,
+                            COALESCE(location_name, name) AS name,
+                            description, nation_id, governance, culture, population,
+                            canonical_rules, tags
                         FROM Locations
-                        WHERE location_id = $1
+                        WHERE COALESCE(id, location_id) = $1
                         LIMIT 1
                     """, location_ref)
                 else:
                     row = await conn.fetchrow("""
-                        SELECT location_id, location_name, description,
-                               nation_id, governance, culture, population,
-                               canonical_rules, tags
+                        SELECT 
+                            COALESCE(id, location_id) AS id,
+                            COALESCE(location_name, name) AS name,
+                            description, nation_id, governance, culture, population,
+                            canonical_rules, tags
                         FROM Locations
-                        WHERE location_name = $1
+                        WHERE COALESCE(location_name, name) = $1
                         LIMIT 1
                     """, location_ref)
     
@@ -861,8 +913,8 @@ class LoreOrchestrator:
                     return {}
     
                 data = {
-                    'id': row['location_id'],
-                    'name': row['location_name'],
+                    'id': row['id'],
+                    'name': row['name'],
                     'description': (row['description'] or '')[:200],
                     'nation_id': row['nation_id'],
                     'governance': row['governance'] or {},
@@ -873,29 +925,29 @@ class LoreOrchestrator:
                 }
     
                 landmarks = await conn.fetch("""
-                    SELECT landmark_id, name, significance
+                    SELECT landmark_id AS id, name, significance
                     FROM Landmarks
                     WHERE location_id = $1
                     ORDER BY significance DESC
                     LIMIT 3
-                """, row['location_id'])
+                """, row['id'])
                 if landmarks:
                     data['landmarks'] = [
-                        {'id': lm['landmark_id'], 'name': lm['name'], 'significance': lm['significance']}
+                        {'id': lm['id'], 'name': lm['name'], 'significance': lm['significance']}
                         for lm in landmarks
                     ]
     
                 events = await conn.fetch("""
-                    SELECT event_name, description, event_date
+                    SELECT event_name AS name, description, event_date
                     FROM Events
                     WHERE location = $1
                     ORDER BY event_date DESC
                     LIMIT 2
-                """, row['location_name'])
+                """, row['name'])
                 if events:
                     data['recent_events'] = [
                         {
-                            'name': e['event_name'],
+                            'name': e['name'],
                             'description': (e['description'] or '')[:100],
                             'date': e['event_date'].isoformat() if e['event_date'] else None
                         }
@@ -908,6 +960,13 @@ class LoreOrchestrator:
             logger.debug(f"get_location_context failed for '{location_ref}': {e}")
             return {}
         
+    async def analyze_setting_and_generate_orgs(self) -> Dict[str, Any]:
+        from lore.setting_analyzer import SettingAnalyzer
+        analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
+        await analyzer.initialize_governance()
+        ctx = self._create_mock_context()
+        return await analyzer.generate_organizations(ctx)
+    
     async def _get_changes_since(
         self, 
         scope_key: str, 
@@ -972,6 +1031,10 @@ class LoreOrchestrator:
             logger.warning(f"Failed to load changes from database: {e}")
         
         return changes
+
+    async def on_element_updated(self, element_type: str, element_id: int, element_data: Dict[str, Any]):
+        keys = self._get_affected_scope_keys(element_type, element_id, element_data or {})
+        await self._invalidate_scope_keys(keys)
     
     def _get_affected_scope_keys(
         self, 
@@ -1307,96 +1370,84 @@ class LoreOrchestrator:
                 self._bundle_cached_at.pop(key, None)
     
     async def _fetch_location_lore_for_bundle(self, location_id: int) -> Dict[str, Any]:
-        """Fetch location-specific lore for a bundle."""
+        """Fetch location-specific lore in canonical shape (id/name)."""
         try:
             location_lore = {}
-            
             async with get_db_connection_context() as conn:
                 self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
-                
-                # Get location data
-                location = await conn.fetchrow("""
-                    SELECT location_id, location_name, description, 
-                           nation_id, governance, culture, population,
-                           canonical_rules, tags
+    
+                # Normalize columns to canonical id/name
+                row = await conn.fetchrow("""
+                    SELECT 
+                        COALESCE(id, location_id) AS id,
+                        COALESCE(location_name, name) AS name,
+                        description,
+                        nation_id,
+                        governance,
+                        culture,
+                        population,
+                        canonical_rules,
+                        tags
                     FROM Locations
-                    WHERE location_id = $1
+                    WHERE COALESCE(id, location_id) = $1
+                    LIMIT 1
                 """, location_id)
-                
-                if location:
+    
+                if row:
                     location_lore = {
-                        'id': location['location_id'],
-                        'name': location['location_name'],
-                        'description': (location['description'] or '')[:200],
-                        'nation_id': location['nation_id'],
-                        'governance': location['governance'] or {},
-                        'culture': location['culture'] or {},
-                        'population': location['population'] or 0,
-                        'canonical_rules': location['canonical_rules'] or [],
-                        'tags': location['tags'] or []
+                        'id': row['id'],
+                        'name': row['name'],
+                        'description': (row['description'] or '')[:200],
+                        'nation_id': row['nation_id'],
+                        'governance': row['governance'] or {},
+                        'culture': row['culture'] or {},
+                        'population': row['population'] or 0,
+                        'canonical_rules': row['canonical_rules'] or [],
+                        'tags': row['tags'] or []
                     }
-                    
-                    # Track changes if enabled
+    
+                    # Change tracking
                     if self._change_tracking_enabled:
-                        scope_keys = self._get_affected_scope_keys('location', location_id, location_lore)
-                        await self._track_element_change('location', location_id, location_lore, scope_keys)
-                    
-                    # Get associated landmarks
-                    landmarks = await conn.fetch("""
-                        SELECT landmark_id, name, significance
+                        scope_keys = self._get_affected_scope_keys('location', row['id'], location_lore)
+                        await self._track_element_change('location', row['id'], location_lore, scope_keys)
+    
+                    # Landmarks (limit 3)
+                    lms = await conn.fetch("""
+                        SELECT landmark_id AS id, name, significance
                         FROM Landmarks
                         WHERE location_id = $1
                         ORDER BY significance DESC
                         LIMIT 3
-                    """, location_id)
-                    
-                    if landmarks:
+                    """, row['id'])
+                    if lms:
                         location_lore['landmarks'] = [
-                            {
-                                'id': lm['landmark_id'],
-                                'name': lm['name'],
-                                'significance': lm['significance']
-                            }
-                            for lm in landmarks
+                            {'id': lm['id'], 'name': lm['name'], 'significance': lm['significance']}
+                            for lm in lms
                         ]
-                    
-                    # Get recent historical events
-                    events = await conn.fetch("""
-                        SELECT event_name, description, event_date
+    
+                    # Recent events by location name
+                    evs = await conn.fetch("""
+                        SELECT event_name AS name, description, event_date
                         FROM Events
                         WHERE location = $1
                         ORDER BY event_date DESC
                         LIMIT 2
-                    """, location['location_name'])
-                    
-                    if events:
+                    """, row['name'])
+                    if evs:
                         location_lore['recent_events'] = [
                             {
-                                'name': e['event_name'],
+                                'name': e['name'],
                                 'description': (e['description'] or '')[:100],
                                 'date': e['event_date'].isoformat() if e['event_date'] else None
                             }
-                            for e in events
+                            for e in evs
                         ]
-            
+    
             return location_lore
-            
+    
         except Exception as e:
             logger.debug(f"Could not fetch location lore: {e}")
-            # Fallback to simpler approach
-            try:
-                # Try the existing method as fallback
-                location_name = f"location_{location_id}"
-                context = await self.get_location_context(location_name)
-                return {
-                    'id': location_id,
-                    'description': context.get('description', '')[:200],
-                    'governance': context.get('governance', {}),
-                    'culture': context.get('culture', {}),
-                    'canonical_rules': context.get('canonical_rules', [])
-                }
-            except:
-                return {}
+            return {}
     
     async def _fetch_world_lore_for_bundle(self, tags: List[str]) -> Dict[str, Any]:
         """Fetch world lore based on tags."""
@@ -1417,157 +1468,236 @@ class LoreOrchestrator:
             return {}
     
     async def _fetch_nations_for_bundle(self, nation_ids: List[int]) -> List[Dict[str, Any]]:
-        """Fetch nation data for bundle using batch query."""
+        """
+        Fetch nation data for bundle using schema-normalized batch query.
+        Ensures culture is always populated via COALESCE(culture, lore_context).
+        """
         try:
-            nations = []
+            nations: List[Dict[str, Any]] = []
             async with get_db_connection_context() as conn:
                 self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
-                
-                # Batch query using ANY()
+    
                 rows = await conn.fetch("""
-                    SELECT nation_id, nation_name, government_type, 
-                           culture, lore_context
+                    SELECT
+                        COALESCE(id, nation_id)     AS id,
+                        COALESCE(name, nation_name) AS name,
+                        COALESCE(government_type, government) AS government_type,
+                        COALESCE(culture, lore_context) AS culture
                     FROM Nations
-                    WHERE nation_id = ANY($1::int[])
+                    WHERE COALESCE(id, nation_id) = ANY($1::int[])
                 """, nation_ids[:5])
-                
-                for nation in rows:
+    
+                for r in rows:
                     nation_data = {
-                        'id': nation['nation_id'],
-                        'name': nation['nation_name'],
-                        'government': nation['government_type'],
-                        'culture': nation['culture']
+                        'id': r['id'],
+                        'name': r['name'],
+                        'government': r['government_type'] or 'unknown',
+                        'culture': r['culture'] or {}
                     }
                     nations.append(nation_data)
-                    
-                    # Track changes
+    
+                    # Change tracking
                     if self._change_tracking_enabled:
-                        scope_keys = self._get_affected_scope_keys('nation', nation['nation_id'], nation_data)
-                        await self._track_element_change('nation', nation['nation_id'], nation_data, scope_keys)
-            
+                        scope_keys = self._get_affected_scope_keys('nation', r['id'], nation_data)
+                        await self._track_element_change('nation', r['id'], nation_data, scope_keys)
+    
             return nations
         except Exception as e:
             logger.debug(f"Could not fetch nations: {e}")
             return []
-    
+        
     async def _fetch_religions_for_location(self, location_id: int) -> List[Dict[str, Any]]:
-        """Fetch religions active in a location."""
         try:
             religions = []
-            
             async with get_db_connection_context() as conn:
                 self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
-                
-                # Query religions active in this location
-                result = await conn.fetch("""
-                    SELECT DISTINCT r.religion_id, r.religion_name, 
-                           r.deity_names, r.core_beliefs, r.sacred_texts,
-                           nrd.influence_level
+    
+                query_try = """
+                    SELECT DISTINCT 
+                        COALESCE(r.id, r.religion_id) AS id,
+                        COALESCE(r.religion_name, r.name) AS name,
+                        r.deity_names,
+                        r.core_beliefs,
+                        r.sacred_texts,
+                        nrd.influence_level
                     FROM Religions r
-                    LEFT JOIN NationReligionDistribution nrd ON r.religion_id = nrd.religion_id
+                    LEFT JOIN NationReligionDistribution nrd ON COALESCE(r.id, r.religion_id) = nrd.religion_id
                     LEFT JOIN Locations l ON l.nation_id = nrd.nation_id
-                    WHERE l.location_id = $1 AND nrd.influence_level > 0.1
+                    WHERE COALESCE(l.id, l.location_id) = $1 AND COALESCE(nrd.influence_level, 0) > 0.1
                     ORDER BY nrd.influence_level DESC
                     LIMIT 5
-                """, location_id)
-                
-                for row in result:
+                """
+    
+                rows = []
+                try:
+                    rows = await conn.fetch(query_try, location_id)
+                except Exception:
+                    # Fallback: derive a pseudo-influence from NationReligion.religiosity_level
+                    rows = await conn.fetch("""
+                        SELECT DISTINCT 
+                            COALESCE(r.id, r.religion_id) AS id,
+                            COALESCE(r.religion_name, r.name) AS name,
+                            r.deity_names,
+                            r.core_beliefs,
+                            r.sacred_texts,
+                            nr.religiosity_level AS influence_level
+                        FROM Religions r
+                        JOIN NationReligion nr ON TRUE
+                        JOIN Locations l ON l.nation_id = nr.nation_id
+                        WHERE COALESCE(l.id, l.location_id) = $1
+                        ORDER BY COALESCE(nr.religiosity_level, 0) DESC
+                        LIMIT 5
+                    """, location_id)
+    
+                for row in rows:
                     religion_data = {
-                        'id': row['religion_id'],
-                        'name': row['religion_name'],
-                        'deities': (row['deity_names'] or [])[:3],  # Guard against None
+                        'id': row['id'],
+                        'name': row['name'],
+                        'deities': (row['deity_names'] or [])[:3],
                         'beliefs': (row['core_beliefs'] or '')[:100],
-                        'influence': row['influence_level'] or 0.5
+                        'influence': row.get('influence_level') or 0.5
                     }
                     religions.append(religion_data)
-                    
-                    # Track changes
+    
                     if self._change_tracking_enabled:
-                        scope_keys = self._get_affected_scope_keys('religion', row['religion_id'], religion_data)
-                        await self._track_element_change('religion', row['religion_id'], religion_data, scope_keys)
-            
+                        scope_keys = self._get_affected_scope_keys('religion', row['id'], religion_data)
+                        await self._track_element_change('religion', row['id'], religion_data, scope_keys)
+    
             return religions
         except Exception as e:
             logger.debug(f"Could not fetch religions: {e}")
             return []
     
     async def _fetch_conflicts_for_bundle(self, conflict_ids: List[int]) -> List[Dict[str, Any]]:
-        """Fetch conflict data for bundle using batch query."""
+        """
+        Fetch conflicts in canonical shape:
+        { id, type, description, stakeholders, intensity, phase, resolution_status }
+        Supports both Conflicts and NationalConflicts.
+        """
+        conflicts: List[Dict[str, Any]] = []
+    
+        async def _from_conflicts_table(conn):
+            rows = await conn.fetch("""
+                SELECT 
+                    COALESCE(id, conflict_id) AS id,
+                    conflict_type,
+                    description,
+                    stakeholders,
+                    COALESCE(intensity, NULL) AS intensity,
+                    COALESCE(phase, NULL) AS phase,
+                    COALESCE(resolution_status, NULL) AS resolution_status
+                FROM Conflicts
+                WHERE COALESCE(id, conflict_id) = ANY($1::int[])
+            """, conflict_ids[:5])
+            out = []
+            for r in rows:
+                out.append({
+                    'id': r['id'],
+                    'type': r['conflict_type'],
+                    'description': (r['description'] or '')[:150],
+                    'stakeholders': (r['stakeholders'] or [])[:3],
+                    'intensity': r['intensity'] if r['intensity'] is not None else 0.5,
+                    'phase': r['phase'] or 'active',
+                    'resolution_status': r['resolution_status'] or 'ongoing'
+                })
+            return out
+    
+        async def _from_national_conflicts(conn):
+            rows = await conn.fetch("""
+                SELECT 
+                    id,
+                    COALESCE(conflict_type,'standard') AS conflict_type,
+                    description,
+                    COALESCE(severity,5) AS severity,
+                    COALESCE(status,'active') AS status,
+                    COALESCE(involved_nations, ARRAY[]::int[]) AS involved_nations
+                FROM NationalConflicts
+                WHERE id = ANY($1::int[])
+            """, conflict_ids[:5])
+            out = []
+            for r in rows:
+                out.append({
+                    'id': r['id'],
+                    'type': r['conflict_type'],
+                    'description': (r['description'] or '')[:150],
+                    # Synthesize stakeholders from involved_nations
+                    'stakeholders': [{'type': 'nation', 'id': nid} for nid in (r['involved_nations'] or [])][:3],
+                    # Map severity -> intensity 0..1
+                    'intensity': max(0.0, min(1.0, float(r['severity']) / 10.0)),
+                    # Map status -> phase
+                    'phase': r['status'],
+                    # We don't have resolution_status here; infer from status
+                    'resolution_status': 'resolved' if (r['status'] or '').lower() == 'resolved' else 'ongoing'
+                })
+            return out
+    
         try:
-            conflicts = []
-            
             async with get_db_connection_context() as conn:
                 self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
-                
-                # Batch query using ANY()
-                rows = await conn.fetch("""
-                    SELECT conflict_id, conflict_type, description,
-                           stakeholders, intensity, phase, resolution_status
-                    FROM Conflicts
-                    WHERE conflict_id = ANY($1::int[])
-                """, conflict_ids[:5])
-                
-                for conflict in rows:
-                    conflict_data = {
-                        'id': conflict['conflict_id'],
-                        'type': conflict['conflict_type'],
-                        'description': (conflict['description'] or '')[:150],
-                        'stakeholders': (conflict['stakeholders'] or [])[:3],
-                        'intensity': conflict['intensity'] or 0.5,
-                        'phase': conflict['phase'] or 'active',
-                        'resolution_status': conflict['resolution_status'] or 'ongoing'
-                    }
-                    conflicts.append(conflict_data)
-                    
-                    # Track changes
-                    if self._change_tracking_enabled:
-                        scope_keys = self._get_affected_scope_keys('conflict', conflict['conflict_id'], conflict_data)
-                        await self._track_element_change('conflict', conflict['conflict_id'], conflict_data, scope_keys)
-            
-            return conflicts
+                try:
+                    primary = await _from_conflicts_table(conn)
+                    conflicts.extend(primary)
+                except Exception as e:
+                    logger.debug(f"Primary Conflicts fetch failed, will try NationalConflicts: {e}")
+    
+                # If we didn't get enough or none, try NationalConflicts too
+                if len(conflicts) < len(conflict_ids):
+                    secondary = await _from_national_conflicts(conn)
+                    # Avoid duplicates if ids overlap
+                    seen = {c['id'] for c in conflicts}
+                    conflicts.extend([c for c in secondary if c['id'] not in seen])
+    
+                # Change tracking on all
+                if self._change_tracking_enabled:
+                    for c in conflicts:
+                        scope_keys = self._get_affected_scope_keys('conflict', c['id'], c)
+                        await self._track_element_change('conflict', c['id'], c, scope_keys)
+    
         except Exception as e:
             logger.debug(f"Could not fetch conflicts: {e}")
-            return []
+    
+        return conflicts
     
     async def _fetch_myths_for_location(self, location_id: int) -> List[Dict[str, Any]]:
-        """Fetch urban myths for a location."""
+        """Fetch urban myths for a location with canonical fields (id/title/...)."""
         try:
             myths = []
-            
             async with get_db_connection_context() as conn:
                 self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
-                
-                # Query urban myths for this location
                 result = await conn.fetch("""
-                    SELECT um.myth_id, um.title, um.description, 
-                           um.origin_period, um.belief_level, um.variants
+                    SELECT 
+                        COALESCE(um.id, um.myth_id) AS id,
+                        um.title,
+                        um.description,
+                        COALESCE(um.origin_period, 'unknown') AS origin_period,
+                        COALESCE(um.belief_level, 0.3) AS belief_level,
+                        um.variants
                     FROM UrbanMyths um
                     WHERE um.location_id = $1
-                    ORDER BY um.belief_level DESC
+                    ORDER BY COALESCE(um.belief_level, 0) DESC
                     LIMIT 5
                 """, location_id)
-                
+    
                 for row in result:
                     myth_data = {
-                        'id': row['myth_id'],
+                        'id': row['id'],
                         'title': row['title'],
                         'description': (row['description'] or '')[:200],
-                        'origin': row['origin_period'] or 'unknown',
-                        'belief_level': row['belief_level'] or 0.3,
+                        'origin': row['origin_period'],
+                        'belief_level': row['belief_level'],
                         'has_variants': bool(row['variants'])
                     }
                     myths.append(myth_data)
-                    
-                    # Track changes
+    
                     if self._change_tracking_enabled:
-                        scope_keys = self._get_affected_scope_keys('myth', row['myth_id'], myth_data)
-                        await self._track_element_change('myth', row['myth_id'], myth_data, scope_keys)
-            
+                        scope_keys = self._get_affected_scope_keys('myth', row['id'], myth_data)
+                        await self._track_element_change('myth', row['id'], myth_data, scope_keys)
+    
             return myths
         except Exception as e:
             logger.debug(f"Could not fetch myths: {e}")
             return []
-    
+        
     async def _get_canonical_rules_for_scope(self, scope: Any) -> List[str]:
         """Get canonical consistency rules relevant to the scope."""
         try:
@@ -1935,18 +2065,29 @@ class LoreOrchestrator:
         return self._lore_system
     
     async def _get_npc_integration(self):
-        """Get or initialize NPC integration."""
         if not self._npc_integration:
             from lore.integration import NPCLoreIntegration
-            self._npc_integration = NPCLoreIntegration()
+            self._npc_integration = NPCLoreIntegration(self.user_id, self.conversation_id)
+            # Inject governance if available
+            try:
+                governor = await get_central_governance(self.user_id, self.conversation_id)
+                self._npc_integration.set_governor(governor)
+            except Exception:
+                logger.debug("Could not attach governor to NPCLoreIntegration")
+            await self._npc_integration.initialize()
             logger.info("NPC integration initialized")
         return self._npc_integration
     
     async def _get_context_enhancer(self):
-        """Get or initialize context enhancer."""
         if not self._context_enhancer:
             from lore.integration import ContextEnhancer
-            self._context_enhancer = ContextEnhancer()
+            self._context_enhancer = ContextEnhancer(self.user_id, self.conversation_id)
+            try:
+                governor = await get_central_governance(self.user_id, self.conversation_id)
+                self._context_enhancer.set_governor(governor)
+            except Exception:
+                logger.debug("Could not attach governor to ContextEnhancer")
+            await self._context_enhancer.initialize()
             logger.info("Context enhancer initialized")
         return self._context_enhancer
     
@@ -1995,14 +2136,114 @@ class LoreOrchestrator:
             await self._dynamic_generator.initialize()
             logger.info("Dynamic lore generator initialized")
         return self._dynamic_generator
+
+    # agentic flows (governed)
+    async def agent_create_complete_lore(self, environment_desc: str) -> Dict[str, Any]:
+        from agents.run_context import RunContextWrapper
+        from lore.lore_agents import create_complete_lore_with_governance
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        return await create_complete_lore_with_governance(ctx, environment_desc)
+    
+    async def agent_generate_scene_description(self, location_name: str, lore_context: Dict[str, Any], npc_ids: List[int] = None):
+        from agents.run_context import RunContextWrapper
+        from lore.lore_agents import generate_scene_description_with_lore_and_governance
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        return await generate_scene_description_with_lore_and_governance(ctx, location_name, lore_context, npc_ids or [])
+    
+    # consolidated dynamics/generator (governed)
+    async def generator_generate_complete_lore(self, environment_desc: str) -> Dict[str, Any]:
+        gen = await self._get_dynamic_generator()
+        return await gen.generate_complete_lore(environment_desc)
+    
+    async def generator_initialize_world_lore(self, environment_desc: str) -> Dict[str, Any]:
+        gen = await self._get_dynamic_generator()
+        return await gen.initialize_world_lore(environment_desc)
+
+    async def get_resource_stats(self) -> Dict[str, Any]:
+        from lore.resource_manager import resource_manager
+        return await resource_manager.get_resource_stats()
+    
+    async def optimize_resources_now(self) -> Dict[str, Any]:
+        from lore.resource_manager import resource_manager
+        return await resource_manager.optimize_resources()
+    
+    async def cleanup_resources_now(self) -> Dict[str, Any]:
+        from lore.resource_manager import resource_manager
+        return await resource_manager.cleanup_resources()
+
+    async def apply_dialect(self, text: str, dialect_id: int, intensity: str = 'medium', npc_id: Optional[int] = None) -> str:
+        integ = await self._get_npc_integration()
+        return await integ.apply_dialect_to_text(text, dialect_id, intensity, npc_id)
+    
+    async def enhance_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        enhancer = await self._get_context_enhancer()
+        return await enhancer.enhance_context(context)
+    
+    async def enhanced_scene_description(self, location_name: str) -> Dict[str, Any]:
+        enhancer = await self._get_context_enhancer()
+        return await enhancer.generate_scene_description(location_name)
+    
+    async def get_conflict_lore(self, conflict_id: int) -> List[Dict[str, Any]]:
+        ci = await self._get_conflict_integration()
+        return await ci.get_conflict_lore(conflict_id)
+    
+    async def get_faction_conflicts(self, faction_id: int) -> List[Dict[str, Any]]:
+        ci = await self._get_conflict_integration()
+        return await ci.get_faction_conflicts(faction_id)
+    
+    async def generate_faction_conflict(self, faction_a_id: int, faction_b_id: int) -> Dict[str, Any]:
+        ci = await self._get_conflict_integration()
+        return await ci.generate_faction_conflict(faction_a_id, faction_b_id)
     
     async def _get_conflict_integration(self):
-        """Get or initialize conflict integration."""
         if not self._conflict_integration:
             from lore.integration import ConflictIntegration
-            self._conflict_integration = ConflictIntegration()
+            self._conflict_integration = ConflictIntegration(self.user_id, self.conversation_id)
+            try:
+                governor = await get_central_governance(self.user_id, self.conversation_id)
+                self._conflict_integration.set_governor(governor)
+            except Exception:
+                logger.debug("Could not attach governor to ConflictIntegration")
+            await self._conflict_integration.initialize()
             logger.info("Conflict integration initialized")
         return self._conflict_integration
+
+    async def da_get_npc_details(self, npc_id: int = None, npc_name: str = None) -> Dict[str, Any]:
+        da = await self._get_npc_data_access()
+        return await da.get_npc_details(npc_id=npc_id, npc_name=npc_name)
+    
+    async def da_get_npc_relationships(self, npc_id: int) -> List[Dict[str, Any]]:
+        da = await self._get_npc_data_access()
+        return await da.get_npc_relationships(npc_id)
+    
+    async def da_get_npc_personality(self, npc_id: int) -> Dict[str, Any]:
+        da = await self._get_npc_data_access()
+        return await da.get_npc_personality(npc_id)
+    
+    async def da_get_location_with_lore(self, location_id: int) -> Dict[str, Any]:
+        da = await self._get_location_data_access()
+        return await da.get_location_with_lore(location_id)
+    
+    async def da_get_comprehensive_location_context(self, location_id: int) -> Dict[str, Any]:
+        da = await self._get_location_data_access()
+        return await da.get_comprehensive_location_context(location_id)
+    
+    async def da_get_faction_details(self, faction_id: int) -> Dict[str, Any]:
+        da = await self._get_faction_data_access()
+        return await da.get_faction_details(faction_id)
+    
+    async def da_get_entity_knowledge(self, entity_type: str, entity_id: int) -> List[Dict[str, Any]]:
+        da = await self._get_knowledge_access()
+        return await da.get_entity_knowledge(entity_type, entity_id)
+    
+    async def da_get_relevant_lore(self, query: str, min_relevance: float = 0.6,
+                                   limit: int = 5, lore_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        da = await self._get_knowledge_access()
+        return await da.get_relevant_lore(query, min_relevance=min_relevance, limit=limit, lore_types=lore_types)
+    
+    async def da_generate_available_lore_for_context(self, query_text: str, entity_type: str, entity_id: int, limit: int = 5):
+        da = await self._get_knowledge_access()
+        return await da.generate_available_lore_for_context(query_text, entity_type, entity_id, limit)
     
     async def _get_master_coordinator(self):
         """Get or initialize the master coordinator."""
@@ -2037,37 +2278,33 @@ class LoreOrchestrator:
         return self._unified_trace_system
     
     async def _get_npc_data_access(self):
-        """Get or initialize NPC data access."""
         if not self._npc_data_access:
             from lore.data_access import NPCDataAccess
-            self._npc_data_access = NPCDataAccess()
+            self._npc_data_access = NPCDataAccess(self.user_id, self.conversation_id)
             logger.info("NPC data access initialized")
         return self._npc_data_access
     
     async def _get_location_data_access(self):
-        """Get or initialize location data access."""
         if not self._location_data_access:
             from lore.data_access import LocationDataAccess
-            self._location_data_access = LocationDataAccess()
+            self._location_data_access = LocationDataAccess(self.user_id, self.conversation_id)
             logger.info("Location data access initialized")
         return self._location_data_access
     
     async def _get_faction_data_access(self):
-        """Get or initialize faction data access."""
         if not self._faction_data_access:
             from lore.data_access import FactionDataAccess
-            self._faction_data_access = FactionDataAccess()
+            self._faction_data_access = FactionDataAccess(self.user_id, self.conversation_id)
             logger.info("Faction data access initialized")
         return self._faction_data_access
     
     async def _get_knowledge_access(self):
-        """Get or initialize knowledge access."""
         if not self._knowledge_access:
             from lore.data_access import LoreKnowledgeAccess
-            self._knowledge_access = LoreKnowledgeAccess()
+            self._knowledge_access = LoreKnowledgeAccess(self.user_id, self.conversation_id)
             logger.info("Knowledge access initialized")
         return self._knowledge_access
-    
+        
     async def _get_lore_generator(self):
         """Get or initialize lore generator."""
         if not self._lore_generator:
@@ -2509,35 +2746,36 @@ class LoreOrchestrator:
     # ===== RELIGION OPERATIONS =====
     
     async def add_deity(self, ctx, params: DeityParams) -> int:
-        """Add a deity to the world."""
         manager = await self._get_religion_manager()
         return await manager.add_deity(ctx, params)
-    
+        
     async def add_pantheon(self, ctx, params: PantheonParams) -> int:
-        """Add a pantheon to the world."""
         manager = await self._get_religion_manager()
         return await manager.add_pantheon(ctx, params)
     
     async def generate_complete_faith_system(self, ctx) -> Dict[str, Any]:
-        """Generate a complete faith system with all components."""
         manager = await self._get_religion_manager()
-        return await manager.generate_complete_faith_system(ctx)
+        raw = await manager.generate_complete_faith_system(ctx)
+        return self._deep_norm_faith_system(raw or {})
     
     async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
-        """Distribute religions across nations."""
         manager = await self._get_religion_manager()
-        return await manager.distribute_religions(ctx)
+        raw = await manager.distribute_religions(ctx)
+        return [self._norm_distribution(d or {}) for d in (raw or [])]
     
-    async def generate_ritual(
-        self, ctx,
-        pantheon_id: int,
-        deity_id: Optional[int] = None,
-        purpose: str = "blessing",
-        formality_level: int = 5
-    ) -> Dict[str, Any]:
-        """Generate a detailed religious ritual."""
+    async def generate_ritual(self, ctx, pantheon_id: int, deity_id: Optional[int] = None,
+                              purpose: str = "blessing", formality_level: int = 5) -> Dict[str, Any]:
         manager = await self._get_religion_manager()
-        return await manager.generate_ritual(ctx, pantheon_id, deity_id, purpose, formality_level)
+        ritual = await manager.generate_ritual(ctx, pantheon_id, deity_id, purpose, formality_level)
+        # Normalize embedded references if present
+        if isinstance(ritual, dict):
+            if 'pantheon' in ritual and isinstance(ritual['pantheon'], dict):
+                ritual['pantheon'] = self._norm_pantheon(ritual['pantheon'])
+            if 'deity' in ritual and isinstance(ritual['deity'], dict):
+                ritual['deity'] = self._norm_deity(ritual['deity'])
+            if 'practice' in ritual and isinstance(ritual['practice'], dict):
+                ritual['practice'] = self._norm_practice(ritual['practice'])
+        return ritual
     
     # ===== POLITICS OPERATIONS =====
     
@@ -2558,25 +2796,26 @@ class LoreOrchestrator:
         )
     
     async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
-        """Get all nations in the world."""
         manager = await self._get_politics_manager()
-        return await manager.get_all_nations(ctx)
+        raw = await manager.get_all_nations(ctx)
+        return [self._norm_nation(n or {}) for n in (raw or [])]
     
     async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
-        """Generate initial conflicts between nations."""
         manager = await self._get_politics_manager()
-        return await manager.generate_initial_conflicts(ctx, count)
+        raw = await manager.generate_initial_conflicts(ctx, count)
+        return [self._norm_conflict(c or {}) for c in (raw or [])]
     
-    async def simulate_diplomatic_negotiation(
-        self, ctx, 
-        nation1_id: int, 
-        nation2_id: int, 
-        issue: str
-    ) -> Dict[str, Any]:
-        """Simulate diplomatic negotiations between two nations."""
+    async def simulate_diplomatic_negotiation(self, ctx, nation1_id: int, nation2_id: int, issue: str) -> Dict[str, Any]:
         manager = await self._get_politics_manager()
-        return await manager.simulate_diplomatic_negotiation(ctx, nation1_id, nation2_id, issue)
-    
+        res = await manager.simulate_diplomatic_negotiation(ctx, nation1_id, nation2_id, issue)
+        # Keep the manager’s structure but normalize embedded nations/conflicts if present
+        if isinstance(res, dict):
+            if 'nations' in res and isinstance(res['nations'], list):
+                res['nations'] = [self._norm_nation(n) for n in res['nations']]
+            if 'conflict' in res and isinstance(res['conflict'], dict):
+                res['conflict'] = self._norm_conflict(res['conflict'])
+        return res
+        
     # ===== GEOPOLITICAL OPERATIONS =====
     
     @with_governance(
@@ -2915,6 +3154,164 @@ class LoreOrchestrator:
     
         return changes
 
+    # ===== NORMALIZATION HELPERS =====
+    
+    def _coalesce_id(self, obj: Dict[str, Any], *candidates: str) -> Optional[int]:
+        for c in candidates:
+            if c in obj and obj[c] is not None:
+                try:
+                    return int(obj[c])
+                except Exception:
+                    pass
+        return None
+    
+    def _coalesce_name(self, obj: Dict[str, Any], *candidates: str) -> Optional[str]:
+        for c in candidates:
+            v = obj.get(c)
+            if isinstance(v, str) and v.strip():
+                return v
+        return None
+    
+    def _norm_nation(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'nation_id'),
+            'name': self._coalesce_name(raw, 'name', 'nation_name'),
+            'government': raw.get('government_type') or raw.get('government') or 'unknown',
+            'culture': raw.get('culture') or raw.get('lore_context') or {},
+            'matriarchy_level': raw.get('matriarchy_level')
+        }
+    
+    def _norm_conflict(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        # Used for both Conflicts and NationalConflicts
+        cid = self._coalesce_id(raw, 'id', 'conflict_id')
+        ctype = raw.get('type') or raw.get('conflict_type') or 'standard'
+        desc = raw.get('description') or ''
+        intensity = raw.get('intensity')
+        if intensity is None and 'severity' in raw:
+            try:
+                intensity = max(0.0, min(1.0, float(raw['severity']) / 10.0))
+            except Exception:
+                intensity = 0.5
+        intensity = intensity if isinstance(intensity, (float, int)) else 0.5
+        phase = raw.get('phase') or raw.get('status') or 'active'
+        res = raw.get('resolution_status')
+        if not res:
+            res = 'resolved' if str(phase).lower() == 'resolved' else 'ongoing'
+    
+        # Stakeholders synthesis
+        stakeholders = raw.get('stakeholders')
+        if not stakeholders:
+            nations = raw.get('involved_nations') or []
+            stakeholders = [{'type': 'nation', 'id': int(n)} for n in nations if n is not None]
+    
+        return {
+            'id': cid,
+            'type': ctype,
+            'description': desc[:150],
+            'stakeholders': stakeholders[:3] if isinstance(stakeholders, list) else [],
+            'intensity': float(intensity),
+            'phase': phase,
+            'resolution_status': res
+        }
+    
+    def _norm_religion(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'religion_id'),
+            'name': self._coalesce_name(raw, 'name', 'religion_name'),
+            'deities': raw.get('deity_names') or raw.get('deities') or [],
+            'beliefs': (raw.get('core_beliefs') or raw.get('beliefs') or '')[:200],
+            'influence': raw.get('influence') or raw.get('influence_level') or 0.0
+        }
+    
+    def _norm_pantheon(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'pantheon_id'),
+            'name': self._coalesce_name(raw, 'name', 'pantheon_name'),
+            'description': raw.get('description'),
+            'matriarchal_elements': raw.get('matriarchal_elements')
+        }
+    
+    def _norm_deity(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'deity_id'),
+            'name': self._coalesce_name(raw, 'name', 'deity_name'),
+            'domains': raw.get('domains') or [],
+            'description': raw.get('description')
+        }
+    
+    def _norm_practice(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'practice_id'),
+            'name': self._coalesce_name(raw, 'name', 'practice_name'),
+            'practice_type': raw.get('practice_type'),
+            'description': raw.get('description'),
+            'purpose': raw.get('purpose')
+        }
+    
+    def _norm_holy_site(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'holy_site_id'),
+            'name': self._coalesce_name(raw, 'name', 'site_name'),
+            'location_id': self._coalesce_id(raw, 'location_id'),
+            'description': raw.get('description')
+        }
+    
+    def _norm_religious_order(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id', 'order_id'),
+            'name': self._coalesce_name(raw, 'name', 'order_name'),
+            'doctrine': raw.get('doctrine'),
+            'hierarchy': raw.get('hierarchy')
+        }
+    
+    def _norm_distribution(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': self._coalesce_id(raw, 'id'),
+            'nation_id': self._coalesce_id(raw, 'nation_id'),
+            'state_religion': bool(raw.get('state_religion', False)),
+            'primary_pantheon_id': self._coalesce_id(raw, 'primary_pantheon_id'),
+            'pantheon_distribution': raw.get('pantheon_distribution') or {},
+            'religiosity_level': raw.get('religiosity_level'),
+            'religious_tolerance': raw.get('religious_tolerance'),
+            'religious_leadership': raw.get('religious_leadership'),
+            'religious_laws': raw.get('religious_laws') or {},
+            'religious_holidays': raw.get('religious_holidays') or [],
+            'religious_conflicts': raw.get('religious_conflicts') or [],
+            'religious_minorities': raw.get('religious_minorities') or []
+        }
+    
+    def _norm_list(self, items: Optional[List[Dict[str, Any]]], norm_fn) -> List[Dict[str, Any]]:
+        if not isinstance(items, list):
+            return []
+        out = []
+        for it in items:
+            try:
+                out.append(norm_fn(it or {}))
+            except Exception:
+                # best-effort: skip malformed entries
+                continue
+        return out
+    
+    def _deep_norm_faith_system(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize a full faith system payload returned by ReligionManager."""
+        if not isinstance(data, dict):
+            return {}
+        out = dict(data)
+    
+        if 'pantheons' in out:
+            out['pantheons'] = self._norm_list(out['pantheons'], self._norm_pantheon)
+        if 'deities' in out:
+            out['deities'] = self._norm_list(out['deities'], self._norm_deity)
+        if 'practices' in out:
+            out['practices'] = self._norm_list(out['practices'], self._norm_practice)
+        if 'holy_sites' in out:
+            out['holy_sites'] = self._norm_list(out['holy_sites'], self._norm_holy_site)
+        if 'orders' in out:
+            out['orders'] = self._norm_list(out['orders'], self._norm_religious_order)
+        if 'religious_conflicts' in out:
+            out['religious_conflicts'] = self._norm_list(out['religious_conflicts'], self._norm_conflict)
+        return out
+
 # ===== CONVENIENCE FUNCTIONS =====
 
 async def get_lore_orchestrator(user_id: int, conversation_id: int, config: Optional[OrchestratorConfig] = None) -> LoreOrchestrator:
@@ -2969,14 +3366,6 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
     orchestrator = await get_lore_orchestrator(user_id, conversation_id)
     ctx = orchestrator._create_mock_context()
     return await orchestrator.evolve_world_with_event(ctx, event_description, **kwargs)
-
-async def on_element_updated(self, element_type: str, element_id: int, element_data: Dict[str, Any]):
-    """
-    Call this whenever lore is created/updated/deleted outside of record_lore_change().
-    Computes affected scope keys and notifies the ContextBroker to invalidate bundles.
-    """
-    keys = self._get_affected_scope_keys(element_type, element_id, element_data or {})
-    await self._invalidate_scope_keys(keys)
 
 # ===== MODULE INITIALIZATION =====
 
