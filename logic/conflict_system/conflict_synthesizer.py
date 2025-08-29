@@ -481,11 +481,24 @@ class ConflictSynthesizer:
         """
         Get conflict context optimized for current scene. Main entry for NyxContext.
         """
-        cache_key = f"scene_{hash(frozenset(scene_info.items()))}"
+        # Stable, safe cache key (handles lists/dicts)
+        try:
+            key_str = json.dumps(scene_info, sort_keys=True, default=str)
+        except Exception:
+            key_str = str(scene_info)
+        cache_key = f"scene_{hashlib.md5(key_str.encode()).hexdigest()}"
         if cache_key in self._scene_cache:
             cached = self._scene_cache[cache_key]
             if datetime.utcnow().timestamp() - cached['timestamp'] < self._cache_ttl:
                 return cached['data']
+
+        # Background fast-path: scene-relevant updates (ambient effects, immediate NPC updates enqueued)
+        ambient_from_processor = []
+        try:
+            immediate = await self.processor.process_scene_relevant_updates(scene_info)
+            ambient_from_processor = immediate.get('ambient_effects') or []
+        except Exception as e:
+            logger.debug(f"Scene-relevant background updates failed: {e}")
     
         event = SystemEvent(
             event_id=f"scene_{datetime.now().timestamp()}",
@@ -511,7 +524,10 @@ class ConflictSynthesizer:
                     if response.subsystem == SubsystemType.BACKGROUND:
                         scene_ctx = response.data.get('scene_context', {}) or {}
                         context['conflicts'].extend(scene_ctx.get('active_conflicts', []) or [])
-                        context['ambient_effects'].extend(scene_ctx.get('ambient_effects', []) or [])
+                        # Accept either key and merge processor ambient
+                        ambient = scene_ctx.get('ambient_effects') or scene_ctx.get('ambient_atmosphere') or []
+                        context['ambient_effects'].extend(ambient or [])
+                        context['ambient_effects'].extend(ambient_from_processor or [])
                         wt = scene_ctx.get('world_tension')
                         if isinstance(wt, (int, float)):
                             context['world_tension'] = float(wt)
@@ -532,6 +548,17 @@ class ConflictSynthesizer:
         result = await ConflictEventHooks.on_game_day_transition(
             self.user_id, self.conversation_id, new_day
         )
+        
+        # Kick off processor daily updates so background conflicts tick and queue items (news, etc.)
+        try:
+            daily = await self.processor.process_daily_updates()
+            # Best-effort: drain a few high-priority items now
+            if self.processor._processing_queue:
+                await self.processor.process_queued_items(max_items=5)
+            logger.debug(f"Background daily updates: {daily}")
+        except Exception as e:
+            logger.debug(f"Daily background update skipped/failed: {e}")
+
     
         event = SystemEvent(
             event_id=f"day_{new_day}_{datetime.now().timestamp()}",
@@ -557,7 +584,26 @@ class ConflictSynthesizer:
     
     async def process_background_queue(self, max_items: int = 5) -> List[Dict[str, Any]]:
         """Process items from the background conflict queue."""
-        return await self.processor.process_queued_items(max_items=max_items)
+        items = await self.processor.process_queued_items(max_items=max_items)
+        # Best-effort: emit simple events for generated news
+        try:
+            for it in items or []:
+                if it.get('type') == 'news' and it.get('result', {}).get('generated'):
+                    ev = SystemEvent(
+                        event_id=f"bg_news_{it.get('conflict_id')}_{time.time()}",
+                        event_type=EventType.STATE_SYNC,
+                        source_subsystem=SubsystemType.ORCHESTRATOR,
+                        payload={'news': it['result'].get('news'), 'conflict_id': it.get('conflict_id')},
+                        requires_response=False,
+                        priority=9
+                    )
+                    try:
+                        self._event_queue.put_nowait(ev)
+                    except asyncio.QueueFull:
+                        pass
+        except Exception:
+            logger.debug("Failed to enqueue background news events (non-fatal)")
+        return items
     
     
     async def should_generate_content(self, content_type: str, entity_id: int) -> tuple[bool, str]:
