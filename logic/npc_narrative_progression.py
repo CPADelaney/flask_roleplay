@@ -138,6 +138,7 @@ async def progress_npc_narrative_stage(
 ) -> Dict[str, Any]:
     """
     Progress or update the narrative stage for a specific NPC.
+    Memory writes are routed through MemoryOrchestrator (player memory).
     """
     try:
         async with get_db_connection_context() as conn:
@@ -178,16 +179,13 @@ async def progress_npc_narrative_stage(
             
             # Map narrative progression to relationship dimensions
             if corruption_change != 0:
-                # Corruption increases influence and hidden agendas
                 state.dimensions.influence += corruption_change * 0.5
                 state.dimensions.hidden_agendas += corruption_change * 0.3
                 
             if dependency_change != 0:
-                # Dependency directly maps
                 state.dimensions.dependence += dependency_change
                 
             if realization_change != 0:
-                # Realization increases unresolved conflict and decreases trust
                 state.dimensions.unresolved_conflict += realization_change * 0.5
                 state.dimensions.trust -= realization_change * 0.3
             
@@ -219,7 +217,6 @@ async def progress_npc_narrative_stage(
                 stage_history = current.get('stage_history') or []
             else:
                 try:
-                    # asyncpg.Record supports keys() and direct indexing
                     stage_history = current['stage_history'] if 'stage_history' in current.keys() else []
                 except Exception:
                     stage_history = []
@@ -247,33 +244,43 @@ async def progress_npc_narrative_stage(
             """, user_id, conversation_id, npc_id, new_stage, new_corruption, 
                 new_dependency, new_realization, stage_history, stage_changed)
             
-            # Create memory if stage changed
+            # Create memory if stage changed (route via MemoryOrchestrator)
             if stage_changed:
-                memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-                
-                # Get NPC name
+                # Get NPC name for the memory text
                 npc_name = await conn.fetchval("""
                     SELECT npc_name FROM NPCStats 
                     WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, npc_id, user_id, conversation_id)
+                """, npc_id, user_id, conversation_id) or f"NPC {npc_id}"
                 
-                await memory_system.remember(
-                    entity_type="player",
-                    entity_id=user_id,
-                    memory_text=f"My relationship with {npc_name} has evolved to a new stage: {new_stage}",
-                    importance="high",
-                    tags=["narrative_progression", f"npc_{npc_id}", new_stage.lower().replace(" ", "_")]
-                )
-                
+                memory_text = f"My relationship with {npc_name} has evolved to a new stage: {new_stage}"
+
+                try:
+                    orch = await get_memory_orchestrator(user_id, conversation_id)
+                    await orch.integrated_add_memory(
+                        entity_type=EntityType.PLAYER.value,
+                        entity_id=user_id,
+                        memory_text=memory_text,
+                        memory_kwargs={
+                            "significance": 5,  # high
+                            "tags": ["narrative_progression", f"npc_{npc_id}", new_stage.lower().replace(' ', '_')],
+                            "metadata": {"source": "npc_narrative_progression", "npc_id": npc_id}
+                        }
+                    )
+                except Exception as me:
+                    logger.debug(f"[NarrativeProgression] memory add failed: {me}")
+
                 # Process a special interaction to mark the stage change
-                interaction_result = await manager.process_interaction(
-                    'npc', npc_id, 'player', user_id,
-                    {
-                        'type': 'narrative_progression',
-                        'context': f'stage_change_to_{new_stage.lower().replace(" ", "_")}',
-                        'description': f'Relationship progressed to {new_stage}'
-                    }
-                )
+                try:
+                    await manager.process_interaction(
+                        'npc', npc_id, 'player', user_id,
+                        {
+                            'type': 'narrative_progression',
+                            'context': f'stage_change_to_{new_stage.lower().replace(" ", "_")}',
+                            'description': f'Relationship progressed to {new_stage}'
+                        }
+                    )
+                except Exception as re:
+                    logger.debug(f"[NarrativeProgression] relationship log failed: {re}")
             
             return {
                 'success': True,
