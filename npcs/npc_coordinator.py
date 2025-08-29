@@ -162,50 +162,39 @@ class NPCAgentCoordinator:
                 logger.error(f"Error logging resource stats: {e}")
 
     async def load_agents(self, npc_ids: Optional[List[int]] = None) -> List[int]:
-        """
-        Load specified NPC agents into memory, or load all if none specified.
-        Thread-safe implementation that prevents duplicate initialization.
-        """
         if npc_ids is None:
             logger.info("Loading all NPC agents for user=%s, conversation=%s", self.user_id, self.conversation_id)
         else:
             logger.info("Loading NPC agents: %s", npc_ids)
 
-        query = """
+        base_sql = """
             SELECT npc_id
             FROM NPCStats
-            WHERE user_id = %s
-              AND conversation_id = %s
+            WHERE user_id = $1
+              AND conversation_id = $2
         """
         params = [self.user_id, self.conversation_id]
 
         if npc_ids:
-            query += " AND npc_id = ANY(%s)"
+            base_sql += " AND npc_id = ANY($3::int[])"
             params.append(npc_ids)
 
         loaded_ids: List[int] = []
-
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(query, params)
-                    rows = await cursor.fetchall()
+                rows = await conn.fetch(base_sql, *params)
+                to_load = []
+                for r in rows:
+                    npc_id = r["npc_id"]
+                    if npc_id not in self.active_agents:
+                        to_load.append(npc_id)
+                    loaded_ids.append(npc_id)
 
-                    # First collect all IDs to load
-                    to_load = []
-                    for row in rows:
-                        npc_id = row[0]
+                for npc_id in to_load:
+                    async with self._agent_init_lock:
                         if npc_id not in self.active_agents:
-                            to_load.append(npc_id)
-                        loaded_ids.append(npc_id)
-
-                    # Then initialize them with proper locking
-                    for npc_id in to_load:
-                        async with self._agent_init_lock:
-                            if npc_id not in self.active_agents:
-                                self.active_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-                                await self.active_agents[npc_id].initialize()
+                            self.active_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                            await self.active_agents[npc_id].initialize()
 
             logger.info("Loaded agents: %s", loaded_ids)
             return loaded_ids
@@ -280,93 +269,75 @@ class NPCAgentCoordinator:
 
     @function_tool
     async def _get_npc_traits(self, npc_id: int) -> Dict[str, Any]:
-        """
-        Get an NPC's traits and personality information.
-        """
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(
-                        """
-                        SELECT npc_name, dominance, cruelty, personality_traits 
-                        FROM NPCStats
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                        """,
-                        (npc_id, self.user_id, self.conversation_id),
-                    )
-                    row = await cursor.fetchone()
-                    if not row:
-                        return {"error": f"NPC {npc_id} not found"}
+                row = await conn.fetchrow(
+                    """
+                    SELECT npc_name, dominance, cruelty, personality_traits 
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """,
+                    npc_id, self.user_id, self.conversation_id
+                )
+            if not row:
+                return {"error": f"NPC {npc_id} not found"}
 
-                    npc_name, dominance, cruelty, personality_traits = row
+            npc_name, dominance, cruelty, personality_traits = row["npc_name"], row["dominance"], row["cruelty"], row["personality_traits"]
 
-                    # Parse personality traits if it's a JSON string
-                    if personality_traits and isinstance(personality_traits, str):
-                        try:
-                            personality_traits = json.loads(personality_traits)
-                        except json.JSONDecodeError:
-                            personality_traits = []
-
-                    return {
-                        "npc_id": npc_id,
-                        "npc_name": npc_name,
-                        "dominance": dominance,
-                        "cruelty": cruelty,
-                        "personality_traits": personality_traits,
-                    }
+            if personality_traits and isinstance(personality_traits, str):
+                try:
+                    personality_traits = json.loads(personality_traits)
+                except json.JSONDecodeError:
+                    personality_traits = []
+            return {
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "dominance": dominance,
+                "cruelty": cruelty,
+                "personality_traits": personality_traits or [],
+            }
         except Exception as e:
             logger.error(f"Error getting NPC traits for {npc_id}: {e}")
             return {"error": str(e)}
 
     @function_tool
     async def _get_relationships_between_npcs(self, npc_ids: List[int]) -> Dict[str, Any]:
-        """
-        Get relationship information between a group of NPCs.
-        """
         if not npc_ids or len(npc_ids) < 2:
             return {}
 
         relationships = {}
-
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    for i, npc1 in enumerate(npc_ids):
-                        for npc2 in npc_ids[i + 1:]:
-                            await cursor.execute(
-                                """
-                                SELECT link_type, link_level 
-                                FROM SocialLinks
-                                WHERE user_id = %s AND conversation_id = %s
-                                  AND (
-                                    (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                                    OR
-                                    (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                                  )
-                                """,
-                                (self.user_id, self.conversation_id, npc1, npc2, npc2, npc1),
-                            )
-                            row = await cursor.fetchone()
-                            key = f"{min(npc1, npc2)}_{max(npc1, npc2)}"
-                            if row:
-                                link_type, link_level = row
-                                relationships[key] = {
-                                    "npc1": npc1,
-                                    "npc2": npc2,
-                                    "link_type": link_type,
-                                    "link_level": link_level,
-                                }
-                            else:
-                                # No established relationship
-                                relationships[key] = {
-                                    "npc1": npc1,
-                                    "npc2": npc2,
-                                    "link_type": "neutral",
-                                    "link_level": 50,
-                                }
-
+                for i, npc1 in enumerate(npc_ids):
+                    for npc2 in npc_ids[i + 1:]:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT link_type, link_level 
+                            FROM SocialLinks
+                            WHERE user_id = $1 AND conversation_id = $2
+                              AND (
+                                (entity1_type = 'npc' AND entity1_id = $3 AND entity2_type = 'npc' AND entity2_id = $4)
+                                OR
+                                (entity1_type = 'npc' AND entity1_id = $4 AND entity2_type = 'npc' AND entity2_id = $3)
+                              )
+                            """,
+                            self.user_id, self.conversation_id, npc1, npc2
+                        )
+                        key = f"{min(npc1, npc2)}_{max(npc1, npc2)}"
+                        if row:
+                            relationships[key] = {
+                                "npc1": npc1,
+                                "npc2": npc2,
+                                "link_type": row["link_type"],
+                                "link_level": row["link_level"],
+                            }
+                        else:
+                            relationships[key] = {
+                                "npc1": npc1,
+                                "npc2": npc2,
+                                "link_type": "neutral",
+                                "link_level": 50,
+                            }
             return relationships
         except Exception as e:
             logger.error(f"Error getting relationships between NPCs: {e}")
@@ -537,98 +508,79 @@ class NPCAgentCoordinator:
             return {"approved": True, "reason": "Failed to contact Nyx, proceeding by default"}
 
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Prepare enhanced context for group interactions with memory.
-        Thread-safe implementation with batched processing.
-        """
-        # Acquire perception resource
         perception_resource = await self.resource_pools["perceptions"].acquire()
-
         try:
             memory_system = await self._get_memory_system()
-
-            # Create enhanced context
             enhanced_context = shared_context.copy()
             enhanced_context["participants"] = npc_ids
             enhanced_context["type"] = "group_interaction"
 
-            # Add location if not present
+            # Location
             if "location" not in enhanced_context:
                 try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute(
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
                             """
                             SELECT current_location
                             FROM NPCStats
-                            WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
                             """,
-                            (npc_ids[0], self.user_id, self.conversation_id),
+                            npc_ids[0], self.user_id, self.conversation_id
                         )
-                        row = cursor.fetchone()
-                        if row and row[0]:
-                            enhanced_context["location"] = row[0]
+                        if row and row["current_location"]:
+                            enhanced_context["location"] = row["current_location"]
                 except Exception as e:
                     logger.error(f"Error getting location for context: {e}")
 
-            # Add time if not present
+            # Time of day
             if "time_of_day" not in enhanced_context:
                 try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute(
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
                             """
                             SELECT value
                             FROM CurrentRoleplay
-                            WHERE user_id = %s AND conversation_id = %s AND key = 'TimeOfDay'
+                            WHERE user_id = $1 AND conversation_id = $2 AND key = 'TimeOfDay'
                             """,
-                            (self.user_id, self.conversation_id),
+                            self.user_id, self.conversation_id
                         )
-                        row = cursor.fetchone()
                         if row:
-                            enhanced_context["time_of_day"] = row[0]
+                            enhanced_context["time_of_day"] = row["value"]
                 except Exception as e:
                     logger.error(f"Error getting time for context: {e}")
 
             if "npc_context" not in enhanced_context:
                 enhanced_context["npc_context"] = {}
 
-            # Build up NPC-specific contexts in batches
-            batch_size = 5
-            if not perception_resource:
-                batch_size = 3
-                logger.warning("Perception resources constrained, using smaller batch size")
-
             npc_contexts = {}
+            batch_size = 3 if not perception_resource else 5
 
             for i in range(0, len(npc_ids), batch_size):
                 batch_npc_ids = npc_ids[i : i + batch_size]
-                batch_tasks = []
-                for npc_id in batch_npc_ids:
-                    batch_tasks.append(self._prepare_single_npc_context(npc_id, npc_ids, enhanced_context))
-                batch_results = await asyncio.gather(*batch_tasks)
-
-                # Add each result to the npc_context
-                for result in batch_results:
-                    npc_id = result.pop("npc_id")
-                    npc_contexts[npc_id] = result
-
+                batch_results = await asyncio.gather(
+                    *[self._prepare_single_npc_context(n, npc_ids, enhanced_context) for n in batch_npc_ids],
+                    return_exceptions=True
+                )
+                for res in batch_results:
+                    if isinstance(res, Exception):
+                        continue
+                    nid = res.pop("npc_id")
+                    npc_contexts[nid] = res
                 if i + batch_size < len(npc_ids):
                     await asyncio.sleep(0.05)
 
             enhanced_context["npc_context"] = npc_contexts
 
-            # Add shared group memories
             shared_memories = await memory_system.recall(
                 entity_type="npc",
-                entity_id=npc_ids[0],  # Just use the first NPC as reference
+                entity_id=npc_ids[0],
                 query="group interaction",
                 context={"location": enhanced_context.get("location", "Unknown")},
                 limit=2,
             )
             enhanced_context["shared_history"] = shared_memories.get("memories", [])
-
             return enhanced_context
         finally:
-            # Make sure we always release this
             if perception_resource:
                 self.resource_pools["perceptions"].release()
 
@@ -1069,35 +1021,25 @@ class NPCAgentCoordinator:
 
         return {"npc_responses": npc_responses}
 
-    async def _determine_affected_npcs(
-        self,
-        player_action: Dict[str, Any],
-        context: Dict[str, Any],
-    ) -> List[int]:
-        """
-        Determine which NPCs are affected by a player action.
-        """
+    async def _determine_affected_npcs(self, player_action: Dict[str, Any], context: Dict[str, Any]) -> List[int]:
         if "target_npc_id" in player_action:
             return [player_action["target_npc_id"]]
 
         current_location = context.get("location", "Unknown")
         logger.debug("Determining NPCs at location=%s", current_location)
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(
-                        """
-                        SELECT npc_id
-                        FROM NPCStats
-                        WHERE user_id = %s
-                          AND conversation_id = %s
-                          AND current_location = %s
-                        """,
-                        (self.user_id, self.conversation_id, current_location),
-                    )
-                    rows = await cursor.fetchall()
-                    return [row[0] for row in rows]
+                rows = await conn.fetch(
+                    """
+                    SELECT npc_id
+                    FROM NPCStats
+                    WHERE user_id = $1
+                      AND conversation_id = $2
+                      AND current_location = $3
+                    """,
+                    self.user_id, self.conversation_id, current_location
+                )
+                return [r["npc_id"] for r in rows]
         except Exception as e:
             logger.error(f"Error determining affected NPCs: {e}")
             return []
@@ -1210,35 +1152,6 @@ class NPCAgentCoordinator:
                                 entity_identifier={"npc_id": npc_id},
                                 updates={"current_location": location_name},
                                 reason=f"NPC moved to {location_name}"
-                            )
-                            
-                            if result.get("status") == "committed":
-                                results["success_count"] += 1
-                                results["details"][npc_id] = {"success": True}
-                            else:
-                                results["error_count"] += 1
-                                results["details"][npc_id] = {"error": result.get("message", "Unknown error")}
-                        except Exception as e:
-                            results["error_count"] += 1
-                            results["details"][npc_id] = {"error": str(e)}
-    
-                # ------------------------------------------------------------------
-                # TRAIT UPDATE
-                # ------------------------------------------------------------------
-                elif update_type == "trait_update":
-                    traits = update_data.get("traits", {})
-                    if not traits:
-                        return {"error": "No traits specified for update"}
-    
-                    # Use LoreSystem for each NPC
-                    for npc_id in npc_ids:
-                        try:
-                            result = await lore_system.propose_and_enact_change(
-                                ctx=ctx,
-                                entity_type="NPCStats",
-                                entity_identifier={"npc_id": npc_id},
-                                updates=traits,
-                                reason=f"Batch trait update: {', '.join(traits.keys())}"
                             )
                             
                             if result.get("status") == "committed":
