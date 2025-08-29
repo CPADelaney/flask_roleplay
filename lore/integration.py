@@ -1148,60 +1148,22 @@ class ConflictIntegration(BaseIntegration):
         return False
     
     async def _get_conflict_details(self, conflict_id: int) -> Dict[str, Any]:
-        """
-        Get details about a conflict.
-        
-        Args:
-            conflict_id: ID of the conflict
-            
-        Returns:
-            Conflict details
-        """
         try:
-            query = """
-                SELECT * FROM Conflicts
-                WHERE id = $1
-            """
-            params = [conflict_id]
-            
-            # Add user/conversation filters
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(query, *params)
-                    
-                    if not row:
-                        return {}
-                        
-                    return dict(row)
-                    
+            query = "SELECT * FROM Conflicts WHERE id = $1"
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(query, conflict_id)
+                return dict(row) if row else {}
         except Exception as e:
             logger.error(f"Error getting conflict details: {e}")
             return {}
+
     
     async def _get_faction_conflicts(self, faction_id: int) -> List[Dict[str, Any]]:
-        """
-        Get conflicts involving a faction.
-        
-        Args:
-            faction_id: ID of the faction
-            
-        Returns:
-            List of conflicts
-        """
         try:
-            query = """
-                SELECT * FROM Conflicts
-                WHERE faction_a_id = $1 OR faction_b_id = $1
-            """
-            params = [faction_id]
-            
-            # Add user/conversation filters
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(query, *params)
-                    
-                    return [dict(row) for row in rows]
-                    
+            query = "SELECT * FROM Conflicts WHERE faction_a_id = $1 OR faction_b_id = $1"
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(query, faction_id)
+                return [dict(r) for r in rows]
         except Exception as e:
             logger.error(f"Error getting faction conflicts: {e}")
             return []
