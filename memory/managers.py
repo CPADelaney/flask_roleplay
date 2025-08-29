@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple, Set
 from datetime import datetime, timedelta
 import asyncio
 import random
+import re
 
 from .core import (
     UnifiedMemoryManager, 
@@ -837,10 +838,10 @@ class ConflictMemoryManager(UnifiedMemoryManager):
         resolution_memory = await self.add_memory(
             memory=Memory(
                 text=f"Conflict {conflict_id} resolved: {resolution_data.get('resolution_type', 'unknown')}",
-                memory_type=MemoryType.CONFLICT_RESOLUTION,
+                memory_type=MemoryType.OBSERVATION,
                 significance=MemorySignificance.HIGH,
-                emotional_intensity=resolution_data.get('emotional_intensity', 0.5),
-                tags=["conflict", "resolution", resolution_data.get('resolution_type', 'unknown')],
+                emotional_intensity=int((resolution_data.get('emotional_intensity', 0.5) or 0.5) * 100),
+                tags=["conflict", "conflict_resolution", resolution_data.get('resolution_type', 'unknown')],
                 timestamp=datetime.now()
             ),
             conn=conn
@@ -857,10 +858,10 @@ class ConflictMemoryManager(UnifiedMemoryManager):
             await self.add_memory(
                 memory=Memory(
                     text=f"Stakeholder {entity_type} {entity_id} outcome: {outcome}",
-                    memory_type=MemoryType.CONFLICT_OUTCOME,
+                    memory_type=MemoryType.OBSERVATION,
                     significance=MemorySignificance.MEDIUM,
-                    emotional_intensity=outcome.get('emotional_impact', 0.3),
-                    tags=["conflict", "stakeholder", outcome.get('outcome_type', 'unknown')],
+                    emotional_intensity=int((outcome.get('emotional_impact', 0.3) or 0.3) * 100),
+                    tags=["conflict", "stakeholder", "conflict_outcome", outcome.get('outcome_type', 'unknown')],
                     timestamp=datetime.now()
                 ),
                 conn=conn
@@ -954,14 +955,16 @@ class LoreMemoryManager(UnifiedMemoryManager):
         """
         # Try to get from cache first
         cache_key = f"lore_patterns:{self.user_id}:{self.conversation_id}"
-        cached_patterns = await get_cache(cache_key)
+        from utils.caching import get as cache_get, set as cache_set
+        cached_patterns = await cache_get(cache_key)
         
         if cached_patterns:
             patterns = cached_patterns
         else:
             # Get relevant memories for lore generation
-            memories = await self.get_memories(
-                memory_types=[MemoryType.EVENT, MemoryType.RELATIONSHIP, MemoryType.CONFLICT],
+            # Use tags to identify types since MemoryType only has a small fixed set
+            memories = await self.retrieve_memories(
+                tags=["event", "relationship", "conflict"],
                 limit=50,
                 conn=conn
             )
@@ -1118,10 +1121,101 @@ class LoreMemoryManager(UnifiedMemoryManager):
         return threads
     
     def _extract_recurring_elements(self, text: str) -> Set[str]:
-        """Extract recurring elements from text."""
-        elements = set()
-        # Add implementation for extracting recurring elements
-        # This could include named entities, key phrases, etc.
+        """Extract recurring elements from text.
+    
+        Heuristic, dependency-free extractor that identifies:
+          - quoted phrases
+          - hashtags and @mentions
+          - capitalized multi-word names
+          - proper nouns (single capitalized words not at sentence start)
+          - salient bigrams (stopword-filtered)
+          - simple years and numeric markers
+          - crude location phrases ("in/at/on the X ...")
+        Elements are typed to avoid collisions (e.g., name:, quote:, tag:, phrase:, year:, num:, place:).
+        """
+        elements: Set[str] = set()
+        if not text or not isinstance(text, str):
+            return elements
+    
+        s = text.strip()
+    
+        # 1) Quoted phrases
+        for m in re.finditer(r'[\"“](.+?)[\"”]', s):
+            phrase = m.group(1).strip()
+            if 3 <= len(phrase) <= 80:
+                elements.add(f"quote:{phrase}")
+    
+        # 2) Hashtags and mentions
+        for m in re.finditer(r'(#[\w\-]+)', s):
+            elements.add(f"tag:{m.group(1).lower()}")
+        for m in re.finditer(r'(@[\w\-]+)', s):
+            elements.add(f"mention:{m.group(1).lower()}")
+    
+        # 3) Capitalized multi-word sequences (likely names/places/titles)
+        #    Example: "Black Rose Tavern", "Lady Nyx"
+        for m in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})\b', s):
+            seq = m.group(1).strip()
+            # Skip if it's sentence-start single capital or all-caps acronym
+            if len(seq.split()) >= 2:
+                elements.add(f"name:{seq}")
+    
+        # 4) Single proper nouns not at sentence start (exclude "I")
+        #    Split sentences loosely, then inspect tokens except first
+        sentence_split = re.split(r'(?<=[\.\?!])\s+', s)
+        for sent in sentence_split:
+            tokens = re.findall(r"[A-Za-z][A-Za-z'\-]+", sent)
+            if not tokens:
+                continue
+            for tok in tokens[1:]:  # skip first token to reduce false positives
+                if tok == "I":
+                    continue
+                if re.match(r'^[A-Z][a-z]+$', tok):
+                    elements.add(f"name:{tok}")
+    
+        # 5) Years and numeric markers
+        for m in re.finditer(r'\b(1[89]\d{2}|20\d{2}|21\d{2})\b', s):  # 1800-2199 range
+            elements.add(f"year:{m.group(1)}")
+        for m in re.finditer(r'\b(\d{2,})\b', s):
+            num = m.group(1)
+            # Avoid double-counting years already captured
+            if not re.match(r'^(1[89]\d{2}|20\d{2}|21\d{2})$', num):
+                elements.add(f"num:{num}")
+    
+        # 6) Simple location phrases: "in/at/on the <Cap...>" or "in/at the <lowercase phrase>"
+        for m in re.finditer(
+            r'\b(?:in|at|on)\s+(?:the\s+)?([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+){0,3})\b', s
+        ):
+            place = m.group(1).strip()
+            if place:
+                elements.add(f"place:{place}")
+        for m in re.finditer(
+            r'\b(?:in|at)\s+(?:the\s+)?([a-z][\w\-]+(?:\s+[a-z][\w\-]+){0,3})\b', s
+        ):
+            place = m.group(1).strip()
+            if place and len(place) >= 3:
+                elements.add(f"place:{place}")
+    
+        # 7) Salient bigrams (stopword-filtered, lowercased)
+        stop = {
+            "the","a","an","and","or","but","if","then","else","for","of","to","in",
+            "on","at","from","by","with","about","as","into","like","through","after",
+            "over","between","out","against","during","without","before","under",
+            "around","among","is","are","was","were","be","been","being","do","does",
+            "did","done","have","has","had","having","it","its","it's","that","this",
+            "these","those","i","you","he","she","they","we","me","him","her","them",
+            "my","your","his","their","our","mine","yours","hers","theirs","ours"
+        }
+        words = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'\-]+", s)]
+        key = [w for w in words if w not in stop and 3 <= len(w) <= 24]
+        for i in range(len(key) - 1):
+            bg = f"{key[i]} {key[i+1]}"
+            elements.add(f"phrase:{bg}")
+    
+        # 8) Bound the set size deterministically (to keep downstream structures lean)
+        if len(elements) > 64:
+            # Sort for determinism, prefer typed elements then lexicographic
+            elements = set(list(sorted(elements))[:64])
+    
         return elements
     
     @with_transaction
@@ -1134,13 +1228,25 @@ class LoreMemoryManager(UnifiedMemoryManager):
         """
         # Try to get from cache
         cache_key = f"lore_relevance:{lore_id}:{hash(str(context))}"
-        cached_relevance = await get_cache(cache_key)
+        from utils.caching import get as cache_get, set as cache_set
+        cached_relevance = await cache_get(cache_key)
         
         if cached_relevance is not None:
             relevance_score = cached_relevance
         else:
             # Get the lore memory
-            lore_memory = await self.get_memory(lore_id, conn=conn)
+            row = await conn.fetchrow(
+                "SELECT id, memory_text, tags, metadata, timestamp FROM unified_memories WHERE id=$1", lore_id
+            )
+            if not row:
+                return
+            lore_memory = Memory.from_dict({
+                "id": row["id"],
+                "text": row["memory_text"],
+                "tags": row["tags"] or [],
+                "metadata": row["metadata"],
+                "timestamp": row["timestamp"]
+            })
             if not lore_memory:
                 return
             
@@ -1150,13 +1256,15 @@ class LoreMemoryManager(UnifiedMemoryManager):
             # Cache the result
             await set_cache(cache_key, relevance_score, ttl=300)  # Cache for 5 minutes
         
-        # Update relevance in database
-        await conn.execute("""
-            UPDATE Memory
-            SET relevance_score = $1,
-                last_relevance_update = CURRENT_TIMESTAMP
-            WHERE memory_id = $2
-        """, relevance_score, lore_id)
+        # Persist relevance in memory metadata (unified_memories has no relevance_score column)
+        row = await conn.fetchrow("SELECT metadata FROM unified_memories WHERE id=$1", lore_id)
+        md = row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"] or "{}")
+        md["lore_relevance"] = {
+            "score": relevance_score,
+            "context_hash": hash(str(context)),
+            "updated_at": datetime.now().isoformat()
+        }
+        await conn.execute("UPDATE unified_memories SET metadata=$1 WHERE id=$2", json.dumps(md), lore_id)
     
     def _calculate_lore_relevance(self,
                                 lore_memory: Memory,
