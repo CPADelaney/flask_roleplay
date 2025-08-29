@@ -168,6 +168,16 @@ class NPCOrchestrator:
         self.auto_canonize = bool(self.config.get('auto_canonize', True))
         self.canon_cache: Dict[str, List[Dict]] = {}
         self._bundle_index: Dict[int, Set[str]] = defaultdict(set)
+
+        self._last_behavior_eval: Dict[int, float] = {}
+        self._behavior_eval_cooldown = float(self.config.get('behavior_eval_cooldown_s', 120.0))  # 2 min default
+
+        # Behavior metrics
+        self.metrics.update({
+            'behavior_evals': 0,
+            'behavior_applies': 0,
+            'behavior_skipped_cooldown': 0,
+        })
         
         # Performance metrics
         self.metrics = {
@@ -548,6 +558,102 @@ class NPCOrchestrator:
         
         self.metrics['delta_updates'] += 1
         return delta
+
+    async def evaluate_and_apply_npc_behavior(
+        self,
+        npc_id: int,
+        use_user_model: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Runs BehaviorEvolution for one NPC, applies changes via LoreSystem,
+        notifies caches, and feeds significant changes into Beliefs.
+        """
+        try:
+            # Evaluate (optionally with user preference model)
+            if use_user_model:
+                eval_result = await self._behavior_evolution.evaluate_npc_scheming_with_user_model(npc_id)
+            else:
+                eval_result = await self._behavior_evolution.evaluate_npc_scheming(npc_id)
+
+            if "error" in eval_result:
+                return eval_result
+
+            # Apply to DB via LoreSystem governance
+            applied = await self._behavior_evolution.apply_scheming_adjustments(npc_id, eval_result)
+            eval_result["applied"] = bool(applied)
+            self.metrics['behavior_evals'] += 1
+            if applied:
+                self.metrics['behavior_applies'] += 1
+
+                # Invalidate snapshot + bundles
+                if npc_id in self._snapshot_cache:
+                    self._snapshot_cache.pop(npc_id, None)
+                self._notify_npc_changed(npc_id)
+
+                # Belief hooks for salient flags
+                try:
+                    significant_bits = []
+                    if eval_result.get("betrayal_planning"):
+                        significant_bits.append("betrayal_planning")
+                    if eval_result.get("targeting_player"):
+                        significant_bits.append("targeting_player")
+                    if (eval_result.get("scheme_level", 0) >= 5):
+                        significant_bits.append("high_scheming")
+
+                    if significant_bits:
+                        from types import SimpleNamespace
+                        ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                        await self._belief_system.process_event_for_beliefs(
+                            ctx=ctx_obj,
+                            event_text=f"Behavior evolved: {', '.join(significant_bits)}",
+                            event_type="behavior_evolution",
+                            npc_ids=[npc_id],
+                            factuality=1.0
+                        )
+                        # Throttled consolidation specific to behavior
+                        await self._maybe_consolidate_beliefs([npc_id], topic_filter="behavior_evolution", reason="post_behavior_eval")
+                except Exception as be:
+                    logger.warning(f"[Beliefs] behavior-evolution belief hook failed for NPC {npc_id}: {be}")
+
+            return eval_result
+        except Exception as e:
+            logger.exception(f"Behavior evolution failed for NPC {npc_id}: {e}")
+            return {"error": str(e)}
+
+    async def _maybe_evaluate_behavior(
+        self,
+        npc_ids: List[int],
+        reason: str = "",
+        use_user_model: bool = True
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Throttle and evaluate behavior for a set of NPCs. Returns per-NPC results.
+        """
+        now = time.time()
+        to_run: List[int] = []
+        for nid in npc_ids:
+            last = self._last_behavior_eval.get(nid, 0.0)
+            if now - last >= self._behavior_eval_cooldown:
+                to_run.append(nid)
+                self._last_behavior_eval[nid] = now
+            else:
+                self.metrics['behavior_skipped_cooldown'] += 1
+
+        if not to_run:
+            return {}
+
+        # Evaluate in parallel, but let BehaviorEvolution hit the DB safely
+        results: Dict[int, Dict[str, Any]] = {}
+
+        async def _one(nid: int):
+            res = await self.evaluate_and_apply_npc_behavior(nid, use_user_model=use_user_model)
+            results[nid] = res
+
+        await asyncio.gather(*[_one(n) for n in to_run], return_exceptions=False)
+
+        if reason:
+            logger.debug(f"[Behavior] Evaluated {to_run} ({reason})")
+        return results
     
     # ==================== SNAPSHOT METHODS ====================
     
@@ -1063,8 +1169,48 @@ class NPCOrchestrator:
                 topic_filter="calendar_event",
                 reason="post_calendar_processing"
             )
+
+        # Behavior evolution after calendar events (throttled)
+        if touched_npcs:
+            try:
+                await self._maybe_evaluate_behavior(list(touched_npcs), reason="post_calendar_processing", use_user_model=False)
+            except Exception as e:
+                logger.warning(f"[Behavior] post_calendar evolution failed: {e}")
     
         return results
+
+    async def evaluate_behavior_for_scope(self, scope: 'SceneScope', use_user_model: bool = True) -> Dict[int, Dict[str, Any]]:
+        """Convenience: evolve behavior for the first N NPCs in the current scope."""
+        npc_ids = list(getattr(scope, "npc_ids", []))[:10]
+        if not npc_ids:
+            return {}
+        return await self._maybe_evaluate_behavior(npc_ids, reason="explicit_scope_eval", use_user_model=use_user_model)
+
+    async def generate_scheming_opportunity(self, npc_id: int, trigger_event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Thin bridge to BehaviorEvolution.generate_scheming_opportunity plus cache/Beliefs."""
+        try:
+            opp = await self._behavior_evolution.generate_scheming_opportunity(npc_id, trigger_event)
+            if opp:
+                # Mark changed for delta feeds
+                self._notify_npc_changed(npc_id)
+                # Optional: belief event
+                try:
+                    from types import SimpleNamespace
+                    ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                    await self._belief_system.process_event_for_beliefs(
+                        ctx=ctx_obj,
+                        event_text=f"Opportunity spotted: {opp.get('type','unknown')}",
+                        event_type="scheming_opportunity",
+                        npc_ids=[npc_id],
+                        factuality=0.9
+                    )
+                except Exception:
+                    pass
+            return opp
+        except Exception as e:
+            logger.warning(f"[Behavior] opportunity generation failed for NPC {npc_id}: {e}")
+            return None
+
     
     # ==================== RELATIONSHIP INTEGRATION ====================
     
@@ -1610,6 +1756,13 @@ class NPCOrchestrator:
     
         except Exception as e:
             logger.exception(f"[Beliefs] post-action belief routing failed: {e}")
+
+        # --- Behavior evolution right after conversations (throttled) ---
+        try:
+            if npc_ids:
+                await self._maybe_evaluate_behavior(npc_ids, reason="post_conversation", use_user_model=True)
+        except Exception as e:
+            logger.warning(f"[Behavior] post_conversation evolution failed: {e}")
     
         return result
 
