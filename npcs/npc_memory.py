@@ -1801,40 +1801,29 @@ class NPCMemoryManager:
     Enhanced memory manager for NPCs using OpenAI Agents SDK.
     Refactored from original EnhancedMemoryManager class.
     """
-    
     def __init__(
-        self, 
-        npc_id: int, 
-        user_id: int, 
+        self,
+        npc_id: int,
+        user_id: int,
         conversation_id: int,
         npc_personality: str = "neutral",
-        npc_intelligence: float = 1.0
+        npc_intelligence: float = 1.0,
+        enable_reporting: bool = True  # NEW
     ):
-        """
-        Initialize the memory manager for a specific NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            user_id: ID of the user/player
-            conversation_id: ID of the current conversation
-            npc_personality: Personality type affecting memory biases
-            npc_intelligence: Factor affecting memory decay rate (0.5-2.0)
-        """
         self.npc_id = npc_id
         self.user_id = user_id
         self.conversation_id = conversation_id
-        
-        # Create context
         self.context = MemoryContext(
-            npc_id, 
-            user_id, 
+            npc_id,
+            user_id,
             conversation_id,
             npc_personality,
             npc_intelligence
         )
-        
-        # Initialize performance reporting
-        self._setup_performance_reporting()
+
+        self._enable_reporting = enable_reporting  # NEW
+        if self._enable_reporting:                # NEW
+            self._setup_performance_reporting()   # NEW
     
     def _setup_performance_reporting(self) -> None:
         """
