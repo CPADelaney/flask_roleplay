@@ -64,7 +64,7 @@ class NPCLearningAdaptation:
     async def initialize(self):
         """Initialize the system and set up components."""
         self.memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
-        self.nyx_governance = NyxGovernanceManager(self.user_id, self.conversation_id)
+        self.nyx_governance = NyxUnifiedGovernor(self.user_id, self.conversation_id)
         self.relationship_manager = NPCRelationshipManager(
             self.npc_id, self.user_id, self.conversation_id
         )
@@ -300,24 +300,22 @@ class NPCLearningAdaptation:
         adaptation_reason = []
         
         # Closeness affects intensity
-        closeness = relationship.get("closeness", 0)
-        # Higher closeness initially decreases intensity as NPC gets comfortable
+        closeness = relationship.get("closeness", relationship.get("link_level", 0))
         if closeness > 70 and npc_data.get("intensity", 50) > 60:
             intensity_change -= 3
             adaptation_reason.append("High closeness is creating comfortable relationship")
-        # Very high closeness can eventually increase intensity as NPC feels secure
         elif closeness > 90 and npc_data.get("cruelty", 50) > 60:
             intensity_change += 5
             adaptation_reason.append("Extremely close relationship allows for more intense domination")
-            
-        # Trust affects intensity
-        trust = relationship.get("trust", 0)
-        # High trust with high dominance increases intensity
+        
+        # Trust affects intensity (fallback to link_level if not present)
+        trust = relationship.get("trust")
+        if trust is None:
+            trust = relationship.get("link_level", closeness)
         if trust > 80 and npc_data.get("dominance", 50) > 70:
             intensity_change += 4
             adaptation_reason.append("High trust enables more intense control")
-        # Low trust decreases intensity as NPC is more cautious
-        elif trust < 30 and trust > 0:
+        elif 0 < trust < 30:
             intensity_change -= 3
             adaptation_reason.append("Low trust requires more careful approach")
             
@@ -841,3 +839,4 @@ class NPCLearningManager:
                 results["npc_adaptations"][npc_id] = {"error": str(e)}
         
         return results
+
