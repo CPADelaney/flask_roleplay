@@ -165,33 +165,34 @@ class BackgroundConflictProcessor:
     async def process_scene_relevant_updates(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process only updates immediately relevant to current scene.
-        Called during actual gameplay, not background.
+        Uses PostgreSQL JSON operators for metadata extraction.
         """
         location = scene_context.get('location', '')
         active_npcs = scene_context.get('npcs', [])
         topics = scene_context.get('conversation_topics', [])
-        
+    
         relevant_updates = {
             'immediate_news': None,
             'npc_updates': [],
             'ambient_effects': []
         }
-        
+    
         async with get_db_connection_context() as conn:
-            # Check if any conflicts are directly relevant to this scene
+            # NOTE: (metadata -> 'key') returns JSON; cast to text to keep existing json.loads pipeline
             conflicts = await conn.fetch(
                 """
-                SELECT bc.*, 
-                       json_extract(bc.metadata, '$.affected_locations') as locations,
-                       json_extract(bc.metadata, '$.key_figures') as figures
+                SELECT bc.*,
+                       COALESCE((bc.metadata -> 'affected_locations')::text, '[]') AS locations,
+                       COALESCE((bc.metadata -> 'key_figures')::text, '[]')       AS figures
                 FROM BackgroundConflicts bc
-                WHERE bc.user_id = $1 AND bc.conversation_id = $2
-                AND bc.status = 'active'
-                AND bc.intensity IN ('visible_effects', 'ambient_tension')
+                WHERE bc.user_id = $1
+                  AND bc.conversation_id = $2
+                  AND bc.status = 'active'
+                  AND bc.intensity IN ('visible_effects', 'ambient_tension')
                 """,
                 self.user_id, self.conversation_id
             )
-            
+    
             for conflict in conflicts:
                 # Check location relevance
                 if self._is_location_affected(location, conflict):
@@ -199,7 +200,7 @@ class BackgroundConflictProcessor:
                     ambient = await self._get_ambient_effect(conflict['id'])
                     if ambient:
                         relevant_updates['ambient_effects'].append(ambient)
-                
+    
                 # Check NPC relevance
                 for npc_id in active_npcs:
                     if self._is_npc_involved(npc_id, conflict):
@@ -210,7 +211,7 @@ class BackgroundConflictProcessor:
                             'conflict_id': conflict['id'],
                             'priority': ProcessingPriority.HIGH
                         })
-        
+    
         return relevant_updates
     
     async def process_queued_items(self, max_items: int = 10) -> List[Dict[str, Any]]:
@@ -465,20 +466,32 @@ class BackgroundConflictProcessor:
             )
         return effect
     
-    def _is_location_affected(self, location: str, conflict: Dict) -> bool:
-        """Check if a location is affected by a conflict"""
-        if not location or not conflict.get('locations'):
+    def _is_location_affected(self, location: Any, conflict: Dict) -> bool:
+        """Check if a location is affected by a conflict (robust to numeric/string)."""
+        if not conflict.get('locations'):
             return False
-            
-        affected_locations = json.loads(conflict['locations'] or '[]')
-        return location.lower() in [loc.lower() for loc in affected_locations]
+    
+        try:
+            affected_locations = json.loads(conflict['locations'] or '[]')
+        except Exception:
+            affected_locations = []
+    
+        # Normalize both sides to lowercase strings for comparison
+        loc_str = str(location or '').lower()
+        affected_norm = [str(loc).lower() for loc in (affected_locations or [])]
+    
+        return bool(loc_str) and (loc_str in affected_norm)
     
     def _is_npc_involved(self, npc_id: int, conflict: Dict) -> bool:
-        """Check if an NPC is involved in a conflict"""
+        """Check if an NPC is involved in a conflict (figures is a JSON array)."""
         if not conflict.get('figures'):
             return False
-            
-        key_figures = json.loads(conflict['figures'] or '[]')
+    
+        try:
+            key_figures = json.loads(conflict['figures'] or '[]')
+        except Exception:
+            key_figures = []
+    
         return npc_id in key_figures
     
     async def _update_npc_conflict_knowledge(self, npc_id: int, conflict_id: int) -> Dict[str, Any]:
