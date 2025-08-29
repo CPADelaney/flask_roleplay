@@ -953,8 +953,8 @@ class MemoryInterferenceManager:
                   AND m1.entity_id = $2
                   AND m1.user_id = $3
                   AND m1.conversation_id = $4
-                  AND m1.is_archived = FALSE
-                  AND m2.is_archived = FALSE
+                  AND m1.status != 'archived'
+                  AND m2.status != 'archived'
                 ORDER BY similarity
                 LIMIT 10
             )
