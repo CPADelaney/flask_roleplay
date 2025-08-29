@@ -122,7 +122,7 @@ class BackgroundConflictOrchestrator:
         self.conversation_id = conversation_id
         self._conflict_generator = None
         self._evolution_agent = None
-        self.processor = BackgroundConflictProcessor(user_id, conversation_id)
+        self.processor = get_conflict_scheduler().get_processor(user_id, conversation_id)
         self.limits = ConflictContentLimits()
     
     @property
@@ -441,7 +441,7 @@ class BackgroundNewsGenerator:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self._news_generator = None
-        self.processor = BackgroundConflictProcessor(user_id, conversation_id)
+        self.processor = get_conflict_scheduler().get_processor(user_id, conversation_id)
     
     @property
     def news_generator(self) -> Agent:
@@ -559,7 +559,7 @@ class BackgroundConflictRipples:
         self.conversation_id = conversation_id
         self._ripple_generator = None
         self._opportunity_creator = None
-        self.processor = BackgroundConflictProcessor(user_id, conversation_id)
+        self.processor = get_conflict_scheduler().get_processor(user_id, conversation_id)
     
     @property
     def ripple_generator(self) -> Agent:
@@ -741,7 +741,7 @@ class BackgroundConflictSubsystem:
         self.orchestrator = BackgroundConflictOrchestrator(user_id, conversation_id)
         self.news_generator = BackgroundNewsGenerator(user_id, conversation_id)
         self.ripple_manager = BackgroundConflictRipples(user_id, conversation_id)
-        self.processor = BackgroundConflictProcessor(user_id, conversation_id)
+        self.processor = get_conflict_scheduler().get_processor(user_id, conversation_id)
         
         # Reference to synthesizer (set during initialization)
         self.synthesizer = None
