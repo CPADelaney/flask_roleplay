@@ -19,6 +19,12 @@ from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
+def _severity_label(sev: float) -> str:
+    if sev >= 0.85: return "critical"
+    if sev >= 0.65: return "high"
+    if sev >= 0.4:  return "medium"
+    return "low"
+
 # ===============================================================================
 # EDGE CASE TYPES
 # ===============================================================================
@@ -154,30 +160,69 @@ class ConflictEdgeCaseSubsystem:
         return True
     
     async def handle_event(self, event) -> Any:
-        """Handle an event from the synthesizer"""
+        """Handle an event from the synthesizer (circular-safe imports)."""
         from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
-        
+    
         try:
-            if event.event_type == EventType.EDGE_CASE_DETECTED:
-                # Handle detected edge case
-                edge_case_data = event.payload
-                recovery = await self._handle_edge_case(edge_case_data)
-                
+            # Execute a specific recovery option (targeted request)
+            if event.event_type == EventType.EDGE_CASE_DETECTED and (event.payload or {}).get('request') == 'execute_recovery':
+                case = (event.payload or {}).get('case') or {}
+                option_index = int((event.payload or {}).get('option_index', 0) or 0)
+                case_type = EdgeCaseType(str(case.get('case_type', 'unknown')))
+                affected = case.get('affected_conflicts', []) or []
+                options = case.get('recovery_options', []) or []
+    
+                if not options or option_index >= len(options):
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={'success': False, 'action': 'no_recovery_options'},
+                        side_effects=[]
+                    )
+    
+                opt = options[option_index]
+                if case_type == EdgeCaseType.ORPHANED_CONFLICT and affected:
+                    result = await self._execute_orphan_recovery(int(affected[0]), opt)
+                elif case_type == EdgeCaseType.INFINITE_LOOP:
+                    result = await self._execute_loop_recovery([int(x) for x in affected], opt)
+                elif case_type == EdgeCaseType.STALE_CONFLICT and affected:
+                    result = await self._execute_stale_recovery(int(affected[0]), opt)
+                elif case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
+                    result = await self._execute_overload_recovery(opt)
+                elif case_type == EdgeCaseType.CONTRADICTION:
+                    result = await self._execute_contradiction_recovery([int(x) for x in affected], opt)
+                else:
+                    result = {'success': False, 'action': 'unknown_edge_case'}
+    
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data=recovery
+                    data=result,
+                    side_effects=[]
                 )
-                
-            elif event.event_type == EventType.HEALTH_CHECK:
-                # Perform comprehensive edge case scan
+    
+            if event.event_type == EventType.EDGE_CASE_DETECTED:
+                # Legacy path: auto-handle ad-hoc payload without explicit request
+                edge_case_data = event.payload or {}
+                recovery = await self._handle_edge_case(edge_case_data)
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=recovery,
+                    side_effects=[]
+                )
+    
+            if event.event_type == EventType.HEALTH_CHECK:
+                # Full scan + return serializable edge cases (with options)
                 edge_cases = await self.scan_for_edge_cases()
-                
-                side_effects = []
+    
+                # Build side effects for critical ones
+                side_effects: List[SystemEvent] = []
                 for case in edge_cases:
                     if case.severity > 0.7:
-                        # Notify synthesizer of critical edge cases
                         side_effects.append(SystemEvent(
                             event_id=f"edge_{event.event_id}_{case.case_id}",
                             event_type=EventType.EDGE_CASE_DETECTED,
@@ -187,65 +232,88 @@ class ConflictEdgeCaseSubsystem:
                                 'severity': case.severity,
                                 'affected_conflicts': case.affected_conflicts
                             },
-                            priority=1  # High priority
+                            priority=1
                         ))
-                
+    
+                # Serialize edge cases for function tools
+                serializable = []
+                for c in edge_cases:
+                    serializable.append({
+                        'case_id': int(c.case_id),
+                        'case_type': c.case_type.value,
+                        'severity': float(c.severity),
+                        'severity_label': _severity_label(float(c.severity)),
+                        'affected_conflicts': [int(x) for x in c.affected_conflicts],
+                        'description': c.description,
+                        'detection_context': c.detection_context,
+                        'recovery_options': c.recovery_options,  # preserved for auto_recover
+                        # convenience summary for scan_for_conflict_issues
+                        'subsystem': 'edge_handler',
+                        'issue': c.description,
+                        'recoverable': bool(c.recovery_options),
+                    })
+    
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
                     data={
-                        'healthy': len(edge_cases) < 5,
+                        'healthy': sum(1 for c in edge_cases if c.severity > 0.7) == 0,
                         'edge_cases_found': len(edge_cases),
-                        'critical_cases': sum(1 for c in edge_cases if c.severity > 0.7)
+                        'critical_cases': sum(1 for c in edge_cases if c.severity > 0.7),
+                        'edge_cases': serializable,
+                        # Back-compat alias used by tools
+                        'issues': serializable,
                     },
                     side_effects=side_effects
                 )
-                
-            elif event.event_type == EventType.CONFLICT_CREATED:
-                # Check for immediate edge cases
-                conflict_id = event.payload.get('conflict_id')
+    
+            if event.event_type == EventType.CONFLICT_CREATED:
+                conflict_id = (event.payload or {}).get('conflict_id')
                 if conflict_id:
-                    issues = await self._check_new_conflict_issues(conflict_id)
-                    
+                    issues = await self._check_new_conflict_issues(int(conflict_id))
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,
                         success=True,
-                        data={'issues_found': issues}
+                        data={'issues_found': issues},
+                        side_effects=[]
                     )
-                    
-            elif event.event_type == EventType.STATE_SYNC:
-                # Periodic edge case check
-                if random.random() < 0.2:  # 20% chance
+    
+            if event.event_type == EventType.STATE_SYNC:
+                # Periodic light check + auto-recover for medium issues
+                if random.random() < 0.2:
                     edge_cases = await self.scan_for_edge_cases()
-                    
-                    # Auto-recover minor issues
-                    for case in edge_cases:
-                        if 0.3 < case.severity < 0.6:
-                            await self.execute_recovery(case, 0)
-                    
+                    recovered = 0
+                    for c in edge_cases:
+                        if 0.3 < c.severity < 0.6 and c.recovery_options:
+                            await self.execute_recovery(c, 0)
+                            recovered += 1
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,
                         success=True,
-                        data={'auto_recovered': len([c for c in edge_cases if 0.3 < c.severity < 0.6])}
+                        data={'auto_recovered': recovered},
+                        side_effects=[]
                     )
-            
+    
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=True,
-                data={}
+                data={},
+                side_effects=[]
             )
-            
+    
         except Exception as e:
             logger.error(f"Edge case subsystem error: {e}")
+            from logic.conflict_system.conflict_synthesizer import SubsystemResponse
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=False,
-                data={'error': str(e)}
+                data={'error': str(e)},
+                side_effects=[]
             )
     
     async def health_check(self) -> Dict[str, Any]:
@@ -441,40 +509,35 @@ class ConflictEdgeCaseSubsystem:
         return edge_cases
     
     async def _detect_orphaned_conflicts(self) -> List[EdgeCase]:
-        """Detect conflicts with no active stakeholders"""
-        
-        edge_cases = []
-        
+        """Detect conflicts with no active stakeholders (schema-safe)."""
+        edge_cases: List[EdgeCase] = []
         async with get_db_connection_context() as conn:
-            orphaned = await conn.fetch("""
-                SELECT c.conflict_id, c.conflict_name, c.description
+            rows = await conn.fetch("""
+                SELECT c.id AS conflict_id, c.conflict_name, COALESCE(c.description,'') AS description
                 FROM Conflicts c
-                LEFT JOIN conflict_stakeholders cs ON c.conflict_id = cs.conflict_id
-                WHERE c.user_id = $1 AND c.conversation_id = $2
-                AND c.is_active = true
-                GROUP BY c.conflict_id
-                HAVING COUNT(cs.npc_id) = 0  -- Check for NPCs as stakeholders
+                LEFT JOIN stakeholders s
+                  ON s.conflict_id = c.id AND s.user_id = $1 AND s.conversation_id = $2
+                WHERE c.user_id = $1 AND c.conversation_id = $2 AND c.is_active = true
+                GROUP BY c.id, c.conflict_name, c.description
+                HAVING COUNT(s.stakeholder_id) = 0
             """, self.user_id, self.conversation_id)
-        
-        for conflict in orphaned:
-            recovery = await self._generate_orphan_recovery(conflict)
-            
-            edge_case = EdgeCase(
-                case_id=await self._store_edge_case(
-                    EdgeCaseType.ORPHANED_CONFLICT,
-                    [conflict['conflict_id']],
-                    0.7,
-                    f"Conflict '{conflict['conflict_name']}' has no stakeholders"
-                ),
-                case_type=EdgeCaseType.ORPHANED_CONFLICT,
-                affected_conflicts=[conflict['conflict_id']],
-                severity=0.7,
-                description=f"Orphaned conflict: {conflict['conflict_name']}",
-                detection_context={'conflict': dict(conflict)},
-                recovery_options=recovery
+    
+        for r in rows:
+            recovery = await self._generate_orphan_recovery(dict(r))
+            sev = 0.7
+            case_id = await self._store_edge_case(
+                EdgeCaseType.ORPHANED_CONFLICT, [int(r['conflict_id'])], sev,
+                f"Conflict '{r['conflict_name']}' has no stakeholders"
             )
-            edge_cases.append(edge_case)
-        
+            edge_cases.append(EdgeCase(
+                case_id=case_id,
+                case_type=EdgeCaseType.ORPHANED_CONFLICT,
+                affected_conflicts=[int(r['conflict_id'])],
+                severity=sev,
+                description=f"Orphaned conflict: {r['conflict_name']}",
+                detection_context={'conflict': dict(r)},
+                recovery_options=recovery,
+            ))
         return edge_cases
     
     async def _detect_infinite_loops(self) -> List[EdgeCase]:
@@ -528,123 +591,117 @@ class ConflictEdgeCaseSubsystem:
         return edge_cases
     
     async def _detect_stale_conflicts(self) -> List[EdgeCase]:
-        """Detect conflicts that haven't progressed"""
-        
-        edge_cases = []
-        
+        """Detect conflicts that haven't progressed recently (schema-safe)."""
+        edge_cases: List[EdgeCase] = []
         async with get_db_connection_context() as conn:
-            stale = await conn.fetch("""
-                SELECT conflict_id, conflict_name, phase, progress,
-                       last_updated, CURRENT_TIMESTAMP - last_updated as stale_duration
+            rows = await conn.fetch("""
+                SELECT id AS conflict_id, conflict_name, phase, progress,
+                       last_updated, (CURRENT_TIMESTAMP - last_updated) AS stale_duration
                 FROM Conflicts
                 WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
-                AND last_updated < CURRENT_TIMESTAMP - INTERVAL '7 days'
-                AND progress < 100
+                  AND is_active = true
+                  AND last_updated < CURRENT_TIMESTAMP - INTERVAL '7 days'
+                  AND progress < 100
             """, self.user_id, self.conversation_id)
-        
-        for conflict in stale:
-            recovery = await self._generate_stale_recovery(conflict)
-            
-            stale_days = conflict['stale_duration'].days if conflict['stale_duration'] else 7
-            
-            edge_case = EdgeCase(
-                case_id=await self._store_edge_case(
-                    EdgeCaseType.STALE_CONFLICT,
-                    [conflict['conflict_id']],
-                    0.5,
-                    f"Conflict stale for {stale_days} days"
-                ),
+    
+        for r in rows:
+            recovery = await self._generate_stale_recovery(dict(r))
+            days = getattr(r['stale_duration'], 'days', None)
+            stale_days = int(days) if days is not None else 7
+            sev = min(0.9, stale_days / 14)
+            case_id = await self._store_edge_case(
+                EdgeCaseType.STALE_CONFLICT, [int(r['conflict_id'])], sev,
+                f"Conflict stale for {stale_days} days"
+            )
+            edge_cases.append(EdgeCase(
+                case_id=case_id,
                 case_type=EdgeCaseType.STALE_CONFLICT,
-                affected_conflicts=[conflict['conflict_id']],
-                severity=min(0.9, stale_days / 14),
-                description=f"Stale conflict: {conflict['conflict_name']}",
+                affected_conflicts=[int(r['conflict_id'])],
+                severity=sev,
+                description=f"Stale conflict: {r['conflict_name']}",
                 detection_context={'stale_days': stale_days},
                 recovery_options=recovery
-            )
-            edge_cases.append(edge_case)
-        
+            ))
         return edge_cases
     
     async def _detect_complexity_overload(self) -> Optional[EdgeCase]:
-        """Detect if too many conflicts are active"""
-        
+        """Detect if too many conflicts are active (schema-safe, single conn)."""
         async with get_db_connection_context() as conn:
             count = await conn.fetchval("""
                 SELECT COUNT(*) FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
+                WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
             """, self.user_id, self.conversation_id)
-        
-        if count > 10:  # More than 10 active conflicts
+    
+            if (count or 0) <= 10:
+                return None
+    
             conflicts = await conn.fetch("""
-                SELECT conflict_id FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
+                SELECT id AS conflict_id FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
             """, self.user_id, self.conversation_id)
-            
-            recovery = await self._generate_overload_recovery(count)
-            
-            return EdgeCase(
-                case_id=await self._store_edge_case(
-                    EdgeCaseType.COMPLEXITY_OVERLOAD,
-                    [c['conflict_id'] for c in conflicts],
-                    0.8,
-                    f"{count} active conflicts causing overload"
-                ),
-                case_type=EdgeCaseType.COMPLEXITY_OVERLOAD,
-                affected_conflicts=[c['conflict_id'] for c in conflicts],
-                severity=min(1.0, count / 15),
-                description=f"System overloaded with {count} active conflicts",
-                detection_context={'active_count': count},
-                recovery_options=recovery
-            )
-        
-        return None
+    
+        recovery = await self._generate_overload_recovery(int(count or 0))
+        conflict_ids = [int(c['conflict_id']) for c in conflicts]
+        sev = min(1.0, float(count) / 15.0)
+        case_id = await self._store_edge_case(
+            EdgeCaseType.COMPLEXITY_OVERLOAD, conflict_ids, sev,
+            f"{count} active conflicts causing overload"
+        )
+        return EdgeCase(
+            case_id=case_id,
+            case_type=EdgeCaseType.COMPLEXITY_OVERLOAD,
+            affected_conflicts=conflict_ids,
+            severity=sev,
+            description=f"System overloaded with {count} active conflicts",
+            detection_context={'active_count': int(count)},
+            recovery_options=recovery
+        )
     
     async def _detect_narrative_breaks(self) -> List[EdgeCase]:
-        """Detect narrative continuity breaks"""
-        
-        edge_cases = []
-        
-        # Detect conflicts with contradictory states
+        """Detect narrative continuity breaks via stakeholder role conflicts."""
+        edge_cases: List[EdgeCase] = []
         async with get_db_connection_context() as conn:
-            contradictions = await conn.fetch("""
-                SELECT c1.conflict_id as conflict1, c2.conflict_id as conflict2,
-                       c1.conflict_name as name1, c2.conflict_name as name2
+            rows = await conn.fetch("""
+                SELECT c1.id AS conflict1, c2.id AS conflict2,
+                       c1.conflict_name AS name1, c2.conflict_name AS name2
                 FROM Conflicts c1
-                JOIN Conflicts c2 ON c1.user_id = c2.user_id
+                JOIN Conflicts c2
+                  ON c1.user_id = c2.user_id
+                 AND c1.conversation_id = c2.conversation_id
+                 AND c1.id < c2.id
                 WHERE c1.user_id = $1 AND c1.conversation_id = $2
-                AND c1.is_active = true AND c2.is_active = true
-                AND c1.conflict_id < c2.conflict_id
-                AND EXISTS (
-                    SELECT 1 FROM conflict_stakeholders cs1
-                    JOIN conflict_stakeholders cs2 ON cs1.npc_id = cs2.npc_id
-                    WHERE cs1.conflict_id = c1.conflict_id
-                    AND cs2.conflict_id = c2.conflict_id
-                    AND cs1.faction_id != cs2.faction_id
-                )
+                  AND c1.is_active = true AND c2.is_active = true
+                  AND EXISTS (
+                    SELECT 1
+                    FROM stakeholders s1
+                    JOIN stakeholders s2
+                      ON s1.npc_id = s2.npc_id
+                     AND s1.user_id = s2.user_id
+                     AND s1.conversation_id = s2.conversation_id
+                    WHERE s1.conflict_id = c1.id
+                      AND s2.conflict_id = c2.id
+                      AND COALESCE(s1.role, s1.faction, '') != COALESCE(s2.role, s2.faction, '')
+                  )
             """, self.user_id, self.conversation_id)
-        
-        for contradiction in contradictions:
-            recovery = await self._generate_contradiction_recovery(contradiction)
-            
-            edge_case = EdgeCase(
-                case_id=await self._store_edge_case(
-                    EdgeCaseType.CONTRADICTION,
-                    [contradiction['conflict1'], contradiction['conflict2']],
-                    0.6,
-                    "Contradictory NPC positions in conflicts"
-                ),
-                case_type=EdgeCaseType.CONTRADICTION,
-                affected_conflicts=[contradiction['conflict1'], contradiction['conflict2']],
-                severity=0.6,
-                description="NPC has contradictory roles in conflicts",
-                detection_context={'conflicts': dict(contradiction)},
-                recovery_options=recovery
+    
+        for r in rows:
+            recovery = await self._generate_contradiction_recovery(dict(r))
+            sev = 0.6
+            case_id = await self._store_edge_case(
+                EdgeCaseType.CONTRADICTION,
+                [int(r['conflict1']), int(r['conflict2'])],
+                sev,
+                "Contradictory NPC positions in conflicts"
             )
-            edge_cases.append(edge_case)
-        
+            edge_cases.append(EdgeCase(
+                case_id=case_id,
+                case_type=EdgeCaseType.CONTRADICTION,
+                affected_conflicts=[int(r['conflict1']), int(r['conflict2'])],
+                severity=sev,
+                description="NPC has contradictory roles in conflicts",
+                detection_context={'conflicts': dict(r)},
+                recovery_options=recovery
+            ))
         return edge_cases
     
     # ========== Recovery Methods ==========
@@ -899,27 +956,19 @@ class ConflictEdgeCaseSubsystem:
     
     # ========== Recovery Execution Methods ==========
     
-    async def _execute_orphan_recovery(
-        self,
-        conflict_id: int,
-        recovery: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute recovery for orphaned conflict"""
-        
-        strategy = recovery['strategy']
-        
+    async def _execute_orphan_recovery(self, conflict_id: int, recovery: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute recovery for orphaned conflict (schema-safe)."""
+        strategy = str(recovery.get('strategy', '')).lower()
         async with get_db_connection_context() as conn:
             if strategy == 'close':
-                # Gracefully close the conflict
                 await conn.execute("""
                     UPDATE Conflicts
                     SET is_active = false,
                         resolution_description = $1,
                         resolved_at = CURRENT_TIMESTAMP
-                    WHERE conflict_id = $2
-                """, recovery.get('narrative', 'Conflict resolved'), conflict_id)
-                
-                # Notify synthesizer
+                    WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                """, recovery.get('narrative', 'Conflict resolved'), conflict_id, self.user_id, self.conversation_id)
+                # Notify synthesizer best-effort
                 if self.synthesizer:
                     from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType
                     synth = self.synthesizer()
@@ -930,178 +979,127 @@ class ConflictEdgeCaseSubsystem:
                             source_subsystem=self.subsystem_type,
                             payload={'conflict_id': conflict_id, 'reason': 'orphaned'}
                         ))
-                
                 return {'success': True, 'action': 'closed_conflict'}
-                
-            elif strategy == 'assign':
-                # Would assign NPCs to the conflict
+    
+            if strategy == 'assign':
+                # Implement NPC reassignment if desired
                 return {'success': True, 'action': 'assigned_npcs'}
-                
-            elif strategy == 'pivot':
-                # Transform to player-centric conflict
+    
+            if strategy == 'pivot':
                 await conn.execute("""
                     UPDATE Conflicts
                     SET conflict_type = 'personal',
                         description = $1
-                    WHERE conflict_id = $2
-                """, recovery.get('narrative', 'Conflict transforms'), conflict_id)
-                
+                    WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                """, recovery.get('narrative', 'Conflict transforms'), conflict_id, self.user_id, self.conversation_id)
                 return {'success': True, 'action': 'pivoted_to_player'}
-        
-        return {'success': False}
     
-    async def _execute_loop_recovery(
-        self,
-        conflicts: List[int],
-        recovery: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute recovery for infinite loop"""
-        
-        strategy = recovery['strategy']
-        
+        return {'success': False, 'action': 'noop'}
+    
+    async def _execute_loop_recovery(self, conflicts: List[int], recovery: Dict[str, Any]) -> Dict[str, Any]:
+        strategy = str(recovery.get('strategy', '')).lower()
         async with get_db_connection_context() as conn:
             if strategy == 'break':
-                # Break the trigger chain
                 await conn.execute("""
                     DELETE FROM conflict_triggers
-                    WHERE conflict_id = ANY($1)
-                    AND triggered_conflict_id = ANY($1)
-                """, conflicts)
-                
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND conflict_id = ANY($3::int[])
+                      AND triggered_conflict_id = ANY($3::int[])
+                """, self.user_id, self.conversation_id, conflicts)
                 return {'success': True, 'action': 'broke_trigger_chain'}
-                
-            elif strategy == 'merge':
-                # Merge conflicts into one
-                # Keep first, deactivate others
+    
+            if strategy == 'merge' and len(conflicts) > 1:
+                # Keep first conflict active; deactivate the rest
                 await conn.execute("""
                     UPDATE Conflicts
                     SET is_active = false
-                    WHERE conflict_id = ANY($1[2:])
-                """, conflicts)
-                
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND id = ANY($3::int[])
+                """, self.user_id, self.conversation_id, conflicts[1:])
                 return {'success': True, 'action': 'merged_conflicts'}
-        
-        return {'success': False}
     
-    async def _execute_stale_recovery(
-        self,
-        conflict_id: int,
-        recovery: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute recovery for stale conflict"""
-        
-        # Generate narrative event
+        return {'success': False, 'action': 'noop'}
+    
+    async def _execute_stale_recovery(self, conflict_id: int, recovery: Dict[str, Any]) -> Dict[str, Any]:
         narrative = recovery.get('narrative_event', 'The situation evolves unexpectedly')
-        
         async with get_db_connection_context() as conn:
-            # Progress the conflict
             await conn.execute("""
                 UPDATE Conflicts
-                SET progress = progress + 20,
+                SET progress = LEAST(100, progress + 20),
                     phase = CASE 
                         WHEN progress + 20 >= 80 THEN 'resolution'
                         WHEN progress + 20 >= 60 THEN 'climax'
                         ELSE phase
                     END,
                     last_updated = CURRENT_TIMESTAMP
-                WHERE conflict_id = $1
-            """, conflict_id)
-            
-            # Add narrative event
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, self.user_id, self.conversation_id)
             await conn.execute("""
                 INSERT INTO conflict_events
-                (user_id, conversation_id, conflict_id, event_type, description, created_at)
+                    (user_id, conversation_id, conflict_id, event_type, description, created_at)
                 VALUES ($1, $2, $3, 'recovery', $4, CURRENT_TIMESTAMP)
             """, self.user_id, self.conversation_id, conflict_id, narrative)
-        
         return {'success': True, 'action': 'revitalized_conflict'}
     
-    async def _execute_overload_recovery(
-        self,
-        recovery: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute recovery for complexity overload"""
-        
-        strategy = recovery['strategy']
-        target_count = recovery.get('target_count', 5)
-        
-        async with get_db_connection_context() as conn:
-            if strategy == 'prioritize':
-                # Keep only highest intensity conflicts
-                await conn.execute("""
-                    UPDATE Conflicts
-                    SET is_active = false
-                    WHERE conflict_id IN (
-                        SELECT conflict_id FROM Conflicts
-                        WHERE user_id = $1 AND conversation_id = $2
-                        AND is_active = true
-                        ORDER BY 
-                            CASE intensity
-                                WHEN 'confrontation' THEN 5
-                                WHEN 'opposition' THEN 4
-                                WHEN 'friction' THEN 3
-                                WHEN 'tension' THEN 2
-                                ELSE 1
-                            END ASC
-                        OFFSET $3
-                    )
-                """, self.user_id, self.conversation_id, target_count)
-                
-                return {'success': True, 'action': 'prioritized_conflicts'}
-        
-        return {'success': False}
+    async def _execute_overload_recovery(self, recovery: Dict[str, Any]) -> Dict[str, Any]:
+        strategy = str(recovery.get('strategy', '')).lower()
+        target_count = int(recovery.get('target_count', 5) or 5)
+        if strategy != 'prioritize':
+            return {'success': False, 'action': 'noop'}
     
-    async def _execute_contradiction_recovery(
-        self,
-        conflicts: List[int],
-        recovery: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute recovery for contradictions"""
-        
-        # Create narrative explanation
-        explanation = recovery.get('narrative_explanation', 'The situation clarifies')
-        
         async with get_db_connection_context() as conn:
-            # Add explanation event to both conflicts
-            for conflict_id in conflicts:
+            # Deactivate lowest-intensity first (customize ordering as needed)
+            await conn.execute("""
+                UPDATE Conflicts
+                SET is_active = false
+                WHERE id IN (
+                    SELECT id
+                    FROM Conflicts
+                    WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
+                    ORDER BY 
+                      CASE intensity
+                        WHEN 'confrontation' THEN 5
+                        WHEN 'opposition' THEN 4
+                        WHEN 'friction' THEN 3
+                        WHEN 'tension' THEN 2
+                        ELSE 1
+                      END DESC
+                    OFFSET $3
+                )
+            """, self.user_id, self.conversation_id, target_count)
+        return {'success': True, 'action': 'prioritized_conflicts'}
+    
+    async def _execute_contradiction_recovery(self, conflicts: List[int], recovery: Dict[str, Any]) -> Dict[str, Any]:
+        explanation = recovery.get('narrative_explanation', 'The situation clarifies')
+        async with get_db_connection_context() as conn:
+            for cid in conflicts:
                 await conn.execute("""
                     INSERT INTO conflict_events
-                    (user_id, conversation_id, conflict_id, event_type, description, created_at)
+                        (user_id, conversation_id, conflict_id, event_type, description, created_at)
                     VALUES ($1, $2, $3, 'clarification', $4, CURRENT_TIMESTAMP)
-                """, self.user_id, self.conversation_id, conflict_id, explanation)
-        
+                """, self.user_id, self.conversation_id, int(cid), explanation)
         return {'success': True, 'action': 'explained_contradiction'}
     
     # ========== Helper Methods ==========
     
     async def _check_new_conflict_issues(self, conflict_id: int) -> List[str]:
-        """Check for immediate issues with new conflict"""
-        issues = []
-        
+        issues: List[str] = []
         async with get_db_connection_context() as conn:
-            # Check for stakeholders
             stakeholder_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM conflict_stakeholders
-                WHERE conflict_id = $1
-            """, conflict_id)
-            
-            if stakeholder_count == 0:
-                issues.append("No stakeholders assigned")
-            
-            # Check for similar active conflicts
-            similar = await conn.fetchval("""
-                SELECT COUNT(*) FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND conflict_id != $3
-                AND is_active = true
-                AND conflict_type = (
-                    SELECT conflict_type FROM Conflicts WHERE conflict_id = $3
-                )
+                SELECT COUNT(*) FROM stakeholders
+                WHERE user_id = $1 AND conversation_id = $2 AND conflict_id = $3
             """, self.user_id, self.conversation_id, conflict_id)
-            
-            if similar > 2:
+            if (stakeholder_count or 0) == 0:
+                issues.append("No stakeholders assigned")
+    
+            similar = await conn.fetchval("""
+                SELECT COUNT(*) FROM Conflicts c
+                WHERE c.user_id = $1 AND c.conversation_id = $2
+                  AND c.id != $3 AND c.is_active = true
+                  AND c.conflict_type = (SELECT conflict_type FROM Conflicts WHERE id = $3)
+            """, self.user_id, self.conversation_id, conflict_id)
+            if (similar or 0) > 2:
                 issues.append("Multiple similar conflicts active")
-        
         return issues
     
     async def _generate_critical_recovery(
