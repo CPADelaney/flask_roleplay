@@ -23,6 +23,7 @@ from npcs.npc_coordinator import NPCAgentCoordinator
 from npcs.npc_memory import NPCMemoryManager
 from npcs.npc_perception import EnvironmentPerception
 from npcs.npc_relationship import NPCRelationshipManager
+from npcs.npc_learning_adaptation import NPCLearningManager
 
 from nyx.scene_keys import generate_scene_cache_key
 
@@ -115,13 +116,15 @@ class NPCOrchestrator:
         self.config = config or {}
         
         # Core subsystems - use normalized IDs
-        self._relationship_manager = NPCRelationshipManager(self.user_id, self.conversation_id)
         self._perception_system = EnvironmentPerception(self.user_id, self.conversation_id)
         self._belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
         self._lore_manager = LoreContextManager(self.user_id, self.conversation_id)
         self._behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
         self._creation_handler = NPCCreationHandler(self.user_id, self.conversation_id)
         self._preset_handler = PresetNPCHandler
+
+        self.enable_learning_adaptation = bool(self.config.get("enable_learning_adaptation", True))
+        self._learning_manager = None
 
         self._decision_engines: Dict[int, NPCDecisionEngine] = {}
         self._decision_engine_timestamps: Dict[int, float] = {}
@@ -253,7 +256,6 @@ class NPCOrchestrator:
     async def initialize(self):
         """Initialize all subsystems"""
         try:
-            await self._relationship_manager.initialize()
             await self._perception_system.initialize()
             await self._belief_system.initialize()
             await self._lore_manager.initialize()
@@ -289,6 +291,80 @@ class NPCOrchestrator:
                     WHERE user_id = $1 AND conversation_id = $2
                 """, self.user_id, self.conversation_id)
         return [{"id": r["npc_id"], "name": r["npc_name"]} for r in rows]
+
+    async def _get_learning_manager(self) -> NPCLearningManager:
+        if self._learning_manager is None:
+            self._learning_manager = NPCLearningManager(self.user_id, self.conversation_id)
+            await self._learning_manager.initialize()
+        return self._learning_manager
+
+    async def run_learning_adaptation_cycle(self, npc_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+        if not self.enable_learning_adaptation:
+            return {"learning_disabled": True}
+        try:
+            mgr = await self._get_learning_manager()
+            ids = list(npc_ids or list(self._active_npcs))[:20]
+            res = await mgr.run_regular_adaptation_cycle(ids)
+    
+            changed: List[int] = []
+            for k, payload in (res.get("npc_adaptations") or {}).items():
+                try:
+                    nid = int(k)
+                except Exception:
+                    nid = k
+                mem = (payload or {}).get("memory_learning") or {}
+                rel = (payload or {}).get("relationship_adaptation") or {}
+                if (mem.get("intensity_change", 0) != 0) or rel.get("adapted"):
+                    changed.append(nid)
+    
+            for nid in changed:
+                self.invalidate_npc_state(nid, reason="learning_cycle")
+    
+            if changed:
+                try:
+                    await self._maybe_evaluate_behavior(changed, reason="post_learning_cycle", use_user_model=False)
+                except Exception as be:
+                    logger.debug(f"[Learning] behavior eval failed post cycle: {be}")
+    
+            return res
+        except Exception as e:
+            logger.exception(f"run_learning_adaptation_cycle failed: {e}")
+            return {"error": str(e)}
+
+    async def _learning_record_player_interaction(
+        self,
+        npc_id: int,
+        interaction_type: str,
+        interaction_details: Dict[str, Any],
+        player_response: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self.enable_learning_adaptation:
+            return {"learning_disabled": True}
+    
+        try:
+            mgr = await self._get_learning_manager()
+            result = await mgr.process_event_for_learning(
+                event_text=interaction_details.get("summary") or interaction_type,
+                event_type=interaction_type,
+                npc_ids=[npc_id],
+                player_response=player_response
+            )
+    
+            npc_res = result.get("npc_learning", {}).get(npc_id) or {}
+            # If LoreSystem changed stats (e.g., intensity), invalidate caches and optionally run behavior eval
+            changed = bool(npc_res.get("stats_updated")) or bool(
+                (npc_res.get("adaptation_results") or {}).get("intensity_change", 0)
+            )
+            if changed:
+                self.invalidate_npc_state(npc_id, reason="learning_adaptation")
+                try:
+                    await self._maybe_evaluate_behavior([npc_id], reason="post_learning_adaptation", use_user_model=False)
+                except Exception as be:
+                    logger.debug(f"[Learning] behavior eval failed post adaptation for NPC {npc_id}: {be}")
+            return npc_res
+        except Exception as e:
+            logger.debug(f"[Learning] record interaction failed for NPC {npc_id}: {e}")
+            return {"error": str(e)}
     
     # ==================== SCENE BUNDLE METHODS ====================
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
@@ -552,16 +628,6 @@ class NPCOrchestrator:
                 if not keys:
                     self._bundle_index.pop(nid, None)
 
-    def invalidate_npc_state(self, npc_id: int, reason: str = "") -> None:
-        """Public wrapper to invalidate a single NPC's cached state and mark deltas."""
-        try:
-            self._snapshot_cache.pop(npc_id, None)
-        except Exception:
-            pass
-        self._notify_npc_changed(npc_id)
-        if reason:
-            logger.debug(f"[Orchestrator] Invalidated NPC {npc_id} ({reason})")
-
     async def route_player_conversation_beliefs(
         self,
         npc_ids: List[int],
@@ -738,6 +804,30 @@ class NPCOrchestrator:
         # 3e) Invalidate caches
         self.invalidate_npc_state(npc_id, reason="player_interaction")
 
+        # 3f) Learning & adaptation (intensity etc.) after conversation
+        try:
+            player_response = None
+            if isinstance(proposal.meta, dict):
+                player_response = {
+                    "compliance_level": proposal.meta.get("player_compliance", 0),
+                    "emotional_response": proposal.meta.get("player_emotion", "neutral"),
+                }
+        
+            interaction_details = {
+                "summary": player_input[:200],
+                "topic": context.get("topic", "general"),
+                "duration": context.get("duration", 0),
+            }
+        
+            await self._learning_record_player_interaction(
+                npc_id=npc_id,
+                interaction_type=interaction_type if interaction_type else "conversation",
+                interaction_details=interaction_details,
+                player_response=player_response,
+            )
+        except Exception as e:
+            logger.debug(f"[Learning] interaction hook failed for NPC {npc_id}: {e}")
+
         # 4) Return payload for the final response synthesizer
         return {
             "npc_id": npc_id,
@@ -897,37 +987,6 @@ class NPCOrchestrator:
         if reason:
             logger.debug(f"[Orchestrator] Invalidated NPC {npc_id} ({reason})")
 
-    async def route_player_conversation_beliefs(
-        self,
-        npc_ids: List[int],
-        text: str,
-        topic: Optional[str] = "general",
-        credibility: float = 0.7
-    ) -> None:
-        """Public helper to push a player utterance into the belief system and consolidate."""
-        if not npc_ids or not text:
-            return
-        from types import SimpleNamespace
-        for nid in npc_ids[:10]:
-            ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=nid)
-            try:
-                await self._belief_system.process_conversation_for_beliefs(
-                    ctx=ctx_obj,
-                    conversation_text=text,
-                    speaker_id="player",
-                    listener_id=nid,
-                    topic=topic or "general",
-                    credibility=float(credibility),
-                )
-            except Exception as e:
-                logger.warning(f"[Beliefs] routing failed for NPC {nid}: {e}")
-
-        await self._maybe_consolidate_beliefs(
-            npc_ids,
-            topic_filter=topic or "general",
-            reason="npc_handler"
-        )
-
     async def coordinate_group_interaction(
         self,
         npc_ids: List[int],
@@ -1017,6 +1076,25 @@ class NPCOrchestrator:
                     )
             except Exception as be:
                 logger.warning(f"[Beliefs] post-group-action belief routing failed: {be}")
+
+            # Learning adaptation for affected NPCs (if any)
+            try:
+                if text and affected and self.enable_learning_adaptation:
+                    mgr = await self._get_learning_manager()
+                    await mgr.process_event_for_learning(
+                        event_text=text,
+                        event_type=action.get("type") or action.get("interaction_type") or "group_action",
+                        npc_ids=affected,
+                        player_response={
+                            "compliance_level": context.get("player_compliance", 0),
+                            "emotional_response": context.get("player_emotion", "neutral"),
+                        } if isinstance(context, dict) else None,
+                    )
+                    for nid in affected:
+                        self.invalidate_npc_state(nid, reason="group_learning")
+                    await self._maybe_evaluate_behavior(affected, reason="post_group_learning", use_user_model=False)
+            except Exception as le:
+                logger.debug(f"[Learning] group learning hook failed: {le}")
 
             return res or {"npc_responses": []}
         except Exception as e:
@@ -1667,6 +1745,13 @@ class NPCOrchestrator:
                 await self._maybe_evaluate_behavior(list(touched_npcs), reason="post_calendar_processing", use_user_model=False)
             except Exception as e:
                 logger.warning(f"[Behavior] post_calendar evolution failed: {e}")
+
+        # Optional: run learning cycle after calendar processing
+        try:
+            if touched_npcs and self.enable_learning_adaptation:
+                await self.run_learning_adaptation_cycle(list(touched_npcs))
+        except Exception as e:
+            logger.debug(f"[Learning] post-calendar cycle failed: {e}")
     
         return results
     
