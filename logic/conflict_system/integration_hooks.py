@@ -39,24 +39,40 @@ class ConflictEventHooks:
     async def on_game_day_transition(user_id: int, conversation_id: int, new_day: int):
         """
         Called when the game day changes.
-        This is the primary trigger for background updates.
+        Primary trigger for background updates.
         """
         logger.info(f"Game day transition to {new_day} for user {user_id}")
-        
+    
         scheduler = get_conflict_scheduler()
-        
-        # Process daily updates asynchronously
         try:
+            # Run background model updates (do NOT call synthesizer.handle_day_transition to avoid recursion)
             result = await scheduler.on_game_day_change(user_id, conversation_id, new_day)
-            
-            # If there are items in the processing queue, schedule background task
+    
+            # Notify orchestrator so subsystems can react
+            try:
+                from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+                synthesizer = await get_synthesizer(user_id, conversation_id)
+    
+                await synthesizer.emit_event(SystemEvent(
+                    event_id=f"day_{new_day}_{datetime.utcnow().timestamp()}",
+                    event_type=EventType.DAY_TRANSITION,
+                    source_subsystem=SubsystemType.ORCHESTRATOR,
+                    payload={'new_day': new_day, 'processing_result': result},
+                    requires_response=False,
+                    priority=7,
+                ))
+    
+                # Best-effort: process a few queued items (news, etc.) so side-effects are enqueued
+                await synthesizer.process_background_queue(max_items=5)
+            except Exception as e:
+                logger.debug(f"Orchestrator day-transition notification failed (non-fatal): {e}")
+    
+            # Kick Celery if processor queue is still non-empty
             processor = scheduler.get_processor(user_id, conversation_id)
             if processor._processing_queue:
-                # Trigger Celery task to process queue
                 process_conflict_queue.delay(user_id, conversation_id)
-                
+    
             return result
-            
         except Exception as e:
             logger.error(f"Error in game day transition: {e}")
             return {"error": str(e)}
@@ -70,36 +86,26 @@ class ConflictEventHooks:
     ):
         """
         Called when transitioning between scenes.
-        Only fetches relevant conflict context, no generation.
+        Asks the orchestrator for scene-relevant context (fast path) and lets it emit events.
         """
-        scheduler = get_conflict_scheduler()
-        
         try:
-            # Get scene-relevant updates (fast path)
-            context = await scheduler.on_scene_enter(user_id, conversation_id, new_scene)
-            
-            # Check if any immediate processing needed
-            if context.get('immediate_news'):
-                # This would be pre-generated news relevant to the scene
-                return context
-                
-            # Check if background processing needed
-            processor = scheduler.get_processor(user_id, conversation_id)
-            high_priority_items = [
-                item for item in processor._processing_queue
-                if item.get('priority') == ProcessingPriority.IMMEDIATE
-            ]
-            
-            if high_priority_items:
-                # Process immediately relevant items synchronously
-                await processor.process_queued_items(max_items=len(high_priority_items))
-                
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            synth = await get_synthesizer(user_id, conversation_id)
+    
+            # Get scene-relevant context (this also enqueues background ambient events via orchestrator)
+            context = await synth.conflict_context_for_scene(new_scene)
+    
+            # Best-effort: process a few high-priority background items now
+            try:
+                await synth.process_background_queue(max_items=5)
+            except Exception:
+                pass
+    
             return context
-            
         except Exception as e:
             logger.error(f"Error in scene transition: {e}")
             return {}
-    
+        
     @staticmethod
     async def on_significant_conflict_event(
         user_id: int,
@@ -110,24 +116,42 @@ class ConflictEventHooks:
     ):
         """
         Called when something significant happens in a conflict.
-        Decides whether to generate news based on limits and cooldowns.
+        Uses orchestrator limits and nudges background processing.
         """
-        scheduler = get_conflict_scheduler()
-        processor = scheduler.get_processor(user_id, conversation_id)
-        
-        # Only trigger if magnitude is significant
-        if magnitude >= processor.limits.significant_event_threshold:
-            return await processor.trigger_significant_event(
-                conflict_id,
-                {
-                    'event_type': event_type,
-                    'magnitude': magnitude,
-                    'description': f"Significant {event_type} event",
-                    'timestamp': datetime.utcnow().isoformat()
-                }
-            )
-        
-        return False
+        try:
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            synth = await get_synthesizer(user_id, conversation_id)
+    
+            # Respect orchestrator limiters (e.g., news rate limiting)
+            allowed, reason = await synth.should_generate_content('news', conflict_id)
+            if not allowed:
+                return {'triggered': False, 'reason': reason}
+    
+            # Use the background processor (owned by orchestrator) to enqueue the event
+            try:
+                result = await synth.processor.trigger_significant_event(
+                    conflict_id,
+                    {
+                        'event_type': event_type,
+                        'magnitude': magnitude,
+                        'description': f"Significant {event_type} event",
+                        'timestamp': datetime.utcnow().isoformat()
+                    }
+                )
+            except Exception as e:
+                logger.debug(f"Processor trigger failed (non-fatal): {e}")
+                result = False
+    
+            # Nudge the queue to surface items and emit news state syncs if any
+            try:
+                await synth.process_background_queue(max_items=3)
+            except Exception:
+                pass
+    
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Error triggering significant event: {e}")
+            return False
 
 # ===============================================================================
 # CELERY BACKGROUND TASKS
@@ -136,26 +160,27 @@ class ConflictEventHooks:
 @celery_app.task(name='conflict.process_queue')
 def process_conflict_queue(user_id: int, conversation_id: int):
     """
-    Celery task to process background conflict queue.
-    Runs outside request path.
+    Celery task to process background conflict queue via orchestrator.
+    Ensures any generated items emit proper events.
     """
     async def _process():
-        scheduler = get_conflict_scheduler()
-        processor = scheduler.get_processor(user_id, conversation_id)
-        
-        # Process up to 10 items
-        results = await processor.process_queued_items(max_items=10)
-        
-        # If queue still has items, schedule another task
-        if processor._processing_queue:
-            process_conflict_queue.apply_async(
-                args=[user_id, conversation_id],
-                countdown=60  # Process again in 1 minute
-            )
-            
-        return results
-    
-    # Run the async function
+        try:
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            synth = await get_synthesizer(user_id, conversation_id)
+            results = await synth.process_background_queue(max_items=10)
+            # Re-enqueue if there's more work (best-effort check)
+            try:
+                if synth.processor and synth.processor._processing_queue:
+                    process_conflict_queue.apply_async(
+                        args=[user_id, conversation_id],
+                        countdown=60
+                    )
+            except Exception:
+                pass
+            return results
+        except Exception as e:
+            logger.error(f"Celery process_queue error: {e}")
+            return []
     return asyncio.run(_process())
 
 @celery_app.task(name='conflict.daily_maintenance')
@@ -166,37 +191,29 @@ def daily_conflict_maintenance():
     """
     async def _maintain():
         async with get_db_connection_context() as conn:
-            # Get all active conversations
             conversations = await conn.fetch(
                 """
                 SELECT DISTINCT user_id, conversation_id 
                 FROM BackgroundConflicts
                 WHERE status = 'active'
-                AND updated_at > NOW() - INTERVAL '7 days'
+                  AND updated_at > NOW() - INTERVAL '7 days'
                 """
             )
-            
-            scheduler = get_conflict_scheduler()
-            
-            for conv in conversations:
-                try:
-                    # Get current game day for this conversation
-                    game_day = await get_current_game_day(
-                        conv['user_id'], 
-                        conv['conversation_id']
-                    )
-                    
-                    # Trigger daily update
-                    await scheduler.on_game_day_change(
-                        conv['user_id'],
-                        conv['conversation_id'],
-                        game_day
-                    )
-                    
-                except Exception as e:
-                    logger.error(f"Error in daily maintenance for {conv}: {e}")
-                    
-        return {"processed": len(conversations)}
+    
+        processed = 0
+        from logic.conflict_system.conflict_synthesizer import get_synthesizer
+        for conv in conversations:
+            try:
+                user_id = int(conv['user_id'])
+                conversation_id = int(conv['conversation_id'])
+                game_day = await get_current_game_day(user_id, conversation_id)
+                synth = await get_synthesizer(user_id, conversation_id)
+                await synth.handle_day_transition(game_day)
+                processed += 1
+            except Exception as e:
+                logger.error(f"Error in daily maintenance for {conv}: {e}")
+    
+        return {"processed": processed}
     
     return asyncio.run(_maintain())
 
