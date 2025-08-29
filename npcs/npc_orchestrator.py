@@ -113,7 +113,6 @@ class NPCOrchestrator:
         self.config = config or {}
         
         # Core subsystems - use normalized IDs
-        self._memory_system = NPCMemoryManager(self.user_id, self.conversation_id)
         self._relationship_manager = NPCRelationshipManager(self.user_id, self.conversation_id)
         self._perception_system = EnvironmentPerception(self.user_id, self.conversation_id)
         self._belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
@@ -172,8 +171,9 @@ class NPCOrchestrator:
         self.canon_cache: Dict[str, List[Dict]] = {}
         self._bundle_index: Dict[int, Set[str]] = defaultdict(set)
 
-        self._last_behavior_eval: Dict[int, float] = {}
-        self._behavior_eval_cooldown = float(self.config.get('behavior_eval_cooldown_s', 120.0))  # 2 min default
+        # per-NPC memory managers
+        self._mem_mgrs: Dict[int, NPCMemoryManager] = {}
+        self._active_status_values = {"active", "idle", "observing"}
 
         # Performance metrics
         self.metrics = {
@@ -204,11 +204,51 @@ class NPCOrchestrator:
         })
         
         logger.info(f"NPCOrchestrator initialized for user {user_id}, conversation {conversation_id}")
+
+    def _is_active_npc(self, npc_id: int) -> bool:
+        return npc_id in self._active_npcs
+
+    def _get_mem_mgr(self, npc_id: int, cache_if_active: bool = True) -> NPCMemoryManager:
+        # Return cached if present
+        mgr = self._mem_mgrs.get(npc_id)
+        if mgr:
+            return mgr
     
+        # Create a new manager; enable reporting only if active
+        is_active = self._is_active_npc(npc_id)
+        mgr = NPCMemoryManager(
+            npc_id,
+            self.user_id,
+            self.conversation_id,
+            enable_reporting=is_active
+        )
+    
+        # Cache only if active and allowed
+        if cache_if_active and is_active:
+            self._mem_mgrs[npc_id] = mgr
+    
+        return mgr
+
+    def _prune_mem_mgr_cache(self) -> None:
+        # Remove cached managers for NPCs that are no longer active
+        for nid in list(self._mem_mgrs.keys()):
+            if nid not in self._active_npcs:
+                self._mem_mgrs.pop(nid, None)
+    
+    def _update_active_trackers(self, npc_id: int, status: str) -> None:
+        """Keep _active_npcs aligned to observed status transitions and prune cache on inactivity."""
+        s = (status or "").lower()
+        if s in self._active_status_values:
+            if npc_id not in self._active_npcs:
+                self._active_npcs.add(npc_id)
+        else:
+            # Became inactive -> drop from active set and memory-manager cache
+            self._active_npcs.discard(npc_id)
+            self._mem_mgrs.pop(npc_id, None)
+
     async def initialize(self):
         """Initialize all subsystems"""
         try:
-            await self._memory_system.initialize()
             await self._relationship_manager.initialize()
             await self._perception_system.initialize()
             await self._belief_system.initialize()
@@ -247,14 +287,10 @@ class NPCOrchestrator:
         return [{"id": r["npc_id"], "name": r["npc_name"]} for r in rows]
     
     # ==================== SCENE BUNDLE METHODS ====================
-    from nyx.scene_keys import generate_scene_cache_key
-    
-    SECTION_SUFFIX = "|npcs"  # pipe avoids any collision with md5 hex
-
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
         start_time = time.time()
         scene_key = generate_scene_cache_key(scope)
-        cache_key = f"{scene_key}{self.SECTION_SUFFIX}"
+        cache_key = f"{scene_key}{NPCS_SECTION_SUFFIX}"
     
         # Fast path: serve from cache if fresh
         if cache_key in self._bundle_cache:
@@ -500,7 +536,7 @@ class NPCOrchestrator:
     
     # helper: invalidate NPC bundles for a *scene* key (called by ContextBroker)
     def invalidate_npc_bundles_for_scene_key(self, scene_key: str):
-        key = f"{scene_key}{self.SECTION_SUFFIX}"
+        key = f"{scene_key}{NPCS_SECTION_SUFFIX}"
     
         # Drop the cached bundle
         self._bundle_cache.pop(key, None)
@@ -940,6 +976,8 @@ class NPCOrchestrator:
                 
                 # Convert Record to dict for safe access
                 row_map = dict(row)
+
+                self._update_active_trackers(npc_id, row_map.get("status", "active"))
                 
                 # Get canonical events if canon enabled
                 canonical_events = []
@@ -962,18 +1000,21 @@ class NPCOrchestrator:
                         self.canon_cache[cache_key] = canonical_events
         
         # Get emotional state (skip if light mode)
-        emotional_state = {} if light else await self._memory_system.get_npc_emotion(npc_id)
+        emotional_state = {}
+        if not light:
+            try:
+                emotional_state = await self._get_mem_mgr(npc_id).get_emotional_state()
+            except Exception:
+                emotional_state = {}
         
         # Get recent memories (skip if light mode)
         recent_memories = []
         if not light:
-            memory_result = await self._memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                query="",
-                limit=5
-            )
-            recent_memories = memory_result.get("memories", [])
+            try:
+                mem_res = await self._get_mem_mgr(npc_id).retrieve_memories(query="", limit=5)
+                recent_memories = mem_res.get("memories", [])
+            except Exception:
+                pass
 
         # Lore summary (heavy only; keep tiny)
         lore_summary = []
@@ -1123,16 +1164,25 @@ class NPCOrchestrator:
                 )
         
         # Add memory for NPC about the scheduled event
-        await self._memory_system.store(
-            entity_type="npc",
-            entity_id=npc_id,
-            content=f"I have {event_name} scheduled for {time_of_day} on day {day}",
+        await self._get_mem_mgr(npc_id).add_memory(
+            memory_text=f"I have {event_name} scheduled for {time_of_day} on day {day}",
             memory_type="scheduling",
-            significance=priority
+            significance=priority,
+            tags=["calendar", "scheduled"]
         )
         
         self._notify_npc_changed(npc_id)
         return result
+
+    async def decide_for_scope(self, scope: 'SceneScope') -> Dict[int, Dict[str, Any]]:
+        npc_ids = list(getattr(scope, "npc_ids", []))[:10]
+        out: Dict[int, Dict[str, Any]] = {}
+        for nid in npc_ids:
+            try:
+                out[nid] = await self.decide_for_npc(nid)
+            except Exception as e:
+                logger.debug(f"decide_for_scope failed for NPC {nid}: {e}")
+        return out
     
     async def check_npc_current_events(self, npc_id: int) -> List[Dict[str, Any]]:
         """Check what events an NPC should be participating in right now."""
@@ -1379,13 +1429,13 @@ class NPCOrchestrator:
                 logger.warning(f"[Behavior] post_calendar evolution failed: {e}")
     
         return results
-
-    async def evaluate_behavior_for_scope(self, scope: 'SceneScope', use_user_model: bool = True) -> Dict[int, Dict[str, Any]]:
-        """Convenience: evolve behavior for the first N NPCs in the current scope."""
+    
+    async def evaluate_behavior_for_scope(self, scope: 'SceneScope', use_user_model: bool = True) -> None:
         npc_ids = list(getattr(scope, "npc_ids", []))[:10]
         if not npc_ids:
-            return {}
-        return await self._maybe_evaluate_behavior(npc_ids, reason="explicit_scope_eval", use_user_model=use_user_model)
+            return None
+        await self._maybe_evaluate_behavior(npc_ids, reason="explicit_scope_eval", use_user_model=use_user_model)
+        return None
 
     async def generate_scheming_opportunity(self, npc_id: int, trigger_event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Thin bridge to BehaviorEvolution.generate_scheming_opportunity plus cache/Beliefs."""
@@ -1678,7 +1728,7 @@ class NPCOrchestrator:
         
         # Check memories for topic relevance
         if snapshot.recent_memories:
-            memory_text = ' '.join([m.get('content', '') for m in snapshot.recent_memories])
+            memory_text = ' '.join([m.get('text', '') for m in snapshot.recent_memories])
             memory_text_lower = memory_text.lower()
             for topic in topics:
                 if topic.lower() in memory_text_lower:
@@ -1859,7 +1909,6 @@ class NPCOrchestrator:
     # ==================== EXISTING METHODS (PRESERVED) ====================
     
     async def _load_active_npcs(self):
-        """Load active NPCs from database"""
         async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
                 SELECT npc_id, current_location
@@ -1867,12 +1916,18 @@ class NPCOrchestrator:
                 WHERE user_id = $1 AND conversation_id = $2
                 AND status IN ('active', 'idle', 'observing')
             """, self.user_id, self.conversation_id)
-            
+    
+            self._active_npcs.clear()
+            self._location_index.clear()
+    
             for row in rows:
                 self._active_npcs.add(row['npc_id'])
                 if row['current_location']:
                     self._location_index[row['current_location']].add(row['npc_id'])
     
+        # NEW: drop cached memory-managers for NPCs no longer active
+        self._prune_mem_mgr_cache()
+        
     async def get_npcs_at_location(self, location: str) -> List[NPCSnapshot]:
         """Get all NPCs at a specific location"""
         npc_ids = set(self._location_index.get(location, set()))
