@@ -172,13 +172,6 @@ class NPCOrchestrator:
         self._last_behavior_eval: Dict[int, float] = {}
         self._behavior_eval_cooldown = float(self.config.get('behavior_eval_cooldown_s', 120.0))  # 2 min default
 
-        # Behavior metrics
-        self.metrics.update({
-            'behavior_evals': 0,
-            'behavior_applies': 0,
-            'behavior_skipped_cooldown': 0,
-        })
-        
         # Performance metrics
         self.metrics = {
             'bundle_fetches': 0,
@@ -190,6 +183,22 @@ class NPCOrchestrator:
             'delta_updates': 0,
             'avg_bundle_time': 0.0
         }
+
+        # Behavior eval throttling
+        self._last_behavior_eval: Dict[int, float] = {}
+        self._behavior_eval_cooldown = float(self.config.get('behavior_eval_cooldown_s', 180.0))  # 3m default
+
+        # Behavior metrics
+        self.metrics.update({
+            'behavior_evals': 0,
+            'behavior_applies': 0,
+            'behavior_skipped_cooldown': 0,
+        })
+
+        self.metrics.update({
+            'group_decisions': 0,
+            'group_player_actions': 0,
+        })
         
         logger.info(f"NPCOrchestrator initialized for user {user_id}, conversation {conversation_id}")
     
@@ -559,6 +568,102 @@ class NPCOrchestrator:
         self.metrics['delta_updates'] += 1
         return delta
 
+    async def coordinate_group_interaction(
+        self,
+        npc_ids: List[int],
+        shared_context: Dict[str, Any],
+        available_actions: Optional[Dict[int, List[Dict[str, Any]]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Run the NPCAgentCoordinator to make a group decision, then
+        feed salient results into beliefs and refresh caches.
+        """
+        try:
+            out = await self._agent_coordinator.make_group_decisions(
+                npc_ids=npc_ids,
+                shared_context=shared_context,
+                available_actions=available_actions
+            )
+            self.metrics['group_decisions'] += 1
+
+            # Belief/event logging for each NPC
+            if out and (out.get("group_actions") or out.get("individual_actions")):
+                from types import SimpleNamespace
+                for nid in npc_ids[:10]:
+                    try:
+                        ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=nid)
+                        await self._belief_system.process_event_for_beliefs(
+                            ctx=ctx_obj,
+                            event_text="Group decision executed",
+                            event_type="group_decision",
+                            npc_ids=[nid],
+                            factuality=1.0
+                        )
+                        # mark changed for delta feeds
+                        self._notify_npc_changed(nid)
+                    except Exception as be:
+                        logger.warning(f"[Beliefs] group-decision hook failed for NPC {nid}: {be}")
+
+            return out or {}
+        except Exception as e:
+            logger.exception(f"group interaction coordination failed: {e}")
+            return {"error": str(e)}
+
+    async def handle_group_player_action(
+        self,
+        action: Dict[str, Any],
+        context: Dict[str, Any],
+        npc_ids: Optional[List[int]] = None
+    ) -> Dict[str, Any]:
+        """
+        Delegate a player action that impacts multiple NPCs to the NPCAgentCoordinator.
+        Includes belief routing + throttled consolidation.
+        """
+        try:
+            res = await self._agent_coordinator.handle_player_action(
+                player_action=action,
+                context=context,
+                npc_ids=npc_ids
+            )
+            self.metrics['group_player_actions'] += 1
+
+            # Belief integration (reuse your existing text if present)
+            text = action.get("description", "") or ""
+            try:
+                if res and res.get("npc_responses"):
+                    affected = npc_ids or [r.get("npc_id") for r in res["npc_responses"] if isinstance(r, dict) and r.get("npc_id")]
+                    affected = [n for n in affected if n is not None][:10]
+                else:
+                    affected = npc_ids or []
+
+                if text and affected:
+                    from types import SimpleNamespace
+                    for nid in affected:
+                        ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=nid)
+                        await self._belief_system.process_conversation_for_beliefs(
+                            ctx=ctx_obj,
+                            conversation_text=text,
+                            speaker_id="player",
+                            listener_id=nid,
+                            topic=context.get("topic", "group"),
+                            credibility=float(context.get("credibility", 0.7))
+                        )
+                        self._notify_npc_changed(nid)
+
+                    await self._maybe_consolidate_beliefs(
+                        affected,
+                        topic_filter=context.get("topic", "group"),
+                        reason="post_group_player_action"
+                    )
+            except Exception as be:
+                logger.warning(f"[Beliefs] post-group-action belief routing failed: {be}")
+
+            return res or {"npc_responses": []}
+        except Exception as e:
+            logger.exception(f"group player action failed: {e}")
+            return {"error": str(e), "npc_responses": []}
+
+
     async def evaluate_and_apply_npc_behavior(
         self,
         npc_id: int,
@@ -624,10 +729,11 @@ class NPCOrchestrator:
         self,
         npc_ids: List[int],
         reason: str = "",
-        use_user_model: bool = True
-    ) -> Dict[int, Dict[str, Any]]:
+        use_user_model: bool = False
+    ) -> None:
         """
-        Throttle and evaluate behavior for a set of NPCs. Returns per-NPC results.
+        Throttle & run behavior evolution for a set of NPCs, apply adjustments,
+        invalidate caches, and mark deltas.
         """
         now = time.time()
         to_run: List[int] = []
@@ -636,24 +742,35 @@ class NPCOrchestrator:
             if now - last >= self._behavior_eval_cooldown:
                 to_run.append(nid)
                 self._last_behavior_eval[nid] = now
-            else:
-                self.metrics['behavior_skipped_cooldown'] += 1
-
+    
         if not to_run:
-            return {}
+            return
+    
+        try:
+            self.metrics['behavior_evals'] += len(to_run)
+            for nid in to_run:
+                try:
+                    if use_user_model:
+                        adjustments = await self._behavior_evolution.evaluate_npc_scheming_with_user_model(nid)
+                    else:
+                        adjustments = await self._behavior_evolution.evaluate_npc_scheming(nid)
+    
+                    if isinstance(adjustments, dict) and "error" not in adjustments:
+                        applied = await self._behavior_evolution.apply_scheming_adjustments(nid, adjustments)
+                        if applied:
+                            self.metrics['behavior_applied'] += 1
+                            # Invalidate snapshot cache & mark change for delta feeds
+                            if nid in self._snapshot_cache:
+                                del self._snapshot_cache[nid]
+                            self._notify_npc_changed(nid)
+                except Exception as e:
+                    logger.warning(f"[Behavior] evolution failed for NPC {nid}: {e}")
+    
+            if reason:
+                logger.debug(f"[Behavior] Evaluated for {to_run} ({reason})")
+        except Exception as e:
+            logger.warning(f"[Behavior] batch evaluation failed ({reason}): {e}")
 
-        # Evaluate in parallel, but let BehaviorEvolution hit the DB safely
-        results: Dict[int, Dict[str, Any]] = {}
-
-        async def _one(nid: int):
-            res = await self.evaluate_and_apply_npc_behavior(nid, use_user_model=use_user_model)
-            results[nid] = res
-
-        await asyncio.gather(*[_one(n) for n in to_run], return_exceptions=False)
-
-        if reason:
-            logger.debug(f"[Behavior] Evaluated {to_run} ({reason})")
-        return results
     
     # ==================== SNAPSHOT METHODS ====================
     
@@ -1707,15 +1824,35 @@ class NPCOrchestrator:
     ) -> Dict[str, Any]:
         """
         Handle player action and generate NPC responses, then route the utterance/event
-        into the belief system for affected NPCs and (throttled) consolidate.
+        into the belief system for affected NPCs and (throttled) consolidate & evolve behavior.
         """
-        # Use bridge if available
+        # Fast path: if explicit group action or multiple NPC targets, delegate to coordinator
+        try:
+            explicit_group = action.get("target") == "group" or action.get("scope") == "group"
+            mentioned_ids_raw = action.get("npc_ids") or []
+            mentioned_ids = []
+            if isinstance(mentioned_ids_raw, list):
+                # normalize -> ints, unique
+                for x in mentioned_ids_raw:
+                    try:
+                        mentioned_ids.append(int(x))
+                    except Exception:
+                        continue
+                mentioned_ids = list({*mentioned_ids})  # dedupe
+            if explicit_group or (isinstance(mentioned_ids, list) and len(mentioned_ids) > 1):
+                return await self.handle_group_player_action(action, context, mentioned_ids)
+        except Exception:
+            # Never block on fast-path failure; fall back to single-NPC handling
+            pass
+    
+        # Default path (single-NPC style)
         if self._npc_bridge:
             result = await self._npc_bridge.handle_player_action(action, context)
         else:
             result = await self._agent_system.process_player_action(action, context)
     
         # --- Belief integration for conversational actions ---
+        affected_ids: List[int] = []
         try:
             action_type = (action.get("type") or "").lower()
             is_conversation = action_type in {
@@ -1727,13 +1864,13 @@ class NPCOrchestrator:
             if is_conversation and text:
                 # Resolve affected NPCs
                 try:
-                    npc_ids = await self._agent_system.determine_affected_npcs(action, context)
+                    affected_ids = await self._agent_system.determine_affected_npcs(action, context)
                 except Exception as e:
                     logger.warning(f"[Beliefs] could not resolve affected NPCs; fallback to active set: {e}")
-                    npc_ids = list(self._active_npcs)[:3]
+                    affected_ids = list(self._active_npcs)[:3]
     
-                if npc_ids:
-                    for npc_id in npc_ids:
+                if affected_ids:
+                    for npc_id in affected_ids:
                         ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
                         try:
                             await self._belief_system.process_conversation_for_beliefs(
@@ -1749,22 +1886,23 @@ class NPCOrchestrator:
     
                     # Throttled consolidation right after conversation bursts
                     await self._maybe_consolidate_beliefs(
-                        npc_ids,
+                        affected_ids,
                         topic_filter=context.get("topic"),
                         reason="post_conversation"
                     )
     
         except Exception as e:
             logger.exception(f"[Beliefs] post-action belief routing failed: {e}")
-
+    
         # --- Behavior evolution right after conversations (throttled) ---
         try:
-            if npc_ids:
-                await self._maybe_evaluate_behavior(npc_ids, reason="post_conversation", use_user_model=True)
+            if affected_ids:
+                await self._maybe_evaluate_behavior(affected_ids, reason="post_conversation", use_user_model=True)
         except Exception as e:
             logger.warning(f"[Behavior] post_conversation evolution failed: {e}")
     
         return result
+
 
     
     async def progress_npc_narrative(
