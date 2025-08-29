@@ -548,7 +548,7 @@ class IntegratedNPCSystem:
         memories: List[Dict[str, Any]],
         current_location: str
     ):
-        """Initialize all advanced systems for a new NPC."""
+        """Initialize all advanced systems for a new NPC (no direct memory writes)."""
         try:
             # Initialize NPC agent as before
             if npc_id not in self.agent_system.npc_agents:
@@ -571,22 +571,14 @@ class IntegratedNPCSystem:
             
             # Initialize lore context
             agent.lore_context = LoreContextManager(self.user_id, self.conversation_id)
-            
-            # Process memories as before
-            memory_system = await agent._get_memory_system()
-            for memory in memories:
-                memory_text = memory if isinstance(memory, str) else memory.get("text", "")
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    memory_text=memory_text,
-                    importance="medium",
-                    tags=["creation", "origin"]
-                )
-        
+    
+            # NOTE: memory initialization is handled by NPCOrchestrator/MemoryOrchestrator now.
+            if memories:
+                logger.debug(f"Skipping direct memory writes for NPC {npc_id} during init; routed via orchestrators.")
+    
         except Exception as e:
             logger.error(f"Error initializing advanced systems for NPC {npc_id}: {e}")
-
+        
     async def process_event_for_beliefs(self, event_text: str, event_type: str, npc_ids: List[int], factuality: float = 1.0) -> Dict[str, Any]:
         """
         Process a game event to generate beliefs for multiple NPCs.
@@ -797,7 +789,7 @@ class IntegratedNPCSystem:
         current_location: str,
         time_of_day: str
     ):
-        """Initialize NPC agent with memory and perception in the background."""
+        """Initialize NPC agent with perception (no direct memory/mask writes)."""
         try:
             # Create agent if it doesn't exist
             if npc_id not in self.agent_system.npc_agents:
@@ -805,46 +797,19 @@ class IntegratedNPCSystem:
             
             agent = self.agent_system.npc_agents[npc_id]
             
-            # Initialize memories in batches for better performance
+            # NOTE: memory batch writes are handled via orchestrators now
             if memories:
-                memory_system = await agent._get_memory_system()
-                
-                # Process in batches of 5 for optimal performance
-                batch_size = 5
-                for i in range(0, len(memories), batch_size):
-                    batch = memories[i:i+batch_size]
-                    
-                    # Create batch memory tasks
-                    memory_tasks = []
-                    for memory in batch:
-                        memory_text = memory if isinstance(memory, str) else memory.get("text", "")
-                        memory_tasks.append(
-                            memory_system.remember(
-                                entity_type="npc",
-                                entity_id=npc_id,
-                                memory_text=memory_text,
-                                importance="medium",
-                                tags=["creation", "origin"]
-                            )
-                        )
-                    
-                    # Process batch concurrently
-                    await asyncio.gather(*memory_tasks)
-                    
-                    # Small delay between batches to prevent overloading
-                    await asyncio.sleep(0.1)
-            
-            # Initialize mask
-            mask_manager = await agent._get_mask_manager()
-            await mask_manager.initialize_npc_mask(npc_id)
-            
+                logger.debug(f"Skipping direct memory batch writes for NPC {npc_id} during agent init; routed via orchestrators.")
+    
+            # NOTE: mask initialization is routed via orchestrators; skip here
+            logger.debug(f"Skipping direct mask initialization for NPC {npc_id}; routed via orchestrators.")
+    
             # Create initial perception
             initial_context = {
                 "location": current_location,
                 "time_of_day": time_of_day,
                 "description": f"Initial perception upon creation at {current_location}"
             }
-            
             await agent.perceive_environment(initial_context)
             
         except Exception as e:
@@ -972,49 +937,17 @@ class IntegratedNPCSystem:
         memories: List[Dict[str, Any]]
     ) -> List[int]:
         """
-        Create multiple memories in a single operation for better performance.
-        
-        Args:
-            npc_id: ID of the NPC
-            memories: List of memory objects with text, type, significance, etc.
-            
-        Returns:
-            List of created memory IDs
+        Deprecated local batch memory write. No-op, routed via NPCOrchestrator/MemoryOrchestrator.
         """
-        if not memories:
+        try:
+            if memories:
+                logger.warning(f"batch_create_memories called directly for NPC {npc_id}; "
+                               f"batch memory writes should be routed via NPCOrchestrator/MemoryOrchestrator. Skipping.")
             return []
-            
-        memory_system = await self._get_memory_system()
+        except Exception as e:
+            logger.error(f"Error (no-op) in batch_create_memories for NPC {npc_id}: {e}")
+            return []
         
-        # Prepare all memories for batch insertion
-        batch_values = []
-        for memory in memories:
-            memory_text = memory if isinstance(memory, str) else memory.get("text", "")
-            
-            # Get emotional analysis for each memory text
-            emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
-                memory_text
-            )
-            
-            batch_values.append({
-                "entity_type": "npc",
-                "entity_id": npc_id,
-                "memory_text": memory_text,
-                "importance": memory.get("importance", "medium") if isinstance(memory, dict) else "medium",
-                "emotional": memory.get("emotional", False) if isinstance(memory, dict) else False,
-                "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
-                "emotion_intensity": emotion_analysis.get("intensity", 0.5),
-                "tags": memory.get("tags", []) if isinstance(memory, dict) else []
-            })
-        
-        # Execute batch insert
-        results = await memory_system.batch_remember(batch_values)
-        
-        # Process schemas in background task for efficiency
-        asyncio.create_task(self._process_batch_schemas(results, npc_id))
-        
-        return results.get("memory_ids", [])
-    
     async def _process_batch_schemas(self, results, npc_id):
         """Process batch memory schemas in the background."""
         try:
@@ -1211,22 +1144,11 @@ class IntegratedNPCSystem:
     
     async def introduce_npc(self, npc_id: int) -> bool:
         """
-        Mark an NPC as introduced, updating agent memory.
-        
-        Args:
-            npc_id: The ID of the NPC to introduce
-            
-        Returns:
-            True if successful, False otherwise
-            
-        Raises:
-            NPCNotFoundError: If the NPC cannot be found
+        Mark an NPC as introduced (no direct memory/emotion writes; orchestrators handle those).
         """
-        # Get or create the NPC agent
+        # Ensure agent exists (for non-memory subsystems)
         if npc_id not in self.agent_system.npc_agents:
             self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
-        
-        agent = self.agent_system.npc_agents[npc_id]
         
         try:
             # Use connection for performance
@@ -1234,9 +1156,9 @@ class IntegratedNPCSystem:
                 # Update NPC status with RETURNING to verify existence
                 row = await conn.fetchrow("""
                     UPDATE NPCStats
-                    SET introduced=TRUE
-                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    RETURNING npc_name
+                       SET introduced=TRUE
+                     WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                 RETURNING npc_name
                 """, self.user_id, self.conversation_id, npc_id)
                 
                 if not row:
@@ -1255,26 +1177,9 @@ class IntegratedNPCSystem:
                     self.user_id, self.conversation_id,
                     f"Met {npc_name} for the first time."
                 )
-            
-            # Create an introduction memory using the agent's memory system
-            memory_system = await agent._get_memory_system()
-            introduction_memory = f"I was formally introduced to the player today."
-            
-            await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=introduction_memory,
-                importance="medium",
-                tags=["introduction", "player_interaction", "first_meeting"]
-            )
-            
-            # Update the agent's emotional state based on introduction
-            await memory_system.update_npc_emotion(
-                npc_id=npc_id,
-                emotion="curiosity", 
-                intensity=0.7
-            )
-            
+    
+            # NOTE: Memory/emotion updates skip here; NPCOrchestrator handles these via MemoryOrchestrator
+    
             # Update the relationship with a formal introduction interaction
             interaction = {
                 "type": "formal_introduction",
@@ -1314,21 +1219,7 @@ class IntegratedNPCSystem:
                                       link_type: str = "neutral", 
                                       link_level: int = 0) -> Dict[str, Any]:
         """
-        Create a relationship between two entities using the dynamic system.
-        
-        Args:
-            entity1_type: Type of first entity
-            entity1_id: ID of first entity
-            entity2_type: Type of second entity
-            entity2_id: ID of second entity
-            link_type: Type of link (now maps to interaction type)
-            link_level: Level of the link (now affects initial dimensions)
-            
-        Returns:
-            Dictionary with relationship information
-            
-        Raises:
-            RelationshipError: If there's an issue creating the relationship
+        Create a relationship between two entities using the dynamic system (no direct memory write).
         """
         try:
             # Map old link types to new interaction types
@@ -1339,7 +1230,6 @@ class IntegratedNPCSystem:
                 "rival": "conflict_resolved",
                 "romantic": "vulnerability_shared"
             }
-            
             interaction_type = interaction_type_map.get(link_type, "first_encounter")
             
             # Create initial interaction
@@ -1358,29 +1248,10 @@ class IntegratedNPCSystem:
                 interaction=interaction
             )
             
-            # If this involves an NPC, update their memory
+            # NOTE: Memory creation is handled via NPCOrchestrator/MemoryOrchestrator; skip here
             if entity1_type == "npc":
-                # Get or create NPC agent
-                if entity1_id not in self.agent_system.npc_agents:
-                    self.agent_system.npc_agents[entity1_id] = _create_npc_agent(entity1_id, self.user_id, self.conversation_id)
-                
-                # Create memory of this link
-                agent = self.agent_system.npc_agents[entity1_id]
-                memory_system = await agent._get_memory_system()
-                
-                # Get target name for better memory context
-                target_name = await self._get_entity_name(entity2_type, entity2_id)
-                
-                memory_text = f"I formed a {link_type} relationship with {target_name}."
-                
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=entity1_id,
-                    memory_text=memory_text,
-                    importance="medium",
-                    tags=["relationship", entity2_type, link_type]
-                )
-            
+                logger.debug(f"Skipping direct memory write for relationship creation on NPC {entity1_id}")
+    
             # Invalidate relationship cache
             cache_key = f"rel:{entity1_type}:{entity1_id}:{entity2_type}:{entity2_id}"
             if cache_key in self.relationship_cache:
@@ -1404,21 +1275,7 @@ class IntegratedNPCSystem:
                                 entity2_type: str, entity2_id: int,
                                 new_type: str = None, level_change: int = 0) -> Dict[str, Any]:
         """
-        Update a relationship using the dynamic system.
-        
-        Args:
-            entity1_type: Type of first entity
-            entity1_id: ID of first entity
-            entity2_type: Type of second entity
-            entity2_id: ID of second entity
-            new_type: New type for the link (maps to interaction)
-            level_change: Amount to change dimensions by
-            
-        Returns:
-            Dictionary with update results
-            
-        Raises:
-            RelationshipError: If there's an issue updating the relationship
+        Update a relationship using the dynamic system (no direct memory/emotion writes).
         """
         try:
             # Map link type changes to interactions
@@ -1455,46 +1312,9 @@ class IntegratedNPCSystem:
                 interaction=interaction
             )
             
-            # Update agent memory if an NPC is involved
+            # NOTE: Memory + emotion updates are handled via orchestrators; skip here
             if entity1_type == "npc":
-                # Get or create NPC agent
-                if entity1_id not in self.agent_system.npc_agents:
-                    self.agent_system.npc_agents[entity1_id] = _create_npc_agent(entity1_id, self.user_id, self.conversation_id)
-                
-                agent = self.agent_system.npc_agents[entity1_id]
-                memory_system = await agent._get_memory_system()
-                
-                # Get target name for better memory context
-                target_name = await self._get_entity_name(entity2_type, entity2_id)
-                
-                if new_type:
-                    memory_text = f"My relationship with {target_name} changed to {new_type}."
-                else:
-                    direction = "improved" if level_change > 0 else "worsened"
-                    memory_text = f"My relationship with {target_name} {direction}."
-                
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=entity1_id,
-                    memory_text=memory_text,
-                    importance="medium",
-                    tags=["relationship_change", entity2_type]
-                )
-                
-                # Update emotional state based on relationship change
-                if abs(level_change) >= 10:
-                    if level_change > 0:
-                        await memory_system.update_npc_emotion(
-                            npc_id=entity1_id,
-                            emotion="joy",
-                            intensity=0.6
-                        )
-                    else:
-                        await memory_system.update_npc_emotion(
-                            npc_id=entity1_id,
-                            emotion="sadness",
-                            intensity=0.6
-                        )
+                logger.debug(f"Skipping direct memory/emotion write for relationship update on NPC {entity1_id}")
             
             # Invalidate relationship cache
             cache_key = f"rel:{entity1_type}:{entity1_id}:{entity2_type}:{entity2_id}"
@@ -1594,49 +1414,29 @@ class IntegratedNPCSystem:
                                                npc_action: Dict[str, Any],
                                                context: Dict[str, Any] = None) -> bool:
         """
-        Update relationship between NPC and player based on an interaction.
-        Enhanced to use the dynamic relationship system.
-        
-        Args:
-            npc_id: ID of the NPC
-            player_action: Description of the player's action
-            npc_action: Description of the NPC's action
-            context: Additional context for the interaction
-            
-        Returns:
-            True if successful
-            
-        Raises:
-            RelationshipError: If there's an issue updating the relationship
+        Update relationship between NPC and player based on an interaction
+        (no direct memory writes; orchestrators handle memory).
         """
         try:
-            # Get or create NPC agent
+            # Ensure agent exists
             if npc_id not in self.agent_system.npc_agents:
                 self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
-            
-            agent = self.agent_system.npc_agents[npc_id]
-            
-            # Get agent's current emotional state and perception for context
-            memory_system = await agent._get_memory_system()
-            emotional_state = await memory_system.get_npc_emotion(npc_id)
-            
+    
             # Default context if none provided
             if context is None:
                 context = {}
-            
-            # Enhance context with emotional state
+    
+            # Build enhanced context without fetching emotion from memory system
             enhanced_context = {
-                "emotional_state": emotional_state,
+                "emotional_state": {},  # skip direct memory-system emotion call
                 "player_action_type": player_action.get("type", "unknown"),
                 "npc_action_type": npc_action.get("type", "unknown")
             }
-            
-            # Update context with provided context
             enhanced_context.update(context)
-            
+    
             # Determine interaction type based on actions
             interaction_type = self._determine_interaction_type(player_action, npc_action)
-            
+    
             # Create interaction
             interaction = {
                 "type": interaction_type,
@@ -1644,40 +1444,25 @@ class IntegratedNPCSystem:
                 "player_action": player_action.get("description", ""),
                 "npc_response": npc_action.get("description", "")
             }
-            
+    
             # Process through dynamic relationship system
-            result = await self.relationship_manager.process_interaction(
+            await self.relationship_manager.process_interaction(
                 entity1_type="npc",
                 entity1_id=npc_id,
                 entity2_type="player",
                 entity2_id=self.user_id,
                 interaction=interaction
             )
-            
-            # Create a memory of this relationship change
-            # Format memory text based on action types
-            if player_action.get("type") in ["help", "assist", "support"]:
-                memory_text = "The player helped me, improving our relationship."
-            elif player_action.get("type") in ["insult", "mock", "threaten"]:
-                memory_text = "The player was hostile to me, damaging our relationship."
-            else:
-                memory_text = f"My relationship with the player changed after they {player_action.get('description', 'interacted with me')}."
-            
-            await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=memory_text,
-                importance="medium",
-                tags=["relationship_change", "player_interaction"]
-            )
-            
+    
+            # NOTE: Memory write removed; orchestrator handles this centrally
+    
             # Invalidate relationship cache
             cache_key = f"rel:npc:{npc_id}:player:{self.user_id}"
             if cache_key in self.relationship_cache:
                 del self.relationship_cache[cache_key]
-            
+    
             return True
-            
+    
         except Exception as e:
             error_msg = f"Failed to update relationship from interaction: {e}"
             logger.error(error_msg)
@@ -2327,49 +2112,20 @@ class IntegratedNPCSystem:
     #=================================================================
     
     async def add_memory_to_npc(self, 
-                              npc_id: int, 
-                              memory_text: str,
-                              importance: str = "medium",
-                              emotional: bool = False,
-                              tags: List[str] = None) -> bool:
+                                npc_id: int, 
+                                memory_text: str,
+                                importance: str = "medium",
+                                emotional: bool = False,
+                                tags: List[str] = None) -> bool:
         """
-        Add a memory to an NPC using the agent architecture.
-        
-        Args:
-            npc_id: ID of the NPC
-            memory_text: Text of the memory
-            importance: Importance of the memory ("low", "medium", "high")
-            emotional: Whether the memory has emotional content
-            tags: List of tags for the memory
-            
-        Returns:
-            True if successful, False otherwise
-            
-        Raises:
-            MemorySystemError: If there's an issue adding the memory
+        Deprecated local memory write. No-op, routed via NPCOrchestrator/MemoryOrchestrator.
         """
         try:
-            # Get or create NPC agent
-            if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
-            
-            agent = self.agent_system.npc_agents[npc_id]
-            memory_system = await agent._get_memory_system()
-            
-            # Create memory using the agent's memory system
-            memory_id = await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=memory_text,
-                importance=importance,
-                emotional=emotional,
-                tags=tags or []
-            )
-            
-            return memory_id is not None
-            
+            logger.warning(f"add_memory_to_npc called directly for NPC {npc_id}; "
+                           f"memory writes should be routed via NPCOrchestrator/MemoryOrchestrator. Skipping.")
+            return True  # Return True to avoid breaking callers that check truthiness
         except Exception as e:
-            error_msg = f"Error adding memory to NPC: {e}"
+            error_msg = f"Error (no-op) adding memory to NPC: {e}"
             logger.error(error_msg)
             raise MemorySystemError(error_msg)
 
@@ -3238,27 +2994,14 @@ class IntegratedNPCSystem:
     
     async def _process_npc_perception(self, agent, npc_id, perception_context, player_action):
         """
-        Process an NPC's perception and memory of a player action.
-        
-        Args:
-            agent: The NPC agent
-            npc_id: NPC ID
-            perception_context: Perception context
-            player_action: Player's action
+        Process an NPC's perception of a player action (no direct memory write).
         """
         try:
             # Update agent's perception
             await agent.perceive_environment(perception_context)
-            
-            # Create a memory of observing the player's action
-            memory_system = await agent._get_memory_system()
-            await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=f"I observed the player {player_action.get('description', 'doing something')} at {perception_context.get('location', 'somewhere')}",
-                importance="low",  # Low importance for routine observations
-                tags=["player_observation", player_action.get("type", "unknown")]
-            )
+    
+            # NOTE: Memory write is centralized; skip local remember
+            logger.debug(f"Skipping direct observation memory for NPC {npc_id}; routed via orchestrators.")
         except Exception as e:
             logger.error(f"Error processing NPC perception for NPC {npc_id}: {e}")
     
