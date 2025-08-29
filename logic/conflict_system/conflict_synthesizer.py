@@ -37,12 +37,6 @@ from agents import function_tool, RunContextWrapper, Runner
 if TYPE_CHECKING:
     from nyx.nyx_agent.context import SceneScope
 
-from logic.conflict_system.background_processor import (
-    get_conflict_scheduler,
-    BackgroundConflictProcessor
-)
-from logic.conflict_system.integration_hooks import ConflictEventHooks
-
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
@@ -197,7 +191,8 @@ class SubsystemType(Enum):
     SLICE_OF_LIFE = "slice_of_life"
     DETECTION = "detection"
     RESOLUTION = "resolution"
-    ORCHESTRATOR = "orchestrator"  # <-- add this
+    ORCHESTRATOR = "orchestrator"  
+    MULTIPARTY = "multiparty" 
 
 class EventType(Enum):
     CONFLICT_CREATED = "conflict_created"
@@ -397,13 +392,19 @@ class ConflictSynthesizer:
             from logic.conflict_system.slice_of_life_conflicts import SliceOfLifeConflictSubsystem
             from logic.conflict_system.enhanced_conflict_integration import EnhancedIntegrationSubsystem
             from logic.conflict_system.conflict_victory import ConflictVictorySubsystem
+            from logic.conflict_system.multi_party_dynamics import MultiPartyConflictSubsystem
+            from logic.conflict_system.integration_hooks import ConflictEventHooks
+            from logic.conflict_system.background_processor import (
+                get_conflict_scheduler,
+                BackgroundConflictProcessor
+            )
     
             subsystems = [
                 TensionSubsystem(self.user_id, self.conversation_id),
                 StakeholderAutonomySystem(self.user_id, self.conversation_id),
-                PhaseSubsystem(self.user_id, self.conversation_id),
                 ConflictFlowSubsystem(self.user_id, self.conversation_id),
                 SocialDynamicsSubsystem(self.user_id, self.conversation_id),
+                MultiPartyConflictSubsystem(self.user_id, self.conversation_id),
                 LeverageSubsystem(self.user_id, self.conversation_id),
                 BackgroundConflictSubsystem(self.user_id, self.conversation_id),
                 ConflictVictorySubsystem(self.user_id, self.conversation_id),
