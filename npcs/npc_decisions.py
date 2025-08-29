@@ -82,6 +82,8 @@ class NPCStats(BaseModel):
     schedule: Dict[str, Any] = Field(default_factory=dict)
     current_location: Optional[str] = None
     sex: Optional[str] = None
+    scheming_level: int = 0
+    betrayal_planning: bool = False
 
 class NPCPerception(BaseModel):
     environment: Dict[str, Any] = Field(default_factory=dict)
@@ -189,7 +191,7 @@ async def generate_dynamic_actions_with_gpt(
     Returns:
         A list of action dicts
     """
-    from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response, TEMPERATURE_SETTINGS
+    from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response
     with function_span("generate_dynamic_actions_with_gpt"):
         # Get async OpenAI client
         client = get_async_openai_client()
@@ -244,8 +246,6 @@ Generate appropriate actions for this NPC."""
         ]
 
         try:
-            # Use centralized client with appropriate temperature
-            temperature = TEMPERATURE_SETTINGS.get("decision", 0.7)
             
             response = await call_openai_with_retry(
                 client,
@@ -583,7 +583,7 @@ async def get_default_actions(
                     ))
         
         # Memory-based expansions
-        memory_based_actions = await generate_memory_based_actions(ctx, perception)
+        memory_based_actions = _memory_actions_from_perception(perception)
         actions.extend(memory_based_actions)
 
         # 3. Use GPT to generate a few dynamic candidate actions
@@ -641,72 +641,60 @@ async def get_default_actions(
         
         return actions
 
+def _memory_actions_from_perception(perception: NPCPerception) -> List[NPCAction]:
+    actions = []
+    memories = perception.relevant_memories
+    memory_topics = set()
+    for memory in memories:
+        memory_text = memory.get("text", "")
+        for topic_indicator in ["about", "mentioned", "discussed", "talked about", "interested in"]:
+            if topic_indicator in memory_text.lower():
+                parts = memory_text.lower().split(topic_indicator, 1)
+                if len(parts) > 1:
+                    topic_part = parts[1].strip()
+                    words = topic_part.split()
+                    if words:
+                        topic = " ".join(words[:3]).rstrip(".,:;!?")
+                        if len(topic) > 3 and topic not in memory_topics:
+                            memory_topics.add(topic)
+                            actions.append(NPCAction(
+                                type="discuss_topic",
+                                description=f"Discuss the topic of {topic}",
+                                target="player",
+                                stats_influenced={"closeness": 1}
+                            ))
+        if "last time" in memory_text.lower() or "previously" in memory_text.lower():
+            actions.append(NPCAction(
+                type="reference_past",
+                description="Reference a past interaction",
+                target="player",
+                stats_influenced={"trust": 1}
+            ))
+    submission_pattern = any("submit" in m.get("text", "").lower() for m in memories)
+    resistance_pattern = any("resist" in m.get("text", "").lower() for m in memories)
+    if submission_pattern:
+        actions.append(NPCAction(
+            type="reward_submission",
+            description="Reward the player's previous submission",
+            target="player",
+            stats_influenced={"closeness": 2, "respect": 1}
+        ))
+    if resistance_pattern:
+        actions.append(NPCAction(
+            type="address_resistance",
+            description="Address the player's previous resistance",
+            target="player",
+            stats_influenced={"dominance": 2, "fear": 1}
+        ))
+    return actions
+
 @function_tool(strict_mode=False)
 async def generate_memory_based_actions(
     ctx: RunContextWrapper[DecisionContext],
     perception: NPCPerception
 ) -> List[NPCAction]:
-    """
-    Generate actions based on relevant memories.
-    
-    Args:
-        perception: The NPC's current perception
-    """
     with function_span("generate_memory_based_actions"):
-        actions = []
-        memories = perception.relevant_memories
-        
-        memory_topics = set()
-        for memory in memories:
-            memory_text = memory.get("text", "")
-            # Simple topic extraction
-            for topic_indicator in ["about", "mentioned", "discussed", "talked about", "interested in"]:
-                if topic_indicator in memory_text.lower():
-                    parts = memory_text.lower().split(topic_indicator, 1)
-                    if len(parts) > 1:
-                        topic_part = parts[1].strip()
-                        words = topic_part.split()
-                        if words:
-                            topic = " ".join(words[:3])
-                            topic = topic.rstrip(".,:;!?")
-                            if len(topic) > 3 and topic not in memory_topics:
-                                memory_topics.add(topic)
-                                actions.append(NPCAction(
-                                    type="discuss_topic",
-                                    description=f"Discuss the topic of {topic}",
-                                    target="player",
-                                    stats_influenced={"closeness": 1}
-                                ))
-            
-            # references to past interactions
-            if "last time" in memory_text.lower() or "previously" in memory_text.lower():
-                actions.append(NPCAction(
-                    type="reference_past",
-                    description="Reference a past interaction",
-                    target="player",
-                    stats_influenced={"trust": 1}
-                ))
-        
-        # Look for patterns in memories that might suggest specific actions
-        submission_pattern = any("submit" in m.get("text", "").lower() for m in memories)
-        resistance_pattern = any("resist" in m.get("text", "").lower() for m in memories)
-        
-        if submission_pattern:
-            actions.append(NPCAction(
-                type="reward_submission",
-                description="Reward the player's previous submission",
-                target="player",
-                stats_influenced={"closeness": 2, "respect": 1}
-            ))
-        if resistance_pattern:
-            actions.append(NPCAction(
-                type="address_resistance",
-                description="Address the player's previous resistance",
-                target="player",
-                stats_influenced={"dominance": 2, "fear": 1}
-            ))
-        
-        return actions
+        return _memory_actions_from_perception(perception)
 
 @function_tool(strict_mode=False)
 async def score_actions(
@@ -1079,7 +1067,7 @@ async def generate_decision_narrative(
         npc_data: NPC stats
         perception: NPC perception
     """
-    from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response, TEMPERATURE_SETTINGS
+    from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response
     with function_span("generate_decision_narrative"):
         # Get async OpenAI client
         client = get_async_openai_client()
@@ -1110,8 +1098,6 @@ Write a brief internal narrative for this decision."""
         ]
 
         try:
-            # Use appropriate temperature for narrative generation
-            temperature = TEMPERATURE_SETTINGS.get("decision", 0.7)
             
             response = await call_openai_with_retry(
                 client,
@@ -1966,7 +1952,6 @@ decision_engine_agent = Agent(
         select_action,
         generate_flashback_action,
         enhance_dominance_context,
-        update_behavior_evolution,
         generate_decision_narrative
     ],
     output_type=NPCAction
