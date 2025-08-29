@@ -391,7 +391,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.flow_control import FlowControlSubsystem
             from logic.conflict_system.social_dynamics import SocialDynamicsSubsystem
             from logic.conflict_system.leverage_system import LeverageSubsystem
-            from logic.conflict_system.background_conflicts import BackgroundConflictSubsystem
+            from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
             from logic.conflict_system.victory_conditions import VictoryConditionSubsystem
             from logic.conflict_system.canon_integration import CanonIntegrationSubsystem
             from logic.conflict_system.template_generator import TemplateGeneratorSubsystem
