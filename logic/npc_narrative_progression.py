@@ -4,7 +4,7 @@ import logging
 from typing import Dict, List, Any, Optional, NamedTuple
 from datetime import datetime
 import asyncpg
-
+import random
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from lore.core.lore_system import LoreSystem
