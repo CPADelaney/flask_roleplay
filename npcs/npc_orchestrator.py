@@ -242,26 +242,34 @@ class NPCOrchestrator:
                 self._mem_mgrs.pop(nid, None)
     
     def _update_active_trackers(self, npc_id: int, status: str) -> None:
-        """Keep _active_npcs aligned to observed status transitions and prune cache on inactivity."""
+        """Keep _active_npcs aligned to observed status transitions and prune caches on inactivity."""
         s = (status or "").lower()
         if s in self._active_status_values:
             if npc_id not in self._active_npcs:
                 self._active_npcs.add(npc_id)
         else:
-            # Became inactive -> drop from active set and memory-manager cache
+            # Became inactive -> drop from active set and caches
             self._active_npcs.discard(npc_id)
             self._mem_mgrs.pop(npc_id, None)
+            # Also drop per-NPC perception cache
+            try:
+                self._perception.pop(npc_id, None)
+            except Exception:
+                pass
 
     async def initialize(self):
         """Initialize all subsystems"""
         try:
-            await self._perception_system.initialize()
+            # Perception is per-NPC now; nothing to initialize globally
             await self._belief_system.initialize()
             await self._lore_manager.initialize()
             
-            # Ensure calendar tables exist
+            # Ensure calendar tables if already loaded; otherwise, they'll be ensured on first use
             if self._calendar_system:
-                await self._calendar_system['ensure_tables'](self.user_id, self.conversation_id)
+                try:
+                    await self._calendar_system['ensure_tables'](self.user_id, self.conversation_id)
+                except Exception as ce:
+                    logger.debug(f"[Calendar] ensure_tables failed during init: {ce}")
             
             # Load active NPCs
             await self._load_active_npcs()
@@ -270,7 +278,7 @@ class NPCOrchestrator:
         except Exception as e:
             logger.error(f"Failed to initialize NPC Orchestrator: {e}")
             raise
-    
+        
     async def get_all_npcs(self, location: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all NPCs for this user/conversation. Required by ContextBroker.
