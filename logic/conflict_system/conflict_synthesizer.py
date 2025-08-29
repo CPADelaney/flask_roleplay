@@ -385,23 +385,21 @@ class ConflictSynthesizer:
     async def initialize_all_subsystems(self):
         """Initialize all default subsystems and start background workers (idempotent)."""
         try:
-            from logic.conflict_system.tension_tracking import TensionSubsystem
-            from logic.conflict_system.stakeholder_management import StakeholderSubsystem
-            from logic.conflict_system.phase_progression import PhaseSubsystem
-            from logic.conflict_system.flow_control import FlowControlSubsystem
-            from logic.conflict_system.social_dynamics import SocialDynamicsSubsystem
-            from logic.conflict_system.leverage_system import LeverageSubsystem
+            from logic.conflict_system.tension import TensionSubsystem
+            from logic.conflict_system.autonomous_stakeholder_actions import StakeholderAutonomySystem
+            from logic.conflict_system.conflict_flow import FlowControlSubsystem
+            from logic.conflict_system.social_circle import SocialDynamicsSubsystem
+            from logic.conflict_system.leverage import LeverageSubsystem
             from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
-            from logic.conflict_system.victory_conditions import VictoryConditionSubsystem
-            from logic.conflict_system.canon_integration import CanonIntegrationSubsystem
-            from logic.conflict_system.template_generator import TemplateGeneratorSubsystem
+            from logic.conflict_system.conflict_canon import CanonIntegrationSubsystem
+            from logic.conflict_system.dynamic_conflict_template import TemplateGeneratorSubsystem
             from logic.conflict_system.edge_case_handler import EdgeCaseHandlerSubsystem
-            from logic.conflict_system.slice_of_life_conflict import SliceOfLifeConflictSubsystem
-            from logic.conflict_system.enhanced_integration import EnhancedIntegrationSubsystem
+            from logic.conflict_system.slice_of_life_conflicts import SliceOfLifeConflictSubsystem
+            from logic.conflict_system.enhanced_conflict_integration import EnhancedIntegrationSubsystem
     
             subsystems = [
                 TensionSubsystem(self.user_id, self.conversation_id),
-                StakeholderSubsystem(self.user_id, self.conversation_id),
+                StakeholderAutonomySystem(self.user_id, self.conversation_id),
                 PhaseSubsystem(self.user_id, self.conversation_id),
                 FlowControlSubsystem(self.user_id, self.conversation_id),
                 SocialDynamicsSubsystem(self.user_id, self.conversation_id),
