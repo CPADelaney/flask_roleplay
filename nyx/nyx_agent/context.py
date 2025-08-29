@@ -140,6 +140,10 @@ class SceneScope:
         # Single canonical key path for all systems
         return generate_scene_cache_key(self)
 
+    def to_cache_key(self) -> str:
+        # Orchestrator expects this name; forward to our canonical key
+        return self.to_key()
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors', 'nation_ids'):
@@ -1098,26 +1102,97 @@ class ContextBroker:
             return bundle
     
     async def _refresh_stale_sections(self, bundle: ContextBundle, scope: SceneScope) -> Optional[ContextBundle]:
-        """Refresh only stale sections of a bundle, preserving metadata"""
+        """Refresh only stale sections of a bundle, preserving metadata and using orchestrator deltas for conflicts."""
         sections_to_refresh = []
-        
+    
         for name in SECTION_NAMES:
             section = getattr(bundle, name)
             if section.is_stale():
                 sections_to_refresh.append(name)
                 logger.debug(f"Section {name} is stale, will refresh")
-        
+    
         if not sections_to_refresh:
             # Everything is fresh
             return bundle
-        
-        # Refresh stale sections in parallel
+    
+        # Special-case: conflicts can be refreshed via orchestrator delta (cheap incremental)
+        if (
+            "conflicts" in sections_to_refresh
+            and self.conflict_synthesizer
+            and hasattr(self.conflict_synthesizer, "get_scene_delta")
+        ):
+            try:
+                since_ts = float(getattr(bundle.conflicts, "last_changed_at", 0.0) or 0.0)
+            except Exception:
+                since_ts = 0.0
+    
+            try:
+                delta = await self.conflict_synthesizer.get_scene_delta(scope, since_ts)
+            except Exception as e:
+                delta = None
+                logger.debug(f"Conflict delta fetch failed: {e}")
+    
+            if isinstance(delta, dict):
+                # If delta returned actual changes, rebuild the conflicts section
+                has_changes = any(
+                    bool(delta.get(k))
+                    for k in ("active", "conflicts", "tensions", "opportunities")
+                )
+                if has_changes:
+                    new_data = {
+                        "active": delta.get("active", delta.get("conflicts", [])) or [],
+                        "tensions": delta.get("tensions", {}) or {},
+                        "opportunities": delta.get("opportunities", []) or [],
+                    }
+                    wt = delta.get("world_tension")
+                    if isinstance(wt, (int, float)):
+                        new_data.setdefault("tensions", {})
+                        new_data["tensions"]["overall"] = float(wt)
+    
+                    new_conflicts_section = BundleSection(
+                        data=new_data,
+                        canonical=True,
+                        priority=bundle.conflicts.priority,
+                        last_changed_at=float(delta.get("last_changed_at", time.time())),
+                        ttl=bundle.conflicts.ttl,
+                        version=f"conflict_delta_{int(time.time())}_{len(new_data['active'])}",
+                    )
+    
+                    bdict = bundle.to_dict()
+                    bdict["conflicts"] = new_conflicts_section.to_dict()
+                    # Preserve metadata and link hints
+                    bdict.setdefault("metadata", {}).update(bundle.metadata)
+                    if scope.link_hints:
+                        bdict["metadata"]["link_hints"] = scope.link_hints
+    
+                    bundle = ContextBundle.from_dict(bdict)
+                    self.metrics["cache_hits"]["conflicts"] += 1
+                    sections_to_refresh = [s for s in sections_to_refresh if s != "conflicts"]
+                else:
+                    # No changes since since_ts: just bump last_changed_at to mark fresh
+                    bdict = bundle.to_dict()
+                    conf_dict = bdict.get("conflicts", {})
+                    if isinstance(conf_dict, dict):
+                        conf_dict["last_changed_at"] = time.time()
+                        bdict["conflicts"] = conf_dict
+                        bdict.setdefault("metadata", {}).update(bundle.metadata)
+                        if scope.link_hints:
+                            bdict["metadata"]["link_hints"] = scope.link_hints
+                        bundle = ContextBundle.from_dict(bdict)
+                        self.metrics["cache_hits"]["conflicts"] += 1
+                        sections_to_refresh = [s for s in sections_to_refresh if s != "conflicts"]
+    
+        # If everything was handled by delta, return
+        if not sections_to_refresh:
+            return bundle
+    
+        # Refresh remaining stale sections in parallel
         refresh_tasks = []
         for name in sections_to_refresh:
             refresh_tasks.append(self._fetch_section(name, scope))
-        
+    
         refreshed_sections = await asyncio.gather(*refresh_tasks, return_exceptions=True)
-        
+    
         # Update bundle with refreshed sections
         bundle_dict = bundle.to_dict()
         for name, result in zip(sections_to_refresh, refreshed_sections):
@@ -1126,19 +1201,19 @@ class ContextBroker:
                 # Keep old section on error
             else:
                 bundle_dict[name] = result.to_dict()
-                self.metrics['cache_hits'][name] += 1
-        
+                self.metrics["cache_hits"][name] += 1
+    
         # Preserve metadata including link hints
-        if 'metadata' not in bundle_dict:
-            bundle_dict['metadata'] = {}
-        
+        if "metadata" not in bundle_dict:
+            bundle_dict["metadata"] = {}
+    
         # Preserve existing metadata
-        bundle_dict['metadata'].update(bundle.metadata)
-        
+        bundle_dict["metadata"].update(bundle.metadata)
+    
         # Update link hints if scope has them
         if scope.link_hints:
-            bundle_dict['metadata']['link_hints'] = scope.link_hints
-        
+            bundle_dict["metadata"]["link_hints"] = scope.link_hints
+    
         return ContextBundle.from_dict(bundle_dict)
     
     async def _fetch_section(self, section_name: str, scope: SceneScope) -> BundleSection:
@@ -1684,18 +1759,24 @@ class ContextBroker:
             try:
                 bundle = await synthesizer.get_scene_bundle(scope)
                 bundle = bundle or {}
+                last_changed = float(bundle.get("last_changed_at", time.time()))
                 data = {
-                    # Keep your section shape the same:
-                    "active": bundle.get("active", bundle.get("conflicts", [])),
-                    "tensions": bundle.get("tensions", {}),
-                    "opportunities": bundle.get("opportunities", []),
+                    "active": bundle.get("active", bundle.get("conflicts", [])) or [],
+                    "tensions": bundle.get("tensions", {}) or {},
+                    "opportunities": bundle.get("opportunities", []) or [],
                 }
+                # Optional: surface overall/world tension for upstream packing/use
+                wt = bundle.get("world_tension")
+                if isinstance(wt, (int, float)):
+                    data.setdefault("tensions", {})
+                    data["tensions"]["overall"] = float(wt)
+        
                 return BundleSection(
                     data=data,
-                    canonical=True,           # synthesizer is canon-first
+                    canonical=True,
                     priority=5,
-                    last_changed_at=time.time(),
-                    version=f"conflict_opt_{len(data['active'])}",
+                    last_changed_at=last_changed,             # use orchestrator’s timestamp
+                    version=f"conflict_opt_{int(last_changed)}_{len(data['active'])}",
                 )
             except Exception as e:
                 logger.error("Optimized conflict fetch failed, falling back: %s", e)
