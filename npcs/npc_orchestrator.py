@@ -121,7 +121,7 @@ class NPCOrchestrator:
         self._lore_manager = LoreContextManager(self.user_id, self.conversation_id)
         self._behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
         self._creation_handler = NPCCreationHandler(self.user_id, self.conversation_id)
-        self._preset_handler = PresetNPCHandler(self.user_id, self.conversation_id)
+        self._preset_handler = PresetNPCHandler
 
         self._decision_engines: Dict[int, NPCDecisionEngine] = {}
         self._decision_engine_timestamps: Dict[int, float] = {}
@@ -1943,6 +1943,161 @@ class NPCOrchestrator:
             self.invalidate_lore_cache_for(lore_change["id"])
     
         return result
+
+    # ==================== PRESET NPC INTEGRATION ====================
+
+    async def create_or_update_preset_npc(
+        self,
+        npc_data: Dict[str, Any],
+        story_context: Dict[str, Any],
+        ctx_obj: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Orchestrator wrapper for Preset NPC creation/update.
+        - Calls PresetNPCHandler.create_detailed_npc
+        - Refreshes snapshot/state/indexes
+        - Invalidates caches and marks deltas
+        - Routes a belief event + optional canon log
+        """
+        # Build a ctx with .context expected by PresetNPCHandler (if not provided)
+        ctx = ctx_obj or SimpleNamespace(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+
+        # 1) Create or update via preset handler
+        try:
+            npc_id = await PresetNPCHandler.create_detailed_npc(ctx, npc_data, story_context)
+        except Exception as e:
+            logger.exception(f"[PresetNPC] create_detailed_npc failed: {e}")
+            return {"error": str(e)}
+
+        # 2) Invalidate snapshot cache and mark change
+        try:
+            self._snapshot_cache.pop(npc_id, None)
+        except Exception:
+            pass
+        self._notify_npc_changed(npc_id)
+
+        # 3) Refresh snapshot + index this NPC (active set, location index, scene-state cache)
+        try:
+            snap = await self.get_npc_snapshot(npc_id, force_refresh=True, light=True)
+
+            # Active tracking (reuse existing helpers/sets)
+            self._update_active_trackers(npc_id, snap.status)
+
+            # Location index maintenance
+            if snap.location:
+                self._location_index[snap.location].add(npc_id)
+
+            # Scene-state cache
+            self._scene_state_cache[npc_id] = {
+                "status": snap.status,
+                "location": snap.location,
+                "trust": snap.trust,
+                "respect": snap.respect,
+                "closeness": snap.closeness,
+                "emotional_state": snap.emotional_state or {},
+            }
+
+        except Exception as e:
+            logger.debug(f"[PresetNPC] post-create snapshot/index refresh failed for NPC {npc_id}: {e}")
+
+        # 4) Optional: belief + canon hooks
+        try:
+            # Belief event about initialization
+            try:
+                from types import SimpleNamespace
+                bctx = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                await self._belief_system.process_event_for_beliefs(
+                    ctx=bctx,
+                    event_text=f"Preset NPC initialized: {npc_data.get('name', '(unnamed)')}",
+                    event_type="preset_npc_initialized",
+                    npc_ids=[npc_id],
+                    factuality=1.0
+                )
+            except Exception as be:
+                logger.debug(f"[PresetNPC] belief hook failed for NPC {npc_id}: {be}")
+
+            # Throttled consolidation
+            try:
+                await self._maybe_consolidate_beliefs([npc_id], topic_filter="preset_init", reason="preset_init")
+            except Exception as ce:
+                logger.debug(f"[PresetNPC] consolidation failed for NPC {npc_id}: {ce}")
+
+            # Canon event (respect config flags)
+            if self.enable_canon and self.auto_canonize:
+                async with get_db_connection_context() as conn:
+                    text = f"Preset NPC initialized: {npc_data.get('name', '(unnamed)')}"
+                    await log_canonical_event(
+                        conn,
+                        self.user_id,
+                        self.conversation_id,
+                        text,
+                        tags=["npc", "preset", "init"],
+                        significance=6
+                    )
+        except Exception as e:
+            logger.debug(f"[PresetNPC] belief/canon wrapper failed for NPC {npc_id}: {e}")
+
+        try:
+            await self._maybe_evaluate_behavior([npc_id], reason="post_preset_init", use_user_model=False)
+        except Exception as e:
+            logger.debug(f"[PresetNPC] post-init behavior eval failed for NPC {npc_id}: {e}")
+
+        # 5) Return a simple payload for callers
+        # Try to include light context for convenience
+        try:
+            snap = await self.get_npc_snapshot(npc_id, light=True)
+            return {
+                "npc_id": npc_id,
+                "name": snap.name,
+                "location": snap.location,
+                "status": snap.status,
+                "traits": snap.personality_traits[:5],
+            }
+        except Exception:
+            return {"npc_id": npc_id, "name": npc_data.get("name")}
+
+    async def create_or_update_preset_npcs(
+        self,
+        npcs: List[Dict[str, Any]],
+        story_context: Dict[str, Any],
+        ctx_obj: Optional[Any] = None,
+        fail_fast: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Bulk variant: integrate multiple preset NPCs.
+        Returns a summary + per-NPC results.
+        """
+        results = []
+        errors = 0
+
+        for data in npcs:
+            try:
+                res = await self.create_or_update_preset_npc(
+                    npc_data=data,
+                    story_context=story_context,
+                    ctx_obj=ctx_obj
+                )
+                if "error" in res:
+                    errors += 1
+                    if fail_fast:
+                        return {"error": res["error"], "results": results}
+                results.append(res)
+            except Exception as e:
+                errors += 1
+                results.append({"error": str(e), "npc_name": data.get("name")})
+                if fail_fast:
+                    return {"error": str(e), "results": results}
+
+        # After a wave of preset NPC updates, refresh active sets (safety)
+        try:
+            await self._load_active_npcs()
+        except Exception as e:
+            logger.debug(f"[PresetNPC] active set refresh failed: {e}")
+
+        return {"results": results, "errors": errors}
     
     # ==================== HELPER METHODS ====================
     
