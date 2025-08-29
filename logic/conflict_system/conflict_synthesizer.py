@@ -1583,7 +1583,7 @@ class ConflictSynthesizer:
                 self._performance_metrics['failures_count'] += 1
         
         # Fallback to default set
-        return {SubsystemType.TENSION, SubsystemType.FLOW, SubsystemType.STAKEHOLDER}
+        return {SubsystemType.TENSION, SubsystemType.FLOW, SubsystemType.STAKEHOLDER, SubsystemType.SLICE_OF_LIFE, SubsystemType.EDGE_HANDLER}
     
     def _aggregate_conflict_creation(self, responses: List[SubsystemResponse]) -> Dict[str, Any]:
         """Aggregate subsystem responses for conflict creation"""
