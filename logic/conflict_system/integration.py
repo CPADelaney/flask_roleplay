@@ -199,12 +199,10 @@ class ConflictSystemInterface:
     
     async def initialize_system(self, mode: IntegrationMode = IntegrationMode.EMERGENT) -> Dict[str, Any]:
         """Initialize the conflict system with specified mode"""
-        
         self.current_mode = mode
-        
-        # Get synthesizer (this initializes all subsystems)
+    
         synthesizer = await self._get_synthesizer()
-        
+    
         # Store mode preference
         async with get_db_connection_context() as conn:
             await conn.execute("""
@@ -214,15 +212,67 @@ class ConflictSystemInterface:
                 ON CONFLICT (user_id, conversation_id)
                 DO UPDATE SET mode = $3, updated_at = CURRENT_TIMESTAMP
             """, self.user_id, self.conversation_id, mode.value)
-        
-        # Get initial state
-        state = await synthesizer.get_system_state()
-        
+    
+        # Compose system state
+        state = await self._compose_system_status()
+        active_modules = list(state.get('subsystems', {}).keys())
+        system_health = float(state.get('metrics', {}).get('system_health', 1.0))
+    
         return {
             'initialized': True,
             'mode': mode.value,
-            'subsystems_loaded': len(state.get('subsystems', {})),
-            'system_health': state['metrics']['system_health']
+            'active_modules': active_modules,
+            'subsystems_loaded': len(active_modules),
+            'system_health': system_health,
+            'message': 'conflict system ready',
+        }
+
+    async def _compose_system_status(self) -> Dict[str, Any]:
+        """Build a synthesizer-like system state without calling get_system_state."""
+        synthesizer = await self._get_synthesizer()
+    
+        # Active subsystems
+        subsystems = {}
+        try:
+            subsystems = {s.value: True for s in getattr(synthesizer, "_subsystems", {}).keys()}
+        except Exception:
+            subsystems = {}
+    
+        # Performance metrics
+        try:
+            metrics = await synthesizer.get_performance_metrics()
+        except Exception:
+            metrics = {}
+    
+        # DB-derived counts
+        active_conflicts = int(metrics.get('active_conflicts', 0) or 0)
+        total_conflicts = int(metrics.get('total_conflicts', 0) or 0)
+    
+        # Health proxies from perf
+        failures = int(metrics.get('failures_count', 0) or 0)
+        timeouts = int(metrics.get('timeouts_count', 0) or 0)
+        events = int(metrics.get('events_processed', 0) or 0)
+        failure_rate = failures / events if events > 0 else 0.0
+        timeout_rate = timeouts / events if events > 0 else 0.0
+    
+        # Compose normalized metrics
+        system_health = max(0.0, 1.0 - (failure_rate * 0.5 + timeout_rate * 0.5))
+        complexity_score = min(1.0, active_conflicts / 10.0)
+        narrative_coherence = max(0.0, 1.0 - failure_rate)  # proxy
+        player_engagement = 0.6  # heuristics can improve later
+    
+        return {
+            'subsystems': subsystems,
+            'metrics': {
+                'active_conflicts': active_conflicts,
+                'total_conflicts': total_conflicts,
+                'system_health': system_health,
+                'complexity_score': complexity_score,
+                'narrative_coherence': narrative_coherence,
+                'player_engagement': player_engagement,
+                # bubble up original perf metrics for debugging
+                **metrics,
+            }
         }
     
     async def process_game_scene(
@@ -287,20 +337,19 @@ class ConflictSystemInterface:
         return result
     
     async def get_system_status(self) -> IntegrationState:
-        """Get comprehensive system status"""
-        
-        synthesizer = await self._get_synthesizer()
-        state = await synthesizer.get_system_state()
-        
-        # Build integration state
+        """Get comprehensive system status (no direct orchestrator API needed)"""
+        state = await self._compose_system_status()
+        metrics = state.get('metrics', {}) or {}
+        subsystems = state.get('subsystems', {}) or {}
+    
         return IntegrationState(
             mode=self.current_mode,
-            active_modules=set(state.get('subsystems', {}).keys()),
-            conflict_count=state['metrics']['active_conflicts'],
-            complexity_score=state['metrics']['complexity_score'],
-            narrative_coherence=state['metrics'].get('narrative_coherence', 1.0),
-            player_engagement=state['metrics'].get('player_engagement', 0.5),
-            system_health=state['metrics']['system_health']
+            active_modules=set(subsystems.keys()),
+            conflict_count=int(metrics.get('active_conflicts', 0) or 0),
+            complexity_score=float(metrics.get('complexity_score', 0.0) or 0.0),
+            narrative_coherence=float(metrics.get('narrative_coherence', 1.0) or 1.0),
+            player_engagement=float(metrics.get('player_engagement', 0.5) or 0.5),
+            system_health=float(metrics.get('system_health', 1.0) or 1.0),
         )
     
     async def optimize_experience(self) -> Dict[str, Any]:
@@ -483,26 +532,24 @@ class ConflictSystemInterface:
     async def _reduce_complexity(self) -> str:
         """Reduce system complexity"""
         synthesizer = await self._get_synthesizer()
-        
-        # Get lowest priority conflicts
+    
         async with get_db_connection_context() as conn:
             low_priority = await conn.fetch("""
-                SELECT conflict_id FROM Conflicts
+                SELECT id FROM Conflicts
                 WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
-                AND intensity IN ('subtle', 'tension')
+                  AND is_active = true
+                  AND intensity IN ('subtle', 'tension')
                 ORDER BY progress ASC
                 LIMIT 2
             """, self.user_id, self.conversation_id)
-        
-        # Resolve them
+    
         for conflict in low_priority:
             await synthesizer.resolve_conflict(
-                conflict['conflict_id'],
+                int(conflict['id']),
                 'natural_resolution',
                 {'reason': 'complexity_reduction'}
             )
-        
+    
         return f"Resolved {len(low_priority)} low-priority conflicts"
     
     async def _improve_coherence(self) -> str:
@@ -545,19 +592,15 @@ class ConflictSystemInterface:
     async def _heal_system(self) -> str:
         """Heal system issues"""
         synthesizer = await self._get_synthesizer()
-        
-        # Trigger comprehensive health check
-        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType
-        
+        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
+    
         event = SystemEvent(
             event_id=f"heal_{datetime.now().timestamp()}",
             event_type=EventType.HEALTH_CHECK,
-            source_subsystem=None,
+            source_subsystem=SubsystemType.ORCHESTRATOR,
             payload={'comprehensive': True}
         )
-        
         await synthesizer.emit_event(event)
-        
         return "System healing initiated"
 
 
@@ -679,7 +722,7 @@ async def adjust_conflict_mode(
         result = await interface.set_mode(mode) or {}
         return {
             'success': True,
-            'mode': str(result.get('mode', mode.value)),
+            'mode': str(result.get('new_mode', mode.value)),
             'message': str(result.get('message', '')),
             'error': "",
         }
@@ -736,12 +779,28 @@ async def optimize_conflict_experience(
     interface = ConflictSystemInterface(user_id, conversation_id)
     raw = await interface.optimize_experience() or {}
 
-    applied_changes = [str(c) for c in raw.get('changes', [])] if isinstance(raw.get('changes', []), list) else []
+    applied_changes = [str(c) for c in raw.get('optimizations_performed', [])] \
+        if isinstance(raw.get('optimizations_performed'), list) else []
+
+    # Build a recommendation label from new_state health/coherence
+    new_state = raw.get('new_state')
+    recommendation = ''
+    new_mode = ''
+    if isinstance(new_state, IntegrationState):
+        health = float(getattr(new_state, 'system_health', 1.0) or 1.0)
+        recommendation = 'healthy' if health > 0.7 else 'needs_attention'
+        new_mode = str(getattr(getattr(new_state, 'mode', None), 'value', ''))
+    elif isinstance(new_state, dict):
+        # fallback if typedict ever used
+        health = float((new_state.get('metrics', {}) or {}).get('system_health', 1.0) or 1.0)
+        recommendation = 'healthy' if health > 0.7 else 'needs_attention'
+        new_mode = str((new_state.get('mode') or ''))
+
     return {
-        'success': bool(raw.get('success', True)),
+        'success': True,
         'applied_changes': applied_changes,
-        'recommendation': str(raw.get('recommendation', '')),
-        'new_mode': str(raw.get('mode', '')),
+        'recommendation': recommendation,
+        'new_mode': new_mode,
         'error': "",
     }
 
