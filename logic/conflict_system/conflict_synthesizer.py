@@ -387,7 +387,7 @@ class ConflictSynthesizer:
         try:
             from logic.conflict_system.tension import TensionSubsystem
             from logic.conflict_system.autonomous_stakeholder_actions import StakeholderAutonomySystem
-            from logic.conflict_system.conflict_flow import FlowControlSubsystem
+            from logic.conflict_system.conflict_flow import ConflictFlowSubsystem
             from logic.conflict_system.social_circle import SocialDynamicsSubsystem
             from logic.conflict_system.leverage import LeverageSubsystem
             from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
