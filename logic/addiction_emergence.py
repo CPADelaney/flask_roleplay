@@ -10,6 +10,7 @@ from agents import RunContextWrapper
 from pydantic import BaseModel, Field
 import os, json
 from typing import List, Dict, Any, Optional
+from agents import Agent, Runner, ModelSettings
 from db.connection import get_db_connection_context
 
 ################################################################################
