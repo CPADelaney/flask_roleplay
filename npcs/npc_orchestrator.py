@@ -26,6 +26,8 @@ from npcs.npc_relationship import NPCRelationshipManager
 
 from nyx.scene_keys import generate_scene_cache_key
 
+from npcs.npc_handler import NPCHandler, NPCInteractionProposal
+
 # Import preset NPC handler
 from npcs.preset_npc_handler import PresetNPCHandler
 
@@ -143,6 +145,8 @@ class NPCOrchestrator:
         self._calendar_system = None
         self._integrated_system = None
         self._dynamic_relationship_manager = None
+
+        self._responder = NPCHandler(self.user_id, self.conversation_id)
         
         # Caching for performance (configurable TTLs)
         self._snapshot_cache: Dict[int, Tuple[NPCSnapshot, datetime]] = {}
@@ -547,6 +551,201 @@ class NPCOrchestrator:
                 keys.discard(key)
                 if not keys:
                     self._bundle_index.pop(nid, None)
+
+    def invalidate_npc_state(self, npc_id: int, reason: str = "") -> None:
+        """Public wrapper to invalidate a single NPC's cached state and mark deltas."""
+        try:
+            self._snapshot_cache.pop(npc_id, None)
+        except Exception:
+            pass
+        self._notify_npc_changed(npc_id)
+        if reason:
+            logger.debug(f"[Orchestrator] Invalidated NPC {npc_id} ({reason})")
+
+    async def route_player_conversation_beliefs(
+        self,
+        npc_ids: List[int],
+        text: str,
+        topic: Optional[str] = "general",
+        credibility: float = 0.7
+    ) -> None:
+        """Push a player utterance into beliefs and consolidate (throttled)."""
+        if not npc_ids or not text:
+            return
+        from types import SimpleNamespace
+        for nid in npc_ids[:10]:
+            ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=nid)
+            try:
+                await self._belief_system.process_conversation_for_beliefs(
+                    ctx=ctx_obj,
+                    conversation_text=text,
+                    speaker_id="player",
+                    listener_id=nid,
+                    topic=topic or "general",
+                    credibility=float(credibility),
+                )
+            except Exception as e:
+                logger.warning(f"[Beliefs] routing failed for NPC {nid}: {e}")
+
+        await self._maybe_consolidate_beliefs(
+            npc_ids,
+            topic_filter=topic or "general",
+            reason="npc_handler"
+        )
+
+    async def synthesize_player_interaction(
+        self,
+        npc_id: int,
+        interaction_type: str,
+        player_input: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Orchestrated conversational pipeline:
+        - Gather context from orchestrator subsystems
+        - Delegate response generation to NPCHandler (no side effects)
+        - Apply side effects here (relationships, stats via LoreSystem, memory, beliefs)
+        - Invalidate caches and return a clean payload for final synthesis
+        """
+        # 1) Gather preloaded context
+        snap = await self.get_npc_snapshot(npc_id, light=True)
+
+        # Relationship dims for preloading
+        try:
+            rel = await self.get_relationship_dynamics("player", 1, "npc", npc_id)
+            rel_pre = {
+                "trust": rel["dimensions"]["trust"],
+                "respect": rel["dimensions"]["respect"],
+                "affection": rel["dimensions"]["affection"],
+                "patterns": rel.get("patterns", []),
+                "archetypes": rel.get("archetypes", [])
+            }
+        except Exception:
+            rel_pre = {"trust": 0, "respect": 0, "affection": 0, "patterns": [], "archetypes": []}
+
+        # Memories (small)
+        try:
+            mems = await self._get_mem_mgr(npc_id).retrieve_memories(query="", limit=5)
+            memories_pre = mems.get("memories", [])
+        except Exception:
+            memories_pre = []
+
+        preloaded = {
+            "npc_details": {
+                "npc_id": snap.npc_id,
+                "npc_name": snap.name,
+                "dominance": snap.dominance,
+                "cruelty": snap.cruelty,
+                "closeness": snap.closeness,
+                "trust": snap.trust,
+                "respect": snap.respect,
+                "intensity": snap.intensity,
+                "personality_traits": snap.personality_traits,
+                "current_location": snap.location,
+            },
+            "memories": memories_pre,
+            "relationship": rel_pre
+        }
+
+        # 2) Generate a proposal (no side effects inside handler)
+        proposal: NPCInteractionProposal = await self._responder.generate_interaction_proposal(
+            npc_id=npc_id,
+            interaction_type=interaction_type,
+            player_input=player_input,
+            context=context or {},
+            preloaded=preloaded
+        )
+
+        # 3) Apply side effects centrally
+
+        # 3a) Relationship update
+        if proposal.proposed_relationship_interaction:
+            try:
+                await self.process_relationship_interaction(
+                    npc_id=npc_id,
+                    interaction_type=proposal.proposed_relationship_interaction,
+                    context="conversation",
+                    intensity=1.0
+                )
+            except Exception as e:
+                logger.debug(f"[Orchestrator] relationship apply failed: {e}")
+
+        # 3b) Stat changes via LoreSystem (treat as deltas)
+        if proposal.proposed_stat_changes:
+            try:
+                from lore.core.lore_system import LoreSystem
+                from agents import RunContextWrapper
+                lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+                ctx = RunContextWrapper(context={
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'npc_id': npc_id
+                })
+
+                # Load current values and compute clamped updates
+                async with get_db_connection_context() as conn:
+                    current = {}
+                    for stat, delta in proposal.proposed_stat_changes.items():
+                        row = await conn.fetchrow(
+                            f"SELECT {stat} FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3",
+                            self.user_id, self.conversation_id, npc_id
+                        )
+                        if row and stat in row:
+                            current[stat] = row[stat]
+
+                updates = {}
+                for stat, delta in proposal.proposed_stat_changes.items():
+                    if stat in current:
+                        new_val = max(0, min(100, int(current[stat]) + int(delta)))
+                        if new_val != current[stat]:
+                            updates[stat] = new_val
+
+                if updates:
+                    await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="NPCStats",
+                        entity_identifier={"npc_id": npc_id},
+                        updates=updates,
+                        reason="Player interaction (orchestrator-applied)"
+                    )
+            except Exception as e:
+                logger.debug(f"[Orchestrator] stat apply failed: {e}")
+
+        # 3c) Memory add
+        if proposal.memory_note:
+            try:
+                await self._get_mem_mgr(npc_id).add_memory(
+                    memory_text=proposal.memory_note,
+                    memory_type="interaction",
+                    significance=0.5,
+                    tags=proposal.memory_tags or ["interaction"],
+                    emotional=True
+                )
+            except Exception as e:
+                logger.debug(f"[Orchestrator] memory add failed: {e}")
+
+        # 3d) Beliefs (conversation)
+        try:
+            await self.route_player_conversation_beliefs(
+                npc_ids=[npc_id],
+                text=player_input,
+                topic=context.get("topic", "general"),
+                credibility=float(context.get("credibility", 0.7))
+            )
+        except Exception as e:
+            logger.debug(f"[Orchestrator] belief route failed: {e}")
+
+        # 3e) Invalidate caches
+        self.invalidate_npc_state(npc_id, reason="player_interaction")
+
+        # 4) Return payload for the final response synthesizer
+        return {
+            "npc_id": npc_id,
+            "npc_name": snap.name,
+            "response": proposal.response,
+            "applied_stat_changes": proposal.proposed_stat_changes,
+            "meta": proposal.meta
+        }
     
     def _prune_bundle_cache(self):
         """Remove expired entries from bundle cache and clean reverse index."""
@@ -687,6 +886,47 @@ class NPCOrchestrator:
         
         self.metrics['delta_updates'] += 1
         return delta
+
+    def invalidate_npc_state(self, npc_id: int, reason: str = "") -> None:
+        """Public wrapper to invalidate a single NPC's cached state and mark deltas."""
+        try:
+            self._snapshot_cache.pop(npc_id, None)
+        except Exception:
+            pass
+        self._notify_npc_changed(npc_id)
+        if reason:
+            logger.debug(f"[Orchestrator] Invalidated NPC {npc_id} ({reason})")
+
+    async def route_player_conversation_beliefs(
+        self,
+        npc_ids: List[int],
+        text: str,
+        topic: Optional[str] = "general",
+        credibility: float = 0.7
+    ) -> None:
+        """Public helper to push a player utterance into the belief system and consolidate."""
+        if not npc_ids or not text:
+            return
+        from types import SimpleNamespace
+        for nid in npc_ids[:10]:
+            ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=nid)
+            try:
+                await self._belief_system.process_conversation_for_beliefs(
+                    ctx=ctx_obj,
+                    conversation_text=text,
+                    speaker_id="player",
+                    listener_id=nid,
+                    topic=topic or "general",
+                    credibility=float(credibility),
+                )
+            except Exception as e:
+                logger.warning(f"[Beliefs] routing failed for NPC {nid}: {e}")
+
+        await self._maybe_consolidate_beliefs(
+            npc_ids,
+            topic_filter=topic or "general",
+            reason="npc_handler"
+        )
 
     async def coordinate_group_interaction(
         self,
@@ -1962,8 +2202,10 @@ class NPCOrchestrator:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Handle player action and generate NPC responses, then route the utterance/event
-        into the belief system for affected NPCs and (throttled) consolidate & evolve behavior.
+        Handle player action and generate NPC responses. Preferred flow:
+        - Group fast-path -> NPCAgentCoordinator
+        - Conversational single-NPC -> orchestrated pipeline (NPCHandler proposal + orchestrator side effects)
+        - Fallback -> NPCAgentSystem.process_player_action (legacy path)
         """
         # Fast path: if explicit group action or multiple NPC targets, delegate to coordinator
         try:
@@ -1984,13 +2226,50 @@ class NPCOrchestrator:
             # Never block on fast-path failure; fall back to single-NPC handling
             pass
     
-        # Default path (single-NPC style)
+        # Orchestrated conversational pipeline for a single NPC (preferred path)
+        try:
+            action_type = (action.get("type") or "").lower()
+            is_conversation = action_type in {
+                "talk", "say", "speak", "ask", "persuade", "deceive",
+                "intimidate", "flirt", "confess", "negotiate"
+            }
+            if is_conversation:
+                # Resolve a single target NPC
+                target_ids: List[int] = []
+                npc_ids_field = action.get("npc_ids") or []
+                if isinstance(npc_ids_field, list) and npc_ids_field:
+                    try:
+                        target_ids = [int(npc_ids_field[0])]
+                    except Exception:
+                        target_ids = []
+    
+                if not target_ids:
+                    try:
+                        target_ids = await self._agent_system.determine_affected_npcs(action, context)
+                    except Exception:
+                        target_ids = []
+    
+                npc_id = (target_ids or list(self._active_npcs)[:1])[0] if (target_ids or self._active_npcs) else None
+    
+                if npc_id is not None:
+                    out = await self.synthesize_player_interaction(
+                        npc_id=npc_id,
+                        interaction_type=(action.get("interaction_type") or action.get("tone") or "friendly"),
+                        player_input=action.get("description", ""),
+                        context=context or {}
+                    )
+                    # Early return to avoid duplicate belief/behavior routing below
+                    return out
+        except Exception as e:
+            logger.debug(f"[Orchestrator] conversational pipeline fallback: {e}")
+    
+        # Default path (legacy single-NPC style)
         if self._npc_bridge:
             result = await self._npc_bridge.handle_player_action(action, context)
         else:
             result = await self._agent_system.process_player_action(action, context)
     
-        # --- Belief integration for conversational actions ---
+        # --- Belief integration for conversational actions (legacy path) ---
         affected_ids: List[int] = []
         try:
             action_type = (action.get("type") or "").lower()
@@ -2009,6 +2288,7 @@ class NPCOrchestrator:
                     affected_ids = list(self._active_npcs)[:3]
     
                 if affected_ids:
+                    from types import SimpleNamespace
                     for npc_id in affected_ids:
                         ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
                         try:
@@ -2033,7 +2313,7 @@ class NPCOrchestrator:
         except Exception as e:
             logger.exception(f"[Beliefs] post-action belief routing failed: {e}")
     
-        # --- Behavior evolution right after conversations (throttled) ---
+        # --- Behavior evolution right after conversations (throttled, legacy path) ---
         try:
             if affected_ids:
                 await self._maybe_evaluate_behavior(affected_ids, reason="post_conversation", use_user_model=True)
