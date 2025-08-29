@@ -1320,55 +1320,181 @@ class ContextBroker:
         return bundle_obj
     
     async def _fetch_npc_section(self, scope: SceneScope) -> BundleSection:
-        """Fetch NPC context for scene - using list format for JSON compatibility"""
+        """
+        Fetch NPC context for scene — prefer orchestrator scene bundle, then overlay
+        dynamic relationship data (player↔NPC) including patterns/archetypes/momentum
+        and the full dimensions vector. Falls back to per-NPC snapshots if needed.
+        """
         if not self.ctx.npc_orchestrator:
-            return BundleSection(data={'npcs': []}, canonical=False, priority=0)
-        
-        npc_list = []
-        canonical_count = 0
-        
-        for npc_id in list(scope.npc_ids)[:10]:  # Cap at 10 NPCs
+            return BundleSection(data=NPCSectionData(npcs=[], canonical_count=0), canonical=False, priority=0)
+    
+        npc_ids = list(scope.npc_ids)[:10] if getattr(scope, "npc_ids", None) else []
+    
+        # Fast path: orchestrator scene bundle (one RPC, includes scene/group dynamics)
+        obundle = None
+        if hasattr(self.ctx.npc_orchestrator, "get_scene_bundle"):
             try:
-                snapshot = await self.ctx.npc_orchestrator.get_npc_snapshot(npc_id)
-                
-                # Extract essential fields with canonical first
-                npc_entry = {
-                    'id': npc_id,
-                    'name': snapshot.name,
-                    'role': snapshot.role,
-                    'canonical': bool(snapshot.canonical_events)
-                }
-                
-                # Add canonical facts first
-                if snapshot.canonical_events:
-                    canonical_count += 1
-                    npc_entry['canonical_events'] = snapshot.canonical_events[:2]
-                
-                # Then dynamic state
-                npc_entry.update({
-                    'status': snapshot.status.value if hasattr(snapshot.status, 'value') else snapshot.status,
-                    'relationship': {
-                        'trust': snapshot.trust,
-                        'respect': snapshot.respect,
-                        'closeness': snapshot.closeness
-                    },
-                    'current_intent': snapshot.emotional_state.get('intent') if snapshot.emotional_state else None
-                })
-                
-                npc_list.append(npc_entry)
-                    
+                obundle = await self.ctx.npc_orchestrator.get_scene_bundle(scope)
             except Exception as e:
-                logger.warning(f"Failed to get NPC {npc_id}: {e}")
-        
-        # Use NPCSectionData for strong typing
-        section_data = NPCSectionData(npcs=npc_list, canonical_count=canonical_count)
-        
+                logger.debug(f"[NyxContext] Orchestrator scene bundle fast-path failed, fallback: {e}")
+    
+        canonical = False
+        last_changed = time.time()
+        version = f"npcs_{len(npc_ids)}_{last_changed}"
+        npc_items: List[Dict[str, Any]] = []
+        canonical_count = 0
+    
+        if obundle:
+            data = obundle.get("data", {}) or {}
+            npc_items = data.get("npcs", []) or []
+            canonical = bool(obundle.get("canonical", False))
+            last_changed = float(obundle.get("last_changed_at", last_changed))
+            version = obundle.get("version") or version
+            canonical_count = int(data.get("canonical_count", 0))
+    
+            # Persist orchestrator scene/group dynamics in context metadata for reuse
+            try:
+                self.ctx.current_context.setdefault("_npc_scene_meta", {})[scope.to_key()] = {
+                    "scene_dynamics": data.get("scene_dynamics", {}),
+                    "group_dynamics": data.get("group_dynamics", {})
+                }
+            except Exception:
+                pass
+    
+            # If orchestrator bundle omitted explicit npc_ids, infer them from items
+            if not npc_ids and npc_items:
+                try:
+                    npc_ids = [int(it.get("id")) for it in npc_items if isinstance(it, dict) and it.get("id") is not None]
+                except Exception:
+                    pass
+        else:
+            # Fallback: per-NPC snapshots
+            async def _fetch_one(nid: int):
+                try:
+                    snap = await self.ctx.npc_orchestrator.get_npc_snapshot(nid, light=True)
+                    entry = {
+                        "id": nid,
+                        "name": snap.name,
+                        "role": snap.role,
+                        "canonical": bool(snap.canonical_events),
+                        "status": snap.status if not hasattr(snap.status, "value") else snap.status.value,
+                        "relationship": {
+                            "trust": snap.trust,
+                            "respect": snap.respect,
+                            "closeness": snap.closeness,
+                        },
+                        "current_intent": snap.emotional_state.get("intent") if snap.emotional_state else None,
+                    }
+                    return entry, bool(snap.canonical_events)
+                except Exception as e:
+                    logger.warning(f"[NyxContext] Snapshot fetch failed for NPC {nid}: {e}")
+                    return None, False
+    
+            results = await asyncio.gather(*[_fetch_one(n) for n in npc_ids], return_exceptions=False)
+            for it, is_canon in results:
+                if isinstance(it, dict):
+                    npc_items.append(it)
+                    if is_canon:
+                        canonical_count += 1
+    
+        # Overlay dynamic relationship data (player↔NPC) onto each entry
+        # Includes patterns/archetypes, momentum (magnitude & direction), and full dimensions.
+        relationships_meta: Dict[str, Any] = {}
+        if npc_ids:
+            try:
+                from logic.dynamic_relationships import OptimizedRelationshipManager
+                dyn = OptimizedRelationshipManager(self.ctx.user_id, self.ctx.conversation_id)
+    
+                async def _fetch_rel(nid: int):
+                    try:
+                        state = await dyn.get_relationship_state("player", 1, "npc", int(nid))
+                        dims = state.dimensions
+                        # Map to 0..100 UI scalars from [-100..100]
+                        trust = int(round((float(dims.trust) + 100.0) / 2.0))
+                        respect = int(round((float(dims.respect) + 100.0) / 2.0))
+                        # Closeness from positive-affection, intimacy, frequency (0..100)
+                        intimacy = max(0.0, float(dims.intimacy))
+                        affection_pos = max(0.0, float(dims.affection))
+                        frequency = max(0.0, float(dims.frequency))
+                        closeness = int(round((intimacy + affection_pos + frequency) / 3.0))
+    
+                        return nid, {
+                            "trust": trust, "respect": respect, "closeness": closeness,
+                            "patterns": list(state.history.active_patterns),
+                            "archetypes": list(state.active_archetypes),
+                            "momentum_mag": round(state.momentum.get_magnitude(), 2),
+                            "momentum_dir": state.momentum.get_direction(),
+                            "dims": state.dimensions.to_dict()
+                        }
+                    except Exception as re:
+                        logger.debug(f"[NyxContext] dynamic rel fetch failed for NPC {nid}: {re}")
+                        return nid, None
+    
+                rel_results = await asyncio.gather(*[_fetch_rel(n) for n in npc_ids], return_exceptions=False)
+                rel_map: Dict[int, Dict[str, Any]] = {
+                    nid: payload for nid, payload in rel_results
+                    if isinstance(nid, int) and isinstance(payload, dict)
+                }
+    
+                # Patch items with dynamic numbers; store compact meta for tools
+                for item in npc_items:
+                    try:
+                        nid = int(item.get("id"))
+                    except Exception:
+                        continue
+                    payload = rel_map.get(nid)
+                    if not payload:
+                        continue
+    
+                    # Overlay relationship scalars with dynamic versions
+                    item.setdefault("relationship", {})
+                    item["relationship"]["trust"] = payload["trust"]
+                    item["relationship"]["respect"] = payload["respect"]
+                    item["relationship"]["closeness"] = payload["closeness"]
+    
+                    # Attach compact dynamic meta (trim patterns/archetypes)
+                    item["relationship_dynamic"] = {
+                        "patterns": payload["patterns"][:2],
+                        "archetypes": payload["archetypes"][:2],
+                        "momentum": {
+                            "magnitude": payload["momentum_mag"],
+                            "direction": payload["momentum_dir"]
+                        },
+                        "dimensions": payload["dims"]  # full vector: trust/affection/respect/familiarity/tension/intimacy/frequency
+                    }
+    
+                    # Populate metadata._relationships for cross-section tools
+                    relationships_meta[str(nid)] = {
+                        "with_player": {
+                            "trust": payload["trust"],
+                            "respect": payload["respect"],
+                            "closeness": payload["closeness"],
+                            "momentum": {
+                                "magnitude": payload["momentum_mag"],
+                                "direction": payload["momentum_dir"]
+                            }
+                        }
+                    }
+    
+            except Exception as e:
+                logger.debug(f"[NyxContext] dynamic relationship overlay skipped: {e}")
+    
+        # Persist relationships meta in bundle-level metadata (broker merges later)
+        if relationships_meta:
+            try:
+                # Stash in current_context; ContextBundle.sections exposes it as 'relationships'
+                rel_meta = self.ctx.current_context.setdefault('_relationships', {})
+                rel_meta.update(relationships_meta)
+            except Exception:
+                pass
+    
+        section_data = NPCSectionData(npcs=npc_items, canonical_count=canonical_count)
         return BundleSection(
             data=section_data,
-            canonical=canonical_count > 0,
-            priority=8,  # High priority
-            last_changed_at=time.time(),
-            version=f"npcs_{len(npc_list)}_{time.time()}"
+            canonical=canonical or canonical_count > 0,
+            priority=8,
+            last_changed_at=last_changed,
+            version=version
         )
     
     async def _fetch_memory_section(self, scope: SceneScope) -> BundleSection:
