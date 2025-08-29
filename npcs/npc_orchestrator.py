@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from npcs.npc_agent_system import NPCAgentSystem
 from npcs.npc_coordinator import NPCAgentCoordinator
 from npcs.npc_memory import NPCMemoryManager
-from npcs.npc_perception import EnvironmentPerception
+from npcs.npc_perception import EnvironmentPerception, PerceptionContext
 from npcs.npc_learning_adaptation import NPCLearningManager
 
 from nyx.scene_keys import generate_scene_cache_key
@@ -115,7 +115,7 @@ class NPCOrchestrator:
         self.config = config or {}
         
         # Core subsystems - use normalized IDs
-        self._perception_system = EnvironmentPerception(self.user_id, self.conversation_id)
+        self._perception: Dict[int, EnvironmentPerception] = {}
         self._belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
         self._lore_manager = LoreContextManager(self.user_id, self.conversation_id)
         self._behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
@@ -545,7 +545,11 @@ class NPCOrchestrator:
         else:
             # Pull what we already have cheaply (avoid heavy memory calls here)
             snapshot = await self.get_npc_snapshot(npc_id, light=True)
-            env = await self._perception_system.get_environment_context(snapshot.location)
+            try:
+                per = self._get_perception(npc_id)
+                env = await per.fetch_environment_data(PerceptionContext(location=snapshot.location))
+            except Exception:
+                env = {}
             # Very small relationship seed for player; engine tools will fetch fuller state if needed
             rel = {"player": {"link_level": max(snapshot.trust, snapshot.closeness)}}
             # Time context (light)
@@ -597,6 +601,13 @@ class NPCOrchestrator:
         # Mark changed for scene deltas
         self._notify_npc_changed(npc_id)
         return decision or {}
+    
+    def _get_perception(self, npc_id: int) -> EnvironmentPerception:
+        p = self._perception.get(npc_id)
+        if p is None:
+            p = EnvironmentPerception(npc_id, self.user_id, self.conversation_id)
+            self._perception[npc_id] = p
+        return p
     
     def _notify_npc_changed(self, npc_id: int):
         self._last_update_times[npc_id] = time.time()
