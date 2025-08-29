@@ -110,19 +110,20 @@ async def suggest_addictions_from_events(
             print(f"Warning: Could not save updated themes dynamically: {e}")
 
     # 2. For each suggestion, apply/add the addiction using update_addiction_level
-    # REFACTORED: Get connection and pass it through
+
+    from logic.addiction_system_sdk import process_addiction_update
+    
     applied = []
-    async with get_db_connection_context() as conn:
-        for suggestion in suggestions:
-            upd = await update_addiction_level(
-                ctx,
-                conn,  # Pass connection
-                player_name,
-                suggestion.addiction_type,
-                progression_multiplier=1.0,
-                target_npc_id=suggestion.target_npc_id if suggestion.is_npc_specific else None
-            )
-            applied.append(upd)
+    for suggestion in suggestions:
+        upd = await process_addiction_update(
+            user_id=ctx.context.user_id,
+            conversation_id=ctx.context.conversation_id,
+            player_name=player_name,
+            addiction_type=suggestion.addiction_type,
+            progression_multiplier=1.0,
+            target_npc_id=suggestion.target_npc_id if suggestion.is_npc_specific else None
+        )
+        applied.append(upd["update"])
 
     # Optionally, retrieve and return summary status after all changes
     from logic.addiction_system_sdk import get_addiction_status
