@@ -23,6 +23,8 @@ import hashlib
 import time
 import inspect
 import re
+from agents.guardrails import InputGuardrailTripwireTriggered
+
 
 # Core imports
 from db.connection import get_db_connection_context
@@ -2121,8 +2123,117 @@ class LoreOrchestrator:
         if not hasattr(self, '_lore_dynamics_system'):
             from lore.systems.dynamics import LoreDynamicsSystem
             self._lore_dynamics_system = LoreDynamicsSystem(self.user_id, self.conversation_id)
+            await self._lore_dynamics_system.ensure_initialized()
+            # Attach governance if available and register
+            try:
+                governor = await get_central_governance(self.user_id, self.conversation_id)
+                self._lore_dynamics_system.governor = governor
+                await self._lore_dynamics_system.register_with_governance()
+            except Exception as e:
+                logger.debug(f"Could not attach/register governance to LoreDynamicsSystem: {e}")
             logger.info("Lore dynamics system initialized")
         return self._lore_dynamics_system
+
+    async def dynamics_evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
+        ds = await self._get_lore_dynamics_system()
+        result = await ds.evolve_lore_with_event(ctx, event_description)
+    
+        # Best-effort change tracking so scene deltas work
+        try:
+            # Updates (existing elements)
+            for upd in result.get('updates', []):
+                etype = str(upd.get('lore_type', 'world_lore')).lower()
+                eid = upd.get('lore_id')
+                if eid is None:
+                    continue
+                # Normalize type names to our canonical delta types
+                if etype in ('locations', 'locationlore', 'location'):
+                    etype = 'location'
+                elif etype in ('historicalevents', 'worldlore', 'culturalelements', 'geographicregions'):
+                    etype = 'world_lore'
+                elif etype in ('factions',):
+                    etype = 'faction'
+                elif etype in ('urbanmyths', 'localhistories', 'landmarks', 'notablefigures'):
+                    # optional: track each as their own; otherwise 'world_lore'
+                    etype = 'myth' if etype == 'urbanmyths' else etype
+    
+                new_data = {
+                    'name': upd.get('name'),
+                    'description': upd.get('new_description'),
+                    'update_reason': upd.get('update_reason'),
+                    'impact_level': upd.get('impact_level'),
+                }
+                await self.record_lore_change(etype, int(eid), 'update', new_data=new_data)
+        except Exception as e:
+            logger.debug(f"dynamics_evolve_lore_with_event: change tracking (updates) failed: {e}")
+    
+        try:
+            # New elements created
+            for ne in result.get('new_elements', []):
+                etype = str(ne.get('lore_type', 'world_lore')).lower()
+                # ID may not be returned by generation; skip if missing
+                eid = ne.get('id') or ne.get('lore_id')
+                if not eid:
+                    continue
+                if etype in ('factions',):
+                    etype = 'faction'
+                elif etype in ('culturalelements', 'worldlore', 'geographicregions'):
+                    etype = 'world_lore'
+                await self.record_lore_change(etype, int(eid), 'create', new_data=ne)
+        except Exception as e:
+            logger.debug(f"dynamics_evolve_lore_with_event: change tracking (new elements) failed: {e}")
+    
+        return result
+
+    async def dynamics_stream_world_changes(self, event_data: Dict[str, Any], affected_elements: List[Dict[str, Any]]):
+        from lore.systems.dynamics import WorldStateStreamer
+        ds = await self._get_lore_dynamics_system()
+        streamer = WorldStateStreamer(ds)
+        async for chunk in streamer.stream_world_changes(event_data, affected_elements):
+            yield chunk
+    
+    async def dynamics_stream_evolution_scenario(self, initial_state: Optional[Dict[str, Any]] = None, years: int = 10):
+        from lore.systems.dynamics import WorldStateStreamer
+        ds = await self._get_lore_dynamics_system()
+        streamer = WorldStateStreamer(ds)
+        async for year_chunk in streamer.stream_evolution_scenario(initial_state or {}, years):
+            yield year_chunk
+    
+    async def dynamics_create_evolution_plan(self, initial_prompt: str, ctx_dict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from lore.systems.dynamics import MultiStepPlanner
+        ds = await self._get_lore_dynamics_system()
+        planner = MultiStepPlanner(ds)
+        context = ctx_dict or {"user_id": self.user_id, "conversation_id": self.conversation_id}
+        return await planner.create_evolution_plan(initial_prompt, context)
+    
+    async def dynamics_execute_plan_step(self, plan_id: str, step_index: int, ctx_dict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from lore.systems.dynamics import MultiStepPlanner
+        ds = await self._get_lore_dynamics_system()
+        planner = MultiStepPlanner(ds)
+        context = ctx_dict or {"user_id": self.user_id, "conversation_id": self.conversation_id}
+        return await planner.execute_plan_step(plan_id, step_index, context)
+    
+    async def dynamics_evaluate_narrative(self, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
+        from lore.systems.dynamics import NarrativeEvaluator
+        ds = await self._get_lore_dynamics_system()
+        evaluator = NarrativeEvaluator(ds)
+        return await evaluator.evaluate_narrative(narrative_element, element_type)
+
+    async def dynamics_generate_emergent_event(self, ctx) -> Dict[str, Any]:
+        ds = await self._get_lore_dynamics_system()
+        data = await ds.generate_emergent_event(ctx)
+    
+        # Optionally record the top-level event as world_lore
+        try:
+            if data and 'description' in data:
+                await self.record_lore_change('world_lore', 0, 'create', new_data={'event': data.get('event_name'), 'description': data['description']})
+        except Exception:
+            pass
+        return data
+    
+    async def dynamics_mature_lore_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
+        ds = await self._get_lore_dynamics_system()
+        return await ds.mature_lore_over_time(days_passed)
     
     async def _get_lore_update_system(self):
         """Get or initialize the lore update system."""
