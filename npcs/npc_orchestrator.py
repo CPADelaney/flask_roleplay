@@ -113,6 +113,12 @@ class NPCOrchestrator:
     
         # Configuration
         self.config = config or {}
+
+        # Conflict synthesizer integration (production)
+        self.enable_conflicts = bool(self.config.get("enable_conflict_system", True))
+        self._conflict_synth = None  # ConflictSynthesizer
+        self._conflict_cache: Dict[int, Tuple[Dict[str, Any], float]] = {}
+        self._conflict_cache_ttl = float(self.config.get("conflict_cache_ttl_s", 30.0))
         
         # Core subsystems - use normalized IDs
         self._perception: Dict[int, EnvironmentPerception] = {}
@@ -124,6 +130,15 @@ class NPCOrchestrator:
 
         self.enable_learning_adaptation = bool(self.config.get("enable_learning_adaptation", True))
         self._learning_manager = None
+
+        # IntegratedNPCSystem routing toggles
+        self._integrated_routing = {
+            "use_for_conversation": bool(self.config.get("use_integrated_for_conversation", False)),
+            "use_for_group": bool(self.config.get("use_integrated_for_group", False)),
+            "use_for_time_advance": bool(self.config.get("use_integrated_for_time", True)),
+            "use_for_scheduled_activities": bool(self.config.get("use_integrated_for_scheduled", True)),
+            "use_for_relationship_ops": bool(self.config.get("use_integrated_for_relationships", True)),
+        }
 
         self._decision_engines: Dict[int, NPCDecisionEngine] = {}
         self._decision_engine_timestamps: Dict[int, float] = {}
@@ -260,6 +275,12 @@ class NPCOrchestrator:
     async def initialize(self):
         """Initialize all subsystems"""
         try:
+            from logic.narrative_events import initialize_player_stats as _init_stats
+            await _init_stats(self.user_id, self.conversation_id)
+        except Exception as e:
+            logger.debug(f"[Stats] player stats init skipped: {e}")
+            
+        try:
             # Perception is per-NPC now; nothing to initialize globally
             await self._belief_system.initialize()
             await self._lore_manager.initialize()
@@ -270,6 +291,12 @@ class NPCOrchestrator:
                     await self._calendar_system['ensure_tables'](self.user_id, self.conversation_id)
                 except Exception as ce:
                     logger.debug(f"[Calendar] ensure_tables failed during init: {ce}")
+
+        try:
+            from logic.addiction_system_sdk import register_with_governance
+            await register_with_governance(self.user_id, self.conversation_id)
+        except Exception as e:
+            logger.debug(f"[Addictions] governance registration skipped: {e}")
             
             # Load active NPCs
             await self._load_active_npcs()
@@ -451,6 +478,20 @@ class NPCOrchestrator:
                 'intensity': snapshot.intensity,
             }
 
+            # Conflict summary (if any, very small)
+            try:
+                conf = await self._get_conflict_state_for_npc(npc_id)
+                if conf:
+                    npc_entry['conflict'] = {
+                        'id': conf.get('conflict_id'),
+                        'type': conf.get('type'),
+                        'active': conf.get('active', True),
+                        'severity': conf.get('intensity'),  # 0..100
+                        'phase': conf.get('phase')
+                    }
+            except Exception as e:
+                logger.debug(f"[Conflict] scene bundle conflict fetch failed for NPC {npc_id}: {e}")
+
             if self._include_lore_in_scene_bundle:
                 try:
                     lore_ctx = await self._lore_manager.get_lore_context(npc_id, "profile")
@@ -494,6 +535,11 @@ class NPCOrchestrator:
                 'respect': snapshot.respect,
                 'closeness': snapshot.closeness,
                 'emotional_state': snapshot.emotional_state,
+                'conflict': {
+                    'id': conf.get('conflict_id') if conf else None,
+                    'active': bool(conf.get('active')) if conf else False,
+                    'severity': conf.get('intensity') if conf else None
+                }
             }
     
         bundle['data']['canonical_count'] = canonical_count
@@ -589,6 +635,20 @@ class NPCOrchestrator:
                 "time_context": {"time_of_day": time_ctx.get("TimeOfDay", "Morning")},
                 "narrative_context": {}
             }
+
+            # Conflict-aware narrative context
+            try:
+                conf = await self._get_conflict_state_for_npc(npc_id)
+            except Exception:
+                conf = None
+
+            perception["narrative_context"] = {
+                "conflict": {
+                    "active": bool(conf.get("active")) if conf else False,
+                    "severity": conf.get("intensity") if conf else None,
+                    "phase": conf.get("phase") if conf else None,
+                } if conf else {}
+            }
     
         decision = await engine.decide(perception=perception, available_actions=available_actions)
     
@@ -609,6 +669,71 @@ class NPCOrchestrator:
         # Mark changed for scene deltas
         self._notify_npc_changed(npc_id)
         return decision or {}
+
+    def _invalidate_conflict_cache(self, npc_id: Optional[int] = None) -> None:
+        if npc_id is None:
+            self._conflict_cache.clear()
+            return
+        try:
+            self._conflict_cache.pop(int(npc_id), None)
+        except Exception:
+            pass
+
+    def invalidate_npc_state(self, npc_id: int, reason: str = "") -> None:
+        """
+        Invalidate a single NPC's cached state and mark deltas.
+        Canonical single version; replace duplicates with this one.
+        """
+        try:
+            self._snapshot_cache.pop(npc_id, None)
+        except Exception:
+            pass
+        # Also invalidate per-NPC conflict cache entry
+        try:
+            self._invalidate_conflict_cache(npc_id)
+        except Exception:
+            pass
+        # Mark changed for delta feeds and clear bundle associations
+        self._notify_npc_changed(npc_id)
+        if reason:
+            logger.debug(f"[Orchestrator] Invalidated NPC {npc_id} ({reason})")
+
+    async def _get_conflict_state_for_npc(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Return a tiny summary: {conflict_id, type, intensity, active} for one NPC, cached."""
+        # Cache fast path
+        entry = self._conflict_cache.get(npc_id)
+        if entry and (time.time() - entry[1] < self._conflict_cache_ttl):
+            return entry[0]
+
+        synth = await self._get_conflict_synth()
+        if not synth:
+            return None
+
+        try:
+            scope = self._ConflictScope(location_id=None, npc_ids=[npc_id])
+            bundle = await synth.get_scene_bundle(scope)
+            # Bundle shape: bundle["active"] holds list of conflicts (see synthesizer code)
+            for c in (bundle.get("active") or []):
+                stks = c.get("stakeholders") or []
+                if npc_id in stks:
+                    # Map intensity [0..1] to a simple severity [0..100]
+                    intensity = float(c.get("intensity", 0.0) or 0.0)
+                    state = {
+                        "conflict_id": c.get("id"),
+                        "type": c.get("type"),
+                        "intensity": max(0, min(100, int(round(intensity * 100)))),
+                        "active": True,
+                        "phase": c.get("phase"),
+                        "canonical": bool(c.get("canonical")),
+                    }
+                    self._conflict_cache[npc_id] = (state, time.time())
+                    return state
+        except Exception as e:
+            logger.debug(f"[Conflict] per-NPC conflict fetch failed for {npc_id}: {e}")
+
+        # No conflict matched
+        self._conflict_cache[npc_id] = (None, time.time())
+        return None
     
     def _get_perception(self, npc_id: int) -> EnvironmentPerception:
         p = self._perception.get(npc_id)
@@ -696,7 +821,7 @@ class NPCOrchestrator:
 
         # Relationship dims for preloading
         try:
-            rel = await self.get_relationship_dynamics("player", 1, "npc", npc_id)
+            rel = await self.get_relationship_dynamics("player", self.user_id, "npc", npc_id)
             rel_pre = {
                 "trust": rel["dimensions"]["trust"],
                 "respect": rel["dimensions"]["respect"],
@@ -819,6 +944,22 @@ class NPCOrchestrator:
         except Exception as e:
             logger.debug(f"[Orchestrator] belief route failed: {e}")
 
+        # Notify conflict synthesizer of this conversation scene (non-blocking)
+        try:
+            synth = await self._get_conflict_synth()
+            if synth:
+                scene_ctx = {
+                    "scene_id": int(time.time() * 1000) % 2_147_483_647,
+                    "scene_type": interaction_type or "conversation",
+                    "characters_present": [npc_id],
+                    "location_id": None,
+                    "dialogue": [{"speaker": "player", "text": player_input[:300]}] if player_input else [],
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                asyncio.create_task(synth.process_scene(scene_ctx))
+        except Exception as e:
+            logger.debug(f"[Conflict] conversation notify failed for NPC {npc_id}: {e}")
+
         # 3e) Invalidate caches
         self.invalidate_npc_state(npc_id, reason="player_interaction")
 
@@ -845,6 +986,22 @@ class NPCOrchestrator:
             )
         except Exception as e:
             logger.debug(f"[Learning] interaction hook failed for NPC {npc_id}: {e}")
+        
+        # 3g) Optional: emergent addiction analysis from this scene (throttled externally if needed)
+        try:
+            text_for_analysis = " ".join(filter(None, [
+                player_input or "",
+                (proposal.response or {}).get("text") if isinstance(proposal.response, dict) else ""
+            ]))
+            if text_for_analysis:
+                add_pack = await self.analyze_emergent_addictions(text_for_analysis, npcs=[{"npc_id": npc_id}])
+                if isinstance(add_pack, dict) and add_pack.get("update_results"):
+                    # Attach a tiny summary for the final synthesizer
+                    applied = add_pack.get("applied_suggestions") or []
+                    out_effects = add_pack.get("player_addiction_status") or {}
+                    # You can optionally route belief here based on applied changes
+        except Exception as e:
+            logger.debug(f"[Addictions] emergent analysis failed: {e}")
 
         # 4) Return payload for the final response synthesizer
         return {
@@ -964,6 +1121,40 @@ class NPCOrchestrator:
                 if rel_changes:
                     change['relationship_changes'] = rel_changes
                     change_types.append('relationship')
+
+                # Conflict change detection (id/active/severity)
+                try:
+                    conf = await self._get_conflict_state_for_npc(npc_id)
+                    old_conf = old_state.get('conflict', {}) if old_state else {}
+                    new_id = conf.get('conflict_id') if conf else None
+                    if new_id != old_conf.get('id'):
+                        change['conflict_id'] = new_id
+                        change_types.append('conflict_id')
+                    new_active = bool(conf.get('active')) if conf else False
+                    if new_active != bool(old_conf.get('active', False)):
+                        change['conflict_active'] = new_active
+                        change_types.append('conflict_active')
+                    new_sev = conf.get('intensity') if conf else None
+                    if new_sev != old_conf.get('severity'):
+                        change['conflict_severity'] = new_sev
+                        change_types.append('conflict_severity')
+                except Exception:
+                    pass
+
+                # Update state cache (also persist conflict)
+                self._scene_state_cache[npc_id] = {
+                    'status': snapshot.status,
+                    'location': snapshot.location,
+                    'trust': snapshot.trust,
+                    'respect': snapshot.respect,
+                    'closeness': snapshot.closeness,
+                    'emotional_state': snapshot.emotional_state,
+                    'conflict': {
+                        'id': (conf.get('conflict_id') if conf else None),
+                        'active': bool(conf.get('active')) if conf else False,
+                        'severity': (conf.get('intensity') if conf else None)
+                    }
+                }
                 
                 # Emotional state changes
                 old_intent = old_state.get('emotional_state', {}).get('intent')
@@ -994,16 +1185,6 @@ class NPCOrchestrator:
         
         self.metrics['delta_updates'] += 1
         return delta
-
-    def invalidate_npc_state(self, npc_id: int, reason: str = "") -> None:
-        """Public wrapper to invalidate a single NPC's cached state and mark deltas."""
-        try:
-            self._snapshot_cache.pop(npc_id, None)
-        except Exception:
-            pass
-        self._notify_npc_changed(npc_id)
-        if reason:
-            logger.debug(f"[Orchestrator] Invalidated NPC {npc_id} ({reason})")
 
     async def coordinate_group_interaction(
         self,
@@ -1100,6 +1281,7 @@ class NPCOrchestrator:
                             credibility=float(context.get("credibility", 0.7))
                         )
                         self._notify_npc_changed(nid)
+                        
 
                     await self._maybe_consolidate_beliefs(
                         affected,
@@ -1108,6 +1290,22 @@ class NPCOrchestrator:
                     )
             except Exception as be:
                 logger.warning(f"[Beliefs] post-group-action belief routing failed: {be}")
+
+            # Notify conflict synthesizer about this scene/action (non-blocking)
+            try:
+                synth = await self._get_conflict_synth()
+                if synth:
+                    scene_ctx = {
+                        "scene_id": int(time.time() * 1000) % 2_147_483_647,
+                        "scene_type": action.get("type") or "group_action",
+                        "characters_present": (affected or npc_ids or [])[:10],
+                        "location_id": None,  # unknown id; pass None
+                        "dialogue": [{"speaker": "player", "text": action.get("description", "")}] if action.get("description") else [],
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    asyncio.create_task(synth.process_scene(scene_ctx))
+            except Exception as e:
+                logger.debug(f"[Conflict] scene notify failed: {e}")
 
             # Learning adaptation for affected NPCs (if any)
             try:
@@ -1228,10 +1426,13 @@ class NPCOrchestrator:
                     if isinstance(adjustments, dict) and "error" not in adjustments:
                         applied = await self._behavior_evolution.apply_scheming_adjustments(nid, adjustments)
                         if applied:
-                            self.metrics['behavior_applied'] += 1
+                            # FIXED METRIC KEY
+                            self.metrics['behavior_applies'] += 1
                             # Invalidate snapshot cache & mark change for delta feeds
-                            if nid in self._snapshot_cache:
-                                del self._snapshot_cache[nid]
+                            try:
+                                self._snapshot_cache.pop(nid, None)
+                            except Exception:
+                                pass
                             self._notify_npc_changed(nid)
                 except Exception as e:
                     logger.warning(f"[Behavior] evolution failed for NPC {nid}: {e}")
@@ -1326,13 +1527,12 @@ class NPCOrchestrator:
                 
                 # Convert Record to dict for safe access
                 row_map = dict(row)
-
+    
                 self._update_active_trackers(npc_id, row_map.get("status", "active"))
                 
                 # Get canonical events if canon enabled
                 canonical_events = []
                 if self.enable_canon:
-                    # Check cache first
                     cache_key = f"canon_{npc_id}"
                     if cache_key in self.canon_cache:
                         canonical_events = self.canon_cache[cache_key]
@@ -1348,31 +1548,44 @@ class NPCOrchestrator:
                         
                         canonical_events = [dict(e) for e in events]
                         self.canon_cache[cache_key] = canonical_events
-        
-        # Get emotional state (skip if light mode)
+    
+        # Heavy fields (optional, prefer Integrated memory system when available)
         emotional_state = {}
+        recent_memories = []
+        mask_integrity = row_map.get("mask_integrity") or 100
+    
         if not light:
+            # Emotion via Integrated memory if available
             try:
-                emotional_state = await self._get_mem_mgr(npc_id).get_emotional_state()
+                integ = await self._get_integrated_npc_system()
+                emo = await integ.get_npc_emotional_state(npc_id)
+                if isinstance(emo, dict) and emo:
+                    emotional_state = emo
             except Exception:
                 emotional_state = {}
-        
-        # Get recent memories (skip if light mode)
-        recent_memories = []
-        if not light:
+    
+            # Mask integrity via Integrated system if present (overrides DB)
+            try:
+                integ = await self._get_integrated_npc_system()
+                mask = await integ.get_npc_mask(npc_id)
+                if isinstance(mask, dict) and "integrity" in mask:
+                    mask_integrity = int(mask.get("integrity", mask_integrity))
+            except Exception:
+                pass
+    
+            # Keep memory recall optional/light (can remain empty to avoid heavy ops)
             try:
                 mem_res = await self._get_mem_mgr(npc_id).retrieve_memories(query="", limit=5)
                 recent_memories = mem_res.get("memories", [])
             except Exception:
-                pass
-
+                recent_memories = []
+    
         # Lore summary (heavy only; keep tiny)
         lore_summary = []
         if not light:
             try:
                 lore_ctx = await self._lore_manager.get_lore_context(npc_id, "profile")
                 knowledge = (lore_ctx or {}).get("knowledge") or []
-                # keep it very small to avoid blowing up payloads
                 for k in knowledge[:3]:
                     lore_summary.append({
                         "lore_type": k.get("lore_type"),
@@ -1382,7 +1595,7 @@ class NPCOrchestrator:
                     })
             except Exception as e:
                 logger.debug(f"[Lore] summary fetch failed for NPC {npc_id}: {e}")
-        
+    
         # Normalize personality traits
         traits = row_map.get("personality_traits", [])
         if isinstance(traits, str):
@@ -1390,7 +1603,7 @@ class NPCOrchestrator:
                 traits = json.loads(traits)
             except Exception:
                 traits = [traits] if traits else []
-        
+    
         # Normalize special_mechanics if stored as JSON text
         special = row_map.get("special_mechanics", {})
         if isinstance(special, str):
@@ -1398,10 +1611,10 @@ class NPCOrchestrator:
                 special = json.loads(special)
             except Exception:
                 special = {}
-        
+    
         # Build snapshot
         snapshot = NPCSnapshot(
-            npc_id=npc_id,
+            npc_id=int(npc_id),
             name=row_map["npc_name"],
             role=row_map.get("role", "NPC"),
             status=row_map.get("status", "active"),
@@ -1415,7 +1628,7 @@ class NPCOrchestrator:
             respect=row_map.get("respect") or 0,
             closeness=row_map.get("closeness") or 0,
             intensity=row_map.get("intensity") or 0,
-            mask_integrity=row_map.get("mask_integrity") or 100,
+            mask_integrity=mask_integrity,
             emotional_state=emotional_state,
             recent_memories=recent_memories,
             scheming_level=row_map.get("scheming_level", 0),
@@ -1424,6 +1637,87 @@ class NPCOrchestrator:
         )
         
         return snapshot
+
+    async def update_player_addiction(
+        self,
+        addiction_type: str,
+        npc_id: Optional[int] = None,
+        progression_multiplier: float = 1.0,
+        player_name: str = "Chase"
+    ) -> Dict[str, Any]:
+        """
+        Progress/regress a specific addiction; returns change summary.
+        """
+        try:
+            from logic.addiction_system_sdk import process_addiction_update
+            res = await process_addiction_update(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                player_name=player_name,
+                addiction_type=addiction_type,
+                progression_multiplier=float(progression_multiplier),
+                target_npc_id=int(npc_id) if npc_id is not None else None
+            )
+            # Optional belief hook on progression/regression
+            try:
+                upd = res.get("update", {})
+                if upd and ("progressed" in upd or "regressed" in upd):
+                    changed = []
+                    if upd.get("progressed"):
+                        changed.append("progressed")
+                    if upd.get("regressed"):
+                        changed.append("regressed")
+                    if changed:
+                        from types import SimpleNamespace
+                        ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                        await self._belief_system.process_event_for_beliefs(
+                            ctx=ctx_obj,
+                            event_text=f"Addiction {addiction_type} {', '.join(changed)} to level {upd.get('new_level', 0)}",
+                            event_type="addiction_update",
+                            npc_ids=[npc_id] if npc_id else [],
+                            factuality=1.0
+                        )
+            except Exception:
+                pass
+            return res
+        except Exception as e:
+            logger.error(f"update_player_addiction failed: {e}")
+            return {"error": str(e)}
+    
+    async def get_player_addiction_status(self, player_name: str = "Chase") -> Dict[str, Any]:
+        """
+        Snapshot of current addictions with labels; safe for UI.
+        """
+        try:
+            from logic.addiction_system_sdk import get_addiction_status
+            return await get_addiction_status(self.user_id, self.conversation_id, player_name)
+        except Exception as e:
+            logger.error(f"get_player_addiction_status failed: {e}")
+            return {"has_addictions": False, "error": str(e)}
+    
+    async def apply_addiction_effects_from_status(self, status: Dict[str, Any], player_name: str = "Chase") -> Dict[str, Any]:
+        """
+        Expand an addiction status object into narrative effects.
+        """
+        try:
+            from logic.addiction_system_sdk import process_addiction_effects
+            return await process_addiction_effects(self.user_id, self.conversation_id, player_name, status or {})
+        except Exception as e:
+            logger.error(f"apply_addiction_effects_from_status failed: {e}")
+            return {"effects": [], "has_effects": False, "error": str(e)}
+    
+    async def analyze_emergent_addictions(self, recent_text: str, npcs: Optional[List[dict]] = None, player_name: str = "Chase") -> Dict[str, Any]:
+        """
+        Analyze recent narrative/events for emergent addictions and apply updates.
+        """
+        try:
+            from logic.addiction_emergence import analyze_and_apply_emergent_addictions
+            return await analyze_and_apply_emergent_addictions(
+                self.user_id, self.conversation_id, player_name, recent_text or "", npcs=npcs
+            )
+        except Exception as e:
+            logger.error(f"analyze_emergent_addictions failed: {e}")
+            return {"error": str(e)}
     
     # ==================== CALENDAR INTEGRATION ====================
     
@@ -1789,8 +2083,42 @@ class NPCOrchestrator:
             await self.apply_relationship_drift()
         except Exception as e:
             logger.debug(f"[Relationships] drift pass failed: {e}")
+
+        # Advance conflicts after calendar processing (day tick if day changed, else scene sync)
+        try:
+            synth = await self._get_conflict_synth()
+            if synth:
+                # If you detect day transition outside this method, call handle_day_transition(new_day) there.
+                # Here we can push a lightweight scene sync for touched NPCs.
+                scope = self._ConflictScope(npc_ids=list(touched_npcs)[:10])
+                # fetch bundle once (warms caches and updates internal states)
+                _ = await synth.get_scene_bundle(scope)
+        except Exception as e:
+            logger.debug(f"[Conflict] post-calendar scene sync failed: {e}")
     
         return results
+
+    async def _get_npc_bridge(self):
+        """Lazy-load the NPCSystemBridge and configure mode."""
+        if self._npc_bridge is None:
+            try:
+                from logic.npc_agent_bridge import NPCSystemBridge
+                self._npc_bridge = NPCSystemBridge(self.user_id, self.conversation_id)
+                # allow config switch to new system path inside the bridge
+                self._npc_bridge.use_new_system = bool(self.config.get("npc_bridge_use_new_system", False))
+            except Exception as e:
+                logger.debug(f"[Bridge] NPCSystemBridge unavailable: {e}")
+                self._npc_bridge = False
+        return self._npc_bridge or None
+    async def get_conflict_metrics(self) -> Dict[str, Any]:
+        synth = await self._get_conflict_synth()
+        if not synth:
+            return {"enabled": False}
+        try:
+            return await synth.get_performance_metrics()
+        except Exception as e:
+            logger.debug(f"[Conflict] metrics fetch failed: {e}")
+            return {"enabled": True, "error": str(e)}
     
     async def evaluate_behavior_for_scope(self, scope: 'SceneScope', use_user_model: bool = True) -> None:
         npc_ids = list(getattr(scope, "npc_ids", []))[:10]
@@ -1847,6 +2175,99 @@ class NPCOrchestrator:
                 self.conversation_id
             )
         return self._dynamic_relationship_manager
+
+    async def get_player_stats(self, scope: str = "visible", player_name: str = "Chase") -> Dict[str, Any]:
+        """
+        Get player stats through stats_logic.
+        scope: 'visible' | 'hidden' | 'all'
+        """
+        try:
+            from logic.stats_logic import (
+                get_player_visible_stats,
+                get_player_hidden_stats,
+                get_all_player_stats,
+            )
+            if scope == "all":
+                return await get_all_player_stats(self.user_id, self.conversation_id, player_name)
+            if scope == "hidden":
+                return await get_player_hidden_stats(self.user_id, self.conversation_id, player_name)
+            return await get_player_visible_stats(self.user_id, self.conversation_id, player_name)
+        except Exception as e:
+            logger.error(f"get_player_stats failed: {e}")
+            return {}
+    
+    async def apply_player_stat_changes(self, changes: Dict[str, int], reason: str = "", player_name: str = "Chase") -> Dict[str, Any]:
+        """
+        Bulk apply changes to player stats via stats_logic.apply_stat_changes
+        """
+        try:
+            from logic.stats_logic import apply_stat_changes
+            return await apply_stat_changes(self.user_id, self.conversation_id, player_name, changes, reason or "orchestrator")
+        except Exception as e:
+            logger.error(f"apply_player_stat_changes failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _route_stats_world_activity(
+        self,
+        activity_name: str,
+        intensity: float = 1.0,
+        hours: int = 0,
+        npc_id: Optional[int] = None,
+        location: Optional[str] = None,
+        forced: bool = False,
+        world_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Use stats_logic.process_world_activity to apply player stat effects based on activity.
+        Returns a compact payload and triggers belief/narrative hooks for thresholds/combos.
+        """
+        if not activity_name:
+            return {"skipped": True}
+        try:
+            from logic.stats_logic import process_world_activity
+            res = await process_world_activity(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                activity_name=activity_name,
+                player_name="Chase",
+                world_context=world_context or {},
+                intensity=float(intensity),
+                hours=int(hours or 0),
+                npc_id=int(npc_id) if npc_id is not None else None,
+                location=location,
+                is_forced=bool(forced)
+            )
+    
+            # Belief hooks for threshold/combo triggers (if present)
+            try:
+                trig = []
+                for t in (res.get("thresholds_triggered") or []):
+                    name = f"{t.get('stat')}:{t.get('threshold')}"
+                    trig.append(name)
+                combos = res.get("combinations_active") or []
+                if trig or combos:
+                    from types import SimpleNamespace
+                    ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                    text_bits = []
+                    if trig:
+                        text_bits.append(f"Thresholds: {', '.join(trig)}")
+                    if combos:
+                        text_bits.append(f"Combinations: {', '.join(combos)}")
+                    if text_bits:
+                        await self._belief_system.process_event_for_beliefs(
+                            ctx=ctx_obj,
+                            event_text="; ".join(text_bits)[:250],
+                            event_type="player_stat_shift",
+                            npc_ids=[npc_id] if npc_id else [],
+                            factuality=1.0
+                        )
+            except Exception as be:
+                logger.debug(f"[Beliefs] stat thresholds hook failed: {be}")
+    
+            return res or {"success": False}
+        except Exception as e:
+            logger.debug(f"[Stats] world activity routing failed: {e}")
+            return {"success": False, "error": str(e)}
     
     async def get_relationship_dynamics(
         self,
@@ -1857,29 +2278,172 @@ class NPCOrchestrator:
     ) -> Dict[str, Any]:
         """Get dynamic relationship state between entities."""
         manager = await self._get_dynamic_relationship_manager()
-        
         state = await manager.get_relationship_state(
-            entity1_type, entity1_id,
-            entity2_type, entity2_id
+            entity1_type, entity1_id, entity2_type, entity2_id
         )
-        
         return {
             'dimensions': {
                 'trust': float(state.dimensions.trust),
                 'affection': float(state.dimensions.affection),
                 'respect': float(state.dimensions.respect),
-                'familiarity': float(state.dimensions.familiarity),
-                'tension': float(state.dimensions.tension)
+                'familiarity': float(state.dimensions.fascination),  # or map as needed
+                'volatility': float(state.dimensions.volatility),
+                'unresolved_conflict': float(state.dimensions.unresolved_conflict),
+                'intimacy': float(state.dimensions.intimacy),
+                'dependence': float(state.dimensions.dependence),
+                'frequency': float(state.dimensions.frequency),
+                'influence': float(state.dimensions.influence),
             },
             'patterns': list(state.history.active_patterns),
             'archetypes': list(state.active_archetypes),
             'momentum': {
-                'magnitude': float(state.momentum.get_magnitude()),
-                'direction': state.momentum.get_direction()
+                'magnitude': float(state.momentum.get_magnitude())
             },
             'contexts': asdict(state.contexts)
         }
+    async def poll_relationship_events(self, max_events: int = 25) -> List[Dict[str, Any]]:
+        try:
+            from logic.dynamic_relationships import event_generator
+            return await event_generator.drain_events(max_events=max_events)
+        except Exception as e:
+            logger.debug(f"[Relationships] poll failed: {e}")
+            return []
+
+    async def apply_relationship_crossroads_choice(self, crossroads: Dict[str, Any], choice_index: int) -> Dict[str, Any]:
+        """
+        Accept a UI crossroads payload (dict), convert to CrossroadsEvent, and apply.
+        """
+        try:
+            from logic.fully_integrated_npc_system import CrossroadsEvent
+            integ = await self._get_integrated_npc_system()
     
+            # Convert dict -> CrossroadsEvent (relationship_state can be None)
+            ev = CrossroadsEvent(
+                entity1_type=crossroads.get("entity1_type", "npc"),
+                entity1_id=int(crossroads.get("entity1_id")),
+                entity2_type=crossroads.get("entity2_type", "player"),
+                entity2_id=int(crossroads.get("entity2_id")),
+                relationship_state=None,  # Not required by the applier
+                event_type=crossroads.get("event_type", "relationship_crossroads"),
+                description=crossroads.get("description", ""),
+                options=crossroads.get("options", []),
+                expires_in=int(crossroads.get("expires_in", 3))
+            )
+    
+            return await integ.apply_crossroads_choice(ev, choice_index)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def run_scheduled_activities_if_enabled(self) -> Optional[Dict[str, Any]]:
+        if not self._integrated_routing.get("use_for_scheduled_activities", True):
+            return None
+        try:
+            integ = await self._get_integrated_npc_system()
+            res = await integ.process_npc_scheduled_activities()
+            # Invalidate changed NPCs for scene deltas
+            for nid in {r.get("npc_id") for r in res.get("npc_responses", []) if isinstance(r, dict)}:
+                if nid:
+                    self._notify_npc_changed(int(nid))
+            return res
+        except Exception as e:
+            logger.debug(f"[Integrated] scheduled activities failed: {e}")
+            return {"error": str(e)}
+
+    async def _route_time_advance_via_integrated(self, player_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Use IntegratedNPCSystem to detect activity type, advance time if appropriate,
+        process scheduled activities, calendar events, and drain relationship events.
+        """
+        try:
+            integ = await self._get_integrated_npc_system()
+            pa = await integ.process_player_activity(player_input, context or {})
+            out = {"integrated_player_activity": pa}
+    
+            if pa.get("activity_type"):
+                should_advance = pa.get("time_advanced") or pa.get("would_advance")
+                if should_advance:
+                    adv = await integ.advance_time_with_activity(pa["activity_type"])
+                    out["time_advance_result"] = adv
+    
+                    if adv.get("time_advanced"):
+                        # Scheduled activities
+                        try:
+                            sched = await integ.process_npc_scheduled_activities()
+                            out["scheduled_activities"] = sched
+                        except Exception as e:
+                            out["scheduled_activities_error"] = str(e)
+    
+                        # Calendar processing
+                        try:
+                            cal = await self.process_calendar_events_for_all_npcs()
+                            out["calendar_results"] = cal
+                        except Exception as e:
+                            out["calendar_error"] = str(e)
+    
+                        # Relationship events
+                        try:
+                            from logic.dynamic_relationships import event_generator
+                            rel_events = await event_generator.drain_events(max_events=25)
+                            out["relationship_events"] = rel_events
+                        except Exception as e:
+                            out["relationship_events_error"] = str(e)
+
+                        # Stats: apply player effects for this activity (if available)
+                        try:
+                            activity = pa.get("activity_type")
+                            npc_hint = (pa.get("npc_id") or pa.get("target_npc_id"))
+                            hours_adv = 0
+                            try:
+                                hours_adv = int((adv or {}).get("hours_advanced") or 0)
+                            except Exception:
+                                hours_adv = 0
+                        
+                            if activity:
+                                stats_pack = await self._route_stats_world_activity(
+                                    activity_name=str(activity),
+                                    intensity=float(pa.get("intensity", 1.0)),
+                                    hours=hours_adv,
+                                    npc_id=int(npc_hint) if npc_hint is not None else None,
+                                    location=(pa.get("location") or None),
+                                    forced=bool(pa.get("forced", False)),
+                                    world_context={"source": "integrated_time_route"}
+                                )
+                                if isinstance(stats_pack, dict):
+                                    out.setdefault("systems", {}).setdefault("stats", {})["activity"] = stats_pack
+                        except Exception as se:
+                            out.setdefault("systems", {}).setdefault("stats", {})["error"] = str(se)
+
+                        try:
+                            add_status = await self.get_player_addiction_status()
+                            out.setdefault("systems", {}).setdefault("addictions", {})["status"] = add_status
+                            if add_status.get("has_addictions"):
+                                add_fx = await self.apply_addiction_effects_from_status(add_status)
+                                out["systems"]["addictions"]["effects"] = add_fx
+                        except Exception as ae:
+                            out.setdefault("systems", {}).setdefault("addictions", {})["error"] = str(ae)
+
+                        # Narrative checks after time advance (optional but recommended)
+                        try:
+                            narrative_pack = {}
+                            personal = await self.check_and_log_personal_revelations()
+                            moment = await self.check_and_log_narrative_moments()
+                            if personal:
+                                narrative_pack["personal_revelation"] = personal
+                            if moment:
+                                narrative_pack["narrative_moment"] = moment
+                            if narrative_pack:
+                                out["narrative"] = narrative_pack
+                        except Exception as ne:
+                            out["narrative_error"] = str(ne)
+    
+                        # Invalidate active NPCs for deltas
+                        for nid in list(self._active_npcs):
+                            self._notify_npc_changed(nid)
+    
+            return out
+        except Exception as e:
+            return {"error": f"time routing via integrated system failed: {e}"}
+        
     async def process_relationship_interaction(
         self,
         npc_id: int,
@@ -1901,7 +2465,7 @@ class NPCOrchestrator:
         # Process with player as entity1, NPC as entity2
         result = await manager.process_interaction(
             entity1_type="player",
-            entity1_id=1,  # Assuming player_id is 1
+            entity1_id=self.user_id,  # FIX: use real player id, not hard-coded 1
             entity2_type="npc",
             entity2_id=npc_id,
             interaction=interaction
@@ -1964,7 +2528,7 @@ class NPCOrchestrator:
         if include_player:
             for npc_id in npc_ids:
                 rel_dynamics = await self.get_relationship_dynamics(
-                    "player", 1, "npc", npc_id
+                    "player", self.user_id, "npc", npc_id
                 )
                 scene["relationships"].append({
                     "npc_id": npc_id,
@@ -2280,51 +2844,57 @@ class NPCOrchestrator:
         return relationships
     
     async def _get_scene_dynamics(self, npc_ids: List[int], snapshot_map: Optional[Dict[int, NPCSnapshot]] = None) -> Dict[str, Any]:
-        """Get dynamics for NPCs in a scene"""
         dynamics = {
             'tension_level': 0,
             'dominant_mood': 'neutral',
             'active_conflicts': [],
             'alliances': []
         }
-        
         if not npc_ids:
             return dynamics
-        
-        # Calculate aggregate tension
+
+        # Start with conflict synthesizer context (world_tension, conflicts)
         tensions = []
+        try:
+            synth = await self._get_conflict_synth()
+            if synth:
+                scope = self._ConflictScope(npc_ids=list(npc_ids))
+                cb = await synth.get_scene_bundle(scope)
+                # world_tension is a float [0..1] in bundle; map to [0..100] contribution
+                wt = float(cb.get("world_tension") or 0.0)
+                if wt > 0:
+                    tensions.append(int(round(wt * 100)))
+                # Include a few conflicts for UI
+                for c in (cb.get("active") or [])[:3]:
+                    dynamics['active_conflicts'].append({
+                        'id': c.get('id'),
+                        'type': c.get('type'),
+                        'intensity': c.get('intensity')
+                    })
+        except Exception as e:
+            logger.debug(f"[Conflict] scene dynamics fetch failed: {e}")
+
+        # Existing scheming/betrayal signals
         for npc_id in npc_ids:
-            # Use provided snapshot or fetch if needed (light mode)
-            if snapshot_map and npc_id in snapshot_map:
-                snapshot = snapshot_map[npc_id]
-            else:
-                snapshot = await self.get_npc_snapshot(npc_id, light=True)
-            
+            snapshot = snapshot_map.get(npc_id) if snapshot_map else await self.get_npc_snapshot(npc_id, light=True)
             if snapshot.scheming_level > 0:
                 tensions.append(snapshot.scheming_level)
             if snapshot.betrayal_planning:
-                tensions.append(50)  # Betrayal adds tension
-        
+                tensions.append(50)
+
         if tensions:
-            dynamics['tension_level'] = sum(tensions) // len(tensions)
-        
-        # Determine mood based on NPCs present
+            dynamics['tension_level'] = sum(tensions) // max(1, len(tensions))
+
+        # Mood (unchanged)
         moods = []
         for npc_id in npc_ids:
-            if snapshot_map and npc_id in snapshot_map:
-                snapshot = snapshot_map[npc_id]
-            else:
-                snapshot = await self.get_npc_snapshot(npc_id, light=True)
-            
+            snapshot = snapshot_map.get(npc_id) if snapshot_map else await self.get_npc_snapshot(npc_id, light=True)
             if snapshot.emotional_state.get('mood'):
                 moods.append(snapshot.emotional_state['mood'])
-        
         if moods:
-            # Simple majority mood
             from collections import Counter
-            mood_counts = Counter(moods)
-            dynamics['dominant_mood'] = mood_counts.most_common(1)[0][0]
-        
+            dynamics['dominant_mood'] = Counter(moods).most_common(1)[0][0]
+
         return dynamics
     
     async def _get_group_dynamics(self, npc_ids: List[int], snapshot_map: Optional[Dict[int, NPCSnapshot]] = None) -> Dict[str, Any]:
@@ -2482,25 +3052,49 @@ class NPCOrchestrator:
         Handle player action and generate NPC responses. Preferred flow:
         - Group fast-path -> NPCAgentCoordinator
         - Conversational single-NPC -> orchestrated pipeline (NPCHandler proposal + orchestrator side effects)
-        - Fallback -> NPCAgentSystem.process_player_action (legacy path)
+        - Default -> NPCSystemBridge (fallback to NPCAgentSystem)
+    
+        Also:
+        - Notifies ConflictSynthesizer of action context (non-blocking) on the default path
+        - Preserves belief routing + behavior throttling for conversational actions (legacy path)
+        - Optionally routes time advance + scheduled activities via IntegratedNPCSystem
         """
-        # Fast path: if explicit group action or multiple NPC targets, delegate to coordinator
+        result: Dict[str, Any] = {}
+        path = "default"
+    
+        # Try group fast-path first
         try:
             explicit_group = action.get("target") == "group" or action.get("scope") == "group"
             mentioned_ids_raw = action.get("npc_ids") or []
-            mentioned_ids = []
+            mentioned_ids: List[int] = []
             if isinstance(mentioned_ids_raw, list):
-                # normalize -> ints, unique
                 for x in mentioned_ids_raw:
                     try:
                         mentioned_ids.append(int(x))
                     except Exception:
                         continue
-                mentioned_ids = list({*mentioned_ids})  # dedupe
+                mentioned_ids = list({*mentioned_ids})
+    
             if explicit_group or (isinstance(mentioned_ids, list) and len(mentioned_ids) > 1):
-                return await self.handle_group_player_action(action, context, mentioned_ids)
+                group_res = await self.handle_group_player_action(action, context, mentioned_ids)
+                result = group_res or {"npc_responses": []}
+                path = "group"
+    
+                # Optional: Integrated time routing
+                if self._integrated_routing.get("use_for_time_advance", True):
+                    try:
+                        time_pack = await self._route_time_advance_via_integrated(action.get("description", "") or "", context or {})
+                        if isinstance(time_pack, dict):
+                            result.setdefault("systems", {})["time"] = time_pack
+                            rel_evs = time_pack.get("relationship_events") or []
+                            if rel_evs:
+                                result.setdefault("events", []).extend([{"type": "relationship", "data": e} for e in rel_evs])
+                    except Exception as e:
+                        logger.debug(f"[IntegratedTime] routing failed (group): {e}")
+    
+                return result
         except Exception:
-            # Never block on fast-path failure; fall back to single-NPC handling
+            # fall through to single-NPC/conversational/default flows
             pass
     
         # Orchestrated conversational pipeline for a single NPC (preferred path)
@@ -2535,18 +3129,83 @@ class NPCOrchestrator:
                         player_input=action.get("description", ""),
                         context=context or {}
                     )
-                    # Early return to avoid duplicate belief/behavior routing below
-                    return out
+                    result = out or {}
+                    path = "conversation"
+    
+                    # Optional: Integrated time routing
+                    if self._integrated_routing.get("use_for_time_advance", True):
+                        try:
+                            time_pack = await self._route_time_advance_via_integrated(action.get("description", "") or "", context or {})
+                            if isinstance(time_pack, dict):
+                                result.setdefault("systems", {})["time"] = time_pack
+                                rel_evs = time_pack.get("relationship_events") or []
+                                if rel_evs:
+                                    result.setdefault("events", []).extend([{"type": "relationship", "data": e} for e in rel_evs])
+                        except Exception as e:
+                            logger.debug(f"[IntegratedTime] routing failed (conversation): {e}")
+    
+                    return result
         except Exception as e:
             logger.debug(f"[Orchestrator] conversational pipeline fallback: {e}")
     
-        # Default path (legacy single-NPC style)
-        if self._npc_bridge:
-            result = await self._npc_bridge.handle_player_action(action, context)
-        else:
+        # Default path: prefer NPCSystemBridge, fall back to NPCAgentSystem
+        try:
+            bridge = await self._get_npc_bridge()
+            if bridge:
+                result = await bridge.handle_player_action(action, context)
+            else:
+                result = await self._agent_system.process_player_action(action, context)
+        except Exception as e:
+            logger.debug(f"[Bridge] handle_player_action failed, using legacy path: {e}")
             result = await self._agent_system.process_player_action(action, context)
     
-        # --- Belief integration for conversational actions (legacy path) ---
+        # Optional: Integrated time routing (default path)
+        if self._integrated_routing.get("use_for_time_advance", True):
+            try:
+                time_pack = await self._route_time_advance_via_integrated(action.get("description", "") or "", context or {})
+                if isinstance(time_pack, dict):
+                    result.setdefault("systems", {})["time"] = time_pack
+                    rel_evs = time_pack.get("relationship_events") or []
+                    if rel_evs:
+                        result.setdefault("events", []).extend([{"type": "relationship", "data": e} for e in rel_evs])
+            except Exception as e:
+                logger.debug(f"[IntegratedTime] routing failed (default): {e}")
+    
+        # Notify ConflictSynthesizer about this action as a scene (non-blocking),
+        # so conflict subsystems can detect/update conflicts based on current context.
+        try:
+            synth = await self._get_conflict_synth()
+            if synth:
+                # Derive affected NPCs when possible
+                affected_ids: List[int] = []
+                if isinstance(result, dict) and result.get("npc_responses"):
+                    for r in result["npc_responses"]:
+                        if isinstance(r, dict):
+                            rid = r.get("npc_id")
+                            if rid is not None:
+                                try:
+                                    affected_ids.append(int(rid))
+                                except Exception:
+                                    pass
+                if not affected_ids:
+                    try:
+                        affected_ids = await self._agent_system.determine_affected_npcs(action, context)
+                    except Exception:
+                        affected_ids = []
+    
+                scene_ctx = {
+                    "scene_id": int(time.time() * 1000) % 2_147_483_647,
+                    "scene_type": action.get("type") or "action",
+                    "characters_present": affected_ids[:10],
+                    "location_id": None,  # Unknown numeric id in this context
+                    "dialogue": [{"speaker": "player", "text": action.get("description", "")}] if action.get("description") else [],
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                asyncio.create_task(synth.process_scene(scene_ctx))
+        except Exception as e:
+            logger.debug(f"[Conflict] bridge/default scene notify failed: {e}")
+    
+        # Belief integration for conversational actions (legacy path)
         affected_ids: List[int] = []
         try:
             action_type = (action.get("type") or "").lower()
@@ -2556,7 +3215,7 @@ class NPCOrchestrator:
             }
             text = action.get("description", "") or ""
     
-            if is_conversation and text:
+            if is_conversation and text and path == "default":
                 # Resolve affected NPCs
                 try:
                     affected_ids = await self._agent_system.determine_affected_npcs(action, context)
@@ -2590,63 +3249,317 @@ class NPCOrchestrator:
         except Exception as e:
             logger.exception(f"[Beliefs] post-action belief routing failed: {e}")
     
-        # --- Behavior evolution right after conversations (throttled, legacy path) ---
+        # Behavior evolution right after conversations (throttled, legacy path)
         try:
-            if affected_ids:
+            if affected_ids and path == "default":
                 await self._maybe_evaluate_behavior(affected_ids, reason="post_conversation", use_user_model=True)
         except Exception as e:
             logger.warning(f"[Behavior] post_conversation evolution failed: {e}")
-    
+
+        # Optional: direct stats activity routing for explicit actions (non-time-advance)
+        try:
+            act_name = (action.get("activity") or action.get("type") or "").lower()
+            # Only run if not already covered by integrated time routing
+            if act_name in {"eat", "meal", "sleep", "rest", "train", "exercise", "service_task", "wait"}:
+                stats_out = await self._route_stats_world_activity(
+                    activity_name=act_name,
+                    intensity=float(action.get("intensity", 1.0)),
+                    hours=int(action.get("hours", 0) or 0),
+                    npc_id=(action.get("npc_id") if isinstance(action.get("npc_id"), int) else None),
+                    location=action.get("location"),
+                    forced=bool(action.get("is_forced", False)),
+                    world_context={"source": "handle_player_action"}
+                )
+                if isinstance(stats_out, dict):
+                    result.setdefault("systems", {}).setdefault("stats", {})["activity"] = stats_out
+        except Exception as se:
+            logger.debug(f"[Stats] direct activity routing failed: {se}")
+        
         return result
 
+    async def detect_npc_deception(self, npc_id: int, deception_type: str = "hidden_motive", player_name: str = "Chase") -> Dict[str, Any]:
+        """
+        Bridge to stats_logic.detect_deception for empathy-based insight checks.
+        """
+        try:
+            from logic.stats_logic import detect_deception
+            res = await detect_deception(self.user_id, self.conversation_id, player_name, int(npc_id), deception_type)
+            # Optional belief hook on success
+            if res.get("success") and res.get("insight"):
+                try:
+                    from types import SimpleNamespace
+                    ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                    await self._belief_system.process_event_for_beliefs(
+                        ctx=ctx_obj,
+                        event_text=f"Insight: {res['insight']}"[:250],
+                        event_type="insight_check",
+                        npc_ids=[npc_id],
+                        factuality=1.0
+                    )
+                except Exception:
+                    pass
+            return res
+        except Exception as e:
+            logger.error(f"detect_npc_deception failed: {e}")
+            return {"success": False, "error": str(e)}
 
-    
     async def progress_npc_narrative(
         self,
         npc_id: int,
         corruption_change: int = 0,
         dependency_change: int = 0,
-        realization_change: int = 0
+        realization_change: int = 0,
+        force_stage: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Progress an NPC's narrative arc"""
-        async with get_db_connection_context() as conn:
-            # Update narrative progress
-            await conn.execute("""
-                UPDATE NPCStats
-                SET corruption = LEAST(100, GREATEST(0, corruption + $1)),
-                    dependency = LEAST(100, GREATEST(0, dependency + $2)),
-                    realization = LEAST(100, GREATEST(0, realization + $3))
-                WHERE npc_id = $4 AND user_id = $5 AND conversation_id = $6
-            """, corruption_change, dependency_change, realization_change,
-                npc_id, self.user_id, self.conversation_id)
-        
-        # Invalidate cache
-        if npc_id in self._snapshot_cache:
-            del self._snapshot_cache[npc_id]
-        self._notify_npc_changed(npc_id)
-        
-        return {
-            'npc_id': npc_id,
-            'corruption_change': corruption_change,
-            'dependency_change': dependency_change,
-            'realization_change': realization_change
-        }
+        """
+        Delegate narrative progression to logic.npc_narrative_progression,
+        then handle cache invalidation, optional belief routing, and event surfacing.
+        """
+        try:
+            from logic.npc_narrative_progression import progress_npc_narrative_stage
+            res = await progress_npc_narrative_stage(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                npc_id=int(npc_id),
+                corruption_change=int(corruption_change),
+                dependency_change=int(dependency_change),
+                realization_change=int(realization_change),
+                force_stage=force_stage
+            )
+    
+            # Invalidate snapshot and mark deltas
+            self.invalidate_npc_state(npc_id, reason="narrative_progression")
+    
+            # Optional: surface relationship events generated by the interaction inside the module
+            try:
+                from logic.dynamic_relationships import event_generator
+                rel_events = await event_generator.drain_events(max_events=25)
+                if isinstance(res, dict):
+                    if rel_events:
+                        res["relationship_events"] = rel_events
+            except Exception:
+                pass
+    
+            # Optional: belief hook about narrative change (if changed)
+            try:
+                if isinstance(res, dict) and res.get("stage_changed"):
+                    from types import SimpleNamespace
+                    ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                    await self._belief_system.process_event_for_beliefs(
+                        ctx=ctx_obj,
+                        event_text=f"Narrative progressed to {res.get('new_stage')}",
+                        event_type="narrative_progression",
+                        npc_ids=[npc_id],
+                        factuality=1.0
+                    )
+                    await self._maybe_consolidate_beliefs([npc_id], topic_filter="narrative_progression", reason="narrative_progression")
+            except Exception:
+                pass
+    
+            return res
+        except Exception as e:
+            logger.error(f"progress_npc_narrative failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_narrative_relationship_overview(self) -> Dict[str, Any]:
+        """
+        Return a stage-centric overview across all NPC relationships for this user/conversation.
+        """
+        try:
+            from logic.narrative_events import get_relationship_overview
+            return await get_relationship_overview(self.user_id, self.conversation_id)
+        except Exception as e:
+            logger.error(f"get_narrative_relationship_overview failed: {e}")
+            return {"error": str(e), "total_relationships": 0, "by_stage": {}, "relationships": []}
+
+    async def generate_player_inner_monologue(self, topic: Optional[str] = None, log_to_journal: bool = False) -> Dict[str, Any]:
+        """
+        Generate a brief inner monologue for the player. Optionally log to PlayerJournal.
+        """
+        try:
+            from logic.narrative_events import generate_inner_monologue
+            text = await generate_inner_monologue(self.user_id, self.conversation_id, topic)
+            payload = {"text": text}
+    
+            if log_to_journal and text:
+                try:
+                    async with get_db_connection_context() as conn:
+                        journal_id = await conn.fetchval("""
+                            INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
+                            VALUES ($1, $2, 'inner_monologue', $3, CURRENT_TIMESTAMP)
+                            RETURNING id
+                        """, self.user_id, self.conversation_id, text)
+                    payload["journal_id"] = journal_id
+                except Exception as je:
+                    logger.debug(f"[Monologue] journal log failed: {je}")
+    
+            return payload
+        except Exception as e:
+            logger.error(f"generate_player_inner_monologue failed: {e}")
+            return {"text": "What's happening to me?", "error": str(e)}
+
+    async def check_and_log_personal_revelations(self) -> Optional[Dict[str, Any]]:
+        """
+        Check for a personal revelation across relationships, log it, hook beliefs, and return the result.
+        """
+        try:
+            from logic.narrative_events import check_for_personal_revelations
+            res = await check_for_personal_revelations(self.user_id, self.conversation_id)
+            if not res:
+                return None
+    
+            # Optional: belief hook (personal revelation about the player's state)
+            try:
+                from types import SimpleNamespace
+                ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=res.get("npc_id"))
+                await self._belief_system.process_event_for_beliefs(
+                    ctx=ctx_obj,
+                    event_text=res.get("inner_monologue", "")[:200] or "Personal revelation occurred",
+                    event_type="personal_revelation",
+                    npc_ids=[res.get("npc_id")] if res.get("npc_id") else [],
+                    factuality=1.0
+                )
+                if res.get("npc_id"):
+                    # Mark NPC changed for scene deltas
+                    self._notify_npc_changed(int(res["npc_id"]))
+            except Exception as be:
+                logger.debug(f"[Beliefs] personal revelation hook failed: {be}")
+    
+            return res
+        except Exception as e:
+            logger.error(f"check_and_log_personal_revelations failed: {e}")
+            return None
+    
+    async def add_dream_sequence_entry(self) -> Optional[Dict[str, Any]]:
+        """
+        Generate and journal a dream sequence influenced by relationship stages.
+        """
+        try:
+            from logic.narrative_events import add_dream_sequence
+            res = await add_dream_sequence(self.user_id, self.conversation_id)
+            return res
+        except Exception as e:
+            logger.error(f"add_dream_sequence_entry failed: {e}")
+            return None
+
+    async def initialize_player_stats_if_needed(self) -> None:
+        """
+        Ensure PlayerStats exist; safe to call at session start.
+        """
+        try:
+            from logic.narrative_events import initialize_player_stats
+            await initialize_player_stats(self.user_id, self.conversation_id)
+        except Exception as e:
+            logger.debug(f"initialize_player_stats_if_needed failed: {e}")
+
+    async def analyze_narrative_tone(self, narrative_text: str) -> Dict[str, Any]:
+        """
+        Run a tone and thematic analysis for a given narrative text.
+        """
+        try:
+            from logic.narrative_events import analyze_narrative_tone as _analyze
+            return await _analyze(narrative_text)
+        except Exception as e:
+            logger.error(f"analyze_narrative_tone failed: {e}")
+            return {"dominant_tone": "error", "power_dynamics": "error", "implied_stages": {}, "manipulation_techniques": [], "intensity_level": 0, "error": str(e)}
+
+    async def add_moment_of_clarity_entry(self, realization_text: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Add a moment of clarity to the journal based on overall relationship stage distribution.
+        """
+        try:
+            from logic.narrative_events import add_moment_of_clarity
+            res = await add_moment_of_clarity(self.user_id, self.conversation_id, realization_text)
+            return res
+        except Exception as e:
+            logger.error(f"add_moment_of_clarity_entry failed: {e}")
+            return None
+
+    async def check_and_log_narrative_moments(self) -> Optional[Dict[str, Any]]:
+        """
+        Check for a narrative moment driven by the stage mix and write it to the journal. Adds belief hooks.
+        """
+        try:
+            from logic.narrative_events import check_for_narrative_moments
+            res = await check_for_narrative_moments(self.user_id, self.conversation_id)
+            if not res:
+                return None
+    
+            # Optional: belief hook (world/narrative-level)
+            try:
+                from types import SimpleNamespace
+                ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=None)
+                await self._belief_system.process_event_for_beliefs(
+                    ctx=ctx_obj,
+                    event_text=res.get("scene_text", "")[:200] or "Narrative moment occurred",
+                    event_type="narrative_moment",
+                    npc_ids=[],
+                    factuality=1.0
+                )
+            except Exception as be:
+                logger.debug(f"[Beliefs] narrative moment hook failed: {be}")
+    
+            return res
+        except Exception as e:
+            logger.error(f"check_and_log_narrative_moments failed: {e}")
+            return None
+
+    async def get_npc_narrative_stage(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Thin wrapper to fetch the current narrative stage via the narrative module.
+        """
+        try:
+            from logic.npc_narrative_progression import get_npc_narrative_stage as _get_stage
+            stage = await _get_stage(self.user_id, self.conversation_id, int(npc_id))
+            return {
+                "npc_id": int(npc_id),
+                "stage": {
+                    "name": stage.name,
+                    "description": stage.description,
+                    "requirements": {
+                        "required_corruption": stage.required_corruption,
+                        "required_dependency": stage.required_dependency,
+                        "required_realization": stage.required_realization
+                    }
+                }
+            }
+        except Exception as e:
+            logger.error(f"get_npc_narrative_stage failed: {e}")
+            return {"npc_id": int(npc_id), "error": str(e)}
     
     async def check_for_npc_revelation(self, npc_id: int) -> Optional[Dict[str, Any]]:
-        """Check if NPC has a revelation about Nyx's nature"""
-        snapshot = await self.get_npc_snapshot(npc_id)
-        
-        # Revelation logic based on mask integrity and other factors
-        if snapshot.mask_integrity < 30:
-            revelation_chance = (100 - snapshot.mask_integrity) / 100
-            if random.random() < revelation_chance:
-                return {
-                    'npc_id': npc_id,
-                    'revelation_type': 'nyx_nature',
-                    'intensity': 100 - snapshot.mask_integrity
-                }
-        
-        return None
+        """
+        Delegate revelation checks to logic.npc_narrative_progression and
+        integrate with beliefs/caches.
+        """
+        try:
+            from logic.npc_narrative_progression import check_for_npc_revelation as _check_revelation
+            res = await _check_revelation(self.user_id, self.conversation_id, int(npc_id))
+            if not res:
+                return None
+    
+            # Invalidate caches since narrative/relationship context likely changed
+            self.invalidate_npc_state(npc_id, reason="npc_revelation")
+    
+            # Optional: belief event for the revelation
+            try:
+                from types import SimpleNamespace
+                ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+                await self._belief_system.process_event_for_beliefs(
+                    ctx=ctx_obj,
+                    event_text=f"Revelation: {res.get('revelation_text','(text)')[:200]}",
+                    event_type="npc_revelation",
+                    npc_ids=[npc_id],
+                    factuality=1.0
+                )
+                await self._maybe_consolidate_beliefs([npc_id], topic_filter="npc_revelation", reason="npc_revelation")
+            except Exception:
+                pass
+    
+            return res
+        except Exception as e:
+            logger.error(f"check_for_npc_revelation failed: {e}")
+            return None
     
     async def sync(self, force: bool = False):
         """Sync orchestrator state"""
@@ -2754,3 +3667,40 @@ class NPCOrchestrator:
                     pass
         
         return relationships
+
+    async def _get_conflict_synth(self):
+        """Lazy-load the ConflictSynthesizer."""
+        if not self.enable_conflicts:
+            return None
+        if self._conflict_synth is None:
+            try:
+                from logic.conflict_system.conflict_synthesizer import get_synthesizer
+                self._conflict_synth = await get_synthesizer(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"[Conflict] synthesizer unavailable: {e}")
+                self._conflict_synth = False
+        return self._conflict_synth or None
+
+    class _ConflictScope:
+        """Minimal scope object compatible with ConflictSynthesizer.get_scene_bundle"""
+        __slots__ = ("location_id", "npc_ids", "topics", "lore_tags", "conflict_ids", "time_window_hours", "link_hints")
+
+        def __init__(self, location_id=None, npc_ids=None, topics=None, lore_tags=None, conflict_ids=None, time_window_hours=24, link_hints=None):
+            self.location_id = location_id
+            self.npc_ids = list(npc_ids or [])
+            self.topics = list(topics or [])
+            self.lore_tags = list(lore_tags or [])
+            self.conflict_ids = list(conflict_ids or [])
+            self.time_window_hours = time_window_hours
+            self.link_hints = link_hints or {}
+
+        def to_cache_key(self) -> str:
+            import json, hashlib
+            key_str = json.dumps({
+                "loc": self.location_id,
+                "npcs": sorted(self.npc_ids),
+                "topics": sorted(self.topics),
+                "lore": sorted(self.lore_tags),
+                "window": self.time_window_hours,
+            }, sort_keys=True, default=str)
+            return hashlib.md5(key_str.encode()).hexdigest()
