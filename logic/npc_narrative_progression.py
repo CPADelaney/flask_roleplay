@@ -214,8 +214,15 @@ async def progress_npc_narrative_stage(
             # Update record
             stage_changed = new_stage != old_stage
             
-            # Update stage history if changed
-            stage_history = current.get('stage_history', [])
+            # Robust handling for Record or dict
+            if isinstance(current, dict):
+                stage_history = current.get('stage_history') or []
+            else:
+                try:
+                    # asyncpg.Record supports keys() and direct indexing
+                    stage_history = current['stage_history'] if 'stage_history' in current.keys() else []
+                except Exception:
+                    stage_history = []
             if stage_changed:
                 stage_history.append({
                     'from': old_stage,
@@ -246,8 +253,9 @@ async def progress_npc_narrative_stage(
                 
                 # Get NPC name
                 npc_name = await conn.fetchval("""
-                    SELECT npc_name FROM NPCStats WHERE npc_id = $1
-                """, npc_id)
+                    SELECT npc_name FROM NPCStats 
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, npc_id, user_id, conversation_id)
                 
                 await memory_system.remember(
                     entity_type="player",
