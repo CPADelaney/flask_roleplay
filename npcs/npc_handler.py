@@ -82,6 +82,16 @@ class NPCInteractionOutput(BaseModel):
     relationship_event: Optional[Dict[str, Any]] = None
     relationship_changes: Dict[str, float] = Field(default_factory=dict)
 
+class NPCInteractionProposal(BaseModel):
+    npc_id: int
+    npc_name: str
+    response: str
+    proposed_stat_changes: Dict[str, int] = Field(default_factory=dict)
+    proposed_relationship_interaction: Optional[str] = None
+    memory_note: Optional[str] = None
+    memory_tags: List[str] = Field(default_factory=list)
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
 class NPCHandler:
     """Handles NPC interactions with players and other NPCs"""
     
@@ -102,6 +112,73 @@ class NPCHandler:
         # Initialize relationship manager
         self.relationship_manager = OptimizedRelationshipManager(user_id, conversation_id)
 
+    def _map_interaction_to_relationship(self, interaction_type: str) -> str:
+        mapping = {
+            "friendly": "helpful_action",
+            "hostile": "criticism_harsh",
+            "intimate": "vulnerability_shared",
+            "suspicious": "boundary_violated",
+            "supportive": "support_provided"
+        }
+        return mapping.get(interaction_type, "helpful_action")
+
+    async def generate_interaction_proposal(
+        self,
+        npc_id: int,
+        interaction_type: str,
+        player_input: str,
+        context: Optional[Dict[str, Any]] = None,
+        preloaded: Optional[Dict[str, Any]] = None
+    ) -> NPCInteractionProposal:
+        # Prefer preloaded context from orchestrator (avoids duplicate DB work)
+        if preloaded:
+            npc_details = preloaded.get("npc_details") or await self.get_npc_details(npc_id)
+            memories = preloaded.get("memories") or await self.get_npc_memory(npc_id)
+            relationship = preloaded.get("relationship") or await self.get_relationship_details("npc", npc_id, "player", 1)
+        else:
+            npc_details = await self.get_npc_details(npc_id)
+            memories = await self.get_npc_memory(npc_id)
+            relationship = await self.get_relationship_details("npc", npc_id, "player", 1)
+
+        # Use existing centralized LLM path
+        result = await self._generate_npc_response_with_gpt(
+            npc_id=npc_id,
+            npc_details=npc_details,
+            player_input=player_input,
+            interaction_type=interaction_type,
+            memories=memories,
+            relationship=relationship,
+            context=context or {}
+        )
+
+        # Extract response text and proposed stat changes (if any)
+        response_text = ""
+        proposed_stat_changes: Dict[str, int] = {}
+
+        if result.get("type") == "function_call" and result.get("function_name") == "apply_universal_update":
+            args = result.get("function_args") or {}
+            response_text = args.get("narrative") or ""
+            stat_updates = (args.get("character_stat_updates") or {}).get("stats") or {}
+            for k, v in stat_updates.items():
+                if isinstance(v, (int, float)):
+                    # Interpret as delta; orchestrator will clamp/apply
+                    proposed_stat_changes[k] = int(v)
+        else:
+            response_text = result.get("response") or "..."
+
+        proposed_rel = self._map_interaction_to_relationship(interaction_type)
+        memory_note = f"Interaction with player: {player_input} - Response: {response_text}"
+
+        return NPCInteractionProposal(
+            npc_id=npc_id,
+            npc_name=npc_details.get("npc_name", f"NPC_{npc_id}"),
+            response=response_text,
+            proposed_stat_changes=proposed_stat_changes,
+            proposed_relationship_interaction=proposed_rel,
+            memory_note=memory_note,
+            memory_tags=["interaction", "player_interaction"],
+            meta={"raw_llm": result}
+        )
     async def handle_interaction(
         self,
         npc_id: int,
