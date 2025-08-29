@@ -1035,6 +1035,22 @@ class LoreOrchestrator:
     async def on_element_updated(self, element_type: str, element_id: int, element_data: Dict[str, Any]):
         keys = self._get_affected_scope_keys(element_type, element_id, element_data or {})
         await self._invalidate_scope_keys(keys)
+
+    async def _get_matriarchal_system(self):
+        if not hasattr(self, '_matriarchal_system'):
+            # IMPORTANT: pick your canonical class path and stick to it
+            # If your canonical implementation is lore.main.MatriarchalLoreSystem, change import accordingly.
+            from lore.matriarchal_lore_system import MatriarchalLoreSystem
+            self._matriarchal_system = MatriarchalLoreSystem(self.user_id, self.conversation_id)
+            await self._matriarchal_system.ensure_initialized() if hasattr(self._matriarchal_system, 'ensure_initialized') else None
+            # Register with governance (if available on the class)
+            try:
+                if hasattr(self._matriarchal_system, 'register_with_governance'):
+                    await self._matriarchal_system.register_with_governance()
+            except Exception as e:
+                logger.debug(f"Matriarchal system governance registration failed: {e}")
+            logger.info("Matriarchal lore system initialized")
+        return self._matriarchal_system
     
     def _get_affected_scope_keys(
         self, 
@@ -1712,9 +1728,9 @@ class LoreOrchestrator:
                 async with get_db_connection_context() as conn:
                     # Get location governance rules
                     location_rules = await conn.fetchval("""
-                        SELECT canonical_rules 
-                        FROM Locations 
-                        WHERE location_id = $1
+                        SELECT canonical_rules
+                        FROM Locations
+                        WHERE COALESCE(id, location_id) = $1
                     """, scope.location_id)
                     
                     if location_rules:
@@ -1730,7 +1746,7 @@ class LoreOrchestrator:
                         nation_rules = await conn.fetchval("""
                             SELECT governance_rules 
                             FROM Nations 
-                            WHERE nation_id = $1
+                            WHERE COALESCE(id, nation_id) = $1
                         """, nation_id)
                         
                         if nation_rules:
@@ -2116,15 +2132,6 @@ class LoreOrchestrator:
             logger.info("Lore update system initialized")
         return self._lore_update_system
     
-    async def _get_matriarchal_system(self):
-        """Get or initialize the matriarchal lore system."""
-        if not hasattr(self, '_matriarchal_system'):
-            from lore.matriarchal_lore_system import MatriarchalLoreSystem
-            self._matriarchal_system = MatriarchalLoreSystem(self.user_id, self.conversation_id)
-            await self._matriarchal_system.initialize()
-            logger.info("Matriarchal lore system initialized")
-        return self._matriarchal_system
-    
     async def _get_dynamic_generator(self):
         """Get or initialize the dynamic lore generator."""
         if not hasattr(self, '_dynamic_generator'):
@@ -2358,39 +2365,37 @@ class LoreOrchestrator:
         id_from_context=lambda ctx: "lore_orchestrator"
     )
     async def generate_complete_world(self, ctx, environment_desc: str, use_matriarchal_theme: Optional[bool] = None) -> Dict[str, Any]:
-        """
-        Generate a complete world with all lore components.
-        
-        Args:
-            ctx: Context object
-            environment_desc: Description of the environment/setting
-            use_matriarchal_theme: Override config setting for matriarchal theme
-            
-        Returns:
-            Complete world lore package
-        """
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
-        
-        # Determine theme
+    
         use_matriarchal = use_matriarchal_theme if use_matriarchal_theme is not None else self.config.enable_matriarchal_theme
-        
-        # Get the lore system
-        lore_system = await self._get_lore_system()
-        
-        # Generate the world
-        result = await lore_system.generate_complete_world(
-            ctx,
-            environment_desc,
-            use_matriarchal_theme=use_matriarchal
-        )
-        
-        # Update metrics
+    
+        if use_matriarchal:
+            matsys = await self._get_matriarchal_system()
+            result = await matsys.generate_complete_world(ctx, environment_desc)
+        else:
+            lore_system = await self._get_lore_system()
+            result = await lore_system.generate_complete_world(ctx, environment_desc, use_matriarchal_theme=False)
+    
         self.metrics["operations"] += 1
         self.metrics["last_operation"] = "generate_world"
-        
+        return result
+
+    async def matriarchal_handle_narrative_event(self, ctx, event_description: str, affected_location_id: int = None, player_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        ms = await self._get_matriarchal_system()
+        result = await ms.handle_narrative_event(ctx, event_description, affected_location_id=affected_location_id, player_data=player_data)
+        # Optional: record/invalidate if needed
+        # Example: if result includes conflicts or locations, call record_lore_change() appropriately.
         return result
     
+    async def matriarchal_get_world_state(self, ctx) -> Dict[str, Any]:
+        ms = await self._get_matriarchal_system()
+        return await ms.get_world_state(ctx)
+    
+    async def matriarchal_generate_additional_content(self, ctx, content_type: str, parameters: Dict[str, Any] = None) -> Dict[str, Any]:
+        ms = await self._get_matriarchal_system()
+        return await ms.generate_additional_content(ctx, content_type, parameters or {})
+            
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_world",
@@ -2398,24 +2403,14 @@ class LoreOrchestrator:
         id_from_context=lambda ctx: "lore_orchestrator"
     )
     async def evolve_world_with_event(self, ctx, event_description: str, affected_location_id: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Evolve the world based on a narrative event.
-        
-        Args:
-            ctx: Context object
-            event_description: Description of the event
-            affected_location_id: Optional specific location affected
-            
-        Returns:
-            Evolution results and updates
-        """
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
-        
-        # Get lore dynamics system
+    
+        if self.config.enable_matriarchal_theme:
+            ms = await self._get_matriarchal_system()
+            return await ms.handle_narrative_event(ctx, event_description, affected_location_id=affected_location_id, player_data=None)
+    
         dynamics = await self._get_lore_dynamics_system()
-        
-        # Evolve the world
         result = await dynamics.evolve_lore_with_event(event_description)
         
         # If specific location affected, update local lore
