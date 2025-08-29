@@ -10,11 +10,66 @@ import asyncio
 import json
 import hashlib
 import time
-from typing import Dict, List, Any, Optional, Tuple, Set, Union
+from typing import Dict, List, Any, Optional, Tuple, Set, Union, Iterable
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import defaultdict
+
+# New/optional integrations (safe fallbacks)
+try:
+    from memory.masks import ProgressiveRevealManager
+except Exception:
+    ProgressiveRevealManager = None
+
+try:
+    from memory.memory_agent_sdk import create_memory_agent, MemorySystemContext
+    from memory.memory_agent_wrapper import MemoryAgentWrapper as V2MemoryAgentWrapper
+except Exception:
+    create_memory_agent = None
+    MemorySystemContext = None
+    V2MemoryAgentWrapper = None
+
+try:
+    from memory.memory_nyx_integration import get_memory_nyx_bridge
+except Exception:
+    get_memory_nyx_bridge = None
+
+try:
+    from memory.memory_config import get_memory_config
+except Exception:
+    get_memory_config = None
+
+# Optional/new components with safe fallbacks
+try:
+    from memory.memory_service import MemoryEmbeddingService as LC_MemoryEmbeddingService
+except Exception:
+    LC_MemoryEmbeddingService = None
+
+try:
+    from memory.memory_retriever import MemoryRetrieverAgent as LC_MemoryRetrieverAgent
+except Exception:
+    LC_MemoryRetrieverAgent = None
+
+try:
+    from memory.reconsolidation import ReconsolidationManager
+except Exception:
+    ReconsolidationManager = None
+
+try:
+    from memory.schemas import MemorySchemaManager as NewMemorySchemaManager
+except Exception:
+    NewMemorySchemaManager = None
+
+try:
+    from memory.semantic import SemanticMemoryManager as NewSemanticMemoryManager
+except Exception:
+    NewSemanticMemoryManager = None
+
+try:
+    from memory.telemetry import MemoryTelemetry
+except Exception:
+    MemoryTelemetry = None
 
 # Lazy imports for heavy dependencies
 _memory_core = None
@@ -256,6 +311,15 @@ class MemoryOrchestrator:
         self.flashback_manager = None
         self.mask_manager = None
         self.interference_manager = None
+        self.integrated_system = None
+
+        # New managers/integrations
+        self.reconsolidation_manager = None
+
+        # New integrations
+        self.progressive_reveal_manager = None  # masks.py
+        self.nyx_bridge = None                  # governance bridge
+        self.memory_config = None               # memory_config.py
         
         # State
         self.initialized = False
@@ -267,91 +331,205 @@ class MemoryOrchestrator:
     # ========================================================================
     
     async def initialize(self):
-        """Initialize all memory subsystems."""
+        """Initialize all memory subsystems (prefers NEW stack, falls back to LEGACY)."""
         if self.initialized:
             return
-        
+
         try:
-            # Lazy import core components
+            # --- Core / cache (LEGACY; keep) ---
             UnifiedMemoryManager, _, _, _, _, _ = _lazy_import_memory_core()
-            
-            # Initialize unified manager
-            self.unified_manager = None
-            
-            # Initialize cache
+
+            # Retrieval/cache for per-entity calls
             from memory.core import MemoryCache
             self.cache = MemoryCache(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
             )
-            
-            # Initialize embedding service
-            from memory.embedding_service import MemoryEmbeddingService
-            self.embedding_service = MemoryEmbeddingService(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-            
-            # Initialize agent wrappers
-            from memory.memory_agent import MemoryAgentWrapper
-            self.memory_agent_wrapper = MemoryAgentWrapper(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-            
-            from memory.retriever_agent import RetrieverAgent
-            self.retriever_agent = RetrieverAgent(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-            
-            # Initialize specialized managers
+
+            # --- Configuration (NEW if available) ---
+            if self.memory_config is None:
+                try:
+                    if get_memory_config:
+                        self.memory_config = get_memory_config()
+                    else:
+                        from memory.memory_config import get_memory_config as _get_cfg
+                        self.memory_config = _get_cfg()
+                except Exception:
+                    self.memory_config = None
+
+            # --- Embedding service (NEW preferred: memory.memory_service) ---
+            # Fallback: legacy memory.embedding_service
+            try:
+                if LC_MemoryEmbeddingService:
+                    vs_type = (self.memory_config or {}).get("vector_store", {}).get("type", "chroma")
+                    emb_type = (self.memory_config or {}).get("embedding", {}).get("type", "local")
+                    self.embedding_service = LC_MemoryEmbeddingService(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id,
+                        vector_store_type=vs_type,
+                        embedding_model=emb_type,
+                        config=(self.memory_config or {})
+                    )
+                    await self.embedding_service.initialize()
+                else:
+                    from memory.embedding_service import MemoryEmbeddingService as OldEmbeddingService  # LEGACY
+                    self.embedding_service = OldEmbeddingService(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+            except Exception as e:
+                logger.error(f"Failed to initialize embedding service: {e}")
+                raise
+
+            # --- Agent wrapper (NEW preferred: SDK + v2.1 wrapper) ---
+            # Fallback: legacy memory.memory_agent.MemoryAgentWrapper
+            try:
+                if create_memory_agent and V2MemoryAgentWrapper and MemorySystemContext:
+                    base_agent = create_memory_agent(self.user_id, self.conversation_id)
+                    agent_context = MemorySystemContext(self.user_id, self.conversation_id)
+                    self.memory_agent_wrapper = V2MemoryAgentWrapper(base_agent, agent_context)
+                else:
+                    from memory.memory_agent import MemoryAgentWrapper as LegacyAgentWrapper  # LEGACY
+                    self.memory_agent_wrapper = LegacyAgentWrapper(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+            except Exception as e:
+                logger.warning(f"Agent wrapper init failed: {e}")
+                self.memory_agent_wrapper = None
+
+            # --- Retriever (NEW preferred: LangChain MemoryRetrieverAgent) ---
+            # Fallback: legacy memory.retriever_agent.RetrieverAgent
+            try:
+                if LC_MemoryRetrieverAgent:
+                    llm_type = (self.memory_config or {}).get("llm", {}).get("type", "openai")
+                    # Adapt config keys expected by the retriever
+                    retriever_cfg = dict(self.memory_config or {})
+                    llm_cfg = (self.memory_config or {}).get("llm", {})
+                    retriever_cfg["openai_model_name"] = llm_cfg.get("openai_model", "gpt-5-nano")
+                    retriever_cfg["hf_model_name"] = llm_cfg.get("huggingface_model", "mistralai/Mistral-7B-Instruct-v0.2")
+                    retriever_cfg["temperature"] = llm_cfg.get("temperature", 0.0)
+                    self.retriever_agent = LC_MemoryRetrieverAgent(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id,
+                        llm_type=llm_type,
+                        memory_service=self.embedding_service,
+                        config=retriever_cfg
+                    )
+                    await self.retriever_agent.initialize()
+                else:
+                    from memory.retriever_agent import RetrieverAgent as LegacyRetriever  # LEGACY
+                    self.retriever_agent = LegacyRetriever(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+            except Exception as e:
+                logger.warning(f"Retriever init failed: {e}")
+                self.retriever_agent = None
+
+            # --- Specialized managers (mixed NEW/LEGACY) ---
+
+            # Nyx memory (LEGACY manager; keep as-is)
             from memory.nyx_memory import NyxMemoryManager
             self.nyx_memory_manager = NyxMemoryManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
-                unified_manager=self.unified_manager
+                unified_manager=self.unified_manager  # may be None; matches existing signature
             )
-            
+
+            # Emotions (LEGACY manager; keep as-is)
             from memory.emotional import EmotionalMemoryManager
             self.emotional_manager = EmotionalMemoryManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
             )
-            
-            from memory.schema_manager import SchemaManager
-            self.schema_manager = SchemaManager(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-            
-            from memory.semantic_manager import SemanticManager
-            self.semantic_manager = SemanticManager(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-            
+
+            # Schema manager (NEW preferred)
+            try:
+                if NewMemorySchemaManager:
+                    self.schema_manager = NewMemorySchemaManager(self.user_id, self.conversation_id)  # NEW
+                else:
+                    raise ImportError("New schema manager not available")
+            except Exception:
+                from memory.schema_manager import SchemaManager  # LEGACY
+                self.schema_manager = SchemaManager(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+
+            # Semantic manager (NEW preferred)
+            try:
+                if NewSemanticMemoryManager:
+                    self.semantic_manager = NewSemanticMemoryManager(self.user_id, self.conversation_id)  # NEW
+                else:
+                    raise ImportError("New semantic manager not available")
+            except Exception:
+                from memory.semantic_manager import SemanticManager  # LEGACY
+                self.semantic_manager = SemanticManager(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+
+            # Flashbacks (LEGACY)
             from memory.flashbacks import FlashbackManager
             self.flashback_manager = FlashbackManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
             )
-            
-            from memory.mask_manager import MaskManager
+
+            # Mask manager (LEGACY; basic masking)
+            from memory.mask import MaskManager
             self.mask_manager = MaskManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
             )
-            
-            from memory.interference_manager import InterferenceManager
-            self.interference_manager = InterferenceManager(
+
+            # Progressive Reveal (NEW masks system; additive)
+            try:
+                if ProgressiveRevealManager:
+                    self.progressive_reveal_manager = ProgressiveRevealManager(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+            except Exception:
+                self.progressive_reveal_manager = None
+
+            # Interference (LEGACY)
+            from memory.interference import MemoryInterferenceManager
+            self.interference_manager = MemoryInterferenceManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
             )
-            
+
+            # Reconsolidation (NEW; optional)
+            try:
+                if ReconsolidationManager:
+                    self.reconsolidation_manager = ReconsolidationManager(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+            except Exception:
+                self.reconsolidation_manager = None
+
+            # Integrated high-level system (LEGACY/primary orchestrator integration)
+            from memory.integrated import IntegratedMemorySystem
+            self.integrated_system = IntegratedMemorySystem(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+
+            # Nyx governance bridge (NEW; optional)
+            try:
+                if get_memory_nyx_bridge:
+                    self.nyx_bridge = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+            except Exception:
+                self.nyx_bridge = None
+
             self.initialized = True
+            self.last_sync = datetime.now()
+            self.last_maintenance = datetime.now()
             logger.info(f"Memory orchestrator initialized for user {self.user_id}, conversation {self.conversation_id}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize memory orchestrator: {e}")
             raise
@@ -359,6 +537,44 @@ class MemoryOrchestrator:
     # ========================================================================
     # Scene Bundle Operations (NEW - Performance Optimization)
     # ========================================================================
+
+    async def reconsolidate_memory(self, entity_type: str, entity_id: int, memory_id: int,
+                                   emotional_context: Optional[Dict[str, Any]] = None,
+                                   recall_context: Optional[str] = None,
+                                   alteration_strength: float = 0.1) -> Dict[str, Any]:
+        if not self.initialized:
+            await self.initialize()
+        if not self.reconsolidation_manager:
+            return {"error": "Reconsolidation not available"}
+        t0 = time.time()
+        try:
+            res = await self.reconsolidation_manager.reconsolidate_memory(
+                memory_id=memory_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                emotional_context=emotional_context,
+                recall_context=recall_context,
+                alteration_strength=alteration_strength
+            )
+            await self._invalidate_caches_for_entity(entity_type, entity_id)
+            await self._telemetry("reconsolidate_memory", started_at=t0, success=("error" not in res),
+                                  metadata={"et": entity_type, "eid": entity_id})
+            return res
+        except Exception as e:
+            await self._telemetry("reconsolidate_memory", started_at=t0, success=False, error=str(e))
+            return {"error": str(e)}
+
+    async def run_reconsolidation_sweep(self, entity_type: str, entity_id: int, max_memories: int = 5) -> List[int]:
+        if not self.initialized:
+            await self.initialize()
+        if not self.reconsolidation_manager:
+            return []
+        ids = await self.reconsolidation_manager.check_memories_for_reconsolidation(
+            entity_type=entity_type, entity_id=entity_id, max_memories=max_memories
+        )
+        if ids:
+            await self._invalidate_caches_for_entity(entity_type, entity_id)
+        return ids
     
     @staticmethod
     def _as_mem_list(res: Any) -> List[Dict[str, Any]]:
@@ -413,64 +629,86 @@ class MemoryOrchestrator:
     
     async def get_scene_bundle(self, scope: Any, token_budget: int = 5000) -> Dict[str, Any]:
         """
-        Get a scene-scoped memory bundle for efficient context assembly.
-        
-        This is the primary method for the new context assembly pipeline.
-        Returns only memories relevant to the current scene scope.
-        
-        Args:
-            scope: Scene scope defining what memories to include
-            token_budget: Maximum token budget for the bundle (default 5000)
-            
-        Returns:
-            Dictionary with canon memories, scene memories, linked memories, patterns
+        Get a scene-scoped memory bundle for efficient context assembly (telemetry-instrumented).
         """
-        if not self.initialized:
-            await self.initialize()
-
-        scope = self._coerce_scope(scope)
-        
-        cls = self.__class__
-        cache_key = f"{self.user_id}:{self.conversation_id}:{scope.to_cache_key()}"
-        
-        # Fast path with separate TTL and LRU tracking
-        cached = cls._bundle_cache.get(cache_key)
-        if cached:
-            created_at = cls._bundle_created_at.get(cache_key, 0.0)
-            # Check TTL based on creation time
-            if time.monotonic() - created_at < cls._bundle_ttl:
-                cls._bundle_cached_at[cache_key] = time.monotonic()  # Touch for LRU
-                logger.debug(f"Bundle cache hit for {cache_key[:50]}...")
-                return cached['bundle']
-            else:
-                logger.debug(f"Bundle cache expired for {cache_key[:50]}...")
-        
-        logger.debug(f"Bundle cache miss for {cache_key[:50]}...")
-        
-        # Prevent duplicate builds across instances
-        async with cls._get_lock(cache_key):
+        t0 = time.time()
+        out_payload: Dict[str, Any] = {}
+        try:
+            if not self.initialized:
+                await self.initialize()
+    
+            scope = self._coerce_scope(scope)
+    
+            cls = self.__class__
+            cache_key = f"{self.user_id}:{self.conversation_id}:{scope.to_cache_key()}"
+    
+            # Fast path with separate TTL and LRU tracking
             cached = cls._bundle_cache.get(cache_key)
             if cached:
                 created_at = cls._bundle_created_at.get(cache_key, 0.0)
                 if time.monotonic() - created_at < cls._bundle_ttl:
                     cls._bundle_cached_at[cache_key] = time.monotonic()  # Touch for LRU
-                    return cached['bundle']
-            
-            bundle = await self._build_scene_bundle(scope, token_budget)
-            payload = bundle.to_dict()
-            
-            # Index and get the entity set
-            ents = self._index_bundle(cache_key, scope)
-            
-            # Cache with entity set for proper cleanup (class-wide)
-            cls._bundle_cache[cache_key] = {
-                'bundle': payload,
-                'timestamp': time.time(),
-                'scope': scope,
-                'ents': ents,  # Store exact keys used for reverse index
-            }
-            self._cleanup_bundle_cache()
-            return payload
+                    logger.debug(f"Bundle cache hit for {cache_key[:50]}...")
+                    out_payload = cached["bundle"]
+                else:
+                    logger.debug(f"Bundle cache expired for {cache_key[:50]}...")
+    
+            if not out_payload:
+                logger.debug(f"Bundle cache miss for {cache_key[:50]}...")
+    
+                # Prevent duplicate builds across instances
+                async with cls._get_lock(cache_key):
+                    cached = cls._bundle_cache.get(cache_key)
+                    if cached:
+                        created_at = cls._bundle_created_at.get(cache_key, 0.0)
+                        if time.monotonic() - created_at < cls._bundle_ttl:
+                            cls._bundle_cached_at[cache_key] = time.monotonic()  # Touch for LRU
+                            out_payload = cached["bundle"]
+    
+                    if not out_payload:
+                        bundle = await self._build_scene_bundle(scope, token_budget)
+                        payload = bundle.to_dict()
+    
+                        # Index and get the entity set
+                        ents = self._index_bundle(cache_key, scope)
+    
+                        # Cache with entity set for proper cleanup (class-wide)
+                        cls._bundle_cache[cache_key] = {
+                            "bundle": payload,
+                            "timestamp": time.time(),
+                            "scope": scope,
+                            "ents": ents,
+                        }
+                        self._cleanup_bundle_cache()
+                        out_payload = payload
+    
+            # Telemetry (success)
+            try:
+                ds = (len(out_payload.get("scene", [])) + len(out_payload.get("canon", []))) if out_payload else 0
+                await self._telemetry(
+                    "get_scene_bundle",
+                    started_at=t0,
+                    success=True,
+                    data_size=ds,
+                    metadata={"loc": scope.location_id, "npcs": list(scope.npc_ids)}
+                )
+            except Exception:
+                pass
+    
+            return out_payload
+    
+        except Exception as e:
+            # Telemetry (failure)
+            try:
+                await self._telemetry(
+                    "get_scene_bundle",
+                    started_at=t0,
+                    success=False,
+                    error=str(e)
+                )
+            except Exception:
+                pass
+            raise
     
     async def get_scene_delta(self, scope: SceneScope, since_timestamp: float) -> Dict[str, Any]:
         """
@@ -648,18 +886,60 @@ class MemoryOrchestrator:
             scope=scope,
             last_changed_at=time.time()
         )
-
+    
         # Emotion-aware augmentation (mood congruent recall)
         try:
             bundle = await self._augment_bundle_with_emotion(bundle)
         except Exception as e:
             logger.debug(f"Emotion augmentation skipped: {e}")
     
+        # Mask integrity overlay for NPCs in scope (if available)
+        if self.progressive_reveal_manager and scope.npc_ids:
+            try:
+                # Fetch masks in parallel
+                mask_tasks = [self.get_npc_mask(npc_id) for npc_id in scope.npc_ids]
+                mask_results = await asyncio.gather(*mask_tasks, return_exceptions=True)
+                for mr in mask_results:
+                    if isinstance(mr, Exception) or not isinstance(mr, dict):
+                        continue
+                    if mr.get("npc_id") and "integrity" in mr:
+                        bundle.emergent_patterns.append({
+                            "type": "mask_integrity",
+                            "npc_id": mr["npc_id"],
+                            "npc_name": mr.get("npc_name"),
+                            "integrity": mr.get("integrity"),
+                            "strength": max(0.0, min(1.0, (100 - float(mr.get("integrity", 0))) / 100.0)),
+                            "traits_hint": list((mr.get("hidden_traits") or {}).keys())[:2],
+                        })
+            except Exception as e:
+                logger.debug(f"Mask overlay skipped: {e}")
+    
         # Trim to token budget and finalize token size
         bundle = self._trim_to_token_budget(bundle, token_budget)
         bundle.bundle_size_tokens = self._estimate_bundle_tokens(bundle)
     
         return bundle
+
+    async def _telemetry(self, operation: str, *, success: bool = True, started_at: float | None = None,
+                         data_size: int | None = None, error: str | None = None, metadata: Dict[str, Any] | None = None):
+        if not MemoryTelemetry:
+            return
+        try:
+            dur = 0.0
+            if started_at is not None:
+                dur = max(0.0, time.time() - started_at)
+            await MemoryTelemetry.record(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                operation=operation,
+                success=success,
+                duration=dur,
+                data_size=data_size,
+                error=error,
+                metadata=metadata or {}
+            )
+        except Exception:
+            pass
 
     async def _augment_bundle_with_emotion(self, bundle: MemoryBundle) -> MemoryBundle:
         """Append mood-congruent memories for player and NPCs into scene_memories (deduped)."""
@@ -1111,34 +1391,21 @@ class MemoryOrchestrator:
         is_canon: bool = False
     ) -> Dict[str, Any]:
         """
-        Store a new memory.
-    
-        Ensures canonical flags are set consistently in metadata and that
-        cache invalidation keys (location, lore_tags, tags) are preserved
-        so ContextBroker invalidations work as expected.
+        Store a new memory (telemetry-instrumented).
         """
+        t0 = time.time()
+    
         if not self.initialized:
             await self.initialize()
     
         try:
-            # Get or create entity manager
             manager = await self._get_entity_manager(entity_type, entity_id)
     
-            # Copy metadata so we never mutate the caller's dict
             md: Dict[str, Any] = dict(metadata or {})
-    
-            # Canonical flags expected by downstream consumers / invalidators
             if is_canon:
-                md['is_canon'] = True
-                md['canonical'] = True
+                md["is_canon"] = True
+                md["canonical"] = True
     
-            # IMPORTANT: do not strip 'location' or 'lore_tags' if present.
-            # These are used by _invalidate_by_metadata to evict the right scene bundles.
-            # Example of what we deliberately keep if provided by caller:
-            #   md.get('location')  -> "tavern-13"
-            #   md.get('lore_tags') -> ["arcane", "old_gods"]
-    
-            # Store memory
             memory = await manager.store_memory(
                 content=content,
                 memory_type=memory_type,
@@ -1148,18 +1415,43 @@ class MemoryOrchestrator:
                 metadata=md
             )
     
-            # Invalidate affected caches using both entity and metadata signals
+            # Invalidate caches using both entity and metadata signals
             await self._invalidate_caches_for_entity(entity_type, entity_id)
             self._invalidate_by_metadata(md, tags)
     
-            return {
+            out = {
                 "memory_id": getattr(memory, "memory_id", None) or getattr(memory, "id", None),
                 "success": True,
                 "entity_type": entity_type,
                 "entity_id": entity_id
             }
     
+            # Telemetry (success)
+            try:
+                await self._telemetry(
+                    "store_memory",
+                    started_at=t0,
+                    success=True,
+                    metadata={"et": entity_type, "eid": entity_id, "tags": (tags or [])}
+                )
+            except Exception:
+                pass
+    
+            return out
+    
         except Exception as e:
+            # Telemetry (failure)
+            try:
+                await self._telemetry(
+                    "store_memory",
+                    started_at=t0,
+                    success=False,
+                    error=str(e),
+                    metadata={"et": entity_type, "eid": entity_id, "tags": (tags or [])}
+                )
+            except Exception:
+                pass
+    
             logger.error(f"Error storing memory: {e}")
             return {"error": str(e), "success": False}
 
@@ -1181,8 +1473,10 @@ class MemoryOrchestrator:
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         include_analysis: bool = False,
-        **kwargs,  # ← swallow unknown flags like use_llm_analysis
+        **kwargs,
     ) -> Dict[str, Any]:
+        t0 = time.time()
+    
         if not self.initialized:
             await self.initialize()
     
@@ -1191,7 +1485,7 @@ class MemoryOrchestrator:
             include_analysis = kwargs["use_llm_analysis"]
     
         entity_type = self._as_et_str(entity_type)
-        
+    
         try:
             # Build a stable cache key with user/conversation in prefix
             prefix = f"mem:{self.user_id}:{self.conversation_id}:"
@@ -1203,99 +1497,231 @@ class MemoryOrchestrator:
                 "tags": sorted(tags or []),
                 "limit": limit,
                 "filters": filters or {},
-                "ia": bool(include_analysis),  # Include analysis flag
+                "ia": bool(include_analysis),
             }
             cache_key = prefix + hashlib.md5(
                 json.dumps(key_payload, sort_keys=True, default=str).encode()
             ).hexdigest()
-            
+    
             cached = await self.cache.get(cache_key)
             if cached:
                 logger.debug(f"Retrieval cache hit for entity {entity_type}:{entity_id}")
-                return cached
-            
-            logger.debug(f"Retrieval cache miss for entity {entity_type}:{entity_id}")
-            
-            # Get entity manager
-            manager = await self._get_entity_manager(entity_type, entity_id)
-            
-            # Retrieve memories with robust fallbacks
-            mem_list = []
-            if query:
-                # Vector search first (embedding-service output must be normalized downstream)
-                vs = await self.search_vector_store(
-                    query=query,
-                    entity_type=entity_type,
-                    top_k=limit,
-                    filter_dict=filters
-                )
-                mem_list = self._as_mem_list(vs)
+                result = cached
             else:
-                if hasattr(manager, "retrieve_memories"):
-                    # Use core UnifiedMemoryManager API
-                    # Map filters we understand (created_after) via python-side filtering
-                    raw = await manager.retrieve_memories(
-                        query=None,
-                        tags=tags,
-                        limit=max(limit, 20)  # fetch extra to allow post-filtering
+                logger.debug(f"Retrieval cache miss for entity {entity_type}:{entity_id}")
+    
+                # Get entity manager
+                manager = await self._get_entity_manager(entity_type, entity_id)
+    
+                # Retrieve memories with robust fallbacks
+                mem_list = []
+                if query:
+                    vs = await self.search_vector_store(
+                        query=query,
+                        entity_type=entity_type,
+                        top_k=limit,
+                        filter_dict=filters
                     )
-                    # Convert Memory objects to dicts
-                    mem_list = [m.to_dict() if hasattr(m, "to_dict") else m for m in raw]
-                    # Post-filter by created_after if present
-                    ca = (filters or {}).get("created_after")
-                    if ca:
-                        try:
-                            from datetime import datetime
-                            cutoff = datetime.fromisoformat(str(ca).replace("Z", "+00:00"))
-                            def _p_ts(x):
-                                s = x.get("timestamp") or x.get("created_at") or x.get("created")
-                                if not s: return None
-                                return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-                            mem_list = [m for m in mem_list if (_p_ts(m) and _p_ts(m) >= cutoff)]
-                        except Exception:
-                            pass
-                    # Filter by memory_type if requested
-                    if memory_type:
-                        mt = str(memory_type).lower()
-                        mem_list = [m for m in mem_list if str(m.get("memory_type","")).lower() == mt]
-                    # Trim to limit after filtering
-                    mem_list = mem_list[:limit]
-                elif hasattr(manager, "query_memories"):
-                    res = await manager.query_memories(
-                        filters=filters or {},
-                        limit=limit,
-                        memory_type=memory_type,
-                        tags=tags
+                    mem_list = self._as_mem_list(vs)
+                else:
+                    if hasattr(manager, "retrieve_memories"):
+                        raw = await manager.retrieve_memories(
+                            query=None,
+                            tags=tags,
+                            limit=max(limit, 20)
+                        )
+                        mem_list = [m.to_dict() if hasattr(m, "to_dict") else m for m in raw]
+                        ca = (filters or {}).get("created_after")
+                        if ca:
+                            try:
+                                from datetime import datetime as _dt
+                                cutoff = _dt.fromisoformat(str(ca).replace("Z", "+00:00"))
+                                def _p_ts(x):
+                                    s = x.get("timestamp") or x.get("created_at") or x.get("created")
+                                    if not s: return None
+                                    return _dt.fromisoformat(str(s).replace("Z", "+00:00"))
+                                mem_list = [m for m in mem_list if (_p_ts(m) and _p_ts(m) >= cutoff)]
+                            except Exception:
+                                pass
+                        if memory_type:
+                            mt = str(memory_type).lower()
+                            mem_list = [m for m in mem_list if str(m.get("memory_type","")).lower() == mt]
+                        mem_list = mem_list[:limit]
+                    elif hasattr(manager, "query_memories"):
+                        res = await manager.query_memories(
+                            filters=filters or {},
+                            limit=limit,
+                            memory_type=memory_type,
+                            tags=tags
+                        )
+                        mem_list = res if isinstance(res, list) else res.get("memories", [])
+                    elif hasattr(manager, "get_recent_memories"):
+                        res = await manager.get_recent_memories(limit=limit)
+                        mem_list = res if isinstance(res, list) else res.get("memories", [])
+    
+                result = {
+                    "memories": mem_list or [],
+                    "count": len(mem_list or []),
+                    "entity_type": entity_type,
+                    "entity_id": entity_id
+                }
+    
+                if include_analysis and result.get("memories"):
+                    result["analysis"] = await self.analyze_memory_set(
+                        memories=result["memories"],
+                        entity_type=entity_type,
+                        entity_id=entity_id
                     )
-                    mem_list = res if isinstance(res, list) else res.get('memories', [])
-                elif hasattr(manager, "get_recent_memories"):
-                    res = await manager.get_recent_memories(limit=limit)
-                    mem_list = res if isinstance(res, list) else res.get('memories', [])
-            
-            # Format response
-            result = {
-                "memories": mem_list or [],
-                "count": len(mem_list or []),
-                "entity_type": entity_type,
-                "entity_id": entity_id
-            }
-            
-            # Add analysis if requested
-            if include_analysis and result.get("memories"):
-                result["analysis"] = await self.analyze_memory_set(
-                    memories=result["memories"],
-                    entity_type=entity_type,
-                    entity_id=entity_id
+    
+                await self.cache.set(cache_key, result)
+    
+            # Telemetry (success)
+            try:
+                await self._telemetry(
+                    "retrieve_memories",
+                    started_at=t0,
+                    success=True,
+                    data_size=result.get("count", 0),
+                    metadata={"et": entity_type, "eid": entity_id, "limit": limit}
                 )
-            
-            # Cache result
-            await self.cache.set(cache_key, result)
-            
+            except Exception:
+                pass
+    
             return result
-            
+    
         except Exception as e:
+            # Telemetry (failure)
+            try:
+                await self._telemetry(
+                    "retrieve_memories",
+                    started_at=t0,
+                    success=False,
+                    error=str(e),
+                    metadata={"et": entity_type, "eid": entity_id}
+                )
+            except Exception:
+                pass
             logger.error(f"Error retrieving memories: {e}")
             return {"error": str(e), "memories": [], "count": 0}
+
+    async def add_event_memory(
+        self,
+        npc_id: int,
+        text: str,
+        *,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        significance: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Store an NPC event as a memory via the integrated system.
+        This replaces direct JSONB appends in NPCStats.memory.
+        """
+        if not self.initialized:
+            await self.initialize()
+    
+        memory_kwargs = {
+            "significance": significance,
+            "tags": (tags or []) + ["npc_event"],
+            "metadata": {"source": "logic.memory_logic", **(metadata or {})},
+        }
+        res = await self.integrated_add_memory(
+            entity_type=EntityType.NPC.value,
+            entity_id=npc_id,
+            memory_text=text,
+            memory_kwargs=memory_kwargs,
+        )
+        return res
+    
+    async def propagate_shared_memories(
+        self,
+        source_npc_id: int,
+        source_npc_name: str,
+        memories: Iterable[str],
+    ) -> int:
+        """
+        Propagate 'secondhand' memories from one NPC to linked NPCs (trust/affection ≥ 50).
+        Centralized version of logic/memory_logic.propagate_shared_memories.
+        """
+        if not self.initialized:
+            await self.initialize()
+    
+        # Lazy import to avoid top-level dependency
+        try:
+            from db.connection import get_db_connection_context
+        except Exception:
+            logger.error("DB connection context not available for propagation")
+            return 0
+    
+        propagated = 0
+        try:
+            async with get_db_connection_context() as conn:
+                links = await conn.fetch("""
+                    SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, dynamics
+                      FROM SocialLinks
+                     WHERE user_id=$1 AND conversation_id=$2
+                       AND ((entity1_type='npc' AND entity1_id=$3) OR (entity2_type='npc' AND entity2_id=$3))
+                """, self.user_id, self.conversation_id, int(source_npc_id))
+    
+            strong_links = []
+            for link in links:
+                dyn = link["dynamics"]
+                if isinstance(dyn, str):
+                    try:
+                        dyn = json.loads(dyn)
+                    except Exception:
+                        dyn = {}
+                if (dyn or {}).get("trust", 0) >= 50 or (dyn or {}).get("affection", 0) >= 50:
+                    strong_links.append(link)
+    
+            tasks: List[asyncio.Task] = []
+            for link in strong_links:
+                e1t, e1i = link["entity1_type"], str(link["entity1_id"])
+                e2t, e2i = link["entity2_type"], str(link["entity2_id"])
+                target_t, target_i = (e2t, e2i) if (e1t == "npc" and e1i == str(source_npc_id)) else (e1t, e1i)
+    
+                if target_t != "npc" or target_i == str(source_npc_id):
+                    continue
+    
+                for mem_text in memories:
+                    secondhand = f"I heard that {source_npc_name}: \"{mem_text}\""
+                    tasks.append(asyncio.create_task(
+                        self.integrated_add_memory(
+                            entity_type=EntityType.NPC.value,
+                            entity_id=int(target_i) if target_i.isdigit() else target_i,
+                            memory_text=secondhand,
+                            memory_kwargs={
+                                "significance": 1,  # low
+                                "tags": ["propagated", "secondhand", f"from_npc:{source_npc_id}"],
+                                "metadata": {"source": "propagation", "origin_npc_id": source_npc_id}
+                            }
+                        )
+                    ))
+    
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, dict) and not r.get("error"):
+                        propagated += 1
+    
+        except Exception as e:
+            logger.error(f"Propagation failed: {e}", exc_info=True)
+    
+        return propagated
+    
+    async def get_mask_perception_difficulty(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Thin wrapper to expose ProgressiveRevealManager.get_perception_difficulty via orchestrator.
+        """
+        if not self.initialized:
+            await self.initialize()
+        if not self.progressive_reveal_manager:
+            return {"error": "ProgressiveRevealManager not available"}
+        try:
+            return await self.progressive_reveal_manager.get_perception_difficulty(npc_id)
+        except Exception as e:
+            logger.error(f"get_mask_perception_difficulty failed: {e}", exc_info=True)
+            return {"error": str(e)}
     
     async def update_memory(
         self,
@@ -1304,21 +1730,47 @@ class MemoryOrchestrator:
         memory_id: int,
         updates: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update an existing memory."""
+        """Update an existing memory (telemetry-instrumented)."""
+        t0 = time.time()
+    
         if not self.initialized:
             await self.initialize()
-        
+    
         try:
             manager = await self._get_entity_manager(entity_type, entity_id)
             updated = await manager.update_memory(memory_id, updates)
-            
-            # Invalidate caches for both entity and metadata
+    
             await self._invalidate_caches_for_entity(entity_type, entity_id)
-            self._invalidate_by_metadata(updates.get('metadata'), updates.get('tags'))
-            
-            return {"success": True, "memory_id": memory_id}
-            
+            self._invalidate_by_metadata(updates.get("metadata"), updates.get("tags"))
+    
+            out = {"success": True, "memory_id": memory_id}
+    
+            # Telemetry (success)
+            try:
+                await self._telemetry(
+                    "update_memory",
+                    started_at=t0,
+                    success=True,
+                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                )
+            except Exception:
+                pass
+    
+            return out
+    
         except Exception as e:
+            # Telemetry (failure)
+            try:
+                await self._telemetry(
+                    "update_memory",
+                    started_at=t0,
+                    success=False,
+                    error=str(e),
+                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                )
+            except Exception:
+                pass
+    
             logger.error(f"Error updating memory: {e}")
             return {"error": str(e), "success": False}
     
@@ -1328,32 +1780,56 @@ class MemoryOrchestrator:
         entity_id: int,
         memory_id: int
     ) -> Dict[str, Any]:
-        """Delete a memory."""
+        """Delete a memory (telemetry-instrumented)."""
+        t0 = time.time()
+    
         if not self.initialized:
             await self.initialize()
-        
+    
         try:
             manager = await self._get_entity_manager(entity_type, entity_id)
-            
-            # Try to get the memory metadata before deletion for cache invalidation
+    
             prev = None
             if hasattr(manager, "get_memory"):
                 try:
                     prev = await manager.get_memory(memory_id)
                 except Exception:
                     prev = None
-            
-            # Delete the memory
+    
             await manager.delete_memory(memory_id)
-            
-            # Invalidate caches
+    
             await self._invalidate_caches_for_entity(entity_type, entity_id)
             if prev:
-                self._invalidate_by_metadata(prev.get('metadata'), prev.get('tags'))
-            
-            return {"success": True, "memory_id": memory_id}
-            
+                self._invalidate_by_metadata(prev.get("metadata"), prev.get("tags"))
+    
+            out = {"success": True, "memory_id": memory_id}
+    
+            # Telemetry (success)
+            try:
+                await self._telemetry(
+                    "delete_memory",
+                    started_at=t0,
+                    success=True,
+                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                )
+            except Exception:
+                pass
+    
+            return out
+    
         except Exception as e:
+            # Telemetry (failure)
+            try:
+                await self._telemetry(
+                    "delete_memory",
+                    started_at=t0,
+                    success=False,
+                    error=str(e),
+                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                )
+            except Exception:
+                pass
+    
             logger.error(f"Error deleting memory: {e}")
             return {"error": str(e), "success": False}
     
@@ -1362,23 +1838,35 @@ class MemoryOrchestrator:
     # ========================================================================
     
     async def _get_entity_manager(self, entity_type: str, entity_id: int):
-        key = f"{entity_type}_{entity_id}"
-        if key not in self.memory_managers:
+         key = f"{entity_type}_{entity_id}"
+         if key not in self.memory_managers:
             if entity_type == EntityType.NPC.value:
-                from memory.npc_memory import NPCMemoryManager
+                from memory.managers import NPCMemoryManager
                 manager = NPCMemoryManager(
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id,
-                    npc_id=entity_id
-                )
-                await manager.initialize()
-            elif entity_type == EntityType.PLAYER.value:
-                from memory.player_memory import PlayerMemoryManager
-                manager = PlayerMemoryManager(
+                    npc_id=entity_id,
                     user_id=self.user_id,
                     conversation_id=self.conversation_id
                 )
-                await manager.initialize()
+            elif entity_type == EntityType.PLAYER.value:
+                # Player manager in managers.py requires player_name; source from DB or default.
+                from memory.managers import PlayerMemoryManager
+                player_name = "Chase"
+                try:
+                    from db.connection import get_db_connection_context
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            "SELECT player_name FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 LIMIT 1",
+                            self.user_id, self.conversation_id
+                        )
+                        if row and row.get("player_name"):
+                            player_name = row["player_name"]
+                except Exception:
+                    pass
+                manager = PlayerMemoryManager(
+                    player_name=player_name,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
             else:
                 # Fallback: core UnifiedMemoryManager (per-entity instance)
                 from memory.core import UnifiedMemoryManager
@@ -1390,6 +1878,85 @@ class MemoryOrchestrator:
                 )
             self.memory_managers[key] = manager
         return self.memory_managers[key]
+
+    async def ensure_npc_mask(self, npc_id: int, overwrite: bool = False) -> Dict[str, Any]:
+        """
+        Ensure an NPC mask exists; initialize if necessary.
+        Supports both new-style (no user_id args) and legacy (requires user_id, conversation_id).
+        """
+        if not self.initialized:
+            await self.initialize()
+        if not self.progressive_reveal_manager:
+            return {"error": "ProgressiveRevealManager not available"}
+        try:
+            # New-style interface
+            if hasattr(self.progressive_reveal_manager, "initialize_npc_mask"):
+                try:
+                    return await self.progressive_reveal_manager.initialize_npc_mask(
+                        npc_id=npc_id, overwrite=overwrite
+                    )
+                except TypeError:
+                    # Legacy interface expects explicit IDs
+                    return await self.progressive_reveal_manager.initialize_npc_mask(
+                        self.user_id, self.conversation_id, npc_id, overwrite
+                    )
+            return {"error": "initialize_npc_mask not supported"}
+        except Exception as e:
+            logger.error(f"ensure_npc_mask failed: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    # -------- Integrated system convenience wrappers --------
+    async def integrated_add_memory(
+        self,
+        entity_type: str,
+        entity_id: int,
+        memory_text: str,
+        memory_kwargs: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self.initialized:
+            await self.initialize()
+    
+        t0 = time.time()
+        try:
+            res = await self.integrated_system.add_memory(
+                entity_type, entity_id, memory_text, memory_kwargs or {}
+            )
+    
+            # Invalidate caches to reflect new content
+            await self._invalidate_caches_for_entity(entity_type, entity_id)
+            self._invalidate_by_metadata(
+                (memory_kwargs or {}).get("metadata"),
+                (memory_kwargs or {}).get("tags")
+            )
+    
+            try:
+                await self._telemetry("integrated_add_memory", started_at=t0, success=True,
+                                      metadata={"et": entity_type, "eid": entity_id})
+            except Exception:
+                pass
+    
+            return res
+    
+        except Exception as e:
+            try:
+                await self._telemetry("integrated_add_memory", started_at=t0, success=False,
+                                      error=str(e), metadata={"et": entity_type, "eid": entity_id})
+            except Exception:
+                pass
+            raise
+
+    async def integrated_retrieve_memories(self, entity_type: str, entity_id: int, query: Optional[str] = None, current_context: Optional[Dict[str, Any]] = None, retrieval_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.initialized:
+            await self.initialize()
+        return await self.integrated_system.retrieve_memories(entity_type, entity_id, query=query, current_context=current_context or {}, retrieval_kwargs=retrieval_kwargs or {})
+
+    async def run_integrated_maintenance(self, entity_type: str, entity_id: int, options: Optional[Dict[str, bool]] = None) -> Dict[str, Any]:
+        if not self.initialized:
+            await self.initialize()
+        res = await self.integrated_system.run_memory_maintenance(entity_type, entity_id, maintenance_options=options or {})
+        # Broad invalidation after maintenance
+        await self._invalidate_caches_for_entity(entity_type, entity_id)
+        return res
     
     async def _invalidate_caches_for_entity(self, entity_type: str, entity_id: int):
         """
@@ -1521,59 +2088,103 @@ class MemoryOrchestrator:
     ) -> Dict[str, Any]:
         """
         Enrich context with relevant memories.
-        
+    
         This is kept for backward compatibility but internally uses scene bundles.
         """
-        # Create scope from context
-        scope = SceneScope(
-            location_id=context.get('current_location'),
-            npc_ids=set(context.get('active_npcs', [])),
-            topics=set(context.get('topics', [])),
-            lore_tags=set(context.get('lore_tags', []))
-        )
-        
-        # Get scene bundle
-        bundle = await self.get_scene_bundle(scope)
-
-        # Trauma triggers → add to linked if any
+        t0 = time.time()
         try:
-            trig_player = await self.emotional_manager.process_traumatic_triggers(
-                entity_type=EntityType.PLAYER.value, entity_id=self.user_id, text=user_input
+            # Create scope from context
+            scope = SceneScope(
+                location_id=context.get('current_location'),
+                npc_ids=set(context.get('active_npcs', [])),
+                topics=set(context.get('topics', [])),
+                lore_tags=set(context.get('lore_tags', []))
             )
-            linked_extra = []
-            if trig_player.get("triggered"):
-                for tm in trig_player.get("triggered_memories", []):
-                    linked_extra.append({
-                        "id": tm.get("id"),
-                        "text": tm.get("text"),
-                        "tags": ["trauma_trigger","player"]
-                    })
-            for npc_id in context.get('active_npcs', []):
-                trig_npc = await self.emotional_manager.process_traumatic_triggers(
-                    entity_type=EntityType.NPC.value, entity_id=npc_id, text=user_input
+    
+            # Get scene bundle
+            bundle = await self.get_scene_bundle(scope)
+    
+            # Trauma triggers → add to linked if any
+            try:
+                trig_player = await self.emotional_manager.process_traumatic_triggers(
+                    entity_type=EntityType.PLAYER.value, entity_id=self.user_id, text=user_input
                 )
-                if trig_npc.get("triggered"):
-                    for tm in trig_npc.get("triggered_memories", []):
+                linked_extra = []
+                if trig_player.get("triggered"):
+                    for tm in trig_player.get("triggered_memories", []):
                         linked_extra.append({
                             "id": tm.get("id"),
                             "text": tm.get("text"),
-                            "tags": ["trauma_trigger","npc"]
+                            "tags": ["trauma_trigger","player"]
                         })
-            if linked_extra:
-                bundle['linked'] = (bundle.get('linked') or []) + linked_extra
-        except Exception:
-            pass
-
-        
-        # Merge bundle into context
-        context['memories'] = {
-            'canon': bundle.get('canon', []),
-            'scene': bundle.get('scene', []),
-            'linked': bundle.get('linked', []),
-            'patterns': bundle.get('patterns', [])
-        }
-        
-        return context
+                for npc_id in context.get('active_npcs', []):
+                    trig_npc = await self.emotional_manager.process_traumatic_triggers(
+                        entity_type=EntityType.NPC.value, entity_id=npc_id, text=user_input
+                    )
+                    if trig_npc.get("triggered"):
+                        for tm in trig_npc.get("triggered_memories", []):
+                            linked_extra.append({
+                                "id": tm.get("id"),
+                                "text": tm.get("text"),
+                                "tags": ["trauma_trigger","npc"]
+                            })
+                if linked_extra:
+                    bundle['linked'] = (bundle.get('linked') or []) + linked_extra
+            except Exception:
+                pass
+    
+            # Optional: combine with retriever analysis for extra insights
+            try:
+                from memory.memory_integration import enrich_context_with_memories as _enrich_legacy
+                context = await _enrich_legacy(self.user_id, self.conversation_id, user_input, context)
+            except Exception:
+                pass
+    
+            # Optional: add retriever's synthesis/analysis (LangChain agent)
+            try:
+                if self.retriever_agent and hasattr(self.retriever_agent, "retrieve_and_analyze"):
+                    rr = await self.retriever_agent.retrieve_and_analyze(
+                        query=user_input,
+                        entity_types=["memory", "npc", "location", "narrative"],
+                        top_k=5,
+                        threshold=(self.memory_config or {}).get("vector_store", {}).get("similarity_threshold", 0.7)
+                    )
+                    if rr and rr.get("found_memories"):
+                        context.setdefault("memory_analysis", {})
+                        ma = rr.get("analysis")
+                        if ma and hasattr(ma, "dict"):
+                            ma = ma.dict()
+                        context["memory_analysis"].update({
+                            "primary_theme": (ma or {}).get("primary_theme"),
+                            "insights": (ma or {}).get("insights", []),
+                            "suggested_response": (ma or {}).get("suggested_response")
+                        })
+            except Exception:
+                pass
+    
+            # Merge bundle into context
+            context['memories'] = {
+                'canon': bundle.get('canon', []),
+                'scene': bundle.get('scene', []),
+                'linked': bundle.get('linked', []),
+                'patterns': bundle.get('patterns', [])
+            }
+    
+            try:
+                await self._telemetry("enrich_context", started_at=t0, success=True,
+                                      metadata={"loc": context.get("current_location"),
+                                                "npc_count": len(context.get("active_npcs", []))})
+            except Exception:
+                pass
+    
+            return context
+    
+        except Exception as e:
+            try:
+                await self._telemetry("enrich_context", started_at=t0, success=False, error=str(e))
+            except Exception:
+                pass
+            raise
     
     # ========================================================================
     # Vector Store Operations
@@ -1602,18 +2213,50 @@ class MemoryOrchestrator:
         top_k: int = 5,
         filter_dict: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Search the vector store directly with concurrency limiting."""
+        """Search the vector store directly with concurrency limiting (telemetry-instrumented)."""
+        t0 = time.time()
+    
         if not self.initialized:
             await self.initialize()
     
-        async with self.__class__._sem():
-            return await self.embedding_service.search_memories(
-                query_text=query,
-                entity_type=entity_type,
-                top_k=top_k,
-                filter_dict=filter_dict,
-                fetch_content=True
-            )
+        try:
+            async with self.__class__._sem():
+                res = await self.embedding_service.search_memories(
+                    query_text=query,
+                    entity_type=entity_type,
+                    top_k=top_k,
+                    filter_dict=filter_dict,
+                    fetch_content=True
+                )
+    
+            # Telemetry (success)
+            try:
+                await self._telemetry(
+                    "search_vector_store",
+                    started_at=t0,
+                    success=True,
+                    data_size=len(res or []),
+                    metadata={"query": query, "top_k": top_k, "et": entity_type}
+                )
+            except Exception:
+                pass
+    
+            return res
+    
+        except Exception as e:
+            # Telemetry (failure)
+            try:
+                await self._telemetry(
+                    "search_vector_store",
+                    started_at=t0,
+                    success=False,
+                    error=str(e),
+                    metadata={"query": query, "top_k": top_k}
+                )
+            except Exception:
+                pass
+    
+            raise
     
     async def generate_embedding(self, text: str) -> List[float]:
         """Generate an embedding for text."""
@@ -1635,20 +2278,68 @@ class MemoryOrchestrator:
         emotional: bool = True,
         tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Store a memory using the memory agent wrapper."""
         if not self.initialized:
             await self.initialize()
-        
-        return await self.memory_agent_wrapper.remember(
-            run_context=None,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            memory_text=memory_text,
-            importance=importance,
-            emotional=emotional,
-            tags=tags
-        )
     
+        t0 = time.time()
+        try:
+            # Prefer Nyx governance bridge if present
+            if self.nyx_bridge:
+                try:
+                    res = await self.nyx_bridge.remember(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        memory_text=memory_text,
+                        importance=importance,
+                        emotional=emotional,
+                        tags=tags
+                    )
+                    # Invalidate caches to reflect new content
+                    await self._invalidate_caches_for_entity(entity_type, entity_id)
+                    self._invalidate_by_metadata(None, tags or [])
+                    try:
+                        await self._telemetry("agent_remember", started_at=t0, success=True,
+                                              metadata={"et": entity_type, "eid": entity_id})
+                    except Exception:
+                        pass
+                    return res
+                except Exception as e:
+                    logger.warning(f"Nyx-bridge remember failed, fallback to agent wrapper: {e}")
+    
+            if not self.memory_agent_wrapper:
+                raise RuntimeError("No memory agent wrapper available")
+    
+            out = await self.memory_agent_wrapper.remember(
+                run_context=None,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                memory_text=memory_text,
+                importance=importance,
+                emotional=emotional,
+                tags=tags
+            )
+            # Invalidate for wrapper path too
+            try:
+                await self._invalidate_caches_for_entity(entity_type, entity_id)
+                self._invalidate_by_metadata(None, tags or [])
+            except Exception:
+                pass
+    
+            try:
+                await self._telemetry("agent_remember", started_at=t0, success=True,
+                                      metadata={"et": entity_type, "eid": entity_id})
+            except Exception:
+                pass
+            return out
+    
+        except Exception as e:
+            try:
+                await self._telemetry("agent_remember", started_at=t0, success=False, error=str(e),
+                                      metadata={"et": entity_type, "eid": entity_id})
+            except Exception:
+                pass
+            raise
+
     async def agent_recall(
         self,
         entity_type: str,
@@ -1657,18 +2348,117 @@ class MemoryOrchestrator:
         context: Optional[str] = None,
         limit: int = 5
     ) -> Dict[str, Any]:
-        """Recall memories using the memory agent wrapper."""
         if not self.initialized:
             await self.initialize()
-        
-        return await self.memory_agent_wrapper.recall(
-            run_context=None,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            query=query,
-            context=context,
-            limit=limit
+    
+        t0 = time.time()
+        try:
+            # Prefer Nyx governance bridge if present
+            if self.nyx_bridge:
+                try:
+                    out = await self.nyx_bridge.recall(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        query=query,
+                        context=context,
+                        limit=limit
+                    )
+                    try:
+                        await self._telemetry("agent_recall", started_at=t0, success=True,
+                                              metadata={"et": entity_type, "eid": entity_id, "limit": limit})
+                    except Exception:
+                        pass
+                    return out
+                except Exception as e:
+                    logger.warning(f"Nyx-bridge recall failed, fallback to agent wrapper: {e}")
+    
+            if not self.memory_agent_wrapper:
+                raise RuntimeError("No memory agent wrapper available")
+    
+            out = await self.memory_agent_wrapper.recall(
+                run_context=None,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                query=query,
+                context=context,
+                limit=limit
+            )
+            try:
+                await self._telemetry("agent_recall", started_at=t0, success=True,
+                                      metadata={"et": entity_type, "eid": entity_id, "limit": limit})
+            except Exception:
+                pass
+            return out
+    
+        except Exception as e:
+            try:
+                await self._telemetry("agent_recall", started_at=t0, success=False, error=str(e),
+                                      metadata={"et": entity_type, "eid": entity_id})
+            except Exception:
+                pass
+            raise
+
+    async def get_npc_mask(self, npc_id: int) -> Dict[str, Any]:
+        if not self.initialized:
+            await self.initialize()
+        if not self.progressive_reveal_manager:
+            return {"error": "ProgressiveRevealManager not available"}
+        return await self.progressive_reveal_manager.get_npc_mask(npc_id)
+
+    async def generate_mask_slippage(
+        self,
+        npc_id: int,
+        trigger: Optional[str] = None,
+        severity: Optional[int] = None,
+        reveal_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self.initialized:
+            await self.initialize()
+        if not self.progressive_reveal_manager:
+            return {"error": "ProgressiveRevealManager not available"}
+
+        res = await self.progressive_reveal_manager.generate_mask_slippage(
+            npc_id=npc_id, trigger=trigger, severity=severity, reveal_type=reveal_type
         )
+
+        # Invalidate NPC + tags (mask_slippage, trait) to refresh scene bundles
+        try:
+            await self._invalidate_caches_for_entity(EntityType.NPC.value, npc_id)
+            tags = ["mask_slippage"]
+            if isinstance(res, dict) and res.get("trait_revealed"):
+                tags.append(res["trait_revealed"])
+            self._invalidate_by_metadata(None, tags)
+        except Exception:
+            pass
+
+        return res
+
+    async def check_automated_mask_reveals(self) -> List[Dict[str, Any]]:
+        if not self.initialized:
+            await self.initialize()
+        if not self.progressive_reveal_manager:
+            return []
+    
+        try:
+            # New-style: bound to user/conversation on init – no args
+            try:
+                reveals = await self.progressive_reveal_manager.check_for_automated_reveals()
+            except TypeError:
+                # Legacy: method expects user_id, conversation_id
+                reveals = await self.progressive_reveal_manager.check_for_automated_reveals(
+                    self.user_id, self.conversation_id
+                )
+        except Exception:
+            reveals = []
+    
+        # Invalidate caches for affected NPCs
+        affected_npcs = {r.get("npc_id") for r in reveals if r.get("npc_id")}
+        for nid in affected_npcs:
+            try:
+                await self._invalidate_caches_for_entity(EntityType.NPC.value, nid)
+            except Exception:
+                pass
+        return reveals
     
     # ========================================================================
     # Maintenance Operations (Move to Background)
@@ -1708,10 +2498,63 @@ class MemoryOrchestrator:
         
         # Run pattern analysis
         results['patterns'] = await self._run_pattern_analysis()
+
+        # Progressive mask auto-reveals (optional)
+        try:
+            if self.progressive_reveal_manager:
+                auto_reveals = await self.check_automated_mask_reveals()
+                results['mask_auto_reveals'] = len(auto_reveals)
+        except Exception as e:
+            logger.debug(f"Automated mask reveals skipped: {e}")
+
+        # Reconsolidation sweep (low-intensity)
+        try:
+            if self.reconsolidation_manager:
+                sweep_ids = await self.run_reconsolidation_sweep(EntityType.PLAYER.value, self.user_id, max_memories=3)
+                results['reconsolidation'] = {"reconsolidated_count": len(sweep_ids)}
+        except Exception as e:
+            results['reconsolidation'] = {"error": str(e)}
         
         self.last_maintenance = datetime.now()
         
         return results
+
+    async def create_belief(
+        self,
+        entity_type: str,
+        entity_id: int,
+        belief_text: str,
+        confidence: float = 0.7
+    ) -> Dict[str, Any]:
+        """
+        Create a belief for an entity (prefers new semantic manager; falls back to integrated).
+        """
+        if not self.initialized:
+            await self.initialize()
+    
+        # Prefer new semantic manager if available
+        if self.semantic_manager and hasattr(self.semantic_manager, "create_belief"):
+            try:
+                return await self.semantic_manager.create_belief(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    belief_text=belief_text,
+                    confidence=confidence
+                )
+            except Exception as e:
+                logger.warning(f"semantic_manager.create_belief failed, falling back to integrated: {e}")
+    
+        # Fallback: integrated system’s semantic manager
+        try:
+            return await self.integrated_system.semantic_manager.create_belief(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                belief_text=belief_text,
+                confidence=confidence
+            )
+        except Exception as e:
+            logger.error(f"create_belief failed: {e}")
+            return {"error": str(e)}
     
     async def _run_consolidation(self) -> Dict[str, Any]:
         """Run memory consolidation for all entities."""
@@ -1878,10 +2721,9 @@ class MemoryOrchestrator:
     # ========================================================================
     
     async def close(self):
-        """Clean up resources."""
         if self.embedding_service:
             await self.embedding_service.close()
-        if self.retriever_agent:
+        if self.retriever_agent and hasattr(self.retriever_agent, "close"):
             await self.retriever_agent.close()
         
         # Clear per-conversation retrieval cache
