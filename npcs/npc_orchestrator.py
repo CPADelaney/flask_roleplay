@@ -119,9 +119,12 @@ class NPCOrchestrator:
         self._belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
         self._lore_manager = LoreContextManager(self.user_id, self.conversation_id)
         self._behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
-        self._decision_engine = NPCDecisionEngine(self.user_id, self.conversation_id)
         self._creation_handler = NPCCreationHandler(self.user_id, self.conversation_id)
         self._preset_handler = PresetNPCHandler(self.user_id, self.conversation_id)
+
+        self._decision_engines: Dict[int, NPCDecisionEngine] = {}
+        self._decision_engine_timestamps: Dict[int, float] = {}
+        self._decision_engine_ttl = float(self.config.get("decision_engine_ttl_s", 600.0))  # 10m default
 
         # Belief consolidation throttling
         self._last_belief_consolidation: Dict[int, float] = {}
@@ -398,6 +401,87 @@ class NPCOrchestrator:
         )
     
         return bundle
+
+    async def _get_decision_engine(self, npc_id: int) -> NPCDecisionEngine:
+        now = time.time()
+        engine = self._decision_engines.get(npc_id)
+        ts = self._decision_engine_timestamps.get(npc_id, 0.0)
+        if engine and (now - ts) < self._decision_engine_ttl:
+            return engine
+    
+        # Create or refresh
+        engine = await NPCDecisionEngine.create(npc_id, self.user_id, self.conversation_id)
+        self._decision_engines[npc_id] = engine
+        self._decision_engine_timestamps[npc_id] = now
+        return engine
+
+    async def decide_for_npc(
+        self,
+        npc_id: int,
+        perception_override: Optional[Dict[str, Any]] = None,
+        available_actions: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        engine = await self._get_decision_engine(npc_id)
+    
+        # Build a minimal perception dict (DecisionEngine will validate/accept dict)
+        # Keep this light; the engine tools will fetch deeper bits as needed.
+        if perception_override:
+            perception = perception_override
+        else:
+            # Pull what we already have cheaply (avoid heavy memory calls here)
+            snapshot = await self.get_npc_snapshot(npc_id, light=True)
+            env = await self._perception_system.get_environment_context(snapshot.location)
+            # Very small relationship seed for player; engine tools will fetch fuller state if needed
+            rel = {"player": {"link_level": max(snapshot.trust, snapshot.closeness)}}
+            # Time context (light)
+            time_ctx = {}
+            try:
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch("""
+                        SELECT key, value FROM CurrentRoleplay
+                        WHERE key IN ('TimeOfDay') AND user_id=$1 AND conversation_id=$2
+                    """, self.user_id, self.conversation_id)
+                time_ctx = {r["key"]: r["value"] for r in rows} if rows else {}
+            except Exception:
+                pass
+    
+            perception = {
+                "environment": {
+                    "location": snapshot.location,
+                    "entities_present": [
+                        {"type": "npc", "id": other_id}
+                        for other_id in self._location_index.get(snapshot.location, set())
+                        if other_id != npc_id
+                    ]
+                } | (env or {}),
+                "relevant_memories": [],              # Keep empty; engine tools can fetch
+                "relationships": rel,
+                "emotional_state": snapshot.emotional_state or {},
+                "mask": {"integrity": snapshot.mask_integrity, "presented_traits": {}, "hidden_traits": {}},
+                "beliefs": [],                        # Engine tools can fetch by itself if needed
+                "time_context": {"time_of_day": time_ctx.get("TimeOfDay", "Morning")},
+                "narrative_context": {}
+            }
+    
+        decision = await engine.decide(perception=perception, available_actions=available_actions)
+    
+        # Optional: log beliefs + invalidate caches
+        try:
+            from types import SimpleNamespace
+            ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=npc_id)
+            await self._belief_system.process_event_for_beliefs(
+                ctx=ctx_obj,
+                event_text=f"NPC chose action: {decision.get('type', 'unknown')} - {decision.get('description','')}",
+                event_type="npc_decision",
+                npc_ids=[npc_id],
+                factuality=1.0
+            )
+        except Exception as e:
+            logger.debug(f"[Beliefs] decision hook failed for NPC {npc_id}: {e}")
+    
+        # Mark changed for scene deltas
+        self._notify_npc_changed(npc_id)
+        return decision or {}
     
     def _notify_npc_changed(self, npc_id: int):
         self._last_update_times[npc_id] = time.time()
