@@ -26,6 +26,7 @@ from nyx.governance_helpers import with_governance, with_governance_permission, 
 from npcs.npc_relationship import NPCRelationshipManager
 from lore.core.lore_system import LoreSystem
 from lore.core import canon
+from logic.dynamic_relationships import OptimizedRelationshipManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -65,9 +66,7 @@ class NPCLearningAdaptation:
         """Initialize the system and set up components."""
         self.memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         self.nyx_governance = NyxUnifiedGovernor(self.user_id, self.conversation_id)
-        self.relationship_manager = NPCRelationshipManager(
-            self.npc_id, self.user_id, self.conversation_id
-        )
+        self._dyn_rel = OptimizedRelationshipManager(self.user_id, self.conversation_id)
         self._lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
         
     @with_governance(
@@ -281,68 +280,79 @@ class NPCLearningAdaptation:
     )
     async def adapt_to_relationship_changes(self, ctx) -> Dict[str, Any]:
         """
-        Adapt NPC intensity based on relationship changes with the player.
-        REFACTORED: Uses LoreSystem for updates.
-        
-        Returns:
-            Adaptation results
+        Adapt NPC intensity based on dynamic relationship changes with the player.
+        Reads relationship dimensions from the OptimizedRelationshipManager (dynamic system)
+        and applies intensity updates via LoreSystem.
         """
-        # Get current relationship - READ ONLY
-        relationship = await self.relationship_manager.get_relationship_with_player()
-        if not relationship:
-            return {"adapted": False, "reason": "No relationship data found"}
-        
-        # Get current NPC stats - READ ONLY
+        # Ensure dynamic relationship manager (lazy init to avoid hard dependency at import time)
+        try:
+            if not hasattr(self, "_dyn_rel") or self._dyn_rel is None:
+                from logic.dynamic_relationships import OptimizedRelationshipManager
+                self._dyn_rel = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+    
+            state = await self._dyn_rel.get_relationship_state("player", 1, "npc", self.npc_id)
+            dims = state.dimensions
+        except Exception as e:
+            logger.debug(f"[Learning] dynamic relationship fetch failed for NPC {self.npc_id}: {e}")
+            return {"adapted": False, "reason": "Relationship state unavailable"}
+    
+        # Map dynamic dimensions to trust/closeness signals
+        # trust is [-100, 100] -> map to [0, 100]
+        trust = (float(dims.trust) + 100.0) / 2.0
+    
+        # Define closeness as an average of positive-affection, intimacy, and frequency (all 0..100 scale)
+        intimacy = max(0.0, float(dims.intimacy))
+        affection_pos = max(0.0, float(dims.affection))  # ignore negative affection for "closeness"
+        frequency = max(0.0, float(dims.frequency))
+        closeness = (intimacy + affection_pos + frequency) / 3.0
+    
+        # Current NPC stats (read-only)
         npc_data = await NPCDataAccess.get_npc_details(self.npc_id, self.user_id, self.conversation_id)
-        
-        # Initialize adaptation variables
+        if not npc_data:
+            return {"adapted": False, "reason": "NPC not found"}
+    
         intensity_change = 0
-        adaptation_reason = []
-        
-        # Closeness affects intensity
-        closeness = relationship.get("closeness", relationship.get("link_level", 0))
+        reasons: List[str] = []
+    
+        # Closeness-based adjustment
         if closeness > 70 and npc_data.get("intensity", 50) > 60:
             intensity_change -= 3
-            adaptation_reason.append("High closeness is creating comfortable relationship")
+            reasons.append("High closeness is creating a comfortable relationship")
         elif closeness > 90 and npc_data.get("cruelty", 50) > 60:
             intensity_change += 5
-            adaptation_reason.append("Extremely close relationship allows for more intense domination")
-        
-        # Trust affects intensity (fallback to link_level if not present)
-        trust = relationship.get("trust")
-        if trust is None:
-            trust = relationship.get("link_level", closeness)
+            reasons.append("Extremely close relationship allows for more intense domination")
+    
+        # Trust-based adjustment
         if trust > 80 and npc_data.get("dominance", 50) > 70:
             intensity_change += 4
-            adaptation_reason.append("High trust enables more intense control")
+            reasons.append("High trust enables more intense control")
         elif 0 < trust < 30:
             intensity_change -= 3
-            adaptation_reason.append("Low trust requires more careful approach")
-            
-        # Apply the intensity change if significant
+            reasons.append("Low trust requires more careful approach")
+    
+        # Apply if meaningful
         if abs(intensity_change) >= 2:
             await self._update_npc_intensity(
                 npc_data.get("intensity", 50),
                 intensity_change,
-                ", ".join(adaptation_reason)
+                ", ".join(reasons)
             )
-            
             return {
                 "adapted": True,
                 "intensity_change": intensity_change,
-                "reason": ", ".join(adaptation_reason),
+                "reason": ", ".join(reasons),
                 "relationship_factors": {
-                    "closeness": closeness,
-                    "trust": trust
+                    "closeness": round(closeness, 1),
+                    "trust": round(trust, 1)
                 }
             }
-        
+    
         return {
             "adapted": False,
             "reason": "Relationship doesn't warrant intensity changes",
             "relationship_factors": {
-                "closeness": closeness,
-                "trust": trust
+                "closeness": round(closeness, 1),
+                "trust": round(trust, 1)
             }
         }
     
@@ -839,4 +849,5 @@ class NPCLearningManager:
                 results["npc_adaptations"][npc_id] = {"error": str(e)}
         
         return results
+
 
