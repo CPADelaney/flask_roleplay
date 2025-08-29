@@ -570,6 +570,11 @@ class NPCOrchestrator:
         )
     
         return bundle
+    
+    async def _mem_orch(self):
+        """Get the MemoryOrchestrator for this user/conversation."""
+        from memory.memory_orchestrator import get_memory_orchestrator, EntityType
+        return await get_memory_orchestrator(self.user_id, self.conversation_id)
 
     async def _get_decision_engine(self, npc_id: int) -> NPCDecisionEngine:
         now = time.time()
@@ -816,9 +821,10 @@ class NPCOrchestrator:
         - Apply side effects here (relationships, stats via LoreSystem, memory, beliefs)
         - Invalidate caches and return a clean payload for final synthesis
         """
+        from memory.memory_orchestrator import get_memory_orchestrator, EntityType
         # 1) Gather preloaded context
         snap = await self.get_npc_snapshot(npc_id, light=True)
-
+    
         # Relationship dims for preloading
         try:
             rel = await self.get_relationship_dynamics("player", self.user_id, "npc", npc_id)
@@ -831,14 +837,19 @@ class NPCOrchestrator:
             }
         except Exception:
             rel_pre = {"trust": 0, "respect": 0, "affection": 0, "patterns": [], "archetypes": []}
-
-        # Memories (small)
+    
+        # Memories (small) via MemoryOrchestrator
         try:
-            mems = await self._get_mem_mgr(npc_id).retrieve_memories(query="", limit=5)
-            memories_pre = mems.get("memories", [])
+            orch = await self._mem_orch()
+            rm = await orch.retrieve_memories(
+                entity_type=EntityType.NPC.value,
+                entity_id=npc_id,
+                limit=5
+            )
+            memories_pre = rm.get("memories", [])
         except Exception:
             memories_pre = []
-
+    
         preloaded = {
             "npc_details": {
                 "npc_id": snap.npc_id,
@@ -855,7 +866,7 @@ class NPCOrchestrator:
             "memories": memories_pre,
             "relationship": rel_pre
         }
-
+    
         # 2) Generate a proposal (no side effects inside handler)
         proposal: NPCInteractionProposal = await self._responder.generate_interaction_proposal(
             npc_id=npc_id,
@@ -864,9 +875,9 @@ class NPCOrchestrator:
             context=context or {},
             preloaded=preloaded
         )
-
+    
         # 3) Apply side effects centrally
-
+    
         # 3a) Relationship update
         if proposal.proposed_relationship_interaction:
             try:
@@ -878,7 +889,7 @@ class NPCOrchestrator:
                 )
             except Exception as e:
                 logger.debug(f"[Orchestrator] relationship apply failed: {e}")
-
+    
         # 3b) Stat changes via LoreSystem (treat as deltas)
         if proposal.proposed_stat_changes:
             try:
@@ -890,7 +901,7 @@ class NPCOrchestrator:
                     'conversation_id': self.conversation_id,
                     'npc_id': npc_id
                 })
-
+    
                 # Load current values and compute clamped updates
                 async with get_db_connection_context() as conn:
                     current = {}
@@ -901,14 +912,14 @@ class NPCOrchestrator:
                         )
                         if row and stat in row:
                             current[stat] = row[stat]
-
+    
                 updates = {}
                 for stat, delta in proposal.proposed_stat_changes.items():
                     if stat in current:
                         new_val = max(0, min(100, int(current[stat]) + int(delta)))
                         if new_val != current[stat]:
                             updates[stat] = new_val
-
+    
                 if updates:
                     await lore_system.propose_and_enact_change(
                         ctx=ctx,
@@ -919,20 +930,23 @@ class NPCOrchestrator:
                     )
             except Exception as e:
                 logger.debug(f"[Orchestrator] stat apply failed: {e}")
-
-        # 3c) Memory add
+    
+        # 3c) Memory add via MemoryOrchestrator
         if proposal.memory_note:
             try:
-                await self._get_mem_mgr(npc_id).add_memory(
+                await orch.integrated_add_memory(
+                    entity_type=EntityType.NPC.value,
+                    entity_id=npc_id,
                     memory_text=proposal.memory_note,
-                    memory_type="interaction",
-                    significance=0.5,
-                    tags=proposal.memory_tags or ["interaction"],
-                    emotional=True
+                    memory_kwargs={
+                        "significance": 3,  # medium
+                        "tags": proposal.memory_tags or ["interaction"],
+                        "metadata": {"source": "npc_orchestrator"}
+                    }
                 )
             except Exception as e:
                 logger.debug(f"[Orchestrator] memory add failed: {e}")
-
+    
         # 3d) Beliefs (conversation)
         try:
             await self.route_player_conversation_beliefs(
@@ -943,7 +957,7 @@ class NPCOrchestrator:
             )
         except Exception as e:
             logger.debug(f"[Orchestrator] belief route failed: {e}")
-
+    
         # Notify conflict synthesizer of this conversation scene (non-blocking)
         try:
             synth = await self._get_conflict_synth()
@@ -959,10 +973,10 @@ class NPCOrchestrator:
                 asyncio.create_task(synth.process_scene(scene_ctx))
         except Exception as e:
             logger.debug(f"[Conflict] conversation notify failed for NPC {npc_id}: {e}")
-
+    
         # 3e) Invalidate caches
         self.invalidate_npc_state(npc_id, reason="player_interaction")
-
+    
         # 3f) Learning & adaptation (intensity etc.) after conversation
         try:
             player_response = None
@@ -971,13 +985,13 @@ class NPCOrchestrator:
                     "compliance_level": proposal.meta.get("player_compliance", 0),
                     "emotional_response": proposal.meta.get("player_emotion", "neutral"),
                 }
-        
+    
             interaction_details = {
                 "summary": player_input[:200],
                 "topic": context.get("topic", "general"),
                 "duration": context.get("duration", 0),
             }
-        
+    
             await self._learning_record_player_interaction(
                 npc_id=npc_id,
                 interaction_type=interaction_type if interaction_type else "conversation",
@@ -986,7 +1000,7 @@ class NPCOrchestrator:
             )
         except Exception as e:
             logger.debug(f"[Learning] interaction hook failed for NPC {npc_id}: {e}")
-        
+    
         # 3g) Optional: emergent addiction analysis from this scene (throttled externally if needed)
         try:
             text_for_analysis = " ".join(filter(None, [
@@ -996,13 +1010,11 @@ class NPCOrchestrator:
             if text_for_analysis:
                 add_pack = await self.analyze_emergent_addictions(text_for_analysis, npcs=[{"npc_id": npc_id}])
                 if isinstance(add_pack, dict) and add_pack.get("update_results"):
-                    # Attach a tiny summary for the final synthesizer
-                    applied = add_pack.get("applied_suggestions") or []
-                    out_effects = add_pack.get("player_addiction_status") or {}
-                    # You can optionally route belief here based on applied changes
+                    # Attach a tiny summary for the final synthesizer if desired
+                    pass
         except Exception as e:
             logger.debug(f"[Addictions] emergent analysis failed: {e}")
-
+    
         # 4) Return payload for the final response synthesizer
         return {
             "npc_id": npc_id,
@@ -1510,6 +1522,7 @@ class NPCOrchestrator:
     
     async def _build_npc_snapshot(self, npc_id: int, light: bool = True) -> NPCSnapshot:
         """Build a comprehensive snapshot of an NPC including canonical events."""
+        from memory.memory_orchestrator import get_memory_orchestrator, EntityType
         # Centralize DB concurrency limits
         async with self._db_semaphore:
             async with get_db_connection_context() as conn:
@@ -1549,34 +1562,42 @@ class NPCOrchestrator:
                         canonical_events = [dict(e) for e in events]
                         self.canon_cache[cache_key] = canonical_events
     
-        # Heavy fields (optional, prefer Integrated memory system when available)
+        # Heavy fields (optional)
         emotional_state = {}
         recent_memories = []
         mask_integrity = row_map.get("mask_integrity") or 100
     
         if not light:
-            # Emotion via Integrated memory if available
+            # Emotion via MemoryOrchestrator (preferred)
             try:
-                integ = await self._get_integrated_npc_system()
-                emo = await integ.get_npc_emotional_state(npc_id)
+                orch = await self._mem_orch()
+                emo = await orch.emotional_manager.get_entity_emotional_state(
+                    entity_type=EntityType.NPC.value,
+                    entity_id=npc_id
+                )
                 if isinstance(emo, dict) and emo:
                     emotional_state = emo
             except Exception:
                 emotional_state = {}
     
-            # Mask integrity via Integrated system if present (overrides DB)
+            # Mask integrity via MemoryOrchestrator (overrides DB)
             try:
-                integ = await self._get_integrated_npc_system()
-                mask = await integ.get_npc_mask(npc_id)
+                orch = await self._mem_orch()
+                mask = await orch.get_npc_mask(npc_id)
                 if isinstance(mask, dict) and "integrity" in mask:
                     mask_integrity = int(mask.get("integrity", mask_integrity))
             except Exception:
                 pass
     
-            # Keep memory recall optional/light (can remain empty to avoid heavy ops)
+            # Memory recall via MemoryOrchestrator (light)
             try:
-                mem_res = await self._get_mem_mgr(npc_id).retrieve_memories(query="", limit=5)
-                recent_memories = mem_res.get("memories", [])
+                orch = await self._mem_orch()
+                rm = await orch.retrieve_memories(
+                    entity_type=EntityType.NPC.value,
+                    entity_id=npc_id,
+                    limit=5
+                )
+                recent_memories = rm.get("memories", [])
             except Exception:
                 recent_memories = []
     
@@ -1763,6 +1784,7 @@ class NPCOrchestrator:
         rewards: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Schedule a calendar event for an NPC with canon integration."""
+        from memory.memory_orchestrator import get_memory_orchestrator, EntityType
         calendar = await self._get_calendar_system()
         
         # Get NPC data for context
@@ -1807,13 +1829,21 @@ class NPCOrchestrator:
                     significance=priority + 2
                 )
         
-        # Add memory for NPC about the scheduled event
-        await self._get_mem_mgr(npc_id).add_memory(
-            memory_text=f"I have {event_name} scheduled for {time_of_day} on day {day}",
-            memory_type="scheduling",
-            significance=priority,
-            tags=["calendar", "scheduled"]
-        )
+        # Add memory for NPC about the scheduled event (via MemoryOrchestrator)
+        try:
+            orch = await self._mem_orch()
+            await orch.integrated_add_memory(
+                entity_type=EntityType.NPC.value,
+                entity_id=npc_id,
+                memory_text=f"I have {event_name} scheduled for {time_of_day} on day {day}",
+                memory_kwargs={
+                    "significance": int(priority),
+                    "tags": ["calendar", "scheduled"],
+                    "metadata": {"source": "npc_orchestrator"}
+                }
+            )
+        except Exception as e:
+            logger.debug(f"[Orchestrator] schedule memory add failed for NPC {npc_id}: {e}")
         
         self._notify_npc_changed(npc_id)
         return result
