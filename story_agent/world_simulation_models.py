@@ -78,11 +78,11 @@ StrictBaseModel = AgentSafeModel  # Alias for compatibility
 class TimeOfDay(Enum):
     """Time periods in the simulation"""
     EARLY_MORNING = "early_morning"  # 5-7 AM
-    MORNING = "morning"  # 7-12 PM
-    AFTERNOON = "afternoon"  # 12-5 PM
-    EVENING = "evening"  # 5-9 PM
-    NIGHT = "night"  # 9 PM-12 AM
-    LATE_NIGHT = "late_night"  # 12 AM-5 AM
+    MORNING = "morning"               # 7-12 PM
+    AFTERNOON = "afternoon"           # 12-5 PM
+    EVENING = "evening"               # 5-9 PM
+    NIGHT = "night"                   # 9 PM-12 AM
+    LATE_NIGHT = "late_night"         # 12 AM-5 AM
 
 class WorldMood(Enum):
     """Overall mood/atmosphere of the world"""
@@ -113,18 +113,25 @@ class ActivityType(Enum):
     REVELATION = "revelation"
 
 class PowerDynamicType(Enum):
-    """Types of power dynamics in interactions"""
+    """
+    Canonical power dynamics. Superset of all values used across modules
+    (agent_interaction, preset_story_tracker, creative_task_agent, etc.).
+    """
     SUBTLE_CONTROL = "subtle_control"
     GENTLE_GUIDANCE = "gentle_guidance"
     FIRM_DIRECTION = "firm_direction"
     CASUAL_DOMINANCE = "casual_dominance"
     PROTECTIVE_CONTROL = "protective_control"
-    MANIPULATIVE = "manipulative"
-    NURTURING_DEPENDENCY = "nurturing_dependency"
-    COLLABORATIVE = "collaborative"
-    RESISTANCE = "resistance"
     PLAYFUL_TEASING = "playful_teasing"
     INTIMATE_COMMAND = "intimate_command"
+    SOCIAL_HIERARCHY = "social_hierarchy"
+    RITUAL_SUBMISSION = "ritual_submission"
+    FINANCIAL_CONTROL = "financial_control"
+    PUBLIC_DISPLAY = "public_display"
+    RESISTANCE = "resistance"
+    NURTURING_DEPENDENCY = "nurturing_dependency"
+    COLLABORATIVE = "collaborative"
+    MANIPULATIVE = "manipulative"
 
 class NarrativeTone(Enum):
     """Tone for slice-of-life narration"""
