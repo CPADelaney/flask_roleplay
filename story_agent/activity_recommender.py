@@ -392,22 +392,62 @@ async def recommend_activities(
     
     # Build context if not provided
     if not context:
-        # Get world state
-        from story_agent.world_director_agent import WorldDirector
-        director = WorldDirector(user_id, conversation_id)
-        world_state = await director.get_world_state()
-        
-        # Build context from world state
+        # Safely extract time_of_day
+        tod = None
+        if world_state and hasattr(world_state, "current_time"):
+            ct = world_state.current_time
+            tod = getattr(ct, "time_of_day", None)
+            if isinstance(tod, str):
+                tod = tod.lower()
+            elif hasattr(tod, "value"):
+                tod = tod.value
+    
+        # Safely extract active_npc ids
+        npc_ids = []
+        active = getattr(world_state, "active_npcs", None) or []
+        for it in active:
+            if isinstance(it, dict):
+                nid = it.get("npc_id") or it.get("id")
+            else:
+                nid = getattr(it, "npc_id", None) or getattr(it, "id", None)
+            if isinstance(nid, int):
+                npc_ids.append(nid)
+    
+        # Safely get power tension
+        wt = getattr(world_state, "world_tension", None)
+        power_tension = 0.0
+        if wt is not None:
+            power_tension = getattr(wt, "power_tension", None) \
+                            or (wt.get("power_tension", 0.0) if isinstance(wt, dict) else 0.0)
+    
+        # Safely get submission/acceptance
+        rd = getattr(world_state, "relationship_dynamics", None)
+        submission = 0.0
+        acceptance = 0.0
+        if rd is not None:
+            if isinstance(rd, dict):
+                submission = rd.get("player_submission_level", 0.0)
+                acceptance = rd.get("acceptance_level", 0.0)
+            else:
+                submission = getattr(rd, "player_submission_level", 0.0)
+                acceptance = getattr(rd, "acceptance_level", 0.0)
+    
+        # Coerce enums from strings when needed
+        mood = getattr(world_state, "world_mood", None)
+        if isinstance(mood, str):
+            mood = WorldMood(mood) if mood in WorldMood._value2member_map_ else WorldMood.RELAXED
+    
+        tod_enum = TimeOfDay(tod) if isinstance(tod, str) and tod in TimeOfDay._value2member_map_ else TimeOfDay.MORNING
+    
         context = ActivityContext(
-            time_of_day=world_state.current_time,
-            world_mood=world_state.world_mood,
-            location="current_location",
-            available_npcs=[npc.npc_id for npc in world_state.active_npcs],
-            power_tension=world_state.world_tension.power_tension,
-            relationship_dynamics={
-                "submission": world_state.relationship_dynamics.player_submission_level,
-                "acceptance": world_state.relationship_dynamics.acceptance_level
-            }
+            time_of_day=tod_enum,
+            world_mood=mood,
+            location="current",  # refine as needed
+            available_npcs=npc_ids,
+            player_vitals={},  # optionally populate
+            recent_activities=[],
+            power_tension=power_tension,
+            relationship_dynamics={"submission": submission, "acceptance": acceptance},
         )
     
     # Create prompt with context
@@ -508,4 +548,5 @@ async def get_npc_initiated_activity(
     )
     
     return activity
+
 
