@@ -71,6 +71,24 @@ from lore.managers.religion import (
     NationReligionDistribution, CompleteRitual, SectarianPosition
 )
 
+# Cache + Canon integration
+from lore.core.cache import GLOBAL_LORE_CACHE
+from lore.core.canon import (
+    initialize_canon_memory_integration,
+    log_canonical_event as canon_log_canonical_event,
+    find_or_create_npc,
+    find_or_create_nation,
+    find_or_create_location,
+    find_or_create_faction,
+    find_or_create_historical_event,
+    find_or_create_urban_myth,
+    find_or_create_landmark,
+    find_or_create_event,
+    find_or_create_quest,
+    sync_entity_to_memory,
+    ensure_embedding_columns,
+)
+
 logger = logging.getLogger(__name__)
 
 # Database connection
@@ -309,26 +327,32 @@ class LoreOrchestrator:
         """Initialize all components."""
         if self.initialized:
             return
-        
+    
         logger.info(f"Initializing LoreOrchestrator for user {self.user_id}")
-        
+    
         try:
             # Initialize core systems
             await self._get_lore_system()
             await self._get_canon_module()
-            
+    
             if self.config.enable_cache:
                 await self._get_cache_system()
-            
+    
             # Prepare the registry
             await self._get_registry_system()
-            
+    
             # Initialize database if needed
             await self._ensure_database_setup()
-            
+    
+            # NEW: bootstrap canon ↔ memory integration (best-effort)
+            try:
+                await initialize_canon_memory_integration(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"Canon-memory integration init skipped: {e}")
+    
             self.initialized = True
             logger.info("LoreOrchestrator initialization complete")
-            
+    
         except Exception as e:
             logger.error(f"Failed to initialize LoreOrchestrator: {e}", exc_info=True)
             raise
@@ -749,7 +773,13 @@ class LoreOrchestrator:
             "systems": {},
         }
     
-        # Use attribute names so hasattr works correctly
+        # LoreCache analytics (optional)
+        try:
+            analytics = await GLOBAL_LORE_CACHE.get_cache_analytics()
+            status["orchestrator"]["lore_cache"] = analytics
+        except Exception:
+            pass
+    
         attr_names = [
             ("lore_dynamics", "_lore_dynamics_system"),
             ("regional_culture", "_regional_culture_system"),
@@ -1990,6 +2020,20 @@ class LoreOrchestrator:
     
         key_string = "|".join(key_parts)
         return hashlib.md5(key_string.encode("utf-8")).hexdigest()
+
+    # ===== CACHE ANALYTICS / OPTIMIZATION =====
+    
+    async def cache_get_analytics(self) -> Dict[str, Any]:
+        """Expose cache analytics (LoreCache)."""
+        return await GLOBAL_LORE_CACHE.get_cache_analytics()
+    
+    async def cache_optimize(self) -> Dict[str, Any]:
+        """Run the cache optimization agent (LoreCache)."""
+        return await GLOBAL_LORE_CACHE.optimize_cache()
+    
+    async def cache_warm_predictive(self, warm_strategy: str = "high_miss") -> Dict[str, Any]:
+        """Pre-warm the cache based on recent miss patterns."""
+        return await GLOBAL_LORE_CACHE.warm_predictive_cache(warm_strategy=warm_strategy)
     
     def _get_cached_bundle(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """Get a cached bundle if it exists and is fresh (no memoization)."""
@@ -2001,6 +2045,56 @@ class LoreOrchestrator:
             self._bundle_cached_at.pop(cache_key, None)
             return None
         return bundle
+
+    # ===== CANON WRAPPERS =====
+    
+    async def canon_log_event(self, ctx, event_description: str, tags: Optional[List[str]] = None, significance: int = 5) -> int:
+        async with get_db_connection_context() as conn:
+            return await canon_log_canonical_event(ctx, conn, event_description, tags or [], significance)
+    
+    async def canon_find_or_create_npc(self, ctx, npc_name: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_npc(ctx, conn, npc_name, **kwargs)
+    
+    async def canon_find_or_create_nation(self, ctx, nation_name: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_nation(ctx, conn, nation_name, **kwargs)
+    
+    async def canon_find_or_create_location(self, ctx, location_name: str, **kwargs) -> str:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_location(ctx, conn, location_name, **kwargs)
+    
+    async def canon_find_or_create_faction(self, ctx, faction_name: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_faction(ctx, conn, faction_name, **kwargs)
+    
+    async def canon_find_or_create_historical_event(self, ctx, event_name: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_historical_event(ctx, conn, event_name, **kwargs)
+    
+    async def canon_find_or_create_myth(self, ctx, name: str, description: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_urban_myth(ctx, conn, name=name, description=description, **kwargs)
+    
+    async def canon_find_or_create_landmark(self, ctx, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_landmark(ctx, conn, **kwargs)
+    
+    async def canon_find_or_create_event(self, ctx, event_name: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_event(ctx, conn, event_name, **kwargs)
+    
+    async def canon_find_or_create_quest(self, ctx, quest_name: str, **kwargs) -> int:
+        async with get_db_connection_context() as conn:
+            return await find_or_create_quest(ctx, conn, quest_name, **kwargs)
+    
+    async def canon_sync_entity_to_memory(self, ctx, entity_type: str, entity_id: int, force: bool = False) -> Dict[str, Any]:
+        async with get_db_connection_context() as conn:
+            return await sync_entity_to_memory(ctx, conn, entity_type, entity_id, force=force)
+    
+    async def canon_ensure_embedding_columns(self) -> None:
+        async with get_db_connection_context() as conn:
+            await ensure_embedding_columns(conn)
     
     def _is_bundle_stale(self, bundle: Dict[str, Any]) -> bool:
         """Check if a bundle is stale based on TTL using monotonic clock."""
