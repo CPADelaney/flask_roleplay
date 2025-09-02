@@ -1139,7 +1139,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 et_dict["nation_id"] = nation_id
                 etiquette_systems.append(et_dict)
     
-    return etiquette_systems
+        return etiquette_systems
     
     # ---------------------------------------------------------------------------
     # Fetching & Summarizing Cultural Data
