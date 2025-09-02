@@ -195,61 +195,12 @@ async def _get_ws_prefer_bundle(narr_ctx: "NarratorContext") -> Optional["WorldS
         logger.warning(f"_get_ws_prefer_bundle failed: {e}", exc_info=True)
         return None
 
-# ===============================================================================
-# CRITICAL FIX: Agent-Safe Base Model
-# ===============================================================================
-
-class AgentSafeModel(BaseModel):
-    """
-    Pydantic v2 base model that emits a schema with no additionalProperties anywhere.
-    This is required for compatibility with OpenAI Agents SDK's strict mode.
-    """
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-    
-    @classmethod
-    def model_json_schema(cls, **kwargs):
-        """Override to strip additionalProperties from the schema"""
-        schema = super().model_json_schema(**kwargs)
-        
-        def strip_additional_properties(obj):
-            if isinstance(obj, dict):
-                # Remove the problematic keys
-                obj.pop('additionalProperties', None)
-                obj.pop('unevaluatedProperties', None)
-                
-                # Fix 'required' field to match properties
-                props = obj.get("properties")
-                req = obj.get("required")
-                if isinstance(props, dict) and isinstance(req, list):
-                    # Only keep required fields that actually exist in properties
-                    obj["required"] = [k for k in req if k in props]
-                
-                # Recursively process all values
-                for v in obj.values():
-                    strip_additional_properties(v)
-            elif isinstance(obj, list):
-                # Process list items
-                for item in obj:
-                    strip_additional_properties(item)
-            return obj
-        
-        return strip_additional_properties(schema)
-
-# ===============================================================================
-# Key-Value Helper for Replacing Dict[str, Any]
-# ===============================================================================
-
-class KeyValue(AgentSafeModel):
-    """Key-value pair to replace Dict[str, Any] fields"""
-    key: str
-    value: Union[str, int, float, bool, None, List[Union[str, int, float, bool, None]]]
-
 
 # ===============================================================================
 # Import World Director Models (they should also use AgentSafeModel)
 # ===============================================================================
 
-from story_agent.world_simulation_models import WorldState, NarrativeTone, SceneFocus, TimeOfDay, WorldMood, ActivityType, PowerDynamicType
+from story_agent.world_simulation_models import WorldState, NarrativeTone, SceneFocus, TimeOfDay, WorldMood, ActivityType, PowerDynamicType, AgentSafeModel, KeyValue
 
 # ===============================================================================
 # Tool Input Models - ALL using AgentSafeModel
