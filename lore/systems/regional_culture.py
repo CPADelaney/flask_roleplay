@@ -1774,52 +1774,53 @@ class RegionalCultureSystem(BaseLoreManager):
                 SELECT name, cultural_traits, matriarchy_level
                 FROM Nations WHERE id = $1
             """, nation_id)
+        
+        # This code needs to be INSIDE the method, not at class level
+        localization_agent = Agent(
+            name="IdiomLocalizationAgent",
+            instructions="""You adapt idioms to fit different cultural contexts while preserving meaning.
+            Consider local culture, values, and matriarchal themes.""",
+            model="gpt-5-nano"
+        )
+        
+        prompt = f"""
+        Localize this idiom for the target culture:
+        
+        Original Idiom: {idiom}
+        Target Nation: {nation['name']}
+        Cultural Traits: {nation.get('cultural_traits', [])}
+        Matriarchy Level: {nation.get('matriarchy_level', 5)}/10
+        
+        Create a culturally appropriate version that:
+        1. Preserves the core meaning
+        2. Uses local cultural references
+        3. Reflects matriarchal values where appropriate
+        
+        Return JSON with:
+        - phrase: the localized idiom
+        - meaning: explanation of what it means
+        """
+        
+        result = await Runner.run(localization_agent, prompt)
+        try:
+            return json.loads(result.final_output)
+        except:
+            return {"phrase": idiom, "meaning": "Borrowed saying"}
     
-    localization_agent = Agent(
-        name="IdiomLocalizationAgent",
-        instructions="""You adapt idioms to fit different cultural contexts while preserving meaning.
-        Consider local culture, values, and matriarchal themes.""",
-        model="gpt-5-nano"
-    )
-    
-    prompt = f"""
-    Localize this idiom for the target culture:
-    
-    Original Idiom: {idiom}
-    Target Nation: {nation['name']}
-    Cultural Traits: {nation.get('cultural_traits', [])}
-    Matriarchy Level: {nation.get('matriarchy_level', 5)}/10
-    
-    Create a culturally appropriate version that:
-    1. Preserves the core meaning
-    2. Uses local cultural references
-    3. Reflects matriarchal values where appropriate
-    
-    Return JSON with:
-    - phrase: the localized idiom
-    - meaning: explanation of what it means
-    """
-    
-    result = await Runner.run(localization_agent, prompt)
-    try:
-        return json.loads(result.final_output)
-    except:
-        return {"phrase": idiom, "meaning": "Borrowed saying"}
-
-def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
-    """Calculate the impact level of cultural diffusion (1-10)."""
-    impact = 0
-    
-    # Count elements
-    for key, value in effects.items():
-        if isinstance(value, list):
-            impact += min(len(value), 3)
-        elif isinstance(value, dict):
-            impact += min(len(value), 3)
-        elif value:
-            impact += 1
-    
-    return min(impact, 10)
+        def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
+            """Calculate the impact level of cultural diffusion (1-10)."""
+            impact = 0
+            
+            # Count elements
+            for key, value in effects.items():
+                if isinstance(value, list):
+                    impact += min(len(value), 3)
+                elif isinstance(value, dict):
+                    impact += min(len(value), 3)
+                elif value:
+                    impact += 1
+            
+            return min(impact, 10)
     
     async def _apply_fashion_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
         """Apply fashion and clothing diffusion effects between nations."""
