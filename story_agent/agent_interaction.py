@@ -17,6 +17,8 @@ from enum import Enum
 from agents import Agent, Runner, trace, handoff
 from agents.exceptions import AgentsException, ModelBehaviorError
 
+from story_agent.world_simulation_models import PowerDynamicType, TimeOfDay, WorldMood, ActivityType
+
 # Lazy loading to avoid circular imports
 if TYPE_CHECKING:
     from story_agent.world_director_agent import (
@@ -41,26 +43,6 @@ from context.context_performance import PerformanceMonitor, track_performance
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
-
-# ===============================================================================
-# Local Enums (to avoid circular import)
-# ===============================================================================
-
-class PowerDynamicType(Enum):
-    """Types of power dynamics in interactions"""
-    CASUAL_DOMINANCE = "casual_dominance"
-    INTIMATE_COMMAND = "intimate_command"
-    SOCIAL_HIERARCHY = "social_hierarchy"
-    SUBTLE_CONTROL = "subtle_control"
-    RITUAL_SUBMISSION = "ritual_submission"
-
-class TimeOfDay(Enum):
-    """Time of day for scene context"""
-    MORNING = "morning"
-    AFTERNOON = "afternoon"
-    EVENING = "evening"
-    NIGHT = "night"
-    LATE_NIGHT = "late_night"
 
 # ===============================================================================
 # Local Data Classes
