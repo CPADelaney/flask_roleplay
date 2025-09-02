@@ -427,24 +427,13 @@ class LoreOrchestrator:
     async def get_scene_bundle(self, scope: Any) -> Dict[str, Any]:
         """
         Get scene-scoped lore bundle with canonical data prioritized.
-        
-        Args:
-            scope: SceneScope containing location_id, npc_ids, topics, lore_tags, etc.
-            
-        Returns:
-            Dictionary with:
-                - section: 'lore' (for consistent merging)
-                - anchors: IDs of core entities in the bundle
-                - data: Scene-relevant lore data (SceneBundleData)
-                - canonical: Boolean indicating if contains canonical data
-                - last_changed_at: Timestamp of last change
-                - version: Version string for cache validation
+        Includes matriarchal framework context when enabled.
         """
         start_time = time.perf_counter()
-        
+    
         # Generate cache key from scope
         cache_key = self._generate_scene_cache_key(scope)
-        
+    
         # Check cache first with lock for race safety
         async with self._cache_lock:
             cached = self._get_cached_bundle(cache_key)
@@ -452,24 +441,24 @@ class LoreOrchestrator:
                 logger.debug(f"Scene bundle cache hit for key {cache_key[:8]}")
                 self.metrics['bundle_hits'] = self.metrics.get('bundle_hits', 0) + 1
                 return cached
-        
+    
         self.metrics['bundle_misses'] = self.metrics.get('bundle_misses', 0) + 1
-        
+    
         # Build fresh bundle in parallel
         bundle_data = SceneBundleData()
         canonical = False
-        
+    
         # Prepare parallel tasks with semaphore
         sem = asyncio.Semaphore(self.config.max_parallel_operations)
-        
+    
         async def _fetch_with_semaphore(task_coro):
             """Execute task with semaphore limit."""
             async with sem:
                 return await task_coro
-        
+    
         # Use configurable timeout
         timeout = self.config.subfetch_timeout if hasattr(self.config, 'subfetch_timeout') else 1.5
-        
+    
         async def _with_timeout(coro, label):
             """Wrap task with timeout to prevent tail latency."""
             try:
@@ -477,10 +466,10 @@ class LoreOrchestrator:
             except asyncio.TimeoutError:
                 logger.warning(f"{label} fetch timed out after {timeout}s")
                 return None
-        
+    
         # Build task list based on scope
         tasks = []
-        
+    
         loc_ref = getattr(scope, 'location_id', None)
         if isinstance(loc_ref, int):
             tasks.append(('location', self._fetch_location_lore_for_bundle(loc_ref)))
@@ -489,19 +478,25 @@ class LoreOrchestrator:
         elif isinstance(loc_ref, str) and loc_ref:
             # Name-only: fetch the location context, skip id-dependent tables
             tasks.append(('location', self.get_location_context(loc_ref)))
-        
+    
         if hasattr(scope, 'lore_tags') and scope.lore_tags:
             tasks.append(('world', self._fetch_world_lore_for_bundle(list(scope.lore_tags)[:10])))
-        
+    
         if hasattr(scope, 'nation_ids') and scope.nation_ids:
             nid_list = list(scope.nation_ids)[:5]
             tasks.append(('nations', self._fetch_nations_for_bundle(nid_list)))
-            # NEW cultural data task
             tasks.append(('culture', self._fetch_cultural_data_for_bundle(nid_list)))
-        
-        if hasattr(scope, 'conflict_ids') and scope.conflict_ids:
-            tasks.append(('conflicts', self._fetch_conflicts_for_bundle(list(scope.conflict_ids)[:5])))
-        
+    
+        # NEW: Matriarchal framework tasks (optional)
+        need_mpf = bool(self.config.enable_matriarchal_theme) and (
+            (hasattr(scope, 'nation_ids') and scope.nation_ids) or
+            (getattr(scope, 'location_id', None) is not None) or
+            (hasattr(scope, 'lore_tags') and scope.lore_tags)
+        )
+        if need_mpf:
+            tasks.append(('mpf_core', self.mpf_generate_core_principles()))
+            tasks.append(('mpf_expressions', self.mpf_generate_power_expressions(limit=3)))
+    
         # Execute all tasks in parallel with timeout protection
         try:
             # Create wrapped tasks with semaphore and timeout
@@ -511,7 +506,7 @@ class LoreOrchestrator:
                 ))
                 for label, coro in tasks
             ]
-            
+    
             # Wait for all to complete
             results = []
             for label, task in wrapped_tasks:
@@ -521,12 +516,12 @@ class LoreOrchestrator:
                 except Exception as e:
                     logger.warning(f"Failed to fetch {label}: {e}")
                     results.append((label, None))
-            
+    
             # Process results
             for label, data in results:
                 if data is None:
                     continue
-                    
+    
                 if label == 'location':
                     bundle_data.location = data
                     if 'canonical_rules' in data:
@@ -535,28 +530,40 @@ class LoreOrchestrator:
                             for rule in data['canonical_rules']
                         ])
                         canonical = True
-                        
+    
                 elif label == 'world':
                     bundle_data.world = data
-                    
+    
                 elif label == 'nations':
                     bundle_data.nations = data
                     canonical = True  # Nations are canonical
-
+    
                 elif label == 'culture':
                     bundle_data.languages = data.get('languages', [])
                     bundle_data.cultural_norms = data.get('norms', [])
                     bundle_data.etiquette = data.get('etiquette', [])
-                    
+    
+                # NEW: Matriarchal framework results
+                elif label == 'mpf_core':
+                    # Ensure world dict exists and attach principles
+                    bundle_data.world = bundle_data.world or {}
+                    bundle_data.world["matriarchal_principles"] = data
+                    canonical = True
+    
+                elif label == 'mpf_expressions':
+                    # Ensure world dict exists and attach expressions
+                    bundle_data.world = bundle_data.world or {}
+                    bundle_data.world["power_expressions"] = data
+    
                 elif label == 'religions':
                     bundle_data.religions = data[:3]  # Top 3 religions
-                    
+    
                 elif label == 'conflicts':
                     bundle_data.conflicts = data
-                    
+    
                 elif label == 'myths':
                     bundle_data.myths = data[:3]  # Top 3 myths
-            
+    
             # Add canonical consistency rules (after main fetches)
             if self.config.enable_validation:
                 try:
@@ -572,11 +579,11 @@ class LoreOrchestrator:
                         canonical = True
                 except Exception as e:
                     logger.debug(f"Could not fetch canonical rules: {e}")
-            
+    
         except Exception as e:
             logger.error(f"Error building scene bundle: {e}")
             # Return minimal bundle on error
-        
+    
         # Calculate build time
         build_ms = (time.perf_counter() - start_time) * 1000
         self.metrics['build_ms'] = self.metrics.get('build_ms', [])
@@ -585,7 +592,7 @@ class LoreOrchestrator:
             # Keep only last 100 measurements
             if len(self.metrics['build_ms']) > 100:
                 self.metrics['build_ms'] = self.metrics['build_ms'][-100:]
-        
+    
         # Build result with consistent structure and anchors
         result = {
             'section': 'lore',  # Consistent with other bundles
@@ -600,12 +607,68 @@ class LoreOrchestrator:
             'version': f"lore_{cache_key[:8]}_{int(time.time())}",
             'build_ms': build_ms
         }
-        
+    
+        # Optional: apply matriarchal lens before caching
+        if self.config.enable_matriarchal_theme:
+            try:
+                result = await self.apply_matriarchal_lens_to_bundle(result)
+            except Exception as e:
+                logger.debug(f"Matriarchal lens application skipped due to error: {e}")
+    
         # Cache the bundle with lock for race safety
         async with self._cache_lock:
             self._cache_bundle(cache_key, result)
-        
+    
         return result
+
+    async def apply_matriarchal_lens_to_bundle(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Optionally rewrite parts of the bundle to reflect matriarchal themes more strongly.
+        This is intentionally conservative: only the most visible textual fields are touched.
+        """
+        if not self.config.enable_matriarchal_theme:
+            return bundle
+    
+        try:
+            mpf = await self._get_matriarchal_power_framework()
+        except Exception as e:
+            logger.debug(f"Could not initialize matriarchal framework: {e}")
+            return bundle
+    
+        # Carefully transform just the most visible textual fields
+        foundation: Dict[str, Any] = {}
+    
+        # Location description
+        try:
+            loc_desc = (
+                bundle.get("data", {})
+                      .get("location", {})
+                      .get("description")
+            )
+            if loc_desc and isinstance(loc_desc, str) and loc_desc.strip():
+                foundation["location_description"] = loc_desc
+        except Exception:
+            pass
+    
+        # Optionally, add other small, self-contained text fields here in future
+    
+        if not foundation:
+            return bundle  # Nothing to transform
+    
+        try:
+            transformed = await mpf.apply_power_lens(foundation)
+        except Exception as e:
+            logger.debug(f"Matriarchal lens application error: {e}")
+            return bundle
+    
+        # Apply back to bundle
+        try:
+            if "location_description" in transformed:
+                bundle["data"]["location"]["description"] = transformed["location_description"]
+        except Exception:
+            pass
+    
+        return bundle
 
     async def _track_lore_dynamics_change(
         self,
@@ -675,40 +738,40 @@ class LoreOrchestrator:
     async def get_system_status(self) -> Dict[str, Any]:
         """Get status of all integrated systems."""
         status = {
-            'orchestrator': {
-                'initialized': self.initialized,
-                'metrics': self.metrics,
-                'cache_status': {
-                    'scene_bundles': len(self._scene_bundle_cache),
-                    'change_log_entries': sum(len(log) for log in self._change_log.values())
-                }
+            "orchestrator": {
+                "initialized": self.initialized,
+                "metrics": self.metrics,
+                "cache_status": {
+                    "scene_bundles": len(self._scene_bundle_cache),
+                    "change_log_entries": sum(len(log) for log in self._change_log.values()),
+                },
             },
-            'systems': {}
+            "systems": {},
         }
-        
-        # Check each system
-        systems_to_check = [
-            ('lore_dynamics', self._lore_dynamics_system),
-            ('regional_culture', self._regional_culture_system),
-            ('matriarchal', self._matriarchal_system),
-            ('education', self._education_manager),
-            ('religion', self._religion_manager),
-            ('politics', self._politics_manager),
-            ('geopolitical', self._geopolitical_manager),
-            ('local_lore', self._local_lore_manager)
+    
+        # Use attribute names so hasattr works correctly
+        attr_names = [
+            ("lore_dynamics", "_lore_dynamics_system"),
+            ("regional_culture", "_regional_culture_system"),
+            ("matriarchal", "_matriarchal_system"),
+            ("education", "_education_manager"),
+            ("religion", "_religion_manager"),
+            ("politics", "_politics_manager"),
+            ("geopolitical", "_geopolitical_manager"),
+            ("local_lore", "_local_lore_manager"),
         ]
-        
-        for name, system_attr in systems_to_check:
-            if hasattr(self, system_attr) and getattr(self, system_attr) is not None:
-                system = getattr(self, system_attr)
-                status['systems'][name] = {
-                    'loaded': True,
-                    'initialized': getattr(system, 'initialized', False),
-                    'has_governance': getattr(system, 'governor', None) is not None
+    
+        for name, attr in attr_names:
+            if hasattr(self, attr) and getattr(self, attr) is not None:
+                system = getattr(self, attr)
+                status["systems"][name] = {
+                    "loaded": True,
+                    "initialized": getattr(system, "initialized", False),
+                    "has_governance": getattr(system, "governor", None) is not None,
                 }
             else:
-                status['systems'][name] = {'loaded': False}
-        
+                status["systems"][name] = {"loaded": False}
+    
         return status
 
     async def culture_simulate_exchange(
@@ -1437,6 +1500,7 @@ class LoreOrchestrator:
         Returns:
             Multi-step plan with dependencies and expected outcomes
         """
+        from lore.systems.dynamics import MultiStepPlanner
         dynamics = await self._get_lore_dynamics_system()
         planner = MultiStepPlanner(dynamics)
         context = {
@@ -1458,6 +1522,7 @@ class LoreOrchestrator:
     
     async def dynamics_execute_plan_step(self, ctx, plan_id: str, step_index: int) -> Dict[str, Any]:
         """Execute a specific step in a multi-step narrative plan."""
+        from lore.systems.dynamics import MultiStepPlanner
         dynamics = await self._get_lore_dynamics_system()
         planner = MultiStepPlanner(dynamics)
         context = {
@@ -1490,6 +1555,7 @@ class LoreOrchestrator:
         Returns:
             Evaluation scores and feedback
         """
+        from lore.systems.dynamics import NarrativeEvaluator
         dynamics = await self._get_lore_dynamics_system()
         evaluator = NarrativeEvaluator(dynamics)
         return await evaluator.evaluate_narrative(narrative_element, element_type)
@@ -1512,6 +1578,7 @@ class LoreOrchestrator:
         Returns:
             Evolved narrative element
         """
+        from lore.systems.dynamics import NarrativeEvolutionSystem
         dynamics = await self._get_lore_dynamics_system()
         evolution_system = NarrativeEvolutionSystem(dynamics)
         
@@ -1536,18 +1603,17 @@ class LoreOrchestrator:
         
         return result
     
-    async def dynamics_stream_world_changes(
-        self, ctx,
+    async def dynamics_stream_world_changes_with_ctx(
+        self,
+        ctx,
         event_data: Dict[str, Any],
         affected_elements: List[Dict[str, Any]]
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream progressive updates about world changes."""
-        dynamics = await self._get_lore_dynamics_system()
-        streamer = WorldStateStreamer(dynamics)
-        
-        async for chunk in streamer.stream_world_changes(event_data, affected_elements):
+        """Wrapper that accepts ctx and forwards to the canonical streamer."""
+        async for chunk in self.dynamics_stream_world_changes(event_data, affected_elements):
             yield chunk
-        
+
+    
     async def analyze_setting_and_generate_orgs(self) -> Dict[str, Any]:
         from lore.setting_analyzer import SettingAnalyzer
         analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
@@ -2782,7 +2848,12 @@ class LoreOrchestrator:
     
         return result
 
-    async def dynamics_stream_world_changes(self, event_data: Dict[str, Any], affected_elements: List[Dict[str, Any]]):
+    async def dynamics_stream_world_changes(
+        self,
+        event_data: Dict[str, Any],
+        affected_elements: List[Dict[str, Any]]
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream progressive updates about world changes."""
         from lore.systems.dynamics import WorldStateStreamer
         ds = await self._get_lore_dynamics_system()
         streamer = WorldStateStreamer(ds)
@@ -3030,13 +3101,12 @@ class LoreOrchestrator:
             )
             logger.info("Lore generator initialized")
         return self._lore_generator
-    
+        
     async def _get_regional_culture_system(self):
-        """Get or initialize regional culture system."""
         if not self._regional_culture_system:
             from lore.systems.regional_culture import RegionalCultureSystem
             self._regional_culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
-            await self._regional_culture_system.initialize_tables()
+            await self._regional_culture_system.ensure_initialized()
             logger.info("Regional culture system initialized")
         return self._regional_culture_system
     
@@ -3057,12 +3127,58 @@ class LoreOrchestrator:
         return self._religious_distribution_system
     
     async def _get_matriarchal_power_framework(self):
-        """Get or initialize matriarchal power framework."""
-        if not hasattr(self, '_matriarchal_power_framework'):
-            from lore.frameworks.matriarchal_power import MatriarchalPowerFramework
-            self._matriarchal_power_framework = MatriarchalPowerFramework(self.user_id, self.conversation_id)
-            logger.info("Matriarchal power framework initialized")
-        return self._matriarchal_power_framework
+        """Get or initialize the matriarchal power structure framework."""
+        if not hasattr(self, "_mpf"):
+            from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
+            self._mpf = MatriarchalPowerStructureFramework(self.user_id, self.conversation_id)
+            # If it inherits BaseLoreManager, you can register governance if needed:
+            try:
+                governor = await get_central_governance(self.user_id, self.conversation_id)
+                self._mpf.governor = governor
+                if hasattr(self._mpf, "register_with_governance"):
+                    await self._mpf.register_with_governance()
+            except Exception as e:
+                logger.debug(f"Could not attach/register governance to Matriarchal framework: {e}")
+            logger.info("MatriarchalPowerStructureFramework initialized")
+        return self._mpf
+
+    # ===== MATRIARCHAL FRAMEWORK WRAPPERS =====
+    
+    async def mpf_generate_core_principles(self) -> Dict[str, Any]:
+        mpf = await self._get_matriarchal_power_framework()
+        out = await mpf.generate_core_principles()
+        try:
+            return out.dict()
+        except Exception:
+            # If it’s already a dict
+            return out
+    
+    async def mpf_generate_hierarchical_constraints(self) -> Dict[str, Any]:
+        mpf = await self._get_matriarchal_power_framework()
+        out = await mpf.generate_hierarchical_constraints()
+        try:
+            return out.dict()
+        except Exception:
+            return out
+    
+    async def mpf_generate_power_expressions(self, limit: int = 5) -> List[Dict[str, Any]]:
+        mpf = await self._get_matriarchal_power_framework()
+        out = await mpf.generate_power_expressions()
+        if hasattr(out, "__iter__"):
+            try:
+                return [e.dict() if hasattr(e, "dict") else e for e in out][:limit]
+            except Exception:
+                return list(out)[:limit]
+        return []
+    
+    async def mpf_apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
+        mpf = await self._get_matriarchal_power_framework()
+        return await mpf.apply_power_lens(foundation_data)
+    
+    async def mpf_develop_narrative_through_dialogue(self, narrative_theme: str, initial_scene: str) -> AsyncGenerator[str, None]:
+        mpf = await self._get_matriarchal_power_framework()
+        async for chunk in mpf.develop_narrative_through_dialogue(narrative_theme, initial_scene):
+            yield chunk
     
     # ===== CORE LORE OPERATIONS =====
     
@@ -3231,7 +3347,7 @@ class LoreOrchestrator:
         rcs = await self._get_regional_culture_system()
         return await rcs.detect_cultural_conflicts(nation_id1=nation_id1, nation_id2=nation_id2)
     
-    async def rc_get_all_languages(self) -> List[Dict[str, Any]:
+    async def rc_get_all_languages(self) -> List[Dict[str, Any]]:
         rcs = await self._get_regional_culture_system()
         return await rcs.get_all_languages()
     
