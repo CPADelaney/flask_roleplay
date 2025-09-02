@@ -229,6 +229,8 @@ from lore.core.canon import (
 )
 from lore.core.context import CanonicalContext
 
+from story_agent.world_simulation_models import kvlist_from_obj, kvdict, dict_to_kvlist, keyvalue_list_to_dict, KVPair, KeyValue
+
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
@@ -284,65 +286,6 @@ def _to_model_dict(x):
     if is_dataclass(x):
         return asdict(x)
     return x  # already a plain type
-
-def _kvlist(data):
-    """
-    Return a List[dict] with {"key": str, "value": <json-safe>} – NOT KVPair/KVItem objects.
-    Always JSON-serialize dicts/lists so Pydantic sees scalars/strings.
-    """
-    import json
-    out = []
-    if data is None:
-        return out
-
-    def _val(v):
-        if isinstance(v, (dict, list)):
-            return json.dumps(v, default=str)
-        if v is None or isinstance(v, (str, int, float, bool)):
-            return v
-        # Pydantic/enum/dataclass/etc. -> make string
-        try:
-            return json.dumps(_to_model_dict(v), default=str)
-        except Exception:
-            return str(v)
-
-    if isinstance(data, dict):
-        for k, v in data.items():
-            out.append({"key": str(k), "value": _val(v)})
-        return out
-
-    if isinstance(data, list):
-        for i, v in enumerate(data):
-            out.append({"key": str(i), "value": _val(v)})
-        return out
-
-    # scalar
-    return [{"key": "value", "value": _val(data)}]
-
-# Helpers used later in this module
-def kvlist_from_obj(obj: Any) -> List[Dict[str, Any]]:
-    """Public wrapper for _kvlist to make call sites clearer."""
-    return _kvlist(obj)
-
-def kvdict(kv_like: Any) -> Dict[str, Any]:
-    """
-    Convert a KV-ish payload (List[KeyValue] | List[dict{'key','value'}] | dict) to a plain dict.
-    Falls back to {} if not recognized.
-    """
-    if kv_like is None:
-        return {}
-    if isinstance(kv_like, dict):
-        return kv_like
-    out: Dict[str, Any] = {}
-    try:
-        for item in kv_like:
-            if hasattr(item, "key") and hasattr(item, "value"):
-                out[str(item.key)] = item.value
-            elif isinstance(item, dict) and "key" in item and "value" in item:
-                out[str(item["key"])] = item["value"]
-    except Exception:
-        return {}
-    return out
 
 def _as_dict_maybe_model(x: Any) -> Dict[str, Any]:
     return x.model_dump() if hasattr(x, "model_dump") else (x if isinstance(x, dict) else {})
