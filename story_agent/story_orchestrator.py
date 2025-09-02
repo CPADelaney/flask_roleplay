@@ -431,18 +431,30 @@ class StoryOrchestrator:
             logger.warning(f"Conflict integration failed: {e}")
 
     async def _adjust_for_conflicts(self, packet: StoryPacket, conflict_state: Dict[str, Any]):
-        """
-        Nudge narrative content based on conflicts being active.
-        """
+        """Nudge narrative content based on conflicts being active."""
         try:
-            summary = conflict_state.get("metrics", {})
-            severity = float(summary.get("complexity_score", 0.0))
-            if packet.primary_narrative:
-                tag = " The atmosphere is tighter than usual; tensions hum in the background."
-                if severity > 0.5 and tag not in packet.primary_narrative:
-                    packet.primary_narrative += tag
-        except Exception:
-            pass
+            severity = float(conflict_state.get("metrics", {}).get("complexity_score", 0.0))
+            
+            # More nuanced adjustments based on conflict type
+            active_conflicts = conflict_state.get("active_conflicts", [])
+            for conflict in active_conflicts:
+                conflict_type = conflict.get("type", "unknown")
+                
+                # Type-specific narrative adjustments
+                if conflict_type == "social" and packet.dialogues:
+                    # Add tension to dialogues
+                    for dialogue in packet.dialogues:
+                        if isinstance(dialogue, dict):
+                            dialogue["subtext"] = "Unspoken tensions color the conversation"
+                
+                elif conflict_type == "power" and packet.primary_narrative:
+                    # Adjust narrative tone
+                    if severity > 0.7:
+                        packet.primary_narrative = packet.primary_narrative.replace(
+                            "relaxed", "charged with subtle tension"
+                        )
+        except Exception as e:
+            logger.debug(f"Conflict adjustment failed: {e}")
 
     # --------- Player Input Path ---------
     async def _process_player_input_path(self, packet: StoryPacket, user_input: str):
@@ -656,22 +668,37 @@ class StoryOrchestrator:
     async def _canonical_log_packet(self, packet: StoryPacket, mode: str):
         if not packet.primary_narrative:
             return
+        
         try:
             from lore.core.canon import log_canonical_event, ensure_canonical_context
             from db.connection import get_db_connection_context
+            
             canonical_ctx = ensure_canonical_context({
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id
             })
+            
             significance = self._calculate_packet_significance(packet)
+            
             if significance >= 7:
                 async with get_db_connection_context() as conn:
-                    await log_canonical_event(
-                        canonical_ctx, conn,
-                        f"Story packet: {packet.primary_narrative[:100]}",
-                        tags=["story_packet", mode],
-                        significance=significance
-                    )
+                    # Batch multiple canonical operations
+                    async with conn.transaction():
+                        await log_canonical_event(
+                            canonical_ctx, conn,
+                            f"Story packet: {packet.primary_narrative[:100]}",
+                            tags=["story_packet", mode],
+                            significance=significance
+                        )
+                        
+                        # Log related events in same transaction
+                        if packet.active_conflicts:
+                            await log_canonical_event(
+                                canonical_ctx, conn,
+                                f"Conflicts active during packet: {len(packet.active_conflicts)}",
+                                tags=["story_packet", "conflicts"],
+                                significance=significance - 1
+                            )
         except Exception as e:
             logger.warning(f"Canonical logging failed: {e}")
 
