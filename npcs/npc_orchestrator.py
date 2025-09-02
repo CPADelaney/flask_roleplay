@@ -273,39 +273,42 @@ class NPCOrchestrator:
                 pass
 
     async def initialize(self):
-        """Initialize all subsystems"""
-        try:
-            from logic.narrative_events import initialize_player_stats as _init_stats
-            await _init_stats(self.user_id, self.conversation_id)
-        except Exception as e:
-            logger.debug(f"[Stats] player stats init skipped: {e}")
+            """Initialize all subsystems"""
+            try:
+                from logic.narrative_events import initialize_player_stats as _init_stats
+                await _init_stats(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"[Stats] player stats init skipped: {e}")
+                
+            try:
+                # Perception is per-NPC now; nothing to initialize globally
+                await self._belief_system.initialize()
+                await self._lore_manager.initialize()
+                
+                # Ensure calendar tables if already loaded; otherwise, they'll be ensured on first use
+                if self._calendar_system:
+                    try:
+                        await self._calendar_system['ensure_tables'](self.user_id, self.conversation_id)
+                    except Exception as ce:
+                        logger.debug(f"[Calendar] ensure_tables failed during init: {ce}")
+            except Exception as e:
+                logger.error(f"Failed to initialize belief/lore systems: {e}")
+    
+            try:
+                from logic.addiction_system_sdk import register_with_governance
+                await register_with_governance(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"[Addictions] governance registration skipped: {e}")
+                
+            try:
+                # Load active NPCs
+                await self._load_active_npcs()
+                
+                logger.info("NPC Orchestrator fully initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize NPC Orchestrator: {e}")
+                raise
             
-        try:
-            # Perception is per-NPC now; nothing to initialize globally
-            await self._belief_system.initialize()
-            await self._lore_manager.initialize()
-            
-            # Ensure calendar tables if already loaded; otherwise, they'll be ensured on first use
-            if self._calendar_system:
-                try:
-                    await self._calendar_system['ensure_tables'](self.user_id, self.conversation_id)
-                except Exception as ce:
-                    logger.debug(f"[Calendar] ensure_tables failed during init: {ce}")
-
-        try:
-            from logic.addiction_system_sdk import register_with_governance
-            await register_with_governance(self.user_id, self.conversation_id)
-        except Exception as e:
-            logger.debug(f"[Addictions] governance registration skipped: {e}")
-            
-            # Load active NPCs
-            await self._load_active_npcs()
-            
-            logger.info("NPC Orchestrator fully initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize NPC Orchestrator: {e}")
-            raise
-        
     async def get_all_npcs(self, location: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all NPCs for this user/conversation. Required by ContextBroker.
