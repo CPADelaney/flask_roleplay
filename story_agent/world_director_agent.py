@@ -233,6 +233,14 @@ from story_agent.world_simulation_models import kvlist_from_obj, kvdict, dict_to
 
 logger = logging.getLogger(__name__)
 
+def to_keyvalues(obj) -> list[dict]:
+# kvlist_from_obj returns List[KVPair]; convert to plain {"key","value"} dicts
+return [{"key": kv.key, "value": kv.value} for kv in kvlist_from_obj(obj or {})]
+
+def to_keyvalues_indexed(seq) -> list[dict]:
+# list -> {"0": item, "1": item2, ...} then to KeyValues
+return [{"key": str(i), "value": v} for i, v in enumerate(seq or [])]
+
 # ===============================================================================
 # COMPLETE World State Models with ALL Integrations
 # ===============================================================================
@@ -604,72 +612,83 @@ class CompleteWorldDirectorContext:
     
             # Build and return the world state (using helpers to keep Pydantic happy)
             return CompleteWorldState(
-                # models -> dicts
+                # models -> dicts (Pydantic can coerce these dicts into their model fields)
                 current_time=_to_model_dict(current_time),
                 player_vitals=_to_model_dict(vitals),
-    
-                # dicts/lists -> KV [{"key","value"}]
-                calendar_names=_kvlist(self.calendar_names or {}),
-                calendar_events=_kvlist(calendar_events),
-    
-                visible_stats=visible_stats,                 # dict
-                hidden_stats=hidden_stats,                   # dict
-                active_stat_combinations=stat_combinations,  # list[dict]
-                stat_thresholds_active=stat_thresholds,      # dict
-    
-                recent_memories=[m.to_dict() if hasattr(m, "to_dict") else _to_model_dict(m) for m in (recent_memories or [])],
-                semantic_abstractions=[],
-                active_flashbacks=[flashback] if flashback else [],
-                pending_reveals=pending_reveals or [],
-                pending_dreams=[],
-                recent_revelations=[revelation] if revelation else [],
+            
+                # dicts/lists -> KV [{"key","value"}], values safely JSON-stringified if complex
+                calendar_names=_to_kv(self.calendar_names or {}),
+                calendar_events=_to_kv(calendar_events or []),
+            
+                visible_stats=_to_kv(visible_stats or {}),                 # was dict
+                hidden_stats=_to_kv(hidden_stats or {}),                   # was dict
+                active_stat_combinations=_to_kv(stat_combinations or []),  # was list[dict]
+                stat_thresholds_active=_to_kv(stat_thresholds or {}),      # was dict
+            
+                # Memory/context (stored as KV to keep schema strict and values scalar)
+                recent_memories=_to_kv([
+                    (m.to_dict() if hasattr(m, "to_dict") else _to_model_dict(m))
+                    for m in (recent_memories or [])
+                ]),
+                semantic_abstractions=[],  # list[str] is fine
+                active_flashbacks=_to_kv([flashback] if flashback else []),
+                pending_reveals=_to_kv(pending_reveals or []),
+                pending_dreams=_to_kv([]),
+                recent_revelations=_to_kv([revelation] if revelation else []),
                 inner_monologues=[],
-    
-                active_rules=triggered_rules or [],
-                triggered_effects=[],
-                pending_effects=[],
-    
-                player_inventory=inventory_result.get("items", []),
-                recent_item_changes=[],
-    
-                active_npcs=npcs,  # list[dict]
-                npc_masks={npc["npc_id"]: npc.get("mask", {}) for npc in npcs if "npc_id" in npc},
-                npc_narrative_stages={npc["npc_id"]: npc.get("narrative_stage", "") for npc in npcs if "npc_id" in npc},
-   
-                relationship_states=[],
+            
+                # Rules/effects
+                active_rules=_to_kv(triggered_rules or []),
+                triggered_effects=_to_kv([]),
+                pending_effects=_to_kv([]),
+            
+                # Inventory (items are often dicts -> index-keyed KV with JSON-stringified values)
+                player_inventory=_to_kv(inventory_result.get("items", [])),
+                recent_item_changes=_to_kv([]),
+            
+                # NPCs and relationships
+                active_npcs=_to_kv(npcs or []),  # list[dict] -> index-keyed KV
+                npc_masks=_to_kv({npc["npc_id"]: npc.get("mask", {}) for npc in npcs if "npc_id" in npc}),
+                npc_narrative_stages=_to_kv({npc["npc_id"]: npc.get("narrative_stage", "") for npc in npcs if "npc_id" in npc}),
+                relationship_states=_to_kv([]),
                 relationship_dynamics=_to_model_dict(relationship_dynamics),
-                relationship_overview=rel_overview or {},
-                pending_relationship_events=rel_events.get("events", []),
-    
-                addiction_status=addiction_status or {},
-                active_cravings=active_cravings or [],
-                addiction_contexts=[],
-    
+                relationship_overview=_to_kv(rel_overview or {}),
+                pending_relationship_events=_to_kv(rel_events.get("events", []) if isinstance(rel_events, dict) else rel_events or []),
+            
+                # Addictions
+                addiction_status=_to_kv(addiction_status or {}),
+                active_cravings=_to_kv(active_cravings or []),
+                addiction_contexts=_to_kv([]),
+            
+                # Currency
                 player_money=100,
-                currency_system=currency_system or {},
-                recent_transactions=[],
-    
-                # enums -> string value
+                currency_system=_to_kv(currency_system or {}),
+                recent_transactions=_to_kv([]),
+            
+                # Enums/models
                 world_mood=world_mood,
-    
-                # model -> dict
                 world_tension=_to_model_dict(world_tension),
-    
-                tension_factors=tensions,
-                environmental_factors={
+            
+                # Tension/environment
+                tension_factors=_to_kv(tensions or {}),
+                environmental_factors=_to_kv({
                     "conflict_manifestations": conflict_manifestations,
-                    "conflict_complexity": conflict_state.get("complexity_score", 0),
-                },
-    
-                # schema expects a string here in your tool JSON
-                location_data=_to_model_dict(location_data) if location_data else "",
-    
-                # use KV for flex fields
-                ongoing_events=active_conflicts,
-                available_activities=available_activities,
-    
-                event_history=[],
-                nyx_directives=[],
+                    "conflict_complexity": (conflict_state.get("metrics", {}) or {}).get("complexity_score", 0),
+                }),
+            
+                # Location: ensure string (model field is str)
+                location_data=(
+                    (location_data.get("current_location") if isinstance(location_data, dict) else str(location_data))
+                    if location_data else ""
+                ),
+            
+                # Events
+                ongoing_events=_to_kv(active_conflicts or []),
+                available_activities=_to_kv(available_activities or []),
+                event_history=_to_kv([]),
+            
+                # Governance
+                nyx_directives=_to_kv([]),
             )
     
         except Exception as e:
