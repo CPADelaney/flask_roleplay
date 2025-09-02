@@ -24,7 +24,8 @@ from agents import (
     trace,
     InputGuardrail,
     GuardrailFunctionOutput,
-    RunContextWrapper
+    RunContextWrapper,
+    InputGuardrailTripwireTriggered
 )
 from agents.run import RunConfig
 
@@ -47,7 +48,6 @@ except Exception:
             embedding.extend(embedding[:min(len(embedding), 1536 - len(embedding))])
         return embedding[:1536]
 
-from agents.guardrails import InputGuardrailTripwireTriggered
 from lore.managers.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
