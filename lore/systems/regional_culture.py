@@ -2882,14 +2882,14 @@ class RegionalCultureSystem(BaseLoreManager):
             except Exception as e:
                 logging.error(f"Error storing dialect data: {e}")
                 # Continue anyway since we've already updated the main language record
-    
-    # Return the dialect evolution results
-    return {
-        "language_id": language_id,
-        "region_id": region_id,
-        "years_simulated": years,
-        "dialect": dialect_model.dict()
-    }
+        
+        # Return the dialect evolution results
+        return {
+            "language_id": language_id,
+            "region_id": region_id,
+            "years_simulated": years,
+            "dialect": dialect_model.dict()
+        }
     
     # ---------------------------------------------------------------------------
     # Additional Helper Methods
