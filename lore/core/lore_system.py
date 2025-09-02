@@ -476,15 +476,15 @@ class LoreSystem:
         return await self.generator.evolve_lore_with_event(event_description)
 
     async def mature_world_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
-        """Example: call the LoreDynamicsSystem to mature lore over time."""
-        # Ensure the system is initialized
         await self.ensure_initialized()
-        
         ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         })
-        return await self.lore_dynamics_system.mature_lore_over_time.fn(ctx, days_passed)
+        try:
+            return await self.lore_dynamics_system.mature_lore_over_time(ctx, days_passed)
+        except TypeError:
+            return await self.lore_dynamics_system.mature_lore_over_time(days_passed)
     
     # ---------------------------------------------------------------------
     # Enhanced Relationship Methods - Multi-Relationship Support
