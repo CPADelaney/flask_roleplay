@@ -449,293 +449,293 @@ class RegionalCultureSystem(BaseLoreManager):
     # (1) Generate Languages
     # ---------------------------------------------------------------------------
     @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_languages",
-        action_description="Generating languages for the world",
-        id_from_context=lambda ctx: "regional_culture_system"
-    )
-    async def generate_languages(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
-        """
-        Generate languages with full canon establishment and relationship tracking.
-        """
-        with trace(
-            "LanguageGeneration", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "language_count": count}
-        ):
-            run_ctx = self.create_run_context(ctx)
-            nations = await self.geopolitical_manager.get_all_nations(run_ctx)
-            if not nations:
-                return []
-            
-            # Get existing languages and analyze patterns
-            async with self._with_conn() as conn:
-                existing_languages = await conn.fetch("""
-                    SELECT l.*, 
-                           array_agg(DISTINCT n1.name) FILTER (WHERE n1.id = ANY(l.primary_regions)) as primary_nation_names,
-                           array_agg(DISTINCT n2.name) FILTER (WHERE n2.id = ANY(l.minority_regions)) as minority_nation_names
-                    FROM Languages l
-                    LEFT JOIN Nations n1 ON n1.id = ANY(l.primary_regions)
-                    LEFT JOIN Nations n2 ON n2.id = ANY(l.minority_regions)
-                    GROUP BY l.id
-                """)
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            action_type="generate_languages",
+            action_description="Generating languages for the world",
+            id_from_context=lambda ctx: "regional_culture_system"
+        )
+        async def generate_languages(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
+            """
+            Generate languages with full canon establishment and relationship tracking.
+            """
+            with trace(
+                "LanguageGeneration", 
+                group_id=self.trace_group_id,
+                metadata={**self.trace_metadata, "language_count": count}
+            ):
+                run_ctx = self.create_run_context(ctx)
+                nations = await self.geopolitical_manager.get_all_nations(run_ctx)
+                if not nations:
+                    return []
                 
-                # Analyze language families
-                language_families = {}
+                # Get existing languages and analyze patterns
+                async with self._with_conn() as conn:
+                    existing_languages = await conn.fetch("""
+                        SELECT l.*, 
+                               array_agg(DISTINCT n1.name) FILTER (WHERE n1.id = ANY(l.primary_regions)) as primary_nation_names,
+                               array_agg(DISTINCT n2.name) FILTER (WHERE n2.id = ANY(l.minority_regions)) as minority_nation_names
+                        FROM Languages l
+                        LEFT JOIN Nations n1 ON n1.id = ANY(l.primary_regions)
+                        LEFT JOIN Nations n2 ON n2.id = ANY(l.minority_regions)
+                        GROUP BY l.id
+                    """)
+                    
+                    # Analyze language families
+                    language_families = {}
+                    for lang in existing_languages:
+                        family = lang['language_family']
+                        if family:
+                            if family not in language_families:
+                                language_families[family] = []
+                            language_families[family].append({
+                                'id': lang['id'],
+                                'name': lang['name'],
+                                'regions': lang['primary_regions'] + lang['minority_regions']
+                            })
+                    
+                    # Get geopolitical relationships
+                    relations = await conn.fetch("""
+                        SELECT r.*, n1.name as nation1_name, n2.name as nation2_name
+                        FROM InternationalRelations r
+                        JOIN Nations n1 ON r.nation1_id = n1.id
+                        JOIN Nations n2 ON r.nation2_id = n2.id
+                        WHERE r.relationship_quality >= 6
+                    """)
+            
+            # Create distribution strategy agent
+            distribution_agent = self._get_agent("distribution")
+            
+            # Build comprehensive context
+            nation_data = []
+            for n in nations:
+                nation_info = {
+                    "id": n["id"],
+                    "name": n["name"],
+                    "matriarchy_level": n.get("matriarchy_level", 5),
+                    "cultural_traits": n.get("cultural_traits", []),
+                    "neighboring_nations": n.get("neighboring_nations", []),
+                    "existing_languages": []
+                }
+                
+                # Add existing languages
                 for lang in existing_languages:
-                    family = lang['language_family']
-                    if family:
-                        if family not in language_families:
-                            language_families[family] = []
-                        language_families[family].append({
-                            'id': lang['id'],
-                            'name': lang['name'],
-                            'regions': lang['primary_regions'] + lang['minority_regions']
+                    if n["id"] in lang.get("primary_regions", []):
+                        nation_info["existing_languages"].append({
+                            "name": lang["name"],
+                            "role": "primary"
+                        })
+                    elif n["id"] in lang.get("minority_regions", []):
+                        nation_info["existing_languages"].append({
+                            "name": lang["name"],
+                            "role": "minority"
                         })
                 
-                # Get geopolitical relationships
-                relations = await conn.fetch("""
-                    SELECT r.*, n1.name as nation1_name, n2.name as nation2_name
-                    FROM InternationalRelations r
-                    JOIN Nations n1 ON r.nation1_id = n1.id
-                    JOIN Nations n2 ON r.nation2_id = n2.id
-                    WHERE r.relationship_quality >= 6
-                """)
-        
-        # Create distribution strategy agent
-        distribution_agent = self._get_agent("distribution")
-        
-        # Build comprehensive context
-        nation_data = []
-        for n in nations:
-            nation_info = {
-                "id": n["id"],
-                "name": n["name"],
-                "matriarchy_level": n.get("matriarchy_level", 5),
-                "cultural_traits": n.get("cultural_traits", []),
-                "neighboring_nations": n.get("neighboring_nations", []),
-                "existing_languages": []
-            }
+                nation_data.append(nation_info)
             
-            # Add existing languages
-            for lang in existing_languages:
-                if n["id"] in lang.get("primary_regions", []):
-                    nation_info["existing_languages"].append({
-                        "name": lang["name"],
-                        "role": "primary"
-                    })
-                elif n["id"] in lang.get("minority_regions", []):
-                    nation_info["existing_languages"].append({
-                        "name": lang["name"],
-                        "role": "minority"
-                    })
+            # Generate distribution plan
+            dist_prompt = f"""
+            Plan the distribution of {count} new languages across these nations:
             
-            nation_data.append(nation_info)
-        
-        # Generate distribution plan
-        dist_prompt = f"""
-        Plan the distribution of {count} new languages across these nations:
-        
-        NATIONS:
-        {json.dumps(nation_data, indent=2)}
-        
-        EXISTING LANGUAGE FAMILIES:
-        {json.dumps(list(language_families.keys()), indent=2)}
-        
-        DIPLOMATIC RELATIONS:
-        {json.dumps([{"nations": [r["nation1_name"], r["nation2_name"]], "quality": r["relationship_quality"]} for r in relations], indent=2)}
-        
-        Consider:
-        1. Geographic proximity (neighboring nations might share languages)
-        2. Political alliances (allied nations might share trade languages)
-        3. Cultural similarities (nations with similar traits might have related languages)
-        4. Existing language gaps (nations without languages need them)
-        5. Create both major languages (many speakers) and minor ones
-        6. Some languages should form new families, others join existing ones
-        
-        For each of the {count} languages, return:
-        - primary_region_ids: array of nation IDs where it's a primary language
-        - minority_region_ids: array of nation IDs where it's a minority language
-        - suggested_family: either an existing family name or "new:[family_name]"
-        - distribution_reasoning: brief explanation
-        """
-        
-        dist_config = RunConfig(
-            workflow_name="LanguageDistribution",
-            trace_metadata=self.trace_metadata
-        )
-        
-        dist_result = await Runner.run(distribution_agent, dist_prompt, context=run_ctx.context, run_config=dist_config)
-        
-        try:
-            distribution_plan = json.loads(dist_result.final_output)
-            if not isinstance(distribution_plan, list):
-                distribution_plan = distribution_plan.get("languages", [])
-        except:
-            # Fallback distribution
-            distribution_plan = self._create_fallback_distribution(nations, count, existing_languages)
-        
-        # Generate languages based on plan
-        language_agent = self._get_agent("language").clone(output_type=LanguageOutput)
-        languages = []
-        
-        async with self._with_conn() as conn:
-            for i, dist in enumerate(distribution_plan[:count]):
-                # Get detailed nation info for context
-                primary_nations = [n for n in nations if n["id"] in dist.get("primary_region_ids", [])]
-                minority_nations = [n for n in nations if n["id"] in dist.get("minority_region_ids", [])]
-                
-                if not primary_nations:
-                    continue
-                
-                # Determine language family
-                suggested_family = dist.get("suggested_family", "")
-                if suggested_family.startswith("new:"):
-                    family_name = suggested_family[4:]
-                elif suggested_family in language_families:
-                    family_name = suggested_family
-                else:
-                    family_name = f"Family_{i+1}"
-                
-                # Generate language details
-                gen_prompt = f"""
-                Create a new language for a matriarchal fantasy world.
-                
-                PRIMARY SPEAKERS (nations where this is the main language):
-                {json.dumps(primary_nations, indent=2)}
-                
-                MINORITY SPEAKERS (nations where this is a secondary language):
-                {json.dumps(minority_nations, indent=2)}
-                
-                LANGUAGE FAMILY: {family_name}
-                {"Related languages in family: " + json.dumps([l['name'] for l in language_families.get(family_name, [])]) if family_name in language_families else "This starts a new language family"}
-                
-                Create a language that:
-                1. Reflects the matriarchal power structures (pronouns, titles, formal speech)
-                2. Has vocabulary related to the nations' cultural traits
-                3. Shows influence from neighboring languages if applicable
-                4. Has appropriate complexity (difficulty 1-10)
-                5. Includes common phrases that reflect the culture
-                
-                Return a LanguageOutput object with all required fields.
-                """
-                
-                run_config = RunConfig(
-                    workflow_name="LanguageGeneration",
-                    trace_metadata={"language_index": i}
-                )
-                
-                result = await Runner.run(language_agent, gen_prompt, context=run_ctx.context, run_config=run_config)
-                language_data = result.final_output
-                
-                # Override with planned distribution
-                language_data.primary_regions = dist.get("primary_region_ids", [])
-                language_data.minority_regions = dist.get("minority_region_ids", [])
-                language_data.language_family = family_name
-                
-                # Check for duplicates using canon system
-                from lore.core import canon
-                embed_text = f"{language_data.name} {language_data.description} {language_data.language_family}"
-                
-                # Custom duplicate check for languages
-                similar_language = await self._check_similar_language(
-                    conn, language_data.name, embed_text, language_data.language_family
-                )
-                
-                if similar_language:
-                    # Ask validation agent
-                    validation_agent = canon.CanonValidationAgent()
-                    prompt = f"""
-                    I'm creating a new language but found a similar one. Are these the same?
+            NATIONS:
+            {json.dumps(nation_data, indent=2)}
+            
+            EXISTING LANGUAGE FAMILIES:
+            {json.dumps(list(language_families.keys()), indent=2)}
+            
+            DIPLOMATIC RELATIONS:
+            {json.dumps([{"nations": [r["nation1_name"], r["nation2_name"]], "quality": r["relationship_quality"]} for r in relations], indent=2)}
+            
+            Consider:
+            1. Geographic proximity (neighboring nations might share languages)
+            2. Political alliances (allied nations might share trade languages)
+            3. Cultural similarities (nations with similar traits might have related languages)
+            4. Existing language gaps (nations without languages need them)
+            5. Create both major languages (many speakers) and minor ones
+            6. Some languages should form new families, others join existing ones
+            
+            For each of the {count} languages, return:
+            - primary_region_ids: array of nation IDs where it's a primary language
+            - minority_region_ids: array of nation IDs where it's a minority language
+            - suggested_family: either an existing family name or "new:[family_name]"
+            - distribution_reasoning: brief explanation
+            """
+            
+            dist_config = RunConfig(
+                workflow_name="LanguageDistribution",
+                trace_metadata=self.trace_metadata
+            )
+            
+            dist_result = await Runner.run(distribution_agent, dist_prompt, context=run_ctx.context, run_config=dist_config)
+            
+            try:
+                distribution_plan = json.loads(dist_result.final_output)
+                if not isinstance(distribution_plan, list):
+                    distribution_plan = distribution_plan.get("languages", [])
+            except:
+                # Fallback distribution
+                distribution_plan = self._create_fallback_distribution(nations, count, existing_languages)
+            
+            # Generate languages based on plan
+            language_agent = self._get_agent("language").clone(output_type=LanguageOutput)
+            languages = []
+            
+            async with self._with_conn() as conn:
+                for i, dist in enumerate(distribution_plan[:count]):
+                    # Get detailed nation info for context
+                    primary_nations = [n for n in nations if n["id"] in dist.get("primary_region_ids", [])]
+                    minority_nations = [n for n in nations if n["id"] in dist.get("minority_region_ids", [])]
                     
-                    Proposed Language:
-                    - Name: {language_data.name}
-                    - Family: {language_data.language_family}
-                    - Description: {language_data.description}
-                    - Primary regions: {[n['name'] for n in primary_nations]}
+                    if not primary_nations:
+                        continue
                     
-                    Existing Language:
-                    - Name: {similar_language['name']}
-                    - Family: {similar_language['language_family']}
-                    - Description: {similar_language['description']}
+                    # Determine language family
+                    suggested_family = dist.get("suggested_family", "")
+                    if suggested_family.startswith("new:"):
+                        family_name = suggested_family[4:]
+                    elif suggested_family in language_families:
+                        family_name = suggested_family
+                    else:
+                        family_name = f"Family_{i+1}"
                     
-                    Consider that languages can have similar names but be different.
-                    Answer only 'true' or 'false'.
+                    # Generate language details
+                    gen_prompt = f"""
+                    Create a new language for a matriarchal fantasy world.
+                    
+                    PRIMARY SPEAKERS (nations where this is the main language):
+                    {json.dumps(primary_nations, indent=2)}
+                    
+                    MINORITY SPEAKERS (nations where this is a secondary language):
+                    {json.dumps(minority_nations, indent=2)}
+                    
+                    LANGUAGE FAMILY: {family_name}
+                    {"Related languages in family: " + json.dumps([l['name'] for l in language_families.get(family_name, [])]) if family_name in language_families else "This starts a new language family"}
+                    
+                    Create a language that:
+                    1. Reflects the matriarchal power structures (pronouns, titles, formal speech)
+                    2. Has vocabulary related to the nations' cultural traits
+                    3. Shows influence from neighboring languages if applicable
+                    4. Has appropriate complexity (difficulty 1-10)
+                    5. Includes common phrases that reflect the culture
+                    
+                    Return a LanguageOutput object with all required fields.
                     """
                     
-                    validation_result = await Runner.run(validation_agent.agent, prompt)
-                    if validation_result.final_output.strip().lower() == 'true':
-                        # Use existing language, maybe expand its reach
-                        language_id = similar_language['id']
-                        
-                        # Add new regions if needed
-                        updated_primary = list(set(similar_language['primary_regions'] + language_data.primary_regions))
-                        updated_minority = list(set(similar_language['minority_regions'] + language_data.minority_regions))
-                        
-                        await conn.execute("""
-                            UPDATE Languages
-                            SET primary_regions = $1,
-                                minority_regions = $2
-                            WHERE id = $3
-                        """, updated_primary, updated_minority, language_id)
-                        
-                        lang_dict = dict(similar_language)
-                        lang_dict['primary_regions'] = updated_primary
-                        lang_dict['minority_regions'] = updated_minority
-                        languages.append(lang_dict)
-                        continue
-                
-                # Create new language
-                language_id = await conn.fetchval("""
-                    INSERT INTO Languages (
-                        name, language_family, description, writing_system,
-                        primary_regions, minority_regions, formality_levels,
-                        common_phrases, difficulty, relation_to_power, dialects,
-                        embedding
+                    run_config = RunConfig(
+                        workflow_name="LanguageGeneration",
+                        trace_metadata={"language_index": i}
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    RETURNING id
-                """,
-                    language_data.name,
-                    language_data.language_family,
-                    language_data.description,
-                    language_data.writing_system,
-                    language_data.primary_regions,
-                    language_data.minority_regions,
-                    language_data.formality_levels,
-                    json.dumps(language_data.common_phrases),
-                    language_data.difficulty,
-                    language_data.relation_to_power,
-                    json.dumps(language_data.dialects),
-                    await generate_embedding(embed_text)
-                )
-                
-                # Log canonical event
-                await canon.log_canonical_event(
-                    ctx, conn,
-                    f"New language '{language_data.name}' emerged in the {language_data.language_family} family",
-                    tags=['language', 'culture', 'creation'],
-                    significance=7
-                )
-                
-                # Create initial dialects for major regions
-                for nation_id in language_data.primary_regions[:3]:  # First 3 primary regions
-                    nation = next((n for n in nations if n['id'] == nation_id), None)
-                    if nation:
-                        await self._create_initial_dialect(
-                            conn, language_id, nation_id, 
-                            language_data.name, nation['name']
+                    
+                    result = await Runner.run(language_agent, gen_prompt, context=run_ctx.context, run_config=run_config)
+                    language_data = result.final_output
+                    
+                    # Override with planned distribution
+                    language_data.primary_regions = dist.get("primary_region_ids", [])
+                    language_data.minority_regions = dist.get("minority_region_ids", [])
+                    language_data.language_family = family_name
+                    
+                    # Check for duplicates using canon system
+                    from lore.core import canon
+                    embed_text = f"{language_data.name} {language_data.description} {language_data.language_family}"
+                    
+                    # Custom duplicate check for languages
+                    similar_language = await self._check_similar_language(
+                        conn, language_data.name, embed_text, language_data.language_family
+                    )
+                    
+                    if similar_language:
+                        # Ask validation agent
+                        validation_agent = canon.CanonValidationAgent()
+                        prompt = f"""
+                        I'm creating a new language but found a similar one. Are these the same?
+                        
+                        Proposed Language:
+                        - Name: {language_data.name}
+                        - Family: {language_data.language_family}
+                        - Description: {language_data.description}
+                        - Primary regions: {[n['name'] for n in primary_nations]}
+                        
+                        Existing Language:
+                        - Name: {similar_language['name']}
+                        - Family: {similar_language['language_family']}
+                        - Description: {similar_language['description']}
+                        
+                        Consider that languages can have similar names but be different.
+                        Answer only 'true' or 'false'.
+                        """
+                        
+                        validation_result = await Runner.run(validation_agent.agent, prompt)
+                        if validation_result.final_output.strip().lower() == 'true':
+                            # Use existing language, maybe expand its reach
+                            language_id = similar_language['id']
+                            
+                            # Add new regions if needed
+                            updated_primary = list(set(similar_language['primary_regions'] + language_data.primary_regions))
+                            updated_minority = list(set(similar_language['minority_regions'] + language_data.minority_regions))
+                            
+                            await conn.execute("""
+                                UPDATE Languages
+                                SET primary_regions = $1,
+                                    minority_regions = $2
+                                WHERE id = $3
+                            """, updated_primary, updated_minority, language_id)
+                            
+                            lang_dict = dict(similar_language)
+                            lang_dict['primary_regions'] = updated_primary
+                            lang_dict['minority_regions'] = updated_minority
+                            languages.append(lang_dict)
+                            continue
+                    
+                    # Create new language
+                    language_id = await conn.fetchval("""
+                        INSERT INTO Languages (
+                            name, language_family, description, writing_system,
+                            primary_regions, minority_regions, formality_levels,
+                            common_phrases, difficulty, relation_to_power, dialects,
+                            embedding
                         )
-                
-                lang_dict = language_data.dict()
-                lang_dict["id"] = language_id
-                languages.append(lang_dict)
-    
-    # Update language relationships
-    await self._establish_language_relationships(languages, existing_languages)
-    
-    return languages
-
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                        RETURNING id
+                    """,
+                        language_data.name,
+                        language_data.language_family,
+                        language_data.description,
+                        language_data.writing_system,
+                        language_data.primary_regions,
+                        language_data.minority_regions,
+                        language_data.formality_levels,
+                        json.dumps(language_data.common_phrases),
+                        language_data.difficulty,
+                        language_data.relation_to_power,
+                        json.dumps(language_data.dialects),
+                        await generate_embedding(embed_text)
+                    )
+                    
+                    # Log canonical event
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"New language '{language_data.name}' emerged in the {language_data.language_family} family",
+                        tags=['language', 'culture', 'creation'],
+                        significance=7
+                    )
+                    
+                    # Create initial dialects for major regions
+                    for nation_id in language_data.primary_regions[:3]:  # First 3 primary regions
+                        nation = next((n for n in nations if n['id'] == nation_id), None)
+                        if nation:
+                            await self._create_initial_dialect(
+                                conn, language_id, nation_id, 
+                                language_data.name, nation['name']
+                            )
+                    
+                    lang_dict = language_data.dict()
+                    lang_dict["id"] = language_id
+                    languages.append(lang_dict)
+            
+            # Update language relationships
+            await self._establish_language_relationships(languages, existing_languages)
+            
+            return languages
+        
     async def _check_similar_language(self, conn, name: str, embed_text: str, family: str) -> Optional[Dict[str, Any]]:
         """Check for similar languages with sophisticated matching."""
         # Check exact name
