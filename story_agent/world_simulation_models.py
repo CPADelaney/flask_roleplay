@@ -12,66 +12,96 @@ logger = logging.getLogger(__name__)
 
 # ===== Agent-Safe Base Model with Complete Schema Sanitization =====
 
+# ===== Canonical Agent-Safe Base =====
+
 class AgentSafeModel(_PydanticBaseModel):
     """
-    Pydantic v2 base model that emits a schema with no additionalProperties anywhere.
-    This is required for compatibility with OpenAI Agents SDK's strict mode.
+    Canonical Pydantic v2 base model for Agents SDK strict mode:
+    - extra="forbid" (reject undeclared fields)
+    - arbitrary_types_allowed=True (lets us store SDK objects if needed)
+    - removes additionalProperties/unevaluatedProperties in generated JSON schema
+    - fixes 'required' to only include declared properties
     """
-    model_config = ConfigDict()
-    
-    @classmethod
-    def model_json_schema(cls, **kwargs):
-        """Override to strip additionalProperties from the schema"""
-        schema = super().model_json_schema(**kwargs)
-        return cls._sanitize_schema(schema)
-    
-    @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
-        """This is what TypeAdapter uses (what Agents SDK relies on)"""
-        schema = handler(core_schema)
-        return cls._sanitize_schema(schema)
-    
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     @classmethod
     def _sanitize_schema(cls, schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Recursively sanitize schema to be Agent-compatible"""
         import copy
         s = copy.deepcopy(schema)
-        
-        def strip_additional_properties(obj, path=""):
+
+        def strip(obj, path=""):
             if isinstance(obj, dict):
-                # Remove the problematic keys
-                obj.pop('additionalProperties', None)
-                obj.pop('unevaluatedProperties', None)
-                
-                # Fix 'required' field to match properties
+                obj.pop("additionalProperties", None)
+                obj.pop("unevaluatedProperties", None)
+
                 props = obj.get("properties")
                 req = obj.get("required")
                 if isinstance(props, dict) and isinstance(req, list):
-                    # Only keep required fields that actually exist in properties
-                    valid_required = [k for k in req if k in props]
-                    if len(valid_required) != len(req):
-                        removed = [k for k in req if k not in props]
-                        if removed and path:
-                            logger.debug(f"Removed invalid required fields {removed} from {path}")
-                    obj["required"] = valid_required
-                elif req is not None:
-                    # Remove invalid required field if not a list
+                    obj["required"] = [k for k in req if k in props]
+                elif req is not None and not isinstance(req, list):
                     obj.pop("required", None)
-                
-                # Recursively process all values
-                for k, v in list(obj.items()):
-                    strip_additional_properties(v, f"{path}.{k}" if path else k)
-            elif isinstance(obj, list):
-                # Process list items
-                for i, item in enumerate(obj):
-                    strip_additional_properties(item, f"{path}[{i}]")
-            return obj
-        
-        return strip_additional_properties(s)
 
-# Use AgentSafeModel as the base for all models
+                for k, v in list(obj.items()):
+                    strip(v, f"{path}.{k}" if path else k)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    strip(item, f"{path}[{i}]")
+            return obj
+
+        return strip(s)
+
+    @classmethod
+    def model_json_schema(cls, **kwargs):
+        schema = super().model_json_schema(**kwargs)
+        return cls._sanitize_schema(schema)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        return cls._sanitize_schema(schema)
+
+# Export canonical base for convenience/consistency
 BaseModel = AgentSafeModel
-StrictBaseModel = AgentSafeModel  # Alias for compatibility
+StrictBaseModel = AgentSafeModel
+
+# ===== Canonical Key-Value and helpers =====
+
+JsonScalar = Union[str, int, float, bool, None]
+JsonValue = Union[JsonScalar, List[JsonScalar]]
+
+class KeyValue(BaseModel):
+    """Key-value pair used across tools for Agent compatibility"""
+    key: str
+    value: JsonValue
+
+class KVPair(BaseModel):
+    """Alias/compat wrapper for KeyValue when a different name is expected."""
+    key: str
+    value: JsonValue
+
+class KVList(BaseModel):
+    items: List[KVPair] = Field(default_factory=list)
+
+def dict_to_kvlist(d: dict) -> KVList:
+    return KVList(items=[KVPair(key=str(k), value=v) for k, v in d.items()])
+
+def kvlist_to_dict(kv: KVList) -> dict:
+    return {pair.key: pair.value for pair in kv.items}
+
+def keyvalue_list_to_dict(kvs: List[KeyValue]) -> dict:
+    return {kv.key: kv.value for kv in kvs}
+
+def kvlist_from_obj(obj: Any) -> List[KVPair]:
+    """Convert dict/list/scalar-like into List[KVPair] consistently."""
+    if isinstance(obj, dict):
+        return [KVPair(key=str(k), value=v) for k, v in obj.items()]
+    if isinstance(obj, list):
+        return [KVPair(key=str(i), value=v) for i, v in enumerate(obj)]
+    return [KVPair(key="value", value=obj)]
+
+def kvdict(items: List[KVPair]) -> Dict[str, Any]:
+    """Convert List[KVPair] back to a dict."""
+    return {it.key: it.value for it in (items or [])}
 
 # ===== Core Enums =====
 
@@ -152,53 +182,6 @@ class SceneFocus(Enum):
     DYNAMICS = "dynamics"
     ROUTINE = "routine"
     TENSION = "tension"
-
-# ===== Key-Value Helper for Replacing Dict[str, Any] =====
-
-JsonScalar = Union[str, int, float, bool, None]
-JsonValue = Union[JsonScalar, List[JsonScalar]]
-
-class KeyValue(BaseModel):
-    """Key-value pair to replace Dict[str, Any] fields for Agent compatibility"""
-    key: str
-    value: JsonValue
-
-class KVPair(BaseModel):
-    """Alias for KeyValue for backwards compatibility"""
-    key: str
-    value: JsonValue
-
-# KVItem as alias for compatibility with world_simulation_models
-KVItem = KVPair
-
-class KVList(BaseModel):
-    """List of key-value pairs"""
-    items: List[KVPair] = Field(default_factory=list)
-
-# Helper functions for conversion
-def dict_to_kvlist(d: dict) -> KVList:
-    """Convert dictionary to KVList"""
-    return KVList(items=[KVPair(key=k, value=v) for k, v in d.items()])
-
-def kvlist_to_dict(kv: KVList) -> dict:
-    """Convert KVList to dictionary"""
-    return {pair.key: pair.value for pair in kv.items}
-
-def keyvalue_list_to_dict(kvs: List[KeyValue]) -> dict:
-    """Convert list of KeyValue to dictionary"""
-    return {kv.key: kv.value for kv in kvs}
-
-def kvlist_from_obj(obj: Any) -> List[KVItem]:
-    """Convert various objects to a list of KVItems"""
-    if isinstance(obj, dict):
-        return [KVItem(key=str(k), value=v) for k, v in obj.items()]
-    if isinstance(obj, list):
-        return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
-    return [KVItem(key="value", value=obj)]
-
-def kvdict(items: List[KVItem]) -> Dict[str, Any]:
-    """Convert list of KVItems back to dictionary"""
-    return {it.key: it.value for it in (items or [])}
 
 # ===== Time and Vitals Models =====
 
