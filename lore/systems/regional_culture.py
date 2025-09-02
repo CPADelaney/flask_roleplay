@@ -907,111 +907,111 @@ class RegionalCultureSystem(BaseLoreManager):
                 if not nation:
                     return []
                 nation_data = dict(nation)
-        
-        # Let the LLM decide how many norms to generate, and for which categories
-        category_agent = self._get_agent("category").clone(
-            output_type=NormCategories
-        )
-        
-        cat_prompt = f"""
-        We have the following nation data:
-        {json.dumps(nation_data, indent=2)}
-
-        Decide which categories of cultural norms we should generate (like greeting, authority, dining, etc.), 
-        and how many norms total. Consider categories like:
-        - greeting, dining, authority, gift_giving, personal_space
-        - gender_relations, religious_practice, public_behavior
-        - business_conduct, family_dynamics
-        
-        Return a NormCategories object with:
-        - categories: array of category strings
-        - count: total number of norms to generate
-        """
-        
-        cat_config = RunConfig(
-            workflow_name="DetermineNormCategories",
-            trace_metadata=self.trace_metadata
-        )
-        cat_result = await Runner.run(category_agent, cat_prompt, context=run_ctx.context, run_config=cat_config)
-        
-        try:
-            category_data = cat_result.final_output
-            categories = category_data.categories
-            norms_count = category_data.count
-        except Exception:
-            # fallback
-            categories = ["greeting","dining","authority","gift_giving","gender_relations"]
-            norms_count = len(categories)
-        
-        # Now we generate that many norms with the norm agent
-        norm_agent = self._get_agent("norm").clone(
-            output_type=CulturalNormOutput,
-            input_guardrails=[input_guardrail]
-        )
-        
-        run_config = RunConfig(
-            workflow_name="CulturalNormGeneration",
-            trace_metadata={"user_id": str(self.user_id), "conversation_id": str(self.conversation_id), "nation_id": nation_id}
-        )
-        
-        norms = []
-        
-        # If the user wants more norms_count than categories, we can repeat categories or some sub-lists
-        # For simplicity, we'll ensure we produce exactly norms_count norms total. We'll cycle categories
-        cat_cycle = categories if categories else ["greeting","dining"]
-        
-        for i in range(norms_count):
-            cat = cat_cycle[i % len(cat_cycle)]
             
-            prompt = f"""
-            Generate cultural norms about {cat} for this nation:
-            NATION DATA:
+            # Let the LLM decide how many norms to generate, and for which categories
+            category_agent = self._get_agent("category").clone(
+                output_type=NormCategories
+            )
+            
+            cat_prompt = f"""
+            We have the following nation data:
             {json.dumps(nation_data, indent=2)}
+    
+            Decide which categories of cultural norms we should generate (like greeting, authority, dining, etc.), 
+            and how many norms total. Consider categories like:
+            - greeting, dining, authority, gift_giving, personal_space
+            - gender_relations, religious_practice, public_behavior
+            - business_conduct, family_dynamics
             
-            Return a CulturalNormOutput object with:
-            - category: {cat}
-            - description, formality_level, gender_specific
-            - female_variation, male_variation (if gender_specific)
-            - taboo_level (0-10), consequence
-            - regional_variations dictionary
-            
-            Ensure strong matriarchal themes.
+            Return a NormCategories object with:
+            - categories: array of category strings
+            - count: total number of norms to generate
             """
             
-            result = await Runner.run(norm_agent, prompt, context=run_ctx.context, run_config=run_config)
-            norm_data = result.final_output
+            cat_config = RunConfig(
+                workflow_name="DetermineNormCategories",
+                trace_metadata=self.trace_metadata
+            )
+            cat_result = await Runner.run(category_agent, cat_prompt, context=run_ctx.context, run_config=cat_config)
             
-            # Insert into DB
-            async with self._with_conn() as conn:
-                norm_id = await conn.fetchval("""
-                    INSERT INTO CulturalNorms (
-                        nation_id, category, description, formality_level,
-                        gender_specific, female_variation, male_variation,
-                        taboo_level, consequence, regional_variations
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    RETURNING id
-                """,
-                nation_id,
-                norm_data.category,
-                norm_data.description,
-                norm_data.formality_level,
-                norm_data.gender_specific,
-                norm_data.female_variation,
-                norm_data.male_variation,
-                norm_data.taboo_level,
-                norm_data.consequence,
-                json.dumps(norm_data.regional_variations))
+            try:
+                category_data = cat_result.final_output
+                categories = category_data.categories
+                norms_count = category_data.count
+            except Exception:
+                # fallback
+                categories = ["greeting","dining","authority","gift_giving","gender_relations"]
+                norms_count = len(categories)
+            
+            # Now we generate that many norms with the norm agent
+            norm_agent = self._get_agent("norm").clone(
+                output_type=CulturalNormOutput,
+                input_guardrails=[input_guardrail]
+            )
+            
+            run_config = RunConfig(
+                workflow_name="CulturalNormGeneration",
+                trace_metadata={"user_id": str(self.user_id), "conversation_id": str(self.conversation_id), "nation_id": nation_id}
+            )
+            
+            norms = []
+            
+            # If the user wants more norms_count than categories, we can repeat categories or some sub-lists
+            # For simplicity, we'll ensure we produce exactly norms_count norms total. We'll cycle categories
+            cat_cycle = categories if categories else ["greeting","dining"]
+            
+            for i in range(norms_count):
+                cat = cat_cycle[i % len(cat_cycle)]
                 
-                emb_text = f"{cat} {norm_data.description}"
-                await self.generate_and_store_embedding(emb_text, conn, "CulturalNorms", "id", norm_id)
+                prompt = f"""
+                Generate cultural norms about {cat} for this nation:
+                NATION DATA:
+                {json.dumps(nation_data, indent=2)}
                 
-                ndict = norm_data.dict()
-                ndict["id"] = norm_id
-                ndict["nation_id"] = nation_id
-                norms.append(ndict)
-    
-    return norms
+                Return a CulturalNormOutput object with:
+                - category: {cat}
+                - description, formality_level, gender_specific
+                - female_variation, male_variation (if gender_specific)
+                - taboo_level (0-10), consequence
+                - regional_variations dictionary
+                
+                Ensure strong matriarchal themes.
+                """
+                
+                result = await Runner.run(norm_agent, prompt, context=run_ctx.context, run_config=run_config)
+                norm_data = result.final_output
+                
+                # Insert into DB
+                async with self._with_conn() as conn:
+                    norm_id = await conn.fetchval("""
+                        INSERT INTO CulturalNorms (
+                            nation_id, category, description, formality_level,
+                            gender_specific, female_variation, male_variation,
+                            taboo_level, consequence, regional_variations
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        RETURNING id
+                    """,
+                    nation_id,
+                    norm_data.category,
+                    norm_data.description,
+                    norm_data.formality_level,
+                    norm_data.gender_specific,
+                    norm_data.female_variation,
+                    norm_data.male_variation,
+                    norm_data.taboo_level,
+                    norm_data.consequence,
+                    json.dumps(norm_data.regional_variations))
+                    
+                    emb_text = f"{cat} {norm_data.description}"
+                    await self.generate_and_store_embedding(emb_text, conn, "CulturalNorms", "id", norm_id)
+                    
+                    ndict = norm_data.dict()
+                    ndict["id"] = norm_id
+                    ndict["nation_id"] = nation_id
+                    norms.append(ndict)
+            
+            return norms  # THIS LINE SHOULD BE INDENTED AT THIS LEVEL (inside the method)
     
     # ---------------------------------------------------------------------------
     # (3) Generate Etiquette
