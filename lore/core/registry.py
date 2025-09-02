@@ -1,16 +1,15 @@
-# lore/core/registry.py – compatible with Agents SDK ≥0.1.0
+# lore/core/registry.py – Refactored with dynamic imports
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, List, Type, Optional
+from typing import Any, Callable, Dict, List, Type, Optional, Tuple
 
 from agents import Agent, Runner, RunConfig, function_tool, trace
 from agents.tool import FunctionTool
 from pydantic import BaseModel, Field
-
-from lore.managers.base_manager import BaseLoreManager
 
 logger = logging.getLogger(__name__)
 
@@ -74,21 +73,64 @@ class ManagerRegistry:
     Central registry for all Lore manager classes.
     
     Features:
-    - Lazy loading of manager instances
+    - Dynamic imports to avoid circular dependencies
+    - Lazy loading of manager instances  
     - Automatic tool registration
     - Cross-manager handoff coordination
+    - Ordered initialization support
     - Dependency tracking and relationships
     """
+    
+    # Manager configuration: key -> (module_path, class_name)
+    MANAGER_CONFIG: Dict[str, Tuple[str, str]] = {
+        'education': ('lore.managers.education', 'EducationalSystemManager'),
+        'geopolitical': ('lore.managers.geopolitical', 'GeopoliticalSystemManager'),
+        'local_lore': ('lore.managers.local_lore', 'LocalLoreManager'),
+        'politics': ('lore.managers.politics', 'WorldPoliticsManager'),
+        'religion': ('lore.managers.religion', 'ReligionManager'),
+        'world_lore': ('lore.managers.world_lore_manager', 'WorldLoreManager'),
+        'lore_dynamics': ('lore.systems.dynamics', 'LoreDynamicsSystem'),
+        'regional_culture': ('lore.systems.regional_culture', 'RegionalCultureSystem'),
+    }
+    
+    # Initialization order for dependencies
+    INIT_ORDER = [
+        'world_lore',        # Foundation
+        'regional_culture',  # Cultural bedrock
+        'lore_dynamics',     # System dynamics
+        'education',
+        'religion', 
+        'politics',
+        'geopolitical',
+        'local_lore',        # Depends on locations
+    ]
+    
+    # Default manager relationships
+    DEFAULT_RELATIONSHIPS = {
+        "geopolitical": ["politics", "regional_culture", "lore_dynamics"],
+        "politics": ["geopolitical", "religion", "lore_dynamics"],
+        "religion": ["politics", "local_lore", "regional_culture"],
+        "local_lore": ["religion", "regional_culture", "world_lore"],
+        "regional_culture": ["local_lore", "geopolitical", "education"],
+        "education": ["regional_culture", "religion", "local_lore"],
+        "world_lore": ["geopolitical", "politics", "religion", "local_lore"],
+        "lore_dynamics": ["geopolitical", "politics", "world_lore"],
+    }
 
     def __init__(self, user_id: int, conversation_id: int) -> None:
         self.user_id = user_id
         self.conversation_id = conversation_id
 
-        self._managers: Dict[str, BaseLoreManager] = {}
-        self._class_map: Dict[str, Type[BaseLoreManager]] = {}
+        # Core state
+        self._managers: Dict[str, Any] = {}
         self._function_tools: Dict[str, Callable] = {}
-        self._relationships: Dict[str, List[str]] = {}
+        self._relationships: Dict[str, List[str]] = self.DEFAULT_RELATIONSHIPS.copy()
+        
+        # Manager configuration (can be extended at runtime)
+        self._manager_config = self.MANAGER_CONFIG.copy()
+        self._init_order = self.INIT_ORDER.copy()
 
+        # Tracing metadata
         self._trace_group = f"registry_{user_id}_{conversation_id}"
         self._metadata = {
             "user_id": str(user_id),
@@ -96,47 +138,10 @@ class ManagerRegistry:
             "component": "ManagerRegistry",
         }
 
+        # Initialize orchestrator for cross-manager coordination
         self._init_orchestrator()
-        self._register_default_managers()
-        self._register_default_relationships()
 
     # ─── Core Internal Methods ────────────────────────────────
-    async def _get_or_init_manager(self, manager_key: str) -> BaseLoreManager:
-        """
-        Get or initialize a manager instance.
-        
-        This is the core method that implements lazy loading.
-        All other methods should use this to access managers.
-        """
-        if manager_key in self._managers:
-            return self._managers[manager_key]
-
-        if manager_key not in self._class_map:
-            raise ValueError(f"Unknown manager key: {manager_key}")
-
-        with trace(
-            "GetAndInitializeManager",
-            group_id=self._trace_group,
-            metadata={**self._metadata, "manager_key": manager_key},
-        ):
-            try:
-                mgr_cls = self._class_map[manager_key]
-                logger.info(f"Lazy-loading manager: {manager_key}")
-                
-                mgr = mgr_cls(self.user_id, self.conversation_id)
-                await mgr.ensure_initialized()
-
-                self._managers[manager_key] = mgr
-                self._register_manager_tools(manager_key, mgr)
-                self._add_orchestrator_handoff(manager_key, mgr)
-                
-                logger.info(f"Successfully initialized manager: {manager_key}")
-                return mgr
-                
-            except Exception as e:
-                logger.error(f"Failed to initialize manager {manager_key}: {e}", exc_info=True)
-                raise
-
     def _init_orchestrator(self) -> None:
         """Initialize the orchestrator agent for cross-manager coordination."""
         self.orchestrator = Agent(
@@ -150,48 +155,58 @@ class ManagerRegistry:
             model="gpt-5-nano",
         )
 
-    def _register_default_managers(self) -> None:
-        """Register all default manager classes."""
-        # Import locally to avoid circular dependencies
-        from lore.managers.education import EducationalSystemManager
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from lore.managers.local_lore import LocalLoreManager
-        from lore.managers.politics import WorldPoliticsManager
-        from lore.managers.religion import ReligionManager
-        from lore.managers.world_lore_manager import WorldLoreManager
-        from lore.systems.dynamics import LoreDynamicsSystem
-        from lore.systems.regional_culture import RegionalCultureSystem
-
-        self._class_map.update({
-            "education": EducationalSystemManager,
-            "geopolitical": GeopoliticalSystemManager,
-            "local_lore": LocalLoreManager,
-            "politics": WorldPoliticsManager,
-            "religion": ReligionManager,
-            "world_lore": WorldLoreManager,
-            "lore_dynamics": LoreDynamicsSystem,
-            "regional_culture": RegionalCultureSystem,
-        })
+    async def _get_or_create_manager(self, manager_key: str) -> Any:
+        """
+        Get existing or create new manager instance using dynamic imports.
         
-        logger.info(f"Registered {len(self._class_map)} default manager classes")
+        Args:
+            manager_key: Key identifying the manager
+            
+        Returns:
+            The initialized manager instance
+        """
+        if manager_key in self._managers:
+            return self._managers[manager_key]
 
-    def _register_default_relationships(self) -> None:
-        """Register default relationships between managers."""
-        self._relationships = {
-            "geopolitical": ["politics", "regional_culture", "lore_dynamics"],
-            "politics": ["geopolitical", "religion", "lore_dynamics"],
-            "religion": ["politics", "local_lore", "regional_culture"],
-            "local_lore": ["religion", "regional_culture", "world_lore"],
-            "regional_culture": ["local_lore", "geopolitical", "education"],
-            "education": ["regional_culture", "religion", "local_lore"],
-            "world_lore": ["geopolitical", "politics", "religion", "local_lore"],
-            "lore_dynamics": ["geopolitical", "politics", "world_lore"],
-        }
+        if manager_key not in self._manager_config:
+            raise ValueError(f"Unknown manager key: {manager_key}")
 
-    def _register_manager_tools(self, manager_key: str, mgr: BaseLoreManager) -> None:
+        with trace(
+            "GetAndInitializeManager",
+            group_id=self._trace_group,
+            metadata={**self._metadata, "manager_key": manager_key},
+        ):
+            try:
+                # Dynamic import to avoid circular dependencies
+                module_name, class_name = self._manager_config[manager_key]
+                module = importlib.import_module(module_name)
+                manager_class = getattr(module, class_name)
+                
+                logger.info(f"Lazy-loading manager: {manager_key} from {module_name}.{class_name}")
+                
+                # Create and initialize manager
+                manager = manager_class(self.user_id, self.conversation_id)
+                
+                # Call ensure_initialized if available (backward compatibility)
+                if hasattr(manager, 'ensure_initialized'):
+                    await manager.ensure_initialized()
+                
+                # Store and configure
+                self._managers[manager_key] = manager
+                self._register_manager_tools(manager_key, manager)
+                self._add_orchestrator_handoff(manager_key, manager)
+                
+                logger.info(f"Successfully initialized manager: {manager_key}")
+                return manager
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize manager {manager_key}: {e}", exc_info=True)
+                raise
+
+    def _register_manager_tools(self, manager_key: str, manager: Any) -> None:
         """Register all function tools from a manager instance."""
         tool_count = 0
-        for name, attr in inspect.getmembers(mgr):
+        for name, attr in inspect.getmembers(manager):
             if isinstance(attr, FunctionTool):
                 full_key = f"{manager_key}.{attr.name or name}"
                 self._function_tools[full_key] = attr
@@ -201,16 +216,13 @@ class ManagerRegistry:
         if tool_count > 0:
             logger.info(f"Registered {tool_count} tools for manager: {manager_key}")
 
-    def _add_orchestrator_handoff(self, manager_key: str, mgr: BaseLoreManager) -> None:
+    def _add_orchestrator_handoff(self, manager_key: str, manager: Any) -> None:
         """Add handoff capability to the orchestrator for a manager."""
-        # Add manager's tools to orchestrator's available tools
         manager_tools = [tool for key, tool in self._function_tools.items() 
                         if key.startswith(f"{manager_key}.")]
         if manager_tools:
             self.orchestrator.tools.extend(manager_tools)
             logger.debug(f"Added {len(manager_tools)} tools from {manager_key} to orchestrator")
-        
-        logger.debug(f"Handoff capability enabled for: {manager_key}")
 
     # ─── Public API Methods (exposed as tools) ────────────────
     @function_tool
@@ -219,17 +231,49 @@ class ManagerRegistry:
         Get metadata about a manager, initializing it if needed.
         
         Args:
-            manager_key: The key identifying the manager (e.g., 'religion', 'politics')
+            manager_key: The key identifying the manager
             
         Returns:
             ManagerResult with information about the initialized manager
         """
-        mgr = await self._get_or_init_manager(manager_key)
+        manager = await self._get_or_create_manager(manager_key)
         return ManagerResult(
             manager_key=manager_key,
-            manager_type=mgr.__class__.__name__,
+            manager_type=manager.__class__.__name__,
             initialized=True,
         )
+
+    @function_tool
+    async def initialize_all(self) -> Dict[str, bool]:
+        """
+        Initialize all registered managers in dependency order.
+        
+        Returns:
+            Dictionary mapping manager keys to initialization success status
+        """
+        results = {}
+        
+        # Use initialization order for known managers
+        for key in self._init_order:
+            if key in self._manager_config:
+                try:
+                    await self._get_or_create_manager(key)
+                    results[key] = True
+                except Exception as e:
+                    logger.error(f"Failed to initialize {key}: {e}")
+                    results[key] = False
+        
+        # Initialize any additional managers not in init order
+        for key in self._manager_config:
+            if key not in results:
+                try:
+                    await self._get_or_create_manager(key)
+                    results[key] = True
+                except Exception as e:
+                    logger.error(f"Failed to initialize {key}: {e}")
+                    results[key] = False
+                    
+        return results
 
     @function_tool
     async def get_available_tools(self) -> List[AvailableToolInfo]:
@@ -242,7 +286,6 @@ class ManagerRegistry:
         tools: List[AvailableToolInfo] = []
         
         for key, tool in self._function_tools.items():
-            # FunctionTool objects have their own function attribute
             fn = tool.function if hasattr(tool, 'function') else tool
             sig = inspect.signature(fn)
             
@@ -256,7 +299,6 @@ class ManagerRegistry:
                 if p.name not in {"self", "ctx"}
             ]
             
-            # Get description from tool or function docstring
             description = tool.description if hasattr(tool, 'description') else (fn.__doc__ or "No description")
             
             tools.append(AvailableToolInfo(
@@ -278,7 +320,7 @@ class ManagerRegistry:
         """
         return ManagerRelationships(relationships=self._relationships.copy())
 
-    @function_tool(strict_mode=False) 
+    @function_tool(strict_mode=False)
     async def execute_cross_manager_handoff(
         self, params: CrossManagerHandoffParams
     ) -> CrossManagerHandoffResult:
@@ -305,8 +347,8 @@ class ManagerRegistry:
         ):
             try:
                 # Ensure both managers are initialized
-                start_mgr = await self._get_or_init_manager(params.starting_manager)
-                target_mgr = await self._get_or_init_manager(params.target_manager)
+                start_mgr = await self._get_or_create_manager(params.starting_manager)
+                target_mgr = await self._get_or_create_manager(params.target_manager)
                 
                 # Create context for the handoff
                 handoff_context = {
@@ -331,8 +373,6 @@ class ManagerRegistry:
                     f"Ensure proper data transformation and parameter mapping between managers."
                 )
                 
-                # Note: In SDK 0.1.0, the parameter is 'context'. 
-                # In future versions, it may change to 'run_context'.
                 result = await Runner.run(
                     self.orchestrator,
                     prompt,
@@ -359,71 +399,21 @@ class ManagerRegistry:
                     error=str(e),
                 )
 
-    @function_tool
-    async def initialize_all(self) -> Dict[str, bool]:
+    # ─── Configuration Methods ────────────────────────────────
+    def register_manager(self, key: str, module_path: str, class_name: str) -> None:
         """
-        Initialize all registered managers.
-        
-        Returns:
-            Dictionary mapping manager keys to initialization success status
-        """
-        results = {}
-        for key in self._class_map:
-            try:
-                await self._get_or_init_manager(key)
-                results[key] = True
-            except Exception as e:
-                logger.error(f"Failed to initialize {key}: {e}")
-                results[key] = False
-        return results
-
-    # ─── Convenience Methods (not exposed as tools) ───────────
-    async def get_lore_dynamics(self) -> BaseLoreManager:
-        """Get the LoreDynamicsSystem instance."""
-        return await self._get_or_init_manager("lore_dynamics")
-
-    async def get_geopolitical_manager(self) -> BaseLoreManager:
-        """Get the GeopoliticalSystemManager instance."""
-        return await self._get_or_init_manager("geopolitical")
-
-    async def get_local_lore_manager(self) -> BaseLoreManager:
-        """Get the LocalLoreManager instance."""
-        return await self._get_or_init_manager("local_lore")
-
-    async def get_religion_manager(self) -> BaseLoreManager:
-        """Get the ReligionManager instance."""
-        return await self._get_or_init_manager("religion")
-
-    async def get_politics_manager(self) -> BaseLoreManager:
-        """Get the WorldPoliticsManager instance."""
-        return await self._get_or_init_manager("politics")
-
-    async def get_regional_culture_system(self) -> BaseLoreManager:
-        """Get the RegionalCultureSystem instance."""
-        return await self._get_or_init_manager("regional_culture")
-
-    async def get_education_manager(self) -> BaseLoreManager:
-        """Get the EducationalSystemManager instance."""
-        return await self._get_or_init_manager("education")
-
-    async def get_world_lore_manager(self) -> BaseLoreManager:
-        """Get the WorldLoreManager instance."""
-        return await self._get_or_init_manager("world_lore")
-
-    # ─── Manager Registration Methods ─────────────────────────
-    def register_manager(self, key: str, manager_class: Type[BaseLoreManager]) -> None:
-        """
-        Register a new manager class.
+        Register a new manager configuration.
         
         Args:
             key: Unique key for the manager
-            manager_class: The manager class to register
+            module_path: Python module path containing the manager class
+            class_name: Name of the manager class
         """
-        if key in self._class_map:
+        if key in self._manager_config:
             logger.warning(f"Overwriting existing manager registration: {key}")
         
-        self._class_map[key] = manager_class
-        logger.info(f"Registered manager: {key} -> {manager_class.__name__}")
+        self._manager_config[key] = (module_path, class_name)
+        logger.info(f"Registered manager: {key} -> {module_path}.{class_name}")
 
     def register_relationship(self, manager_key: str, related_managers: List[str]) -> None:
         """
@@ -435,6 +425,49 @@ class ManagerRegistry:
         """
         self._relationships[manager_key] = related_managers
         logger.info(f"Registered relationships for {manager_key}: {related_managers}")
+
+    def set_initialization_order(self, order: List[str]) -> None:
+        """
+        Set custom initialization order for managers.
+        
+        Args:
+            order: List of manager keys in initialization order
+        """
+        self._init_order = order
+        logger.info(f"Updated initialization order: {order}")
+
+    # ─── Convenience Methods (backward compatibility) ─────────
+    async def get_lore_dynamics(self) -> Any:
+        """Get the LoreDynamicsSystem instance."""
+        return await self._get_or_create_manager("lore_dynamics")
+
+    async def get_geopolitical_manager(self) -> Any:
+        """Get the GeopoliticalSystemManager instance."""
+        return await self._get_or_create_manager("geopolitical")
+
+    async def get_local_lore_manager(self) -> Any:
+        """Get the LocalLoreManager instance."""
+        return await self._get_or_create_manager("local_lore")
+
+    async def get_religion_manager(self) -> Any:
+        """Get the ReligionManager instance."""
+        return await self._get_or_create_manager("religion")
+
+    async def get_politics_manager(self) -> Any:
+        """Get the WorldPoliticsManager instance."""
+        return await self._get_or_create_manager("politics")
+
+    async def get_regional_culture_system(self) -> Any:
+        """Get the RegionalCultureSystem instance."""
+        return await self._get_or_create_manager("regional_culture")
+
+    async def get_education_manager(self) -> Any:
+        """Get the EducationalSystemManager instance."""
+        return await self._get_or_create_manager("education")
+
+    async def get_world_lore_manager(self) -> Any:
+        """Get the WorldLoreManager instance."""
+        return await self._get_or_create_manager("world_lore")
 
 
 # Rebuild models to ensure forward references are resolved
