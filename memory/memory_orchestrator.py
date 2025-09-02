@@ -1838,46 +1838,46 @@ class MemoryOrchestrator:
     # ========================================================================
     
     async def _get_entity_manager(self, entity_type: str, entity_id: int):
-         key = f"{entity_type}_{entity_id}"
-         if key not in self.memory_managers:
-            if entity_type == EntityType.NPC.value:
-                from memory.managers import NPCMemoryManager
-                manager = NPCMemoryManager(
-                    npc_id=entity_id,
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id
-                )
-            elif entity_type == EntityType.PLAYER.value:
-                # Player manager in managers.py requires player_name; source from DB or default.
-                from memory.managers import PlayerMemoryManager
-                player_name = "Chase"
-                try:
-                    from db.connection import get_db_connection_context
-                    async with get_db_connection_context() as conn:
-                        row = await conn.fetchrow(
-                            "SELECT player_name FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 LIMIT 1",
-                            self.user_id, self.conversation_id
-                        )
-                        if row and row.get("player_name"):
-                            player_name = row["player_name"]
-                except Exception:
-                    pass
-                manager = PlayerMemoryManager(
-                    player_name=player_name,
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id
-                )
-            else:
-                # Fallback: core UnifiedMemoryManager (per-entity instance)
-                from memory.core import UnifiedMemoryManager
-                manager = UnifiedMemoryManager(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id
-                )
-            self.memory_managers[key] = manager
-        return self.memory_managers[key]
+            key = f"{entity_type}_{entity_id}"
+            if key not in self.memory_managers:
+                if entity_type == EntityType.NPC.value:
+                    from memory.managers import NPCMemoryManager
+                    manager = NPCMemoryManager(
+                        npc_id=entity_id,
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+                elif entity_type == EntityType.PLAYER.value:
+                    # Player manager in managers.py requires player_name; source from DB or default.
+                    from memory.managers import PlayerMemoryManager
+                    player_name = "Chase"
+                    try:
+                        from db.connection import get_db_connection_context
+                        async with get_db_connection_context() as conn:
+                            row = await conn.fetchrow(
+                                "SELECT player_name FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 LIMIT 1",
+                                self.user_id, self.conversation_id
+                            )
+                            if row and row.get("player_name"):
+                                player_name = row["player_name"]
+                    except Exception:
+                        pass
+                    manager = PlayerMemoryManager(
+                        player_name=player_name,
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+                else:
+                    # Fallback: core UnifiedMemoryManager (per-entity instance)
+                    from memory.core import UnifiedMemoryManager
+                    manager = UnifiedMemoryManager(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id
+                    )
+                self.memory_managers[key] = manager
+            return self.memory_managers[key]
 
     async def ensure_npc_mask(self, npc_id: int, overwrite: bool = False) -> Dict[str, Any]:
         """
