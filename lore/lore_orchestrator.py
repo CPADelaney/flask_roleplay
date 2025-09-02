@@ -529,9 +529,12 @@ class LoreOrchestrator:
             (getattr(scope, 'location_id', None) is not None) or
             (hasattr(scope, 'lore_tags') and scope.lore_tags)
         )
+        # In get_scene_bundle(), the matriarchal framework tasks section:
         if need_mpf:
             tasks.append(('mpf_core', self.mpf_generate_core_principles()))
             tasks.append(('mpf_expressions', self.mpf_generate_power_expressions(limit=3)))
+            # You could also add:
+            tasks.append(('mpf_constraints', self.mpf_generate_hierarchical_constraints()))
     
         # Execute all tasks in parallel with timeout protection
         try:
@@ -780,39 +783,167 @@ class LoreOrchestrator:
                 "cache_status": {
                     "scene_bundles": len(self._scene_bundle_cache),
                     "change_log_entries": sum(len(log) for log in self._change_log.values()),
+                    "element_snapshots": len(self._element_snapshots),
+                    "bundle_last_changed": len(self._bundle_last_changed),
                 },
             },
             "systems": {},
+            "cache_analytics": {},
+            "resource_limits": {},
         }
     
         # LoreCache analytics (optional)
         try:
             analytics = await GLOBAL_LORE_CACHE.get_cache_analytics()
-            status["orchestrator"]["lore_cache"] = analytics
-        except Exception:
-            pass
+            status["cache_analytics"] = {
+                "hit_rate": analytics.get("hit_rate", 0),
+                "size_bytes": analytics.get("size_bytes", 0),
+                "keys_count": analytics.get("keys_count", 0),
+                "avg_access_time_ms": analytics.get("avg_access_time_ms", 0),
+            }
+        except Exception as e:
+            logger.debug(f"Could not get cache analytics: {e}")
+            status["cache_analytics"] = {"error": str(e)}
     
+        # Check all system attributes
         attr_names = [
-            ("lore_dynamics", "_lore_dynamics_system"),
-            ("regional_culture", "_regional_culture_system"),
-            ("matriarchal", "_matriarchal_system"),
+            # Core systems
+            ("lore_system", "_lore_system"),
+            ("canon_module", "_canon_module"),
+            ("cache_system", "_cache_system"),
+            ("registry_system", "_registry_system"),
+            ("canon_validation", "_canon_validation"),
+            
+            # Manager systems
             ("education", "_education_manager"),
             ("religion", "_religion_manager"),
-            ("politics", "_politics_manager"),
-            ("geopolitical", "_geopolitical_manager"),
             ("local_lore", "_local_lore_manager"),
+            ("geopolitical", "_geopolitical_manager"),
+            ("politics", "_politics_manager"),
+            ("world_lore", "_world_lore_manager"),
+            
+            # Specialized systems
+            ("lore_dynamics", "_lore_dynamics_system"),
+            ("regional_culture", "_regional_culture_system"),
+            ("matriarchal_framework", "_mpf"),  # Fixed: using actual framework
+            
+            # Integration components
+            ("npc_integration", "_npc_integration"),
+            ("conflict_integration", "_conflict_integration"),
+            ("context_enhancer", "_context_enhancer"),
+            ("lore_generator", "_lore_generator"),
+            ("dynamic_generator", "_dynamic_generator"),
+            
+            # Support systems
+            ("master_coordinator", "_master_coordinator"),
+            ("content_validator", "_content_validator"),
+            ("relationship_mapper", "_relationship_mapper"),
+            ("unified_trace", "_unified_trace_system"),
+            
+            # Data access layers
+            ("npc_data_access", "_npc_data_access"),
+            ("location_data_access", "_location_data_access"),
+            ("faction_data_access", "_faction_data_access"),
+            ("knowledge_access", "_knowledge_access"),
+            
+            # Additional systems (if they exist)
+            ("lore_update_system", "_lore_update_system"),
+            ("national_conflict_system", "_national_conflict_system"),
+            ("religious_distribution_system", "_religious_distribution_system"),
         ]
     
         for name, attr in attr_names:
-            if hasattr(self, attr) and getattr(self, attr) is not None:
+            if hasattr(self, attr):
                 system = getattr(self, attr)
-                status["systems"][name] = {
-                    "loaded": True,
-                    "initialized": getattr(system, "initialized", False),
-                    "has_governance": getattr(system, "governor", None) is not None,
-                }
+                if system is not None:
+                    system_status = {
+                        "loaded": True,
+                        "type": type(system).__name__,
+                    }
+                    
+                    # Check initialization status
+                    if hasattr(system, "initialized"):
+                        system_status["initialized"] = system.initialized
+                    elif hasattr(system, "is_initialized") and callable(system.is_initialized):
+                        system_status["initialized"] = system.is_initialized()
+                    else:
+                        system_status["initialized"] = True  # Assume initialized if no flag
+                    
+                    # Check governance status
+                    if hasattr(system, "governor"):
+                        system_status["has_governance"] = system.governor is not None
+                    
+                    # Check for health check capability
+                    if hasattr(system, "health_check"):
+                        system_status["health_check_available"] = True
+                    
+                    # Get metrics if available
+                    if hasattr(system, "metrics"):
+                        system_status["metrics"] = getattr(system, "metrics", {})
+                    
+                    status["systems"][name] = system_status
+                else:
+                    status["systems"][name] = {"loaded": False, "reason": "Attribute exists but is None"}
             else:
-                status["systems"][name] = {"loaded": False}
+                status["systems"][name] = {"loaded": False, "reason": "Attribute not found"}
+    
+        # Calculate overall health
+        total_systems = len(attr_names)
+        loaded_systems = sum(1 for s in status["systems"].values() if s.get("loaded", False))
+        initialized_systems = sum(1 for s in status["systems"].values() 
+                                 if s.get("loaded", False) and s.get("initialized", False))
+        
+        status["summary"] = {
+            "total_systems": total_systems,
+            "loaded_systems": loaded_systems,
+            "initialized_systems": initialized_systems,
+            "health_percentage": (initialized_systems / total_systems * 100) if total_systems > 0 else 0,
+            "status": "healthy" if initialized_systems >= total_systems * 0.8 else 
+                      "degraded" if initialized_systems >= total_systems * 0.5 else "unhealthy"
+        }
+    
+        # Check resource limits if configured
+        if self.config.resource_limits:
+            status["resource_limits"] = {
+                "max_parallel_operations": self.config.max_parallel_operations,
+                "cache_ttl": self.config.cache_ttl,
+                "cache_max_size": self.config.cache_max_size,
+                "bundle_cache_max_size": self.config.bundle_cache_max_size,
+                "bundle_ttl": self.config.bundle_ttl,
+            }
+            
+            # Check if we're near limits
+            if len(self._scene_bundle_cache) > self.config.bundle_cache_max_size * 0.9:
+                status["warnings"] = status.get("warnings", [])
+                status["warnings"].append(f"Bundle cache near limit: {len(self._scene_bundle_cache)}/{self.config.bundle_cache_max_size}")
+    
+        # Add timestamp
+        status["checked_at"] = datetime.now().isoformat()
+        
+        # Add operational metrics
+        status["operational_metrics"] = {
+            "total_operations": self.metrics.get("operations", 0),
+            "cache_hits": self.metrics.get("cache_hits", 0),
+            "cache_misses": self.metrics.get("cache_misses", 0),
+            "bundle_hits": self.metrics.get("bundle_hits", 0),
+            "bundle_misses": self.metrics.get("bundle_misses", 0),
+            "db_roundtrips": self.metrics.get("db_roundtrips", 0),
+            "errors": self.metrics.get("errors", 0),
+            "last_operation": self.metrics.get("last_operation"),
+        }
+        
+        # Calculate cache hit rate
+        total_cache_ops = status["operational_metrics"]["cache_hits"] + status["operational_metrics"]["cache_misses"]
+        if total_cache_ops > 0:
+            status["operational_metrics"]["cache_hit_rate"] = (
+                status["operational_metrics"]["cache_hits"] / total_cache_ops * 100
+            )
+        
+        total_bundle_ops = status["operational_metrics"]["bundle_hits"] + status["operational_metrics"]["bundle_misses"]
+        if total_bundle_ops > 0:
+            status["operational_metrics"]["bundle_hit_rate"] = (
+                status["operational_metrics"]["bundle_hits"] / total_bundle_ops * 100
+            )
     
         return status
 
@@ -3191,7 +3322,12 @@ class LoreOrchestrator:
         if not hasattr(self, "_mpf"):
             from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
             self._mpf = MatriarchalPowerStructureFramework(self.user_id, self.conversation_id)
-            # If it inherits BaseLoreManager, you can register governance if needed:
+            
+            # Initialize if it has the method
+            if hasattr(self._mpf, 'ensure_initialized'):
+                await self._mpf.ensure_initialized()
+            
+            # Register with governance if available
             try:
                 governor = await get_central_governance(self.user_id, self.conversation_id)
                 self._mpf.governor = governor
@@ -3199,6 +3335,7 @@ class LoreOrchestrator:
                     await self._mpf.register_with_governance()
             except Exception as e:
                 logger.debug(f"Could not attach/register governance to Matriarchal framework: {e}")
+            
             logger.info("MatriarchalPowerStructureFramework initialized")
         return self._mpf
 
@@ -3254,31 +3391,25 @@ class LoreOrchestrator:
     
         use_matriarchal = use_matriarchal_theme if use_matriarchal_theme is not None else self.config.enable_matriarchal_theme
     
+        # Generate base world using LoreSystem
+        lore_system = await self._get_lore_system()
+        result = await lore_system.generate_complete_lore(environment_desc)
+        
+        # If matriarchal theme is enabled, enhance with the framework
         if use_matriarchal:
-            matsys = await self._get_matriarchal_system()
-            result = await matsys.generate_complete_world(ctx, environment_desc)
-        else:
-            lore_system = await self._get_lore_system()
-            result = await lore_system.generate_complete_world(ctx, environment_desc, use_matriarchal_theme=False)
+            mpf = await self._get_matriarchal_power_framework()
+            
+            # Apply matriarchal lens to the generated world
+            result = await mpf.apply_power_lens(result)
+            
+            # Add matriarchal-specific elements
+            result['matriarchal_principles'] = await mpf.generate_core_principles()
+            result['power_expressions'] = await mpf.generate_power_expressions()
+            result['hierarchical_constraints'] = await mpf.generate_hierarchical_constraints()
     
         self.metrics["operations"] += 1
         self.metrics["last_operation"] = "generate_world"
         return result
-
-    async def matriarchal_handle_narrative_event(self, ctx, event_description: str, affected_location_id: int = None, player_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        ms = await self._get_matriarchal_system()
-        result = await ms.handle_narrative_event(ctx, event_description, affected_location_id=affected_location_id, player_data=player_data)
-        # Optional: record/invalidate if needed
-        # Example: if result includes conflicts or locations, call record_lore_change() appropriately.
-        return result
-    
-    async def matriarchal_get_world_state(self, ctx) -> Dict[str, Any]:
-        ms = await self._get_matriarchal_system()
-        return await ms.get_world_state(ctx)
-    
-    async def matriarchal_generate_additional_content(self, ctx, content_type: str, parameters: Dict[str, Any] = None) -> Dict[str, Any]:
-        ms = await self._get_matriarchal_system()
-        return await ms.generate_additional_content(ctx, content_type, parameters or {})
             
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
