@@ -341,33 +341,55 @@ class StoryOrchestrator:
 
     async def health_check(self) -> Dict[str, Any]:
         """
-        Check health of subsystems.
+        Check health of subsystems, with a small dry-run where feasible.
         """
+        import asyncio
         health = {"director": False, "narrator": False, "summarizer": False, "activity": False, "errors": []}
         try:
             await self._ensure_director()
             health["director"] = self._director is not None
         except Exception as e:
             health["errors"].append(f"Director: {e}")
-
+    
         try:
             await self._ensure_narrator()
             health["narrator"] = self._narrator is not None
         except Exception as e:
             health["errors"].append(f"Narrator: {e}")
-
+    
         try:
             await self._ensure_summarizer()
             health["summarizer"] = self._summarizer is not None
         except Exception as e:
             health["errors"].append(f"Summarizer: {e}")
-
+    
+        # Activity recommender dry-run
         try:
             mod = await self._get_module("activity_recommender")
-            health["activity"] = mod is not None
+            if mod is None:
+                health["activity"] = False
+            else:
+                async def _probe():
+                    try:
+                        # Minimal probe: ask for a single recommendation with defaults
+                        recs = await mod.recommend_activities(
+                            self.user_id, self.conversation_id, context=None, num_recommendations=1
+                        )
+                        return bool(getattr(recs, "recommendations", None) or recs)
+                    except Exception:
+                        return False
+    
+                ok = await asyncio.wait_for(_probe(), timeout=3.0)
+                health["activity"] = ok
+                if not ok:
+                    health["errors"].append("Activity recommender probe failed")
+        except asyncio.TimeoutError:
+            health["activity"] = False
+            health["errors"].append("Activity recommender probe timed out")
         except Exception as e:
+            health["activity"] = False
             health["errors"].append(f"Activity: {e}")
-
+    
         health["healthy"] = all([health["director"], health["narrator"], health["summarizer"]])
         return health
 
@@ -398,6 +420,13 @@ class StoryOrchestrator:
             await self._process_player_input_path(packet, user_input)
         else:
             await self._autonomous_path(packet)
+        
+        # Populate scene and canonical IDs (best-effort, non-critical)
+        await self._populate_scene_and_ids(packet)
+        
+        # Run non-critical attachments concurrently with per-task timeouts
+        seed = user_input or packet.primary_narrative or ""
+        await self._run_concurrent_attachments(packet, narrative_seed=seed, timeout_seconds=8.0)
 
         # Activities & tasks
         if self.options.include_activity_recs:
@@ -420,6 +449,119 @@ class StoryOrchestrator:
         # Canonical logging for significant packets
         await self._canonical_log_packet(packet, mode)
 
+
+    # ========= Drop-in: helpers for timing and concurrent attachments =========
+    
+    async def _timed(self, packet: StoryPacket, name: str, coro):
+        """Run coro and record elapsed ms in packet.performance[name+'_ms']."""
+        import time as _time
+        t0 = _time.perf_counter()
+        try:
+            return await coro
+        finally:
+            t1 = _time.perf_counter()
+            dur_ms = int((t1 - t0) * 1000)
+            try:
+                perf = packet.performance or {}
+                perf_key = f"{name}_ms"
+                # Flatten at top-level of packet.performance
+                perf[perf_key] = dur_ms
+                packet.performance = perf
+            except Exception:
+                pass
+    
+    async def _run_concurrent_attachments(
+        self,
+        packet: StoryPacket,
+        narrative_seed: str,
+        timeout_seconds: float = 8.0
+    ):
+        """
+        Schedule non-critical attachments concurrently with per-task timeouts.
+        Records per-subsystem timings in packet.performance.
+        """
+        import asyncio
+    
+        tasks = []
+    
+        # Activity recommendations
+        if self.options.include_activity_recs:
+            tasks.append(asyncio.create_task(
+                self._timed(packet, "attach_activity_recs",
+                            self._attach_activity_recommendations(packet))
+            ))
+    
+        # Daily task
+        if self.options.include_daily_task:
+            tasks.append(asyncio.create_task(
+                self._timed(packet, "attach_daily_task",
+                            self._attach_daily_task(packet))
+            ))
+    
+        # Creative task
+        if self.options.include_creative_task:
+            tasks.append(asyncio.create_task(
+                self._timed(packet, "attach_creative_task",
+                            self._attach_creative_task(packet))
+            ))
+    
+        # Emergent patterns
+        if self.options.include_emergent_patterns:
+            tasks.append(asyncio.create_task(
+                self._timed(packet, "attach_emergent_patterns",
+                            self._attach_emergent_patterns(packet))
+            ))
+    
+        # Narrative context + memories
+        tasks.append(asyncio.create_task(
+            self._timed(packet, "attach_narrative_context",
+                        self._attach_narrative_context(packet, narrative_seed))
+        ))
+    
+        # Performance metrics (from agents)
+        tasks.append(asyncio.create_task(
+            self._timed(packet, "attach_metrics",
+                        self._attach_metrics(packet))
+        ))
+    
+        # Await with individual timeouts
+        for t in tasks:
+            try:
+                await asyncio.wait_for(t, timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                packet.errors.append("attachment_timeout")
+    
+    async def _populate_scene_and_ids(self, packet: StoryPacket):
+        """
+        Populate packet.scene and packet.canonical_ids using narrator orchestration
+        and current world_state.
+        """
+        try:
+            scene_bundle = await self._narrator.orchestrate_scene(scene_type=self.options.scene_type)
+            packet.scene = _safe_dump(scene_bundle.get("scene"))
+        except Exception as e:
+            # Not critical; log and continue
+            logger.info(f"scene orchestration skipped: {e}")
+    
+        # canonical ids from world state
+        try:
+            canonical_map = {}
+            active = getattr(self._world_state, "active_npcs", None) or []
+            for it in active:
+                if isinstance(it, dict):
+                    npc_id = it.get("npc_id")
+                    can_id = it.get("canonical_id", npc_id)
+                    if npc_id is not None:
+                        canonical_map[str(npc_id)] = can_id
+                else:
+                    npc_id = getattr(it, "npc_id", None)
+                    can_id = getattr(it, "canonical_id", npc_id)
+                    if npc_id is not None:
+                        canonical_map[str(npc_id)] = can_id
+            if canonical_map:
+                packet.canonical_ids.update(canonical_map)
+        except Exception:
+            pass
     # --------- Conflict awareness ---------
     async def _attach_conflict_awareness(self, packet: StoryPacket):
         try:
@@ -435,28 +577,31 @@ class StoryOrchestrator:
             logger.warning(f"Conflict integration failed: {e}")
 
     async def _adjust_for_conflicts(self, packet: StoryPacket, conflict_state: Dict[str, Any]):
-        """Nudge narrative content based on conflicts being active."""
+        """Nudge narrative content based on conflicts being active (non-destructive)."""
         try:
             severity = float(conflict_state.get("metrics", {}).get("complexity_score", 0.0))
-            
-            # More nuanced adjustments based on conflict type
             active_conflicts = conflict_state.get("active_conflicts", [])
-            for conflict in active_conflicts:
-                conflict_type = conflict.get("type", "unknown")
-                
-                # Type-specific narrative adjustments
-                if conflict_type == "social" and packet.dialogues:
-                    # Add tension to dialogues
-                    for dialogue in packet.dialogues:
-                        if isinstance(dialogue, dict):
-                            dialogue["subtext"] = "Unspoken tensions color the conversation"
-                
-                elif conflict_type == "power" and packet.primary_narrative:
-                    # Adjust narrative tone
-                    if severity > 0.7:
-                        packet.primary_narrative = packet.primary_narrative.replace(
-                            "relaxed", "charged with subtle tension"
-                        )
+    
+            # Prepare a tone hint instead of modifying narrative text
+            tone_hint = None
+            types = {c.get("type", "unknown") for c in active_conflicts if isinstance(c, dict)}
+    
+            if "power" in types and severity > 0.6:
+                tone_hint = "charged"
+            elif "social" in types:
+                tone_hint = "tense"
+    
+            if tone_hint:
+                # Store a machine-readable hint without altering the narrative text
+                packet.performance = packet.performance or {}
+                packet.performance["narrative_tone_hint"] = tone_hint
+    
+            # Add subtext to dialogues if social conflict is active
+            if "social" in types and packet.dialogues:
+                for dialogue in packet.dialogues:
+                    if isinstance(dialogue, dict):
+                        dialogue.setdefault("subtext", "Unspoken tensions color the conversation")
+    
         except Exception as e:
             logger.debug(f"Conflict adjustment failed: {e}")
 
@@ -673,11 +818,15 @@ class StoryOrchestrator:
     def _calculate_packet_significance(self, packet: StoryPacket) -> int:
         """
         Heuristic significance score (1-10) for canonical logging.
+        Factors in overall and power tension, conflicts, dialogues, emergent threads,
+        and bumps for 'vital/emergent' activity recs when available.
         """
         score = 5
         brief = packet.world_state_brief or {}
-        tension = (brief.get("tension") or {}).get("power", 0.0)
-        if tension and tension > 0.6:
+        t = (brief.get("tension") or {})
+        if t.get("overall", 0.0) > 0.6:
+            score += 1
+        if t.get("power", 0.0) > 0.6:
             score += 1
         if packet.active_conflicts:
             score += 2
@@ -685,6 +834,19 @@ class StoryOrchestrator:
             score += 1
         if packet.emergent_threads:
             score += 1
+    
+        # Optional: bump if any recommended activity is high priority (e.g., "vital", "emergent")
+        try:
+            recs = packet.activity_recommendations or {}
+            items = recs.get("recommendations") or []
+            for r in items:
+                prio = (r.get("priority") or "").lower()
+                if prio in ("vital", "emergent"):
+                    score += 1
+                    break
+        except Exception:
+            pass
+    
         return max(1, min(score, 10))
 
     async def _canonical_log_packet(self, packet: StoryPacket, mode: str):
