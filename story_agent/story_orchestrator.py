@@ -404,48 +404,30 @@ class StoryOrchestrator:
             self._ensure_narrator(),
             self._ensure_summarizer()
         )
-
+    
         # World
         bundle = await self._get_world_bundle()
         ws = self._world_state
         packet.world_state_brief = _ws_brief(ws)
         if self.options.include_world_patterns_from_bundle and isinstance(bundle, dict):
             packet.world_patterns = _safe_dump(bundle.get("patterns"))
-
+    
         # Conflict awareness
         await self._attach_conflict_awareness(packet)
-
+    
         # Branch
         if user_input:
             await self._process_player_input_path(packet, user_input)
         else:
             await self._autonomous_path(packet)
-        
+    
         # Populate scene and canonical IDs (best-effort, non-critical)
         await self._populate_scene_and_ids(packet)
-        
+    
         # Run non-critical attachments concurrently with per-task timeouts
         seed = user_input or packet.primary_narrative or ""
         await self._run_concurrent_attachments(packet, narrative_seed=seed, timeout_seconds=8.0)
-
-        # Activities & tasks
-        if self.options.include_activity_recs:
-            await self._attach_activity_recommendations(packet)
-        if self.options.include_daily_task:
-            await self._attach_daily_task(packet)
-        if self.options.include_creative_task:
-            await self._attach_creative_task(packet)
-
-        # Emergent patterns (full scan)
-        if self.options.include_emergent_patterns:
-            await self._attach_emergent_patterns(packet)
-
-        # Narrative context + relevant memories
-        await self._attach_narrative_context(packet, user_input or packet.primary_narrative or "")
-
-        # Performance
-        await self._attach_metrics(packet)
-
+    
         # Canonical logging for significant packets
         await self._canonical_log_packet(packet, mode)
 
@@ -800,17 +782,28 @@ class StoryOrchestrator:
 
     async def _attach_metrics(self, packet: StoryPacket):
         try:
+            current = packet.performance or {}
             perf = {}
+    
             if self._perf_monitor:
                 try:
                     perf["world_director"] = self._perf_monitor.get_metrics()
                 except Exception:
                     pass
+    
             try:
                 perf["narrator"] = await self._narrator.get_performance_metrics()
             except Exception:
                 pass
-            packet.performance = _safe_dump(perf)
+    
+            # Merge, don’t overwrite, so timing keys and tone hints remain
+            perf_dump = _safe_dump(perf)
+            if isinstance(perf_dump, dict):
+                current.update(perf_dump)
+            else:
+                current["metrics"] = perf_dump
+    
+            packet.performance = current
         except Exception as e:
             logger.debug(f"metrics collection failed: {e}")
 
