@@ -244,37 +244,12 @@ class KeyValue(AgentSafeModel):
     key: str
     value: Union[str, int, float, bool, None, List[Union[str, int, float, bool, None]]]
 
-# ===============================================================================
-# Narrative Tone and Style Enums
-# ===============================================================================
-
-class NarrativeTone(Enum):
-    """Tone for slice-of-life narration"""
-    CASUAL = "casual"
-    INTIMATE = "intimate"
-    OBSERVATIONAL = "observational"
-    SENSUAL = "sensual"
-    TEASING = "teasing"
-    COMMANDING = "commanding"
-    SUBTLE = "subtle"
-    PSYCHOLOGICAL = "psychological"
-
-class SceneFocus(Enum):
-    """What to emphasize in scene narration"""
-    ATMOSPHERE = "atmosphere"
-    DIALOGUE = "dialogue"
-    INTERNAL = "internal"
-    DYNAMICS = "dynamics"
-    ROUTINE = "routine"
-    TENSION = "tension"
 
 # ===============================================================================
 # Import World Director Models (they should also use AgentSafeModel)
 # ===============================================================================
 
-from story_agent.world_simulation_models import (
-    WorldState, WorldMood, TimeOfDay, ActivityType, PowerDynamicType
-)
+from story_agent.world_simulation_models import WorldState, NarrativeTone, SceneFocus, TimeOfDay, WorldMood, ActivityType, PowerDynamicType
 
 # ===============================================================================
 # Tool Input Models - ALL using AgentSafeModel
