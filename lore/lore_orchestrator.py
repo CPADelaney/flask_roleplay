@@ -25,7 +25,6 @@ import inspect
 import re
 from agents.guardrails import InputGuardrailTripwireTriggered
 
-
 # Core imports
 from db.connection import get_db_connection_context
 
@@ -1519,6 +1518,17 @@ class LoreOrchestrator:
                         scope_keys = self._get_affected_scope_keys('nation', r['id'], nation_data)
                         await self._track_element_change('nation', r['id'], nation_data, scope_keys)
     
+            # Attach brief culture summary (non-blocking best-effort)
+            try:
+                for n in nations[:2]:  # only summarize first two to keep it light
+                    try:
+                        summary = await asyncio.wait_for(self.rc_summarize_culture(n['id'], format_type="brief"), timeout=1.2)
+                        n['culture_summary'] = summary
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            
             return nations
         except Exception as e:
             logger.debug(f"Could not fetch nations: {e}")
@@ -2238,7 +2248,7 @@ class LoreOrchestrator:
     async def _get_lore_update_system(self):
         """Get or initialize the lore update system."""
         if not hasattr(self, '_lore_update_system'):
-            from lore.systems.lore_update import LoreUpdateSystem
+            from lore.matriarchal_lore_system import LoreUpdateSystem
             self._lore_update_system = LoreUpdateSystem(self.user_id, self.conversation_id)
             logger.info("Lore update system initialized")
         return self._lore_update_system
@@ -2446,7 +2456,7 @@ class LoreOrchestrator:
     async def _get_national_conflict_system(self):
         """Get or initialize national conflict system."""
         if not hasattr(self, '_national_conflict_system'):
-            from lore.systems.national_conflict import NationalConflictSystem
+            from lore.matriarchal_lore_system import NationalConflictSystem
             self._national_conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
             logger.info("National conflict system initialized")
         return self._national_conflict_system
@@ -2454,7 +2464,7 @@ class LoreOrchestrator:
     async def _get_religious_distribution_system(self):
         """Get or initialize religious distribution system."""
         if not hasattr(self, '_religious_distribution_system'):
-            from lore.systems.religious_distribution import ReligiousDistributionSystem
+            from lore.matriarchal_lore_system import ReligiousDistributionSystem
             self._religious_distribution_system = ReligiousDistributionSystem(self.user_id, self.conversation_id)
             logger.info("Religious distribution system initialized")
         return self._religious_distribution_system
@@ -2517,42 +2527,29 @@ class LoreOrchestrator:
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
     
+        # If matriarchal theme is enabled, use the specialized system
         if self.config.enable_matriarchal_theme:
             ms = await self._get_matriarchal_system()
             return await ms.handle_narrative_event(ctx, event_description, affected_location_id=affected_location_id, player_data=None)
     
-        dynamics = await self._get_lore_dynamics_system()
-        result = await dynamics.evolve_lore_with_event(event_description)
-        
-        # If specific location affected, update local lore
+        # Use LoreDynamicsSystem (with ctx!) and its change tracking wrapper
+        result = await self.dynamics_evolve_lore_with_event(ctx, event_description)
+    
+        # If specific location affected, update local lore as a secondary step
         if affected_location_id:
             local_mgr = await self._get_local_lore_manager()
-            location_update = await local_mgr.evolve_location_lore(
-                ctx, affected_location_id, event_description
-            )
+            location_update = await local_mgr.evolve_location_lore(ctx, affected_location_id, event_description)
             result['location_update'] = location_update
-            
-            # Record location change
+    
+            # Record location change (best-effort)
             if self._change_tracking_enabled and location_update:
                 await self.record_lore_change(
-                    'location', 
-                    affected_location_id, 
+                    'location',
+                    affected_location_id,
                     'update',
                     new_data={'event': event_description, 'updates': location_update}
                 )
-        
-        # Record world-level changes from the evolution
-        if self._change_tracking_enabled and 'updates' in result:
-            for update in result.get('updates', []):
-                if 'element_type' in update and 'element_id' in update:
-                    await self.record_lore_change(
-                        update['element_type'],
-                        update['element_id'],
-                        update.get('operation', 'update'),
-                        new_data=update.get('new_data'),
-                        old_data=update.get('old_data')
-                    )
-        
+    
         return result
     
     # ===== NPC LORE OPERATIONS =====
@@ -2612,6 +2609,57 @@ class LoreOrchestrator:
         
         from lore.lore_agents import integrate_npc_lore
         return await integrate_npc_lore(npc_id, relevant_lore, context)
+
+    # ===== REGIONAL CULTURE SYSTEM – WRAPPERS =====
+    
+    async def rc_generate_languages(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.generate_languages(ctx, count)
+    
+    async def rc_generate_cultural_norms(self, ctx, nation_id: int) -> List[Dict[str, Any]]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.generate_cultural_norms(ctx, nation_id)
+    
+    async def rc_generate_etiquette(self, ctx, nation_id: int) -> List[Dict[str, Any]]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.generate_etiquette(ctx, nation_id)
+    
+    async def rc_get_nation_culture(self, ctx, nation_id: int) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.get_nation_culture(ctx, nation_id)
+    
+    async def rc_summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
+        rcs = await self._get_regional_culture_system()
+        # function_tool methods are regular async functions; safe to call directly
+        return await rcs.summarize_culture(nation_id=nation_id, format_type=format_type)
+    
+    async def rc_detect_cultural_conflicts(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.detect_cultural_conflicts(nation_id1=nation_id1, nation_id2=nation_id2)
+    
+    async def rc_simulate_cultural_diffusion(self, ctx, nation1_id: int, nation2_id: int, years: int = 50) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.simulate_cultural_diffusion(ctx, nation1_id, nation2_id, years)
+    
+    async def rc_evolve_dialect(self, ctx, language_id: int, region_id: int, years: int = 100) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.evolve_dialect(ctx, language_id, region_id, years)
+    
+    async def rc_get_all_languages(self) -> List[Dict[str, Any]]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.get_all_languages()
+    
+    async def rc_get_language_details(self, language_id: int) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.get_language_details(language_id)
+    
+    async def rc_compare_etiquette(self, nation_id1: int, nation_id2: int, context: str) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.compare_etiquette(nation_id1, nation_id2, context)
+    
+    async def rc_generate_diplomatic_protocol(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.generate_diplomatic_protocol(nation_id1, nation_id2)
     
     async def initialize_npc_lore_knowledge(
         self,
