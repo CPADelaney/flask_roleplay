@@ -193,8 +193,9 @@ async def orchestrate_daily_scene(
                 async with get_db_connection_context() as conn:
                     npc = await conn.fetchrow("""
                         SELECT npc_name, dominance, closeness
-                        FROM NPCStats WHERE npc_id=$1
-                    """, npc_id)
+                        FROM NPCStats
+                        WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                    """, npc_id, user_id, conversation_id)
                 
                 if npc and dialogue_agent:
                     # Get current time safely
