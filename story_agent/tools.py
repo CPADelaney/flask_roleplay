@@ -1,4 +1,4 @@
-# story_agent/world_simulation_tools.py
+# story_agent/tools.py
 
 """
 World Simulation Tools for the open-world femdom slice-of-life game.
@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field, ConfigDict
 
 # Agent SDK imports
 from agents import Agent, function_tool, FunctionTool, RunContextWrapper, Runner, ModelSettings
+
+from story_agent.world_simulation_models import PowerDynamicType
 
 # Database imports
 from db.connection import get_db_connection_context
@@ -113,16 +115,6 @@ class MoodType(Enum):
     INTIMATE = "intimate"
     MYSTERIOUS = "mysterious"
 
-class PowerDynamicType(Enum):
-    """Types of power dynamics in daily life"""
-    SUBTLE_CONTROL = "subtle_control"
-    CASUAL_DOMINANCE = "casual_dominance"
-    PROTECTIVE_CONTROL = "protective_control"
-    PLAYFUL_TEASING = "playful_teasing"
-    RITUAL_SUBMISSION = "ritual_submission"
-    FINANCIAL_CONTROL = "financial_control"
-    SOCIAL_HIERARCHY = "social_hierarchy"
-    INTIMATE_COMMAND = "intimate_command"
 
 # ============= PYDANTIC MODELS =============
 
