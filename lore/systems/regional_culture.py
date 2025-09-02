@@ -30,6 +30,13 @@ from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.core.cache import GLOBAL_LORE_CACHE
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def _with_conn(self):
+    async with self._with_conn() as conn:
+        yield conn
+
 # ===========================================================================
 # PYDANTIC MODELS FOR STRUCTURED DATA
 # ===========================================================================
@@ -425,7 +432,7 @@ class RegionalCultureSystem(BaseLoreManager):
     async def _validate_nation_id(self, ctx, agent, input_data: int) -> GuardrailFunctionOutput:
         """Validate that the given nation ID actually exists in the DB."""
         run_ctx = self.create_run_context(ctx)
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             nation = await conn.fetchrow("""
                 SELECT id FROM Nations WHERE id = $1
             """, input_data)
@@ -462,7 +469,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 return []
             
             # Get existing languages and analyze patterns
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 existing_languages = await conn.fetch("""
                     SELECT l.*, 
                            array_agg(DISTINCT n1.name) FILTER (WHERE n1.id = ANY(l.primary_regions)) as primary_nation_names,
@@ -572,7 +579,7 @@ class RegionalCultureSystem(BaseLoreManager):
         language_agent = self._get_agent("language").clone(output_type=LanguageOutput)
         languages = []
         
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             for i, dist in enumerate(distribution_plan[:count]):
                 # Get detailed nation info for context
                 primary_nations = [n for n in nations if n["id"] in dist.get("primary_region_ids", [])]
@@ -797,7 +804,7 @@ class RegionalCultureSystem(BaseLoreManager):
     async def _establish_language_relationships(self, new_languages: List[Dict[str, Any]], 
                                               existing_languages: List[Any]) -> None:
         """Establish relationships between languages (borrowings, influences, etc)."""
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Group languages by family
             families = {}
             for lang in new_languages + [dict(l) for l in existing_languages]:
@@ -892,7 +899,7 @@ class RegionalCultureSystem(BaseLoreManager):
             input_guardrail = InputGuardrail(guardrail_function=self._validate_nation_id)
             
             # Fetch the nation data
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level, cultural_traits
                     FROM Nations
@@ -976,7 +983,7 @@ class RegionalCultureSystem(BaseLoreManager):
             norm_data = result.final_output
             
             # Insert into DB
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 norm_id = await conn.fetchval("""
                     INSERT INTO CulturalNorms (
                         nation_id, category, description, formality_level,
@@ -1030,7 +1037,7 @@ class RegionalCultureSystem(BaseLoreManager):
             input_guardrail = InputGuardrail(guardrail_function=self._validate_nation_id)
             
             # Fetch nation details
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level, cultural_traits
                     FROM Nations
@@ -1100,7 +1107,7 @@ class RegionalCultureSystem(BaseLoreManager):
             etiquette_data = result.final_output
             
             # Insert into DB
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 etiq_id = await conn.fetchval("""
                     INSERT INTO Etiquette (
                         nation_id, context, title_system, greeting_ritual,
@@ -1161,7 +1168,7 @@ class RegionalCultureSystem(BaseLoreManager):
             if cached:
                 return cached
             
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level, cultural_traits
                     FROM Nations
@@ -1344,7 +1351,7 @@ class RegionalCultureSystem(BaseLoreManager):
             )
             
             # Get geopolitical data about the two nations' relationship
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 relation = await conn.fetchrow("""
                     SELECT * FROM InternationalRelations
                     WHERE (nation1_id = $1 AND nation2_id = $2)
@@ -1435,7 +1442,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects or not isinstance(effects, dict):
             return
             
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Get languages for both nations
             nation1_langs = await conn.fetch("""
                 SELECT l.*, n.name as nation_name, n.matriarchy_level
@@ -1547,7 +1554,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Get cultural context for both nations
             nation1_data = await conn.fetchrow("""
                 SELECT n.*, 
@@ -1657,7 +1664,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Get religious data for both nations
             nation1_religion = await conn.fetchrow("""
                 SELECT nr.*, p.name as pantheon_name
@@ -1763,7 +1770,7 @@ class RegionalCultureSystem(BaseLoreManager):
     
     async def _localize_idiom(self, idiom: str, target_language: Dict[str, Any], nation_id: int) -> Dict[str, str]:
         """Localize an idiom to fit the target culture."""
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             nation = await conn.fetchrow("""
                 SELECT name, cultural_traits, matriarchy_level
                 FROM Nations WHERE id = $1
@@ -1820,7 +1827,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
         if not effects:
             return
             
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Get nation data for context
             nation1 = await conn.fetchrow("""
                 SELECT n.*, 
@@ -2067,7 +2074,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
         if not effects:
             return
             
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Get nation data including existing cuisine
             nation1 = await conn.fetchrow("""
                 SELECT n.*, 
@@ -2349,7 +2356,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
         if not effects:
             return
             
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Get detailed nation data including existing customs
             nation1 = await conn.fetchrow("""
                 SELECT n.*, 
@@ -2734,7 +2741,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
             run_ctx = self.create_run_context(ctx)
             
             # Get language and region data
-            async with get_db_connection_context() as conn:
+            async with self._with_conn() as conn:
                 language = await conn.fetchrow("""
                     SELECT * FROM Languages WHERE id = $1
                 """, language_id)
@@ -2812,7 +2819,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
         dialect_model = result.final_output
         
         # Store the dialect in the database
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             # Update the language's dialects
             current_dialects = language_data.get("dialects", {})
             if not current_dialects:
@@ -2891,7 +2898,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
     @function_tool(strict_mode=False)
     async def get_all_languages(self) -> List[Dict[str, Any]]:
         """Get all languages in the world."""
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             languages = await conn.fetch("""
                 SELECT id, name, language_family, description, 
                        writing_system, difficulty, relation_to_power
@@ -2903,7 +2910,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
     @function_tool(strict_mode=False)
     async def get_language_details(self, language_id: int) -> Dict[str, Any]:
         """Get detailed information about a specific language."""
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             language = await conn.fetchrow("""
                 SELECT * FROM Languages WHERE id = $1
             """, language_id)
@@ -2957,7 +2964,7 @@ def _calculate_impact_level(self, effects: Dict[str, Any]) -> int:
     @function_tool(strict_mode=False)
     async def compare_etiquette(self, nation_id1: int, nation_id2: int, context: str) -> Dict[str, Any]:
         """Compare etiquette between two nations for a specific context."""
-        async with get_db_connection_context() as conn:
+        async with self._with_conn() as conn:
             etiq1 = await conn.fetchrow("""
                 SELECT * FROM Etiquette
                 WHERE nation_id = $1 AND context = $2
