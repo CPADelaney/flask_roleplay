@@ -292,21 +292,20 @@ class StoryOrchestrator:
         self,
         user_input: Optional[str] = None,
         mode: str = "auto"
-    ) -> StoryPacket:
+    ) -> Dict[str, Any]:
         """
-        Assemble and return a StoryPacket. Uses short-lived caching for performance.
+        Assemble and return a JSON-serializable dict (cache-aware).
         """
         # Cache key: time-bucketed by TTL
         bucket = int(time.time() // self._cache_ttl)
         cache_key = f"{self.user_id}:{self.conversation_id}:{mode}:{(user_input or 'auto')}:{bucket}"
+
+        # Fast path: return cached dict
         cached = self._packet_cache.get(cache_key)
         if cached:
-            # Return deserialized packet dict as StoryPacket for compatibility
-            pkt = StoryPacket(self.user_id, self.conversation_id, _now_iso())
-            pkt_dict = cached
-            # quick merge (we only need to return dict via to_dict at the module convenience func)
-            return pkt  # caller likely uses module-level function (which returns dict); cache handled there
+            return cached
 
+        # Build packet
         packet = StoryPacket(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -314,7 +313,10 @@ class StoryOrchestrator:
         )
 
         try:
-            await asyncio.wait_for(self._assemble(packet, user_input, mode), timeout=self.options.timeout_seconds)
+            await asyncio.wait_for(
+                self._assemble(packet, user_input, mode),
+                timeout=self.options.timeout_seconds
+            )
         except asyncio.TimeoutError:
             packet.errors.append("Orchestration timed out")
         except Exception as e:
@@ -322,7 +324,9 @@ class StoryOrchestrator:
             packet.errors.append(str(e))
 
         # Store in cache
-        self._packet_cache[cache_key] = packet.to_dict()
+        packet_dict = packet.to_dict()
+        self._packet_cache[cache_key] = packet_dict
+
         # Cleanup old cache entries
         try:
             cutoff_bucket = int(time.time() // self._cache_ttl) - 2
@@ -333,7 +337,7 @@ class StoryOrchestrator:
         except Exception:
             pass
 
-        return packet
+        return packet_dict
 
     async def health_check(self) -> Dict[str, Any]:
         """
@@ -482,9 +486,21 @@ class StoryOrchestrator:
             # Try to attach a structured narration object (best-effort)
             try:
                 sln = await self._get_module("slice_of_life_narrator")
-                ni = sln.NarrateSliceOfLifeInput(scene_type=self.options.scene_type, world_state=self._world_state)
-                structured = await sln.narrate_slice_of_life_scene(self._narrator.scene_narrator, payload=ni)
-                packet.primary_narration_obj = _safe_dump(structured)
+                # Build a Run call using the narrator's agent (scene_narrator) and tool
+                result = await self._narrator.scene_narrator.run(
+                    messages=[{"role": "user", "content": f"Narrate a {self.options.scene_type} scene"}],
+                    context=self._narrator.context,
+                    tool_calls=[{
+                        "tool": sln.narrate_slice_of_life_scene,
+                        "kwargs": {
+                            "payload": sln.NarrateSliceOfLifeInput(
+                                scene_type=self.options.scene_type,
+                                world_state=self._world_state
+                            ).model_dump()
+                        }
+                    }]
+                )
+                packet.primary_narration_obj = _safe_dump(getattr(result, "data", result))
             except Exception:
                 pass
         except Exception as e:
@@ -534,13 +550,19 @@ class StoryOrchestrator:
     async def _attach_ambient(self, packet: StoryPacket):
         try:
             sln = await self._get_module("slice_of_life_narrator")
-            ambient_dict = await sln.generate_ambient_narration(
-                self._narrator.scene_narrator,
-                focus="ambient",
-                world_state=self._world_state,
-                intensity=0.5
+            result = await self._narrator.scene_narrator.run(
+                messages=[{"role": "user", "content": "Ambient generation"}],
+                context=self._narrator.context,
+                tool_calls=[{
+                    "tool": sln.generate_ambient_narration,
+                    "kwargs": {
+                        "focus": "ambient",
+                        "world_state": self._world_state.model_dump() if hasattr(self._world_state, "model_dump") else self._world_state,
+                        "intensity": 0.5
+                    }
+                }]
             )
-            packet.ambient = _safe_dump(ambient_dict)
+            packet.ambient = _safe_dump(getattr(result, "data", result))
         except Exception as e:
             logger.warning(f"ambient attachment failed: {e}")
 
@@ -719,12 +741,5 @@ async def assemble_story_packet(
     Uses orchestrator-internal caching automatically.
     """
     orchestrator = StoryOrchestrator(user_id, conversation_id, options)
-    packet = await orchestrator.assemble_story_packet(user_input=user_input, mode=mode)
-
-    # Try to return a cached dict if present (fast path)
-    bucket = int(time.time() // orchestrator._cache_ttl)
-    cache_key = f"{user_id}:{conversation_id}:{mode}:{(user_input or 'auto')}:{bucket}"
-    cached = orchestrator._packet_cache.get(cache_key)
-    if cached:
-        return cached
-    return packet.to_dict()
+    # Now the orchestrator method already returns a dict and handles caching.
+    return await orchestrator.assemble_story_packet(user_input=user_input, mode=mode)
