@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
 
-from story_agent.world_director_agent import WorldState, WorldMood
+from story_agent.world_simulation_models import WorldState, WorldMood
 from story_agent.emergent_story_tracker import EmergentNarrative, EmergentPattern
 
 class BalanceAxis(Enum):
