@@ -606,80 +606,457 @@ class LoreOrchestrator:
             self._cache_bundle(cache_key, result)
         
         return result
+
+    async def _track_lore_dynamics_change(
+        self,
+        change_type: str,
+        change_data: Dict[str, Any]
+    ) -> None:
+        """Track changes from the LoreDynamicsSystem."""
+        # Map dynamics change types to standard element types
+        element_type_map = {
+            'myth_evolution': 'myth',
+            'culture_development': 'cultural_element',
+            'geopolitical_shift': 'faction',
+            'reputation_change': 'notable_figure',
+            'emergent_event': 'event'
+        }
+        
+        element_type = element_type_map.get(change_type, 'world_lore')
+        
+        # Extract relevant IDs and scope keys
+        element_id = change_data.get('id', 0)
+        scope_keys = self._get_affected_scope_keys(
+            element_type, element_id, change_data
+        )
+        
+        await self._track_element_change(
+            element_type,
+            element_id,
+            change_data,
+            scope_keys
+        )
     
+    async def _track_cultural_change(
+        self,
+        nation_id: int,
+        change_type: str,
+        change_data: Dict[str, Any]
+    ) -> None:
+        """Track changes from the RegionalCultureSystem."""
+        # Map cultural change types
+        element_type_map = {
+            'language': 'language',
+            'dialect': 'dialect',
+            'norm': 'cultural_norm',
+            'etiquette': 'etiquette',
+            'diffusion': 'cultural_exchange'
+        }
+        
+        element_type = element_type_map.get(change_type, 'cultural_element')
+        
+        # Add nation context to change data
+        change_data['nation_id'] = nation_id
+        
+        # Generate scope keys that include the nation
+        scope_keys = self._get_affected_scope_keys(
+            element_type,
+            change_data.get('id', 0),
+            change_data
+        )
+        
+        await self._track_element_change(
+            element_type,
+            change_data.get('id', 0),
+            change_data,
+            scope_keys
+        )
+
+    async def get_system_status(self) -> Dict[str, Any]:
+        """Get status of all integrated systems."""
+        status = {
+            'orchestrator': {
+                'initialized': self.initialized,
+                'metrics': self.metrics,
+                'cache_status': {
+                    'scene_bundles': len(self._scene_bundle_cache),
+                    'change_log_entries': sum(len(log) for log in self._change_log.values())
+                }
+            },
+            'systems': {}
+        }
+        
+        # Check each system
+        systems_to_check = [
+            ('lore_dynamics', self._lore_dynamics_system),
+            ('regional_culture', self._regional_culture_system),
+            ('matriarchal', self._matriarchal_system),
+            ('education', self._education_manager),
+            ('religion', self._religion_manager),
+            ('politics', self._politics_manager),
+            ('geopolitical', self._geopolitical_manager),
+            ('local_lore', self._local_lore_manager)
+        ]
+        
+        for name, system_attr in systems_to_check:
+            if hasattr(self, system_attr) and getattr(self, system_attr) is not None:
+                system = getattr(self, system_attr)
+                status['systems'][name] = {
+                    'loaded': True,
+                    'initialized': getattr(system, 'initialized', False),
+                    'has_governance': getattr(system, 'governor', None) is not None
+                }
+            else:
+                status['systems'][name] = {'loaded': False}
+        
+        return status
+
+    async def culture_simulate_exchange(
+        self, ctx,
+        nation1_id: int,
+        nation2_id: int,
+        exchange_type: str = "full",
+        years: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Simulate comprehensive cultural exchange between nations.
+        
+        Args:
+            ctx: Context object
+            nation1_id: First nation ID
+            nation2_id: Second nation ID
+            exchange_type: Type of exchange (full, language, customs, cuisine, etc.)
+            years: Years to simulate
+            
+        Returns:
+            Exchange results and impacts
+        """
+        rcs = await self._get_regional_culture_system()
+        
+        if exchange_type == "full":
+            # Full cultural diffusion
+            result = await rcs.simulate_cultural_diffusion(ctx, nation1_id, nation2_id, years)
+        else:
+            # Specific exchange type
+            result = await rcs._apply_specific_diffusion(nation1_id, nation2_id, exchange_type, years)
+        
+        # Track the exchange
+        if self._change_tracking_enabled:
+            await self._track_cultural_change(
+                nation1_id,
+                'diffusion',
+                {
+                    'type': exchange_type,
+                    'partner_nation': nation2_id,
+                    'years': years,
+                    'results': result
+                }
+            )
+            await self._track_cultural_change(
+                nation2_id,
+                'diffusion',
+                {
+                    'type': exchange_type,
+                    'partner_nation': nation1_id,
+                    'years': years,
+                    'results': result
+                }
+            )
+        
+        # Invalidate scene caches for both nations
+        nation1_keys = self._get_affected_scope_keys('nation', nation1_id, {'nation_id': nation1_id})
+        nation2_keys = self._get_affected_scope_keys('nation', nation2_id, {'nation_id': nation2_id})
+        await self._invalidate_scope_keys(nation1_keys + nation2_keys)
+        
+        return result
+    
+    async def culture_get_comprehensive_summary(
+        self, ctx,
+        nation_id: int,
+        include_comparisons: bool = False,
+        comparison_nations: Optional[List[int]] = None
+    ) -> Dict[str, Any]:
+        """
+        Get a comprehensive cultural summary with optional comparisons.
+        
+        Args:
+            ctx: Context object
+            nation_id: Nation to summarize
+            include_comparisons: Whether to include comparisons
+            comparison_nations: Nations to compare with
+            
+        Returns:
+            Comprehensive cultural summary
+        """
+        rcs = await self._get_regional_culture_system()
+        
+        # Get base cultural data
+        culture = await rcs.get_nation_culture(ctx, nation_id)
+        
+        # Generate narrative summary
+        summary = await rcs.summarize_culture(nation_id, format_type="detailed")
+        
+        result = {
+            'nation_id': nation_id,
+            'culture_data': culture,
+            'narrative_summary': summary
+        }
+        
+        # Add comparisons if requested
+        if include_comparisons and comparison_nations:
+            comparisons = []
+            for other_nation_id in comparison_nations[:3]:  # Limit comparisons
+                conflict_analysis = await rcs.detect_cultural_conflicts(
+                    nation_id, other_nation_id
+                )
+                comparisons.append({
+                    'nation_id': other_nation_id,
+                    'conflicts': conflict_analysis
+                })
+            result['comparisons'] = comparisons
+        
+        return result
+        
     async def _fetch_cultural_data_for_bundle(self, nation_ids: List[int]) -> Dict[str, Any]:
-        """Fetch cultural data (languages, norms, etiquette) for nations in bundle."""
+        """Enhanced cultural data fetching for scene bundles."""
         try:
-            data = {'languages': [], 'norms': [], 'etiquette': []}
+            data = {'languages': [], 'norms': [], 'etiquette': [], 'customs': [], 'dialects': [], 'exchanges': []}
     
             async with get_db_connection_context() as conn:
+                # Your original efficient queries - keep these!
                 # Languages linked to nation_ids (primary or minority)
                 langs = await conn.fetch("""
                     SELECT l.id, l.name, l.language_family, l.writing_system,
-                           l.difficulty, l.relation_to_power
+                           l.difficulty, l.relation_to_power, l.formality_levels,
+                           l.common_phrases, l.dialects,
+                           array_agg(DISTINCT ld.region_id) FILTER (WHERE ld.id IS NOT NULL) as dialect_regions,
+                           array_agg(DISTINCT ld.name) FILTER (WHERE ld.id IS NOT NULL) as dialect_names
                     FROM Languages l
+                    LEFT JOIN LanguageDialects ld ON l.id = ld.language_id
                     WHERE EXISTS (
                         SELECT 1 FROM unnest($1::int[]) AS nid
                         WHERE nid = ANY(l.primary_regions) OR nid = ANY(l.minority_regions)
                     )
-                    LIMIT 5
+                    GROUP BY l.id
+                    LIMIT 10
                 """, nation_ids[:10])
     
                 for r in langs:
-                    data['languages'].append({
+                    lang_data = {
                         'id': r['id'],
                         'name': r['name'],
                         'family': r['language_family'],
                         'writing': r['writing_system'],
                         'difficulty': r['difficulty'],
                         'power_relation': r['relation_to_power'],
-                    })
+                        'formality_levels': r['formality_levels'],
+                        'has_dialects': bool(r['dialect_names'])
+                    }
+                    
+                    # Add common phrases sample (limit size)
+                    if r['common_phrases']:
+                        phrases = json.loads(r['common_phrases']) if isinstance(r['common_phrases'], str) else r['common_phrases']
+                        lang_data['sample_phrases'] = dict(list(phrases.items())[:3])
+                    
+                    data['languages'].append(lang_data)
     
-                # Cultural norms for those nations
+                # Cultural norms for those nations - enhanced query
                 norms = await conn.fetch("""
                     SELECT cn.id, cn.category, cn.description, cn.taboo_level, cn.gender_specific,
-                           COALESCE(n.name, n.nation_name) AS nation_name
+                           cn.female_variation, cn.male_variation, cn.consequence,
+                           cn.regional_variations,
+                           COALESCE(n.name, n.nation_name) AS nation_name,
+                           n.matriarchy_level
                     FROM CulturalNorms cn
                     JOIN Nations n ON cn.nation_id = COALESCE(n.id, n.nation_id)
                     WHERE cn.nation_id = ANY($1::int[])
-                    ORDER BY cn.taboo_level DESC
-                    LIMIT 10
+                    ORDER BY cn.taboo_level DESC, cn.category
+                    LIMIT 15
                 """, nation_ids[:5])
     
                 for r in norms:
-                    data['norms'].append({
+                    norm_data = {
                         'id': r['id'],
                         'category': r['category'],
                         'description': (r['description'] or '')[:150],
                         'taboo_level': r['taboo_level'],
                         'gender_specific': r['gender_specific'],
                         'nation': r['nation_name'],
-                    })
+                        'matriarchy_level': r['matriarchy_level']
+                    }
+                    
+                    # Include gender variations if they exist
+                    if r['gender_specific']:
+                        norm_data['female_variation'] = (r['female_variation'] or '')[:100]
+                        norm_data['male_variation'] = (r['male_variation'] or '')[:100]
+                    
+                    # Include consequence for high taboo items
+                    if r['taboo_level'] >= 7:
+                        norm_data['consequence'] = (r['consequence'] or 'Social sanctions')
+                        
+                    data['norms'].append(norm_data)
     
-                # Etiquette for those nations
+                # Etiquette for those nations - enhanced
                 etqs = await conn.fetch("""
-                    SELECT e.id, e.context, e.greeting_ritual, e.power_display, e.gender_distinctions,
+                    SELECT e.id, e.context, e.greeting_ritual, e.power_display, 
+                           e.gender_distinctions, e.title_system, e.gift_giving,
+                           e.dining_etiquette, e.taboos,
                            COALESCE(n.name, n.nation_name) AS nation_name
                     FROM Etiquette e
                     JOIN Nations n ON e.nation_id = COALESCE(n.id, n.nation_id)
                     WHERE e.nation_id = ANY($1::int[])
-                    LIMIT 5
-                """, nation_ids[:3])
+                    ORDER BY 
+                        CASE e.context 
+                            WHEN 'court' THEN 1
+                            WHEN 'diplomatic' THEN 2
+                            WHEN 'public' THEN 3
+                            ELSE 4
+                        END
+                    LIMIT 10
+                """, nation_ids[:5])
     
                 for r in etqs:
                     data['etiquette'].append({
                         'id': r['id'],
                         'context': r['context'],
+                        'nation': r['nation_name'],
                         'greeting': (r['greeting_ritual'] or '')[:100],
                         'power_display': (r['power_display'] or '')[:100],
                         'gender_rules': r['gender_distinctions'],
-                        'nation': r['nation_name'],
+                        'titles': (r['title_system'] or '')[:50],
+                        'gifts': (r['gift_giving'] or '')[:50],
+                        'dining': (r['dining_etiquette'] or '')[:50],
+                        'major_taboos': r['taboos'][:3] if r['taboos'] else []
                     })
     
+                # NEW: Social customs
+                customs = await conn.fetch("""
+                    SELECT sc.id, sc.name, sc.description, sc.context,
+                           sc.formality_level, sc.gender_rules,
+                           sc.violation_consequences,
+                           n.name as origin_nation
+                    FROM SocialCustoms sc
+                    JOIN Nations n ON sc.nation_origin = n.id
+                    WHERE sc.nation_origin = ANY($1::int[])
+                       OR $1::int[] && sc.adopted_by
+                    LIMIT 10
+                """, nation_ids[:5])
+    
+                for r in customs:
+                    data['customs'].append({
+                        'id': r['id'],
+                        'name': r['name'],
+                        'description': (r['description'] or '')[:100],
+                        'context': r['context'],
+                        'formality': r['formality_level'],
+                        'origin': r['origin_nation']
+                    })
+    
+                # NEW: Active dialects in the region
+                dialects = await conn.fetch("""
+                    SELECT ld.id, ld.name, ld.region_id, ld.prestige_level,
+                           ld.social_context, l.name as parent_language,
+                           n.name as region_name
+                    FROM LanguageDialects ld
+                    JOIN Languages l ON ld.language_id = l.id
+                    JOIN Nations n ON ld.region_id = n.id
+                    WHERE ld.region_id = ANY($1::int[])
+                    ORDER BY ld.prestige_level DESC
+                    LIMIT 5
+                """, nation_ids[:3])
+    
+                for r in dialects:
+                    data['dialects'].append({
+                        'id': r['id'],
+                        'name': r['name'],
+                        'parent_language': r['parent_language'],
+                        'region': r['region_name'],
+                        'prestige': r['prestige_level'],
+                        'context': r['social_context']
+                    })
+    
+                # NEW: Recent cultural exchanges
+                if len(nation_ids) >= 2:
+                    exchanges = await conn.fetch("""
+                        SELECT ce.exchange_type, ce.impact_level,
+                               ce.cultural_resistance, ce.exchange_details,
+                               n1.name as nation1_name, n2.name as nation2_name
+                        FROM CulturalExchanges ce
+                        JOIN Nations n1 ON ce.nation1_id = n1.id
+                        JOIN Nations n2 ON ce.nation2_id = n2.id
+                        WHERE (ce.nation1_id = ANY($1::int[]) AND ce.nation2_id = ANY($1::int[]))
+                           OR (ce.nation2_id = ANY($1::int[]) AND ce.nation1_id = ANY($1::int[]))
+                        ORDER BY ce.timestamp DESC
+                        LIMIT 5
+                    """, nation_ids[:5])
+    
+                    for r in exchanges:
+                        exchange_summary = {
+                            'type': r['exchange_type'],
+                            'between': [r['nation1_name'], r['nation2_name']],
+                            'impact': r['impact_level'],
+                            'resistance': r['cultural_resistance']
+                        }
+                        
+                        # Extract key elements from exchange details
+                        if r['exchange_details']:
+                            details = json.loads(r['exchange_details']) if isinstance(r['exchange_details'], str) else r['exchange_details']
+                            if 'vocabulary' in details:
+                                exchange_summary['vocabulary_exchanged'] = len(details['vocabulary'])
+                            if 'customs' in details:
+                                exchange_summary['customs_shared'] = len(details.get('customs', []))
+                        
+                        data['exchanges'].append(exchange_summary)
+    
+                # Cultural conflict detection (if multiple nations)
+                if len(nation_ids) >= 2:
+                    # Quick conflict check using direct SQL
+                    conflict_check = await conn.fetchrow("""
+                        WITH norm_conflicts AS (
+                            SELECT 
+                                cn1.category,
+                                cn1.description as norm1,
+                                cn2.description as norm2,
+                                ABS(cn1.taboo_level - cn2.taboo_level) as taboo_diff,
+                                cn1.nation_id as nation1_id,
+                                cn2.nation_id as nation2_id
+                            FROM CulturalNorms cn1
+                            CROSS JOIN CulturalNorms cn2
+                            WHERE cn1.nation_id = $1 
+                              AND cn2.nation_id = $2
+                              AND cn1.category = cn2.category
+                              AND ABS(cn1.taboo_level - cn2.taboo_level) > 5
+                        )
+                        SELECT COUNT(*) as conflict_count,
+                               MAX(taboo_diff) as max_difference
+                        FROM norm_conflicts
+                    """, nation_ids[0], nation_ids[1])
+                    
+                    if conflict_check and conflict_check['conflict_count'] > 0:
+                        data['conflict_indicators'] = {
+                            'norm_conflicts': conflict_check['conflict_count'],
+                            'max_taboo_difference': conflict_check['max_difference'],
+                            'risk_level': 'high' if conflict_check['max_difference'] > 7 else 'medium'
+                        }
+    
+            # Get RegionalCultureSystem for advanced analysis only if needed
+            if len(nation_ids) >= 2 and not data.get('conflict_indicators'):
+                try:
+                    rcs = await self._get_regional_culture_system()
+                    conflict_analysis = await rcs.detect_cultural_conflicts(
+                        nation_ids[0], nation_ids[1]
+                    )
+                    if conflict_analysis and "error" not in conflict_analysis:
+                        data['detailed_conflicts'] = conflict_analysis.get('potential_conflicts', [])[:3]
+                except Exception as e:
+                    logger.debug(f"Could not perform detailed conflict analysis: {e}")
+    
             return data
+            
         except Exception as e:
             logger.debug(f"Could not fetch cultural data: {e}")
-            return {'languages': [], 'norms': [], 'etiquette': []}
+            return {'languages': [], 'norms': [], 'etiquette': [], 'customs': [], 
+                    'dialects': [], 'exchanges': []}
     
     async def get_scene_delta(self, scope: Any, since_ts: float) -> Dict[str, Any]:
         """
@@ -1048,6 +1425,128 @@ class LoreOrchestrator:
         except Exception as e:
             logger.debug(f"get_location_context failed for '{location_ref}': {e}")
             return {}
+
+    async def dynamics_create_evolution_plan(self, ctx, initial_prompt: str) -> Dict[str, Any]:
+        """
+        Create a multi-step narrative evolution plan.
+        
+        Args:
+            ctx: Context object
+            initial_prompt: Initial narrative prompt
+            
+        Returns:
+            Multi-step plan with dependencies and expected outcomes
+        """
+        dynamics = await self._get_lore_dynamics_system()
+        planner = MultiStepPlanner(dynamics)
+        context = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        }
+        plan = await planner.create_evolution_plan(initial_prompt, context)
+        
+        # Track the plan creation
+        if self._change_tracking_enabled:
+            await self.record_lore_change(
+                'narrative_plan',
+                plan.get('id', 0),
+                'create',
+                new_data={'prompt': initial_prompt, 'steps': len(plan.get('steps', []))}
+            )
+        
+        return plan
+    
+    async def dynamics_execute_plan_step(self, ctx, plan_id: str, step_index: int) -> Dict[str, Any]:
+        """Execute a specific step in a multi-step narrative plan."""
+        dynamics = await self._get_lore_dynamics_system()
+        planner = MultiStepPlanner(dynamics)
+        context = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        }
+        result = await planner.execute_plan_step(plan_id, step_index, context)
+        
+        # Track changes from the step execution
+        if self._change_tracking_enabled and result.get('applied_changes'):
+            for change in result['applied_changes']:
+                await self.record_lore_change(
+                    change.get('element_type', 'world_lore'),
+                    change.get('element_id', 0),
+                    'update',
+                    new_data=change
+                )
+        
+        return result
+    
+    async def dynamics_evaluate_narrative(self, ctx, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
+        """
+        Evaluate the quality of a narrative element.
+        
+        Args:
+            ctx: Context object
+            narrative_element: The element to evaluate
+            element_type: Type of element (event, cultural_development, etc.)
+            
+        Returns:
+            Evaluation scores and feedback
+        """
+        dynamics = await self._get_lore_dynamics_system()
+        evaluator = NarrativeEvaluator(dynamics)
+        return await evaluator.evaluate_narrative(narrative_element, element_type)
+    
+    async def dynamics_evolve_narrative_element(
+        self, ctx,
+        element_type: str,
+        initial_element: Optional[Dict[str, Any]] = None,
+        generations: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Evolve a narrative element through multiple generations.
+        
+        Args:
+            ctx: Context object
+            element_type: Type of element to evolve
+            initial_element: Optional seed element
+            generations: Number of evolution generations
+            
+        Returns:
+            Evolved narrative element
+        """
+        dynamics = await self._get_lore_dynamics_system()
+        evolution_system = NarrativeEvolutionSystem(dynamics)
+        
+        context = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "world_state": await dynamics._fetch_world_state()
+        }
+        
+        result = await evolution_system.evolve_narrative_element(
+            element_type, context, initial_element, generations
+        )
+        
+        # Record the evolution
+        if self._change_tracking_enabled and not result.get('error'):
+            await self.record_lore_change(
+                element_type,
+                result.get('id', 0),
+                'evolve',
+                new_data=result
+            )
+        
+        return result
+    
+    async def dynamics_stream_world_changes(
+        self, ctx,
+        event_data: Dict[str, Any],
+        affected_elements: List[Dict[str, Any]]
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream progressive updates about world changes."""
+        dynamics = await self._get_lore_dynamics_system()
+        streamer = WorldStateStreamer(dynamics)
+        
+        async for chunk in streamer.stream_world_changes(event_data, affected_elements):
+            yield chunk
         
     async def analyze_setting_and_generate_orgs(self) -> Dict[str, Any]:
         from lore.setting_analyzer import SettingAnalyzer
