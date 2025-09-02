@@ -1352,7 +1352,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 5) Time evolution prediction
     # ------------------------------------------------------------------------
-    @staticmethod
     @function_tool
     async def predict_geopolitical_evolution(
         ctx: RunContextWrapper,
@@ -1362,19 +1361,16 @@ class GeopoliticalSystemManager(BaseLoreManager):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Predict the geopolitical evolution of an entity over time, streaming results.
-        
-        Args:
-            ctx: Context object
-            entity_id: ID of the political entity
-            years_forward: Number of years to predict
-            include_events: Whether to include significant events
-            
-        Yields:
-            Evolution updates as they are predicted
         """
-        # Apply governance if available
+        # Resolve manager from ctx or create one
+        manager = ctx.context.get("manager")
+        if not manager:
+            manager = GeopoliticalSystemManager(ctx.context.get("user_id"), ctx.context.get("conversation_id"))
+            await manager.ensure_initialized()
+    
+        # Governance check (optional)
         try:
-            from nyx.nyx_governance import NyxUnifiedGovernor
+            from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
             governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
             permission = await governor.check_action_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1382,44 +1378,28 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 action_type="predict_geopolitical_evolution",
                 action_details={"entity_id": entity_id}
             )
-            
             if not permission.get("approved", True):
                 yield {"error": permission.get("reasoning", "Action not permitted by governance")}
                 return
-        except (ImportError, Exception):
-            # Governance optional - continue if not available
+        except Exception:
             pass
-            
+    
+        # Original body, but using manager instead of self
         with trace(
-            "PredictGeopoliticalEvolution", 
-            group_id=self.trace_group_id,
-            metadata={
-                **self.trace_metadata, 
-                "entity_id": entity_id,
-                "years_forward": years_forward
-            }
+            "PredictGeopoliticalEvolution",
+            group_id=manager.trace_group_id,
+            metadata={**manager.trace_metadata, "entity_id": entity_id, "years_forward": years_forward}
         ):
-            run_ctx = self.create_run_context(ctx)
-            
-            # Fetch entity details
-            async with await self.get_connection_pool() as pool:
+            run_ctx = manager.create_run_context(ctx)
+            async with await manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
-                    entity = await conn.fetchrow("""
-                        SELECT * FROM PoliticalEntities WHERE id = $1
-                    """, entity_id)
-                    
+                    entity = await conn.fetchrow("SELECT * FROM PoliticalEntities WHERE id = $1", entity_id)
                     if not entity:
                         yield {"error": "Political entity not found"}
                         return
-                    
-                    # Fetch region
                     region = None
                     if entity["region_id"]:
-                        region = await conn.fetchrow("""
-                            SELECT * FROM GeographicRegions WHERE id = $1
-                        """, entity["region_id"])
-                    
-                    # Fetch related conflicts
+                        region = await conn.fetchrow("SELECT * FROM GeographicRegions WHERE id = $1", entity["region_id"])
                     conflicts = await conn.fetch("""
                         SELECT c.* 
                         FROM ConflictSimulations c
@@ -1428,8 +1408,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                         ORDER BY c.simulation_date DESC
                         LIMIT 3
                     """, str(entity_id), entity["name"])
-                    
-                    # Get neighboring entities
                     neighbors = []
                     if region:
                         neighbors = await conn.fetch("""
@@ -1439,23 +1417,18 @@ class GeopoliticalSystemManager(BaseLoreManager):
                             WHERE g.id != $1 AND e.id != $2
                             LIMIT 5
                         """, region["id"], entity_id)
-            
-            # Parse entity data
+    
             entity_data = dict(entity)
-            
             for field in ["relations", "power_centers"]:
                 if field in entity_data and entity_data[field]:
                     try:
                         entity_data[field] = json.loads(entity_data[field])
-                    except:
+                    except Exception:
                         entity_data[field] = {}
-            
-            # Prepare context data
             region_data = dict(region) if region else {}
             conflict_data = [dict(c) for c in conflicts]
             neighbor_data = [dict(n) for n in neighbors]
-            
-            # Initial yield with basic information
+    
             yield {
                 "entity_name": entity_data["name"],
                 "current_state": {
@@ -1467,28 +1440,25 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "years_to_predict": years_forward,
                 "prediction_status": "starting"
             }
-            
-            # Allow a small delay for better streaming experience
             await asyncio.sleep(0.5)
-            
-            # Create evolution prompt
+    
             evolution_prompt = f"""
             Predict the geopolitical evolution of this political entity over {years_forward} years:
-            
+    
             ENTITY:
             {json.dumps(entity_data, indent=2)}
-            
+    
             REGION:
             {json.dumps(region_data, indent=2)}
-            
+    
             RECENT CONFLICTS:
             {json.dumps(conflict_data, indent=2)}
-            
+    
             NEIGHBORING ENTITIES:
             {json.dumps(neighbor_data, indent=2)}
-            
+    
             {f'Include significant events and their impacts.' if include_events else ''}
-            
+    
             Predict evolution in these areas:
             1. Governance style and leadership
             2. Matriarchal power dynamics
@@ -1497,111 +1467,50 @@ class GeopoliticalSystemManager(BaseLoreManager):
             5. Internal stability and conflicts
             6. Economic development
             7. Cultural shifts
-            
+    
             Return a year-by-year prediction with key changes and events.
             Format as structured JSON with each year as a separate object.
             """
-            
-            # Create a streaming run configuration
+    
             streaming_config = RunConfig(
                 workflow_name="GeopoliticalEvolution",
-                trace_metadata={
-                    "user_id": str(self.user_id),
-                    "conversation_id": str(self.conversation_id),
-                    "entity_id": str(entity_id)
-                }
+                trace_metadata={"user_id": str(manager.user_id), "conversation_id": str(manager.conversation_id), "entity_id": str(entity_id)}
             )
-            
-            # Run the time evolution prediction with streaming
-            streaming_result = Runner.run_streamed(
-                self.time_evolution_agent,
-                evolution_prompt,
-                context=run_ctx.context,
-                run_config=streaming_config
-            )
-            
-            # Buffer to accumulate content between "Year X" markers
+            streaming_result = Runner.run_streamed(manager.time_evolution_agent, evolution_prompt, context=run_ctx.context, run_config=streaming_config)
+    
             current_year = None
             buffer = ""
-            
-            # Process the streamed events
             async for event in streaming_result.stream_events():
-                if event.type == "run_item_stream_event":
-                    if event.item.type == "message_output_item":
-                        # Extract text from the message output
-                        from agents.items import ItemHelpers
-                        message_text = ItemHelpers.text_message_output(event.item)
-                        
-                        # Check for year markers
-                        year_match = re.search(r'year (\d+)', message_text.lower())
-                        if year_match and buffer:
-                            # If we're starting a new year, yield the previous year's content
-                            if current_year is not None:
-                                year_data = {
-                                    "year": current_year,
-                                    "prediction": buffer.strip(),
-                                    "entity_name": entity_data["name"],
-                                    "prediction_status": "in_progress"
-                                }
-                                yield year_data
-                                
-                                # Small delay for better streaming experience
-                                await asyncio.sleep(0.2)
-                            
-                            # Start accumulating for the new year
-                            current_year = int(year_match.group(1))
-                            buffer = message_text
-                        else:
-                            # Continue accumulating
-                            buffer += message_text
-            
-            # Yield any remaining content
+                if event.type == "run_item_stream_event" and event.item.type == "message_output_item":
+                    from agents.items import ItemHelpers
+                    message_text = ItemHelpers.text_message_output(event.item)
+                    year_match = re.search(r'year (\d+)', message_text.lower())
+                    if year_match and buffer:
+                        if current_year is not None:
+                            year_data = {"year": current_year, "prediction": buffer.strip(), "entity_name": entity_data["name"], "prediction_status": "in_progress"}
+                            yield year_data
+                            await asyncio.sleep(0.2)
+                        current_year = int(year_match.group(1))
+                        buffer = message_text
+                    else:
+                        buffer += message_text
+    
             if current_year is not None and buffer:
-                year_data = {
-                    "year": current_year,
-                    "prediction": buffer.strip(),
-                    "entity_name": entity_data["name"],
-                    "prediction_status": "in_progress"
-                }
-                yield year_data
-            
-            # Final attempt to parse the complete result
+                yield {"year": current_year, "prediction": buffer.strip(), "entity_name": entity_data["name"], "prediction_status": "in_progress"}
+    
             try:
-                # Fetch the complete result (not just the streamed chunks)
-                complete_evolution = await Runner.run(
-                    self.time_evolution_agent, 
-                    evolution_prompt, 
-                    context=run_ctx.context
-                )
-                
-                # Parse the complete evolution data
+                complete_evolution = await Runner.run(manager.time_evolution_agent, evolution_prompt, context=run_ctx.context)
                 try:
                     evolution_data = json.loads(complete_evolution.final_output)
-                    
-                    # Final yield with complete data
-                    yield {
-                        "entity_name": entity_data["name"],
-                        "complete_evolution": evolution_data,
-                        "prediction_status": "complete"
-                    }
+                    yield {"entity_name": entity_data["name"], "complete_evolution": evolution_data, "prediction_status": "complete"}
                 except json.JSONDecodeError:
-                    # If we can't parse as JSON, yield the raw text
-                    yield {
-                        "entity_name": entity_data["name"],
-                        "evolution_text": complete_evolution.final_output,
-                        "prediction_status": "complete_raw"
-                    }
+                    yield {"entity_name": entity_data["name"], "evolution_text": complete_evolution.final_output, "prediction_status": "complete_raw"}
             except Exception as e:
-                yield {
-                    "entity_name": entity_data["name"],
-                    "error": str(e),
-                    "prediction_status": "error"
-                }
+                yield {"entity_name": entity_data["name"], "error": str(e), "prediction_status": "error"}
 
     # ------------------------------------------------------------------------
     # 6) Specialized simulations
     # ------------------------------------------------------------------------
-    @staticmethod
     @function_tool
     async def simulate_trade(
         ctx: RunContextWrapper,
@@ -1610,22 +1519,13 @@ class GeopoliticalSystemManager(BaseLoreManager):
         trade_goods: List[str],
         trade_route: str
     ) -> Dict[str, Any]:
-        """
-        Simulate the economic impact of trade between two nations.
-        
-        Args:
-            ctx: Context object
-            nation1: First nation name
-            nation2: Second nation name
-            trade_goods: List of goods being traded
-            trade_route: Route of trade
-            
-        Returns:
-            Economic trade simulation results
-        """
-        # Apply governance if available
+        manager = ctx.context.get("manager")
+        if not manager:
+            manager = GeopoliticalSystemManager(ctx.context.get("user_id"), ctx.context.get("conversation_id"))
+            await manager.ensure_initialized()
+    
         try:
-            from nyx.nyx_governance import NyxUnifiedGovernor
+            from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
             governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
             permission = await governor.check_action_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1633,75 +1533,54 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 action_type="simulate_trade",
                 action_details={"nation1": nation1, "nation2": nation2}
             )
-            
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
-        except (ImportError, Exception):
-            # Governance optional - continue if not available
+        except Exception:
             pass
-            
-        with trace(
-            "SimulateTrade",
-            group_id=self.trace_group_id,
-            metadata={
-                **self.trace_metadata,
-                "nation1": nation1,
-                "nation2": nation2
-            }
-        ):
-            run_ctx = self.create_run_context(ctx)
-            
-            # Get nation information from DB if available
+    
+        with trace("SimulateTrade", group_id=manager.trace_group_id, metadata={**manager.trace_metadata, "nation1": nation1, "nation2": nation2}):
+            run_ctx = manager.create_run_context(ctx)
             nations_data = {}
-            async with await self.get_connection_pool() as pool:
+            async with await manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     for name in [nation1, nation2]:
-                        nation = await conn.fetchrow("""
-                            SELECT * FROM PoliticalEntities WHERE name ILIKE $1
-                        """, f"%{name}%")
-                        
+                        nation = await conn.fetchrow("SELECT * FROM PoliticalEntities WHERE name ILIKE $1", f"%{name}%")
                         if nation:
-                            nation_data = dict(nation)
-                            # Parse JSON fields
+                            nd = dict(nation)
                             for field in ["relations", "power_centers"]:
-                                if field in nation_data and nation_data[field]:
+                                if field in nd and nd[field]:
                                     try:
-                                        nation_data[field] = json.loads(nation_data[field])
-                                    except:
-                                        nation_data[field] = {}
-                            
-                            nations_data[name] = nation_data
-            
-            # Prepare prompt
+                                        nd[field] = json.loads(nd[field])
+                                    except Exception:
+                                        nd[field] = {}
+                            nations_data[name] = nd
+    
             prompt = f"""
             Simulate trade relations between these two nations:
-            
+    
             NATION 1: {nation1}
             {json.dumps(nations_data.get(nation1, {}), indent=2) if nation1 in nations_data else "No additional data available"}
-            
+    
             NATION 2: {nation2}
             {json.dumps(nations_data.get(nation2, {}), indent=2) if nation2 in nations_data else "No additional data available"}
-            
+    
             TRADE GOODS: {', '.join(trade_goods)}
             TRADE ROUTE: {trade_route}
-            
+    
             Analyze:
             1. Economic impact on both nations
             2. Balance of trade (who benefits more)
             3. Strategic implications
             4. Cultural exchange aspects
             5. Impact on matriarchal power structures
-            
+    
             Return an EconomicTradeSimulation object with all fields.
             """
-            
-            # Run the trade simulation
-            result = await Runner.run(self.trade_modeling_agent, prompt, context=run_ctx.context)
+    
+            result = await Runner.run(manager.trade_modeling_agent, prompt, context=run_ctx.context)
             trade_sim = result.final_output
-            
-            return trade_sim.dict()
+            return trade_sim.dict() if hasattr(trade_sim, "dict") else trade_sim
 
-    @staticmethod
     @function_tool
     async def simulate_geography_impact(
         ctx: RunContextWrapper,
@@ -1709,21 +1588,13 @@ class GeopoliticalSystemManager(BaseLoreManager):
         terrain_features: List[str],
         climate_type: str
     ) -> Dict[str, Any]:
-        """
-        Simulate how terrain features and climate affect political stability.
-        
-        Args:
-            ctx: Context object
-            region_name: Name of the region
-            terrain_features: List of terrain features
-            climate_type: Type of climate
-            
-        Returns:
-            Geography effect simulation results
-        """
-        # Apply governance if available
+        manager = ctx.context.get("manager")
+        if not manager:
+            manager = GeopoliticalSystemManager(ctx.context.get("user_id"), ctx.context.get("conversation_id"))
+            await manager.ensure_initialized()
+    
         try:
-            from nyx.nyx_governance import NyxUnifiedGovernor
+            from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
             governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
             permission = await governor.check_action_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1731,66 +1602,46 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 action_type="simulate_geography_impact",
                 action_details={"region_name": region_name}
             )
-            
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
-        except (ImportError, Exception):
-            # Governance optional - continue if not available
+        except Exception:
             pass
-            
-        with trace(
-            "SimulateGeographyImpact",
-            group_id=self.trace_group_id,
-            metadata={
-                **self.trace_metadata,
-                "region_name": region_name,
-                "climate_type": climate_type
-            }
-        ):
-            run_ctx = self.create_run_context(ctx)
-            
-            # Get region information from DB if available
+    
+        with trace("SimulateGeographyImpact", group_id=manager.trace_group_id, metadata={**manager.trace_metadata, "region_name": region_name, "climate_type": climate_type}):
+            run_ctx = manager.create_run_context(ctx)
             region_data = {}
             resource_availability = []
-            
-            async with await self.get_connection_pool() as pool:
+            async with await manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
-                    region = await conn.fetchrow("""
-                        SELECT * FROM GeographicRegions WHERE name ILIKE $1
-                    """, f"%{region_name}%")
-                    
+                    region = await conn.fetchrow("SELECT * FROM GeographicRegions WHERE name ILIKE $1", f"%{region_name}%")
                     if region:
                         region_data = dict(region)
                         resource_availability = region_data.get("resources", [])
-            
-            # Prepare prompt
+    
             prompt = f"""
             Simulate the impact of geography and climate on political development:
-            
+    
             REGION: {region_name}
             {json.dumps(region_data, indent=2) if region_data else "No additional data available"}
-            
+    
             TERRAIN FEATURES: {', '.join(terrain_features)}
             CLIMATE TYPE: {climate_type}
             RESOURCE AVAILABILITY: {', '.join(resource_availability)}
-            
+    
             Analyze:
             1. Defensive characteristics of the terrain
             2. Impact on resource accessibility
             3. Settlement patterns influenced by geography
             4. Cultural adaptations to the environment
             5. How matriarchal structures might be strengthened or challenged by geography
-            
+    
             Return a ClimateGeographyEffect object with all fields.
             """
-            
-            # Run the geography impact simulation
-            result = await Runner.run(self.geography_effect_agent, prompt, context=run_ctx.context)
+    
+            result = await Runner.run(manager.geography_effect_agent, prompt, context=run_ctx.context)
             geography_effect = result.final_output
-            
-            return geography_effect.dict()
-
-    @staticmethod
+            return geography_effect.dict() if hasattr(geography_effect, "dict") else geography_effect
+        
     @function_tool
     async def simulate_espionage(
         ctx: RunContextWrapper,
@@ -1799,22 +1650,13 @@ class GeopoliticalSystemManager(BaseLoreManager):
         operation_type: str,
         secrecy_level: int
     ) -> Dict[str, Any]:
-        """
-        Simulate covert operations between nations.
-        
-        Args:
-            ctx: Context object
-            agent_name: Name of the agent conducting the operation
-            target_nation: Target nation
-            operation_type: Type of operation (intelligence gathering, sabotage, etc.)
-            secrecy_level: Level of secrecy (1-10)
-            
-        Returns:
-            Covert operation simulation results
-        """
-        # Apply governance if available
+        manager = ctx.context.get("manager")
+        if not manager:
+            manager = GeopoliticalSystemManager(ctx.context.get("user_id"), ctx.context.get("conversation_id"))
+            await manager.ensure_initialized()
+    
         try:
-            from nyx.nyx_governance import NyxUnifiedGovernor
+            from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
             governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
             permission = await governor.check_action_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1822,67 +1664,47 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 action_type="simulate_espionage",
                 action_details={"target_nation": target_nation}
             )
-            
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
-        except (ImportError, Exception):
-            # Governance optional - continue if not available
+        except Exception:
             pass
-            
-        with trace(
-            "SimulateEspionage",
-            group_id=self.trace_group_id,
-            metadata={
-                **self.trace_metadata,
-                "agent_name": agent_name,
-                "target_nation": target_nation
-            }
-        ):
-            run_ctx = self.create_run_context(ctx)
-            
-            # Get target nation information from DB if available
+    
+        with trace("SimulateEspionage", group_id=manager.trace_group_id, metadata={**manager.trace_metadata, "agent_name": agent_name, "target_nation": target_nation}):
+            run_ctx = manager.create_run_context(ctx)
             nation_data = {}
-            
-            async with await self.get_connection_pool() as pool:
+            async with await manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
-                    nation = await conn.fetchrow("""
-                        SELECT * FROM PoliticalEntities WHERE name ILIKE $1
-                    """, f"%{target_nation}%")
-                    
+                    nation = await conn.fetchrow("SELECT * FROM PoliticalEntities WHERE name ILIKE $1", f"%{target_nation}%")
                     if nation:
                         nation_data = dict(nation)
-                        # Parse JSON fields
                         for field in ["relations", "power_centers"]:
                             if field in nation_data and nation_data[field]:
                                 try:
                                     nation_data[field] = json.loads(nation_data[field])
-                                except:
+                                except Exception:
                                     nation_data[field] = {}
-            
-            # Prepare prompt
+    
             prompt = f"""
             Simulate a covert operation:
-            
+    
             AGENT: {agent_name}
             TARGET NATION: {target_nation}
             {json.dumps(nation_data, indent=2) if nation_data else "No additional data available"}
-            
+    
             OPERATION TYPE: {operation_type}
             SECRECY LEVEL: {secrecy_level} (1-10)
-            
+    
             Analyze:
             1. Likelihood of success based on target nation's security
             2. Potential international ramifications if discovered
             3. Strategic value of the intelligence gathered
             4. Matriarchal leadership's response if discovered
             5. Unexpected outcomes or complications
-            
+    
             Determine a realistic mission outcome (success, partial success, failure, catastrophic).
             Return a CovertOperation object with all fields.
             """
-            
-            # Run the espionage simulation
-            result = await Runner.run(self.covert_operations_agent, prompt, context=run_ctx.context)
+    
+            result = await Runner.run(manager.covert_operations_agent, prompt, context=run_ctx.context)
             espionage_result = result.final_output
-            
-            return espionage_result.dict()
+            return espionage_result.dict() if hasattr(espionage_result, "dict") else espionage_result
