@@ -429,9 +429,8 @@ class RegionalCultureSystem(BaseLoreManager):
     # ---------------------------------------------------------------------------
     # Guardrail function for validating nation IDs
     # ---------------------------------------------------------------------------
-    async def _validate_nation_id(self, ctx, agent, input_data: int) -> GuardrailFunctionOutput:
+    async def _validate_nation_id(self, run_ctx, agent, input_data: int) -> GuardrailFunctionOutput:
         """Validate that the given nation ID actually exists in the DB."""
-        run_ctx = self.create_run_context(ctx)
         async with self._with_conn() as conn:
             nation = await conn.fetchrow("""
                 SELECT id FROM Nations WHERE id = $1
@@ -449,12 +448,12 @@ class RegionalCultureSystem(BaseLoreManager):
     # (1) Generate Languages
     # ---------------------------------------------------------------------------
     @with_governance(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            action_type="generate_languages",
-            action_description="Generating languages for the world",
-            id_from_context=lambda ctx: "regional_culture_system"
-        )
-        async def generate_languages(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_languages",
+        action_description="Generating languages for the world",
+        id_from_context=lambda ctx: "regional_culture_system",
+    )
+    async def generate_languages(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
             """
             Generate languages with full canon establishment and relationship tracking.
             """
