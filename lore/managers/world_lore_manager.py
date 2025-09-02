@@ -66,26 +66,23 @@ class WorldLoreManager(BaseLoreManager):
         
         # Optional: store your agent if you want direct usage
         self.resource_ops_agent = RESOURCE_OPS_AGENT
-
+    
         self.inconsistency_resolution_agent = Agent(
             name="InconsistencyResolutionAgent",
             instructions="Analyze and resolve any inconsistencies in world lore elements.",
-            model="gpt-5-nano",
-            output_type=InconsistencyResolutionAgent
+            model="gpt-5-nano"
         )
-
+    
         self.world_documentation_agent = Agent(
             name="WorldDocumentationAgent",
             instructions="Generate readable summaries of world history and current state.",
-            model="gpt-5-nano",
-            output_type=WorldDocumentationAgent
-        )    
-
+            model="gpt-5-nano"
+        )
+    
         self.world_query_agent = Agent(
             name="WorldQueryAgent",
             instructions="Process queries related to the world state and provide relevant information.",
-            model="gpt-5-nano",
-            output_type=WorldQueryAgent
+            model="gpt-5-nano"
         )
 
 
@@ -2453,6 +2450,23 @@ class InconsistencyResolutionAgent(BaseModel):
         else:
             return f"Unknown inconsistency type: {inconsistency['type']}"
 
+# Late-bind output types after classes are defined
+def bind_world_agents_output_types(manager: "WorldLoreManager") -> None:
+    try:
+        manager.inconsistency_resolution_agent.output_type = InconsistencyResolutionAgent
+        manager.world_documentation_agent.output_type = WorldDocumentationAgent
+        manager.world_query_agent.output_type = WorldQueryAgent
+    except Exception:
+        pass
+
+# Bind for the singleton if it exists
+try:
+    bind_world_agents_output_types(world_lore_manager)
+except Exception:
+    pass
+
+
 # Create a singleton instance if desired
 world_lore_manager = WorldLoreManager(user_id=0, conversation_id=0)
+
 
