@@ -192,6 +192,12 @@ class OrchestratorOptions:
     scene_type: str = "routine"
     prefer_fast_world_bundle: bool = False
     timeout_seconds: int = 30
+    include_agent_interaction_scene: bool = False
+    include_agent_interaction_ambient: bool = False
+    include_agent_driven_scene: bool = False  # from world_simulation_tools
+    include_emergent_balance: bool = False
+    include_preset_tracker: bool = False
+    include_world_memory_summaries: bool = False
 
 
 # =========================
@@ -459,59 +465,73 @@ class StoryOrchestrator:
         timeout_seconds: float = 8.0
     ):
         """
-        Schedule non-critical attachments concurrently with per-task timeouts.
-        Records per-subsystem timings in packet.performance.
+        Schedule non-critical attachments concurrently, cancel slow tasks after timeout,
+        and record per-subsystem timings via _timed.
         """
         import asyncio
     
-        tasks = []
-    
-        # Activity recommendations
+        # Build (name, coroutine) pairs so we can report which ones time out
+        jobs = []
+        
         if self.options.include_activity_recs:
-            tasks.append(asyncio.create_task(
-                self._timed(packet, "attach_activity_recs",
-                            self._attach_activity_recommendations(packet))
-            ))
-    
-        # Daily task
+            jobs.append(("attach_activity_recs", self._attach_activity_recommendations(packet)))
         if self.options.include_daily_task:
-            tasks.append(asyncio.create_task(
-                self._timed(packet, "attach_daily_task",
-                            self._attach_daily_task(packet))
-            ))
-    
-        # Creative task
+            jobs.append(("attach_daily_task", self._attach_daily_task(packet)))
         if self.options.include_creative_task:
-            tasks.append(asyncio.create_task(
-                self._timed(packet, "attach_creative_task",
-                            self._attach_creative_task(packet))
-            ))
-    
-        # Emergent patterns
+            jobs.append(("attach_creative_task", self._attach_creative_task(packet)))
         if self.options.include_emergent_patterns:
-            tasks.append(asyncio.create_task(
-                self._timed(packet, "attach_emergent_patterns",
-                            self._attach_emergent_patterns(packet))
-            ))
+            jobs.append(("attach_emergent_patterns", self._attach_emergent_patterns(packet)))
+        
+        # NEW: optional integrations
+        if self.options.include_agent_interaction_scene:
+            jobs.append(("attach_agent_interaction_scene", self._attach_agent_interaction_scene(packet)))
+        if self.options.include_agent_interaction_ambient:
+            jobs.append(("attach_agent_interaction_ambient", self._attach_agent_interaction_ambient(packet)))
+        if self.options.include_agent_driven_scene:
+            jobs.append(("attach_agent_driven_scene", self._attach_agent_driven_scene(packet)))
+        if self.options.include_emergent_balance:
+            jobs.append(("attach_balance_report", self._attach_balance_report(packet)))
+        if self.options.include_preset_tracker:
+            jobs.append(("attach_preset_beats", self._attach_preset_beat_opportunities(packet)))
+        if self.options.include_world_memory_summaries:
+            jobs.append(("attach_world_memory_summaries", self._attach_world_memory_summaries(packet)))
+        
+        jobs.append(("attach_narrative_context", self._attach_narrative_context(packet, narrative_seed)))
+        jobs.append(("attach_metrics", self._attach_metrics(packet)))
     
-        # Narrative context + memories
-        tasks.append(asyncio.create_task(
-            self._timed(packet, "attach_narrative_context",
-                        self._attach_narrative_context(packet, narrative_seed))
-        ))
+        # Wrap each job with _timed and create tasks
+        tasks = []
+        task_name = {}
+        for name, coro in jobs:
+            t = asyncio.create_task(self._timed(packet, name, coro))
+            tasks.append(t)
+            task_name[t] = name
     
-        # Performance metrics (from agents)
-        tasks.append(asyncio.create_task(
-            self._timed(packet, "attach_metrics",
-                        self._attach_metrics(packet))
-        ))
-    
-        # Await with individual timeouts
-        for t in tasks:
-            try:
-                await asyncio.wait_for(t, timeout=timeout_seconds)
-            except asyncio.TimeoutError:
+        try:
+            done, pending = await asyncio.wait(tasks, timeout=timeout_seconds, return_when=asyncio.ALL_COMPLETED)
+            # Cancel anything that exceeded timeout
+            if pending:
+                for t in pending:
+                    t.cancel()
                 packet.errors.append("attachment_timeout")
+                try:
+                    timed_out = [task_name.get(t, "unknown") for t in pending]
+                    perf = packet.performance or {}
+                    perf["attachments_timed_out"] = timed_out
+                    packet.performance = perf
+                except Exception:
+                    pass
+    
+            # Surface exceptions from finished tasks (without crashing orchestrator)
+            for t in done:
+                exc = t.exception()
+                if exc:
+                    packet.errors.append(f"attachment_error:{type(exc).__name__}")
+        except Exception:
+            # In case asyncio.wait itself fails, cancel all tasks
+            for t in tasks:
+                t.cancel()
+            packet.errors.append("attachments_failed")
     
     async def _populate_scene_and_ids(self, packet: StoryPacket):
         """
@@ -557,6 +577,221 @@ class StoryOrchestrator:
                     await self._adjust_for_conflicts(packet, conflict_state)
         except Exception as e:
             logger.warning(f"Conflict integration failed: {e}")
+    
+    async def _attach_world_memory_summaries(self, packet: StoryPacket):
+        """
+        Provide long-horizon summaries from the world memory system:
+        - daily summary
+        - optional relationship summaries for top NPCs
+        Stores results under packet.performance['world_memory'].
+        """
+        try:
+            from story_agent.world_memory_system import WorldMemorySystem
+            wms = WorldMemorySystem(self.user_id, self.conversation_id)
+            await wms.initialize()
+    
+            daily = await wms.get_daily_summary()
+    
+            # Optionally, get first 1-2 active npcs summaries
+            rel_summaries = []
+            active = getattr(self._world_state, "active_npcs", None) or []
+            for it in active[:2]:
+                npc_id = None
+                npc_name = None
+                if isinstance(it, dict):
+                    npc_id = it.get("npc_id")
+                    npc_name = it.get("npc_name")
+                else:
+                    npc_id = getattr(it, "npc_id", None)
+                    npc_name = getattr(it, "npc_name", None)
+                if npc_id:
+                    rs = await wms.get_relationship_summary(npc_id)
+                    if rs:
+                        rel_summaries.append({"npc_id": npc_id, "npc_name": npc_name, "summary": rs})
+    
+            perf = packet.performance or {}
+            perf["world_memory"] = {
+                "daily_summary": daily,
+                "relationship_summaries": rel_summaries
+            }
+            packet.performance = perf
+        except Exception as e:
+            logger.info(f"world memory summaries failed: {e}")
+
+    async def _attach_preset_beat_opportunities(self, packet: StoryPacket):
+        """
+        Check preset beat opportunities, store under packet.emergent_threads['preset'] if any.
+        Note: Requires that a preset story was initialized elsewhere; otherwise no-ops.
+        """
+        try:
+            from story_agent.preset_story_tracker import PresetStoryTracker
+            tracker = PresetStoryTracker(self.user_id, self.conversation_id)
+            # Quick context: current location & rough hours played (if available)
+            brief = packet.world_state_brief or {}
+            ctx = {
+                "current_location": brief.get("location"),
+                "hours_played": 0
+            }
+            beat = await tracker.check_beat_triggers(ctx)
+            if beat:
+                threads = packet.emergent_threads or {}
+                threads["preset"] = {
+                    "can_trigger": True,
+                    "beat_id": getattr(beat, "id", None),
+                    "name": getattr(beat, "name", None),
+                    "description": getattr(beat, "description", None),
+                }
+                packet.emergent_threads = threads
+        except Exception as e:
+            logger.info(f"preset tracker failed: {e}")
+
+    async def _attach_balance_report(self, packet: StoryPacket):
+        """
+        Evaluate and suggest balance adjustments. Store in packet.performance['balance_report'].
+        """
+        try:
+            from story_agent.emergent_balance_manager import EmergentBalanceManager
+            mgr = EmergentBalanceManager(self.user_id, self.conversation_id)
+            # Some functions expect recent_events & active_narratives; pass minimal
+            world_state = self._world_state
+            recent_events = []  # could feed from summarizer if desired
+            active_narratives = []  # optional source
+    
+            bal = await mgr.evaluate_current_balance(world_state, recent_events, active_narratives)
+            suggestions = await mgr.suggest_balance_adjustments()
+    
+            report = {
+                "agency": bal.agency_level,
+                "routine": bal.routine_level,
+                "subtlety": bal.subtlety_level,
+                "emergence": bal.emergence_level,
+                "suggestions": suggestions
+            }
+            perf = packet.performance or {}
+            perf["balance_report"] = _safe_dump(report)
+            packet.performance = perf
+        except Exception as e:
+            logger.info(f"balance report failed: {e}")
+
+    async def _attach_agent_driven_scene(self, packet: StoryPacket):
+        """
+        Agent-driven daily life scene via world_simulation_tools.generate_daily_life_scene.
+        Stores result under 'scene_agent_driven'.
+        """
+        try:
+            from story_agent.world_simulation_tools import generate_daily_life_scene
+            from agents import RunContextWrapper
+            scene = await generate_daily_life_scene(
+                RunContextWrapper(self._director.context),
+                forced_participants=None,
+                forced_activity=None,
+                include_power_dynamics=True
+            )
+            # append as alternate scene
+            alt = packet.scene or {}
+            alt["agent_driven"] = _safe_dump(getattr(scene, "model_dump", lambda: scene)())
+            packet.scene = alt
+        except Exception as e:
+            logger.info(f"agent-driven scene failed: {e}")
+
+    async def _attach_agent_interaction_scene(self, packet: StoryPacket):
+        """
+        Alternative scene engine via agent_interaction.orchestrate_daily_scene.
+        Stores a secondary scene under 'scene_alt' and/or enriches emergent_threads.
+        """
+        try:
+            from story_agent.agent_interaction import orchestrate_daily_scene
+            result = await orchestrate_daily_scene(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                scene_focus=self.options.scene_type,
+                involved_npcs=None  # let the agent pick
+            )
+            # Keep alternate scene
+            alt = packet.scene or {}
+            alt["agent_interaction"] = _safe_dump(result.get("scene"))
+            packet.scene = alt
+    
+            # Merge dialogues/power dynamics if present
+            try:
+                diags = result.get("dialogues") or []
+                if diags:
+                    packet.dialogues.extend(_safe_dump(diags))
+            except Exception:
+                pass
+    
+            # Attach emergent patterns from this engine
+            try:
+                threads = packet.emergent_threads or {}
+                threads["agent_interaction"] = _safe_dump(result.get("emergent_patterns"))
+                packet.emergent_threads = threads
+            except Exception:
+                pass
+    
+        except Exception as e:
+            logger.info(f"agent_interaction scene failed: {e}")
+    
+    async def _attach_agent_interaction_ambient(self, packet: StoryPacket):
+        """
+        Ambient world details via agent_interaction.generate_ambient_world.
+        Stores results under 'ambient_agent'.
+        """
+        try:
+            from story_agent.agent_interaction import generate_ambient_world_details
+            res = await generate_ambient_world_details(self.user_id, self.conversation_id)
+            ambient_agent = _safe_dump(res)
+            # don’t overwrite your main 'ambient', stash separately
+            if packet.ambient is None:
+                packet.ambient = {}
+            if isinstance(packet.ambient, dict):
+                packet.ambient["agent_interaction"] = ambient_agent
+        except Exception as e:
+            logger.info(f"agent_interaction ambient failed: {e}")
+    
+    async def agent_handoff(self, from_agent: str, to_agent: str, handoff_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Public convenience method for inter-agent handoff.
+        """
+        try:
+            from story_agent.agent_interaction import coordinate_agent_handoff
+            return await coordinate_agent_handoff(
+                self.user_id, self.conversation_id,
+                from_agent=from_agent, to_agent=to_agent, handoff_data=handoff_data
+            )
+        except Exception as e:
+            logger.error(f"agent_handoff failed: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    async def process_power_exchange(self, exchange: Dict[str, Any], player_response: str) -> Dict[str, Any]:
+        """
+        Public convenience method to process a power exchange with agent layer.
+        exchange should include keys consistent with agent_interaction.PowerExchange:
+        {
+          "exchange_type": "casual_dominance" | ...,
+          "initiator_npc_id": int,
+          "intensity": float,
+          "is_public": bool
+        }
+        """
+        try:
+            from story_agent.agent_interaction import PowerExchange, process_power_exchange_with_agents, PowerDynamicType
+            # Coerce into PowerExchange
+            # Handle string exchange_type -> PowerDynamicType
+            ex_type = exchange.get("exchange_type")
+            if isinstance(ex_type, str) and hasattr(PowerDynamicType, ex_type.upper()):
+                exchange["exchange_type"] = getattr(PowerDynamicType, ex_type.upper())
+            px = PowerExchange(
+                exchange_type=exchange["exchange_type"],
+                initiator_npc_id=int(exchange["initiator_npc_id"]),
+                intensity=float(exchange.get("intensity", 0.5)),
+                is_public=bool(exchange.get("is_public", False))
+            )
+            return await process_power_exchange_with_agents(
+                self.user_id, self.conversation_id, exchange=px, player_response=player_response
+            )
+        except Exception as e:
+            logger.error(f"process_power_exchange failed: {e}", exc_info=True)
+            return {"error": str(e)}
 
     async def _adjust_for_conflicts(self, packet: StoryPacket, conflict_state: Dict[str, Any]):
         """Nudge narrative content based on conflicts being active (non-destructive)."""
@@ -589,56 +824,81 @@ class StoryOrchestrator:
 
     # --------- Player Input Path ---------
     async def _process_player_input_path(self, packet: StoryPacket, user_input: str):
+        import time as _time
+    
+        async def _do():
+            try:
+                result = await self._narrator.process_player_input(user_input)
+                result_dict = _safe_dump(result)
+                packet.action_result = result_dict
+                packet.primary_narrative = result_dict.get("narrative") or result_dict.get("response") or ""
+                if self.options.include_dialogues:
+                    npc_responses = result_dict.get("npc_responses") or result_dict.get("npc_dialogues")
+                    if npc_responses:
+                        packet.dialogues = [_safe_dump(d) for d in npc_responses if d]
+            except Exception as e:
+                logger.error(f"process_player_input failed: {e}", exc_info=True)
+                packet.errors.append(f"process_input: {e}")
+    
+            if self.options.include_ambient:
+                await self._attach_ambient(packet)
+    
+        # Time the whole branch and record in packet.performance
+        t0 = _time.perf_counter()
         try:
-            result = await self._narrator.process_player_input(user_input)
-            result_dict = _safe_dump(result)
-            packet.action_result = result_dict
-            packet.primary_narrative = result_dict.get("narrative") or result_dict.get("response") or ""
-            if self.options.include_dialogues:
-                npc_responses = result_dict.get("npc_responses") or result_dict.get("npc_dialogues")
-                if npc_responses:
-                    packet.dialogues = [_safe_dump(d) for d in npc_responses if d]
-        except Exception as e:
-            logger.error(f"process_player_input failed: {e}", exc_info=True)
-            packet.errors.append(f"process_input: {e}")
-
-        if self.options.include_ambient:
-            await self._attach_ambient(packet)
+            await _do()
+        finally:
+            t1 = _time.perf_counter()
+            dur_ms = int((t1 - t0) * 1000)
+            perf = packet.performance or {}
+            perf["process_input_ms"] = dur_ms
+            packet.performance = perf
 
     # --------- Autonomous Path ---------
     async def _autonomous_path(self, packet: StoryPacket):
-        try:
-            narration_text = await self._narrator.narrate_world_state()
-            packet.primary_narrative = narration_text
-            # Try to attach a structured narration object (best-effort)
+        import time as _time
+    
+        async def _do():
             try:
-                sln = await self._get_module("slice_of_life_narrator")
-                # Build a Run call using the narrator's agent (scene_narrator) and tool
-                result = await self._narrator.scene_narrator.run(
-                    messages=[{"role": "user", "content": f"Narrate a {self.options.scene_type} scene"}],
-                    context=self._narrator.context,
-                    tool_calls=[{
-                        "tool": sln.narrate_slice_of_life_scene,
-                        "kwargs": {
-                            "payload": sln.NarrateSliceOfLifeInput(
-                                scene_type=self.options.scene_type,
-                                world_state=self._world_state
-                            ).model_dump()
-                        }
-                    }]
-                )
-                packet.primary_narration_obj = _safe_dump(getattr(result, "data", result))
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"narrate_world_state failed: {e}", exc_info=True)
-            packet.errors.append(f"narrate_world: {e}")
-
-        if self.options.include_dialogues:
-            await self._attach_dialogues(packet, max_npcs=self.options.max_dialogue_npcs)
-        if self.options.include_ambient:
-            await self._attach_ambient(packet)
-
+                narration_text = await self._narrator.narrate_world_state()
+                packet.primary_narrative = narration_text
+                # Try to attach a structured narration object (best-effort)
+                try:
+                    sln = await self._get_module("slice_of_life_narrator")
+                    result = await self._narrator.scene_narrator.run(
+                        messages=[{"role": "user", "content": f"Narrate a {self.options.scene_type} scene"}],
+                        context=self._narrator.context,
+                        tool_calls=[{
+                            "tool": sln.narrate_slice_of_life_scene,
+                            "kwargs": {
+                                "payload": sln.NarrateSliceOfLifeInput(
+                                    scene_type=self.options.scene_type,
+                                    world_state=self._world_state
+                                ).model_dump()
+                            }
+                        }]
+                    )
+                    packet.primary_narration_obj = _safe_dump(getattr(result, "data", result))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"narrate_world_state failed: {e}", exc_info=True)
+                packet.errors.append(f"narrate_world: {e}")
+    
+            if self.options.include_dialogues:
+                await self._attach_dialogues(packet, max_npcs=self.options.max_dialogue_npcs)
+            if self.options.include_ambient:
+                await self._attach_ambient(packet)
+    
+        t0 = _time.perf_counter()
+        try:
+            await _do()
+        finally:
+            t1 = _time.perf_counter()
+            dur_ms = int((t1 - t0) * 1000)
+            perf = packet.performance or {}
+            perf["autonomous_ms"] = dur_ms
+            packet.performance = perf
     # --------- Attachments ---------
     async def _attach_dialogues(self, packet: StoryPacket, max_npcs: int = 2):
         try:
