@@ -2,6 +2,8 @@
 
 import logging
 import json
+import os
+import asyncpg
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Type, Set, Callable, Protocol, runtime_checkable, Union, Tuple
@@ -34,6 +36,8 @@ from embedding.vector_store import generate_embedding, compute_similarity
 from lore.core.cache import GLOBAL_LORE_CACHE
 
 logger = logging.getLogger(__name__)
+
+DB_DSN = os.getenv("DB_DSN")
 
 # ------------------------------------------------------------------------
 # Pydantic Models for Agent SDK Integration
@@ -241,6 +245,52 @@ class BaseLoreManager:
                 self._get_agent_type(),
                 self._get_agent_id()
             )
+
+    async def get_connection_pool(self) -> "asyncpg.Pool":
+        """
+        Shared connection pool across managers.
+        """
+        if not hasattr(self, "_pool") or self._pool is None:
+            if not DB_DSN:
+                raise RuntimeError("DB_DSN is not configured")
+            self._pool = await asyncpg.create_pool(dsn=DB_DSN)
+        return self._pool
+    
+    async def get_cached_data(self, namespace: str, key: str, fetch_func=None):
+        """
+        Generic cached fetch helper. If fetch_func is provided and the key
+        is not in cache, it will be awaited and cached.
+        """
+        val = GLOBAL_LORE_CACHE.get(namespace, key, self.user_id, self.conversation_id)
+        if val is None and fetch_func:
+            val = await fetch_func()
+            if val is not None:
+                GLOBAL_LORE_CACHE.set(namespace, key, val, self._default_ttl, self.user_id, self.conversation_id)
+        return val
+    
+    async def set_cached_data(self, namespace: str, key: str, value, tags: Optional[Set[str]] = None) -> bool:
+        """
+        Generic cached set helper.
+        """
+        GLOBAL_LORE_CACHE.set(namespace, key, value, self._default_ttl, self.user_id, self.conversation_id)
+        return True
+    
+    async def invalidate_cached_data(self, namespace: str, key: Optional[str] = None, recursive: bool = True) -> None:
+        """
+        Generic cache invalidation helper. If key is None, clears the namespace
+        for this user+conversation context (pattern invalidate).
+        """
+        if key:
+            GLOBAL_LORE_CACHE.invalidate(namespace, key, self.user_id, self.conversation_id)
+        else:
+            await GLOBAL_LORE_CACHE.invalidate_pattern(namespace, "*", self.user_id, self.conversation_id)
+    
+    # Lifecycle no-ops so child managers can call start/stop safely
+    async def start(self):
+        return None
+    
+    async def stop(self):
+        return None
 
     async def ensure_initialized(self):
         """
@@ -1323,4 +1373,5 @@ class BaseLoreManager:
         """Cleanup on deletion."""
         if hasattr(self, 'maintenance_task') and self.maintenance_task:
             self.maintenance_task.cancel()
+
 
