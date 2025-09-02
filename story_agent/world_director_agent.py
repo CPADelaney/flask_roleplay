@@ -241,6 +241,54 @@ def to_keyvalues_indexed(seq) -> list[dict]:
 # list -> {"0": item, "1": item2, ...} then to KeyValues
 return [{"key": str(i), "value": v} for i, v in enumerate(seq or [])]
 
+def _kv_scalar(v):
+    return isinstance(v, (str, int, float, bool)) or v is None
+
+def _kv_coerce_value(v):
+    # Ensure value is JSON-serializable scalar or list of scalars for KeyValue
+    if _kv_scalar(v):
+        return v
+    if isinstance(v, list):
+        # If the list contains non-scalars, stringify the whole list
+        if all(_kv_scalar(x) for x in v):
+            return v
+        try:
+            return json.dumps(v, default=str)
+        except Exception:
+            return str(v)
+    # dict, pydantic model, dataclass, or other complex types -> JSON string
+    try:
+        # Try to use model_dump/dict/asdict where applicable (done earlier by _to_model_dict),
+        # but still encode as JSON string to respect KeyValue value type.
+        return json.dumps(_to_model_dict(v), default=str)
+    except Exception:
+        try:
+            return json.dumps(v, default=str)
+        except Exception:
+            return str(v)
+
+def _to_kv(obj) -> list[dict]:
+    """
+    Convert dict/list/scalar -> List[{"key": str, "value": scalar or list-of-scalars}]
+    For lists, uses index keys: "0", "1", ...
+    Complex values are JSON-stringified to satisfy KeyValue value constraints.
+    """
+    if obj is None:
+        return []
+    if isinstance(obj, dict):
+        out = []
+        for k, v in obj.items():
+            out.append({"key": str(k), "value": _kv_coerce_value(v)})
+        return out
+    if isinstance(obj, list):
+        out = []
+        for i, v in enumerate(obj):
+            out.append({"key": str(i), "value": _kv_coerce_value(v)})
+        return out
+    # scalar -> single KV
+    return [{"key": "value", "value": _kv_coerce_value(obj)}]
+
+
 # ===============================================================================
 # COMPLETE World State Models with ALL Integrations
 # ===============================================================================
