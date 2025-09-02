@@ -97,6 +97,14 @@ DB_DSN = os.getenv("DB_DSN")
 # Singleton instance storage
 _ORCHESTRATOR_INSTANCES: Dict[Tuple[int, int], "LoreOrchestrator"] = {}
 
+def _as_canonical_ctx(self, ctx: Any = None):
+    Ctx = self._get_canonical_context_class()
+    if ctx and hasattr(ctx, 'context'):
+        return ctx
+    if isinstance(ctx, dict):
+        return Ctx.from_dict(ctx)
+    return Ctx(self.user_id, self.conversation_id)
+
 # ===== CANONICAL LORE BUNDLE SCHEMA CONTRACT =====
 # All orchestrator-facing data should conform to these shapes.
 #
@@ -505,6 +513,10 @@ class LoreOrchestrator:
     
         if hasattr(scope, 'lore_tags') and scope.lore_tags:
             tasks.append(('world', self._fetch_world_lore_for_bundle(list(scope.lore_tags)[:10])))
+
+        if hasattr(scope, 'conflict_ids') and scope.conflict_ids:
+            cid_list = list(scope.conflict_ids)[:5]
+            tasks.append(('conflicts', self._fetch_conflicts_for_bundle(cid_list)))
     
         if hasattr(scope, 'nation_ids') and scope.nation_ids:
             nid_list = list(scope.nation_ids)[:5]
@@ -1519,76 +1531,30 @@ class LoreOrchestrator:
             logger.debug(f"get_location_context failed for '{location_ref}': {e}")
             return {}
 
-    async def dynamics_create_evolution_plan(self, ctx, initial_prompt: str) -> Dict[str, Any]:
-        """
-        Create a multi-step narrative evolution plan.
-        
-        Args:
-            ctx: Context object
-            initial_prompt: Initial narrative prompt
-            
-        Returns:
-            Multi-step plan with dependencies and expected outcomes
-        """
-        from lore.systems.dynamics import MultiStepPlanner
-        dynamics = await self._get_lore_dynamics_system()
-        planner = MultiStepPlanner(dynamics)
-        context = {
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        }
-        plan = await planner.create_evolution_plan(initial_prompt, context)
-        
-        # Track the plan creation
-        if self._change_tracking_enabled:
-            await self.record_lore_change(
-                'narrative_plan',
-                plan.get('id', 0),
-                'create',
-                new_data={'prompt': initial_prompt, 'steps': len(plan.get('steps', []))}
-            )
-        
-        return plan
-    
+
     async def dynamics_execute_plan_step(self, ctx, plan_id: str, step_index: int) -> Dict[str, Any]:
-        """Execute a specific step in a multi-step narrative plan."""
         from lore.systems.dynamics import MultiStepPlanner
         dynamics = await self._get_lore_dynamics_system()
         planner = MultiStepPlanner(dynamics)
-        context = {
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        }
+        context = {"user_id": self.user_id, "conversation_id": self.conversation_id}
         result = await planner.execute_plan_step(plan_id, step_index, context)
-        
-        # Track changes from the step execution
         if self._change_tracking_enabled and result.get('applied_changes'):
             for change in result['applied_changes']:
-                await self.record_lore_change(
-                    change.get('element_type', 'world_lore'),
-                    change.get('element_id', 0),
-                    'update',
-                    new_data=change
-                )
-        
+                await self.record_lore_change(change.get('element_type', 'world_lore'),
+                                              change.get('element_id', 0), 'update', new_data=change)
         return result
+
+    async def dynamics_create_evolution_plan_noctx(self, initial_prompt: str) -> Dict[str, Any]:
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        return await self.dynamics_create_evolution_plan(ctx, initial_prompt)
     
-    async def dynamics_evaluate_narrative(self, ctx, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
-        """
-        Evaluate the quality of a narrative element.
-        
-        Args:
-            ctx: Context object
-            narrative_element: The element to evaluate
-            element_type: Type of element (event, cultural_development, etc.)
-            
-        Returns:
-            Evaluation scores and feedback
-        """
-        from lore.systems.dynamics import NarrativeEvaluator
-        dynamics = await self._get_lore_dynamics_system()
-        evaluator = NarrativeEvaluator(dynamics)
-        return await evaluator.evaluate_narrative(narrative_element, element_type)
+    async def dynamics_execute_plan_step_noctx(self, plan_id: str, step_index: int) -> Dict[str, Any]:
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        return await self.dynamics_execute_plan_step(ctx, plan_id, step_index)
+    
+    async def dynamics_evaluate_narrative_noctx(self, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        return await self.dynamics_evaluate_narrative(ctx, narrative_element, element_type)
     
     async def dynamics_evolve_narrative_element(
         self, ctx,
@@ -2867,9 +2833,8 @@ class LoreOrchestrator:
         return self._context_enhancer
     
     async def _get_world_lore_manager(self):
-        """Get or initialize the world lore manager."""
         if not self._world_lore_manager:
-            from lore.managers.world_lore import WorldLoreManager
+            from lore.managers.world_lore_manager import WorldLoreManager
             self._world_lore_manager = WorldLoreManager(self.user_id, self.conversation_id)
             await self._world_lore_manager.ensure_initialized()
             logger.info("World lore manager initialized")
@@ -2961,24 +2926,21 @@ class LoreOrchestrator:
         async for year_chunk in streamer.stream_evolution_scenario(initial_state or {}, years):
             yield year_chunk
     
-    async def dynamics_create_evolution_plan(self, initial_prompt: str, ctx_dict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def dynamics_create_evolution_plan(self, ctx, initial_prompt: str) -> Dict[str, Any]:
         from lore.systems.dynamics import MultiStepPlanner
-        ds = await self._get_lore_dynamics_system()
-        planner = MultiStepPlanner(ds)
-        context = ctx_dict or {"user_id": self.user_id, "conversation_id": self.conversation_id}
-        return await planner.create_evolution_plan(initial_prompt, context)
+        dynamics = await self._get_lore_dynamics_system()
+        planner = MultiStepPlanner(dynamics)
+        context = {"user_id": self.user_id, "conversation_id": self.conversation_id}
+        plan = await planner.create_evolution_plan(initial_prompt, context)
+        if self._change_tracking_enabled:
+            await self.record_lore_change('narrative_plan', plan.get('id', 0), 'create',
+                                          new_data={'prompt': initial_prompt, 'steps': len(plan.get('steps', []))})
+        return plan
     
-    async def dynamics_execute_plan_step(self, plan_id: str, step_index: int, ctx_dict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        from lore.systems.dynamics import MultiStepPlanner
-        ds = await self._get_lore_dynamics_system()
-        planner = MultiStepPlanner(ds)
-        context = ctx_dict or {"user_id": self.user_id, "conversation_id": self.conversation_id}
-        return await planner.execute_plan_step(plan_id, step_index, context)
-    
-    async def dynamics_evaluate_narrative(self, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
+    async def dynamics_evaluate_narrative(self, ctx, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
         from lore.systems.dynamics import NarrativeEvaluator
-        ds = await self._get_lore_dynamics_system()
-        evaluator = NarrativeEvaluator(ds)
+        dynamics = await self._get_lore_dynamics_system()
+        evaluator = NarrativeEvaluator(dynamics)
         return await evaluator.evaluate_narrative(narrative_element, element_type)
 
     async def dynamics_generate_emergent_event(self, ctx) -> Dict[str, Any]:
@@ -2995,7 +2957,11 @@ class LoreOrchestrator:
     
     async def dynamics_mature_lore_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
         ds = await self._get_lore_dynamics_system()
-        return await ds.mature_lore_over_time(days_passed)
+        ctx = self._create_mock_context()
+        try:
+            return await ds.mature_lore_over_time(ctx, days_passed)
+        except TypeError:
+            return await ds.mature_lore_over_time(days_passed)
     
     async def _get_lore_update_system(self):
         """Get or initialize the lore update system."""
