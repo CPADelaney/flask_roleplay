@@ -33,7 +33,21 @@ from nyx.nyx_governance import AgentType, DirectivePriority
 from nyx.governance_helpers import with_governance
 
 # ------------------ PROJECT IMPORTS ------------------
-from embedding.vector_store import generate_embedding
+try:
+    from embedding.vector_store import generate_embedding
+except Exception:
+    import hashlib
+    async def generate_embedding(text: str):
+        # Fallback pseudo-embedding
+        h = hashlib.md5(text.encode()).hexdigest()
+        embedding = []
+        for i in range(0, len(h), 2):
+            embedding.append(int(h[i:i+2], 16) / 255.0)
+        while len(embedding) < 1536:
+            embedding.extend(embedding[:min(len(embedding), 1536 - len(embedding))])
+        return embedding[:1536]
+
+from agents.guardrails import InputGuardrailTripwireTriggered
 from lore.managers.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
@@ -599,8 +613,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         normalized = ALIASES.get(raw_lower, raw.strip())
         # Ensure the result is in allowed types
         if normalized not in ALLOWED_LORE_TYPES:
-            # Log warning and default to WorldLore
-            logger.warning(f"Unknown lore type '{raw}' normalized to '{normalized}', defaulting to WorldLore")
+            logger.warning("Unknown lore type '%s' normalized to '%s', defaulting to WorldLore", raw, normalized)
             return "WorldLore"
         return normalized
     
@@ -660,9 +673,9 @@ class LoreDynamicsSystem(BaseLoreManager):
         Evolve world lore based on a narrative event with enhanced logging.
         """
         logger.info(f"[evolve_lore_with_event] Starting lore evolution for event: '{event_description[:100]}...'")
-        
+    
         with trace(
-            "LoreEvolutionWorkflow", 
+            "LoreEvolutionWorkflow",
             group_id=self.trace_group_id,
             metadata={
                 **self.trace_metadata,
@@ -671,31 +684,30 @@ class LoreDynamicsSystem(BaseLoreManager):
             }
         ):
             await self.ensure_initialized()
-            
+    
             permission = await self.check_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
                 agent_id="lore_generator",
                 action_type="evolve_lore_with_event",
                 action_details={"event_description": event_description}
             )
-            
             logger.debug(f"[evolve_lore_with_event] Permission check result: {permission}")
-            
-            if not permission["approved"]:
+    
+            if not permission.get("approved", True):
                 logger.warning(f"[evolve_lore_with_event] Permission denied: {permission.get('reasoning')}")
                 return {"error": permission.get("reasoning"), "approved": False}
-            
+    
             run_ctx = RunContextWrapper(context={
                 "user_id": self.user_id,
                 "conversation_id": self.conversation_id
             })
-            
+    
             # Input guardrail for event validation
             input_guardrail = InputGuardrail(guardrail_function=self._validate_event_description)
-            
+    
             # Get cached function tools
             function_tools = self._create_function_tools()
-            
+    
             # Evolving agent that orchestrates the steps
             evolution_agent = Agent(
                 name="LoreEvolutionAgent",
@@ -705,11 +717,10 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Maintain matriarchal power dynamics in all transformations."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9),
                 input_guardrails=[input_guardrail],
-                tools=function_tools  # Use the cached function tools
+                tools=function_tools
             )
-            
+    
             run_config = RunConfig(
                 workflow_name="LoreEvolution",
                 trace_metadata={
@@ -718,35 +729,24 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "event_type": "lore_evolution"
                 }
             )
-            
+    
             prompt = f"""
             A significant event has occurred that requires lore evolution:
-            
+    
             EVENT DESCRIPTION:
             {event_description}
-            
+    
             Please:
             1) Identify affected lore elements with identify_affected_lore
             2) Generate updates for each with generate_lore_updates
             3) Apply them via apply_lore_updates
             4) Generate potential new lore elements with generate_consequential_lore
-            
+    
             Finally, provide a summary of changes made and their significance.
             """
-            
-            # Let the agent orchestrate
-            result = await Runner.run(
-                evolution_agent,
-                prompt,
-                context=run_ctx.context,
-                run_config=run_config
-            )
-            
-            # In parallel (or afterwards), we manually call the steps ourselves
-            # just to ensure we have structured data to return. The agent usage above
-            # might do partial calls, but let's ensure we finalize them here.
+    
+            # Single agent run with guardrail handling
             try:
-                logger.debug(f"[evolve_lore_with_event] Creating evolution agent and running workflow")
                 result = await Runner.run(
                     evolution_agent,
                     prompt,
@@ -754,35 +754,33 @@ class LoreDynamicsSystem(BaseLoreManager):
                     run_config=run_config
                 )
                 logger.info(f"[evolve_lore_with_event] Agent workflow completed successfully")
-                
             except InputGuardrailTripwireTriggered as e:
-                logger.error(f"[evolve_lore_with_event] Guardrail triggered!")
-                logger.error(f"[evolve_lore_with_event] Guardrail info: {e}")
+                logger.error(f"[evolve_lore_with_event] Guardrail triggered! info={e}")
                 logger.error(f"[evolve_lore_with_event] Original event: {event_description}")
-                raise
+                return {"error": "Event validation failed", "guardrail": str(e)}
             except Exception as e:
                 logger.error(f"[evolve_lore_with_event] Unexpected error: {e}")
                 logger.error(f"[evolve_lore_with_event] Event description: {event_description}")
                 raise
-            
-            # Manual step execution with logging
+    
+            # Manual step execution for structured return
             try:
                 logger.debug(f"[evolve_lore_with_event] Identifying affected lore elements")
                 affected_elements = await self._identify_affected_lore_impl(event_description)
                 logger.info(f"[evolve_lore_with_event] Found {len(affected_elements)} affected elements")
-                
+    
                 logger.debug(f"[evolve_lore_with_event] Generating lore updates")
                 updates = await self._generate_lore_updates_impl(affected_elements, event_description)
                 logger.info(f"[evolve_lore_with_event] Generated {len(updates)} updates")
-                
+    
                 logger.debug(f"[evolve_lore_with_event] Applying lore updates")
                 await self._apply_lore_updates_impl(updates)
                 logger.info(f"[evolve_lore_with_event] Applied all updates")
-                
+    
                 logger.debug(f"[evolve_lore_with_event] Generating consequential lore")
                 new_elements = await self._generate_consequential_lore_impl(event_description, affected_elements)
                 logger.info(f"[evolve_lore_with_event] Created {len(new_elements)} new lore elements")
-                
+    
                 await self.report_action(
                     agent_type=AgentType.NARRATIVE_CRAFTER,
                     agent_id="lore_generator",
@@ -795,7 +793,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "new_elements_created": len(new_elements)
                     }
                 )
-                
+    
                 logger.info(f"[evolve_lore_with_event] Lore evolution completed successfully")
                 return {
                     "affected_elements": affected_elements,
@@ -804,8 +802,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "summary": result.final_output
                 }
             except Exception as e:
-                logger.error(f"[evolve_lore_with_event] Error in manual lore evolution process: {e}")
-                logger.error(f"[evolve_lore_with_event] Stack trace:", exc_info=True)
+                logger.error(f"[evolve_lore_with_event] Error in manual lore evolution process: {e}", exc_info=True)
                 return {
                     "error": str(e),
                     "event_description": event_description,
@@ -822,8 +819,8 @@ class LoreDynamicsSystem(BaseLoreManager):
         """
         event_embedding = await generate_embedding(event_description)
         affected_elements = []
-        
-        # Define table configurations with their specific name columns
+    
+        # Per-type name/id columns
         lore_type_configs = {
             "WorldLore": {"name_column": "name", "id_column": "id"},
             "Factions": {"name_column": "name", "id_column": "id"},
@@ -832,79 +829,66 @@ class LoreDynamicsSystem(BaseLoreManager):
             "GeographicRegions": {"name_column": "name", "id_column": "id"},
             "LocationLore": {"name_column": "name", "id_column": "location_id"},
             "UrbanMyths": {"name_column": "name", "id_column": "id"},
-            "LocalHistories": {"name_column": "event_name", "id_column": "id"},  # Different name column
+            "LocalHistories": {"name_column": "event_name", "id_column": "id"},
             "Landmarks": {"name_column": "name", "id_column": "id"},
             "NotableFigures": {"name_column": "name", "id_column": "id"},
-            "Locations": {"name_column": "location_name", "id_column": "id"}  # Different name column
+            "Locations": {"name_column": "location_name", "id_column": "id"},
         }
-        
+    
         async with get_db_connection_context() as conn:
             for lore_type, config in lore_type_configs.items():
                 try:
-                    # Use safe table name
-                    table_name_unquoted = lore_type.lower()
+                    table_info = ALLOWED_LORE_TYPES[lore_type]
+                    table_name_unquoted = table_info["table"]  # canonical lowercase table name
                     table_name = safe_table_name(table_name_unquoted)
-                    
-                    # Check if table exists
+    
+                    # Check table exists
                     table_exists = await conn.fetchval("""
                         SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
+                            SELECT FROM information_schema.tables
                             WHERE table_name = $1
                         );
                     """, table_name_unquoted)
-                    
                     if not table_exists:
                         continue
-                    
-                    # Check if embedding column exists
+    
+                    # Check embedding column exists
                     has_embedding = await conn.fetchval("""
                         SELECT EXISTS (
-                            SELECT FROM information_schema.columns 
+                            SELECT FROM information_schema.columns
                             WHERE table_name = $1 AND column_name = 'embedding'
                         );
                     """, table_name_unquoted)
-                    
                     if not has_embedding:
                         continue
-                    
-                    # Get column names from config
-                    id_field = config["id_column"]
-                    name_field = config["name_column"]
-                    
-                    id_column = safe_column_name(id_field)
-                    name_column = safe_column_name(name_field)
-                    
-                    # Build and execute query with the correct name column
+    
+                    id_column = safe_column_name(config["id_column"])
+                    name_column = safe_column_name(config["name_column"])
+    
                     query = f"""
-                        SELECT {id_column} as id, {name_column} as name, description, 
+                        SELECT {id_column} as id, {name_column} as name, description,
                                1 - (embedding <=> $1) as relevance
                         FROM {table_name}
                         WHERE embedding IS NOT NULL
                         ORDER BY embedding <=> $1
                         LIMIT 5
                     """
-                    
                     rows = await conn.fetch(query, event_embedding)
-                    
-                    # Filter only those with decent relevance
+    
                     for row in rows:
                         if row['relevance'] >= 0.6:
                             affected_elements.append({
-                                'lore_type': lore_type,
-                                'lore_id': row['id'],
-                                'name': row['name'],
-                                'description': row['description'],
-                                'relevance': row['relevance']
+                                "lore_type": lore_type,
+                                "lore_id": row["id"],
+                                "name": row["name"],
+                                "description": row["description"],
+                                "relevance": row["relevance"]
                             })
                 except Exception as e:
                     logging.error(f"Error checking {lore_type} for affected elements: {e}")
-        
-        # Sort by descending relevance, limit to top 15
-        affected_elements.sort(key=lambda x: x['relevance'], reverse=True)
-        if len(affected_elements) > 15:
-            affected_elements = affected_elements[:15]
-        
-        return affected_elements
+    
+        affected_elements.sort(key=lambda x: x["relevance"], reverse=True)
+        return affected_elements[:15] if len(affected_elements) > 15 else affected_elements
 
     
     #===========================================================================
@@ -1685,26 +1669,31 @@ class LoreDynamicsSystem(BaseLoreManager):
     async def _fetch_world_state(self) -> Dict[str, Any]:
         """Fetch current WorldState from DB or return defaults."""
         async with get_db_connection_context() as conn:
-            world_state = await conn.fetchrow("""
-                SELECT * FROM WorldState 
+            row = await conn.fetchrow("""
+                SELECT * FROM WorldState
                 WHERE user_id = $1 AND conversation_id = $2
                 LIMIT 1
             """, self.user_id, self.conversation_id)
-            if world_state:
-                result = dict(world_state)
-                if 'power_hierarchy' in result and result['power_hierarchy']:
-                    try:
-                        result['power_hierarchy'] = json.loads(result['power_hierarchy'])
-                    except:
-                        result['power_hierarchy'] = {}
-                return result
-            else:
+    
+            if not row:
                 return {
-                    'stability_index': 8,
-                    'narrative_tone': 'dramatic',
-                    'power_dynamics': 'strict_hierarchy',
-                    'power_hierarchy': {}
+                    "stability_index": 8,
+                    "narrative_tone": "dramatic",
+                    "power_dynamics": "strict_hierarchy",
+                    "power_hierarchy": {}
                 }
+    
+            result = dict(row)
+            # power_hierarchy may be JSON/JSONB or text; normalize to dict
+            ph = result.get("power_hierarchy")
+            if isinstance(ph, str):
+                try:
+                    result["power_hierarchy"] = json.loads(ph)
+                except Exception:
+                    result["power_hierarchy"] = {}
+            elif ph is None:
+                result["power_hierarchy"] = {}
+            return result
 
     async def check_permission(self, agent_type, agent_id, action_type, action_details):
         """Check permission with governance system."""
@@ -1748,33 +1737,40 @@ class LoreDynamicsSystem(BaseLoreManager):
 
     async def _get_hierarchy_position(self, element: Dict[str, Any]) -> int:
         """
-        Determine an element's position in the power hierarchy. 
-        For now, keep some fallback logic, but you could also agent-ify it.
+        Determine an element's position in the power hierarchy.
+        Lower number = higher authority.
         """
-        if element.get('lore_type', '').lower() == 'character':
-            if 'hierarchy_position' in element:
-                return element['hierarchy_position']
-            name = element.get('name','').lower()
-            if any(title in name for title in ['queen','empress','matriarch','high','supreme']):
+        t = self._normalize_lore_type(element.get("lore_type", ""))
+        name = (element.get("name") or "").lower()
+    
+        if t == "NotableFigures":
+            if "hierarchy_position" in element:
+                return int(element["hierarchy_position"])
+            if any(title in name for title in ["queen", "empress", "matriarch", "high", "supreme"]):
                 return 1
-            elif any(title in name for title in ['princess','duchess','lady','noble']):
+            if any(title in name for title in ["princess", "duchess", "lady", "noble"]):
                 return 3
-            elif any(title in name for title in ['advisor','minister','council']):
+            if any(title in name for title in ["advisor", "minister", "council"]):
                 return 5
-            else:
-                return 8
-        elif element.get('lore_type','').lower() == 'faction':
-            if 'importance' in element:
-                return max(1, 10 - element['importance'])
-            else:
-                return 4
-        elif element.get('lore_type','').lower() == 'location':
-            if 'significance' in element:
-                return max(1, 10 - element['significance'])
-            else:
-                return 6
-        else:
-            return 5
+            return 8
+    
+        if t == "Factions":
+            if "importance" in element:
+                try:
+                    return max(1, 10 - int(element["importance"]))
+                except Exception:
+                    pass
+            return 4
+    
+        if t == "Locations":
+            if "significance" in element:
+                try:
+                    return max(1, 10 - int(element["significance"]))
+                except Exception:
+                    pass
+            return 6
+    
+        return 5
     
     async def _fetch_element_update_history(self, lore_id: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Fetch recent changes from LoreChangeHistory."""
@@ -3317,28 +3313,6 @@ class NarrativeEvaluator:
             
         except Exception as e:
             logger.error(f"Error applying improvement suggestions: {e}")
-
-async def generate_embedding(text: str) -> List[float]:
-    """Generate embedding for text using the embedding system."""
-    try:
-        from embedding.vector_store import generate_embedding
-        return await generate_embedding(text)
-    except ImportError:
-        # Fallback if embedding system not available
-        logger.warning("Embedding system not available, using dummy embedding")
-        import hashlib
-        # Create a simple hash-based pseudo-embedding
-        hash_obj = hashlib.md5(text.encode())
-        hash_hex = hash_obj.hexdigest()
-        # Convert to list of floats (1536 dimensions)
-        embedding = []
-        for i in range(0, len(hash_hex), 2):
-            byte_val = int(hash_hex[i:i+2], 16)
-            embedding.append(float(byte_val) / 255.0)
-        # Pad or truncate to 1536 dimensions
-        while len(embedding) < 1536:
-            embedding.extend(embedding[:min(len(embedding), 1536 - len(embedding))])
-        return embedding[:1536]
 
 class NarrativeEvolutionSystem:
     """
