@@ -1590,7 +1590,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         action_description="Maturing lore over time",
         id_from_context=lambda ctx: "lore_dynamics"
     )
-    async def mature_lore_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
+    async def mature_lore_over_time(self, ctx, days_passed: int = 7) -> Dict[str, Any]:
         """
         Natural evolution of lore over time, simulating how history and culture develop.
         Instead of code-based random logic, we can keep partial queries but 
