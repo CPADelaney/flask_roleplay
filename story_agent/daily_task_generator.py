@@ -296,6 +296,5 @@ DailyTaskGenerator = Agent(
     Always ensure tasks feel grounded in daily life, not fantasy scenarios.
     The femdom elements should be woven naturally into ordinary activities.""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.7),
     tools=[get_task_context, generate_contextual_task]
 )
