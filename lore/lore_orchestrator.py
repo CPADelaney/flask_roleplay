@@ -169,11 +169,14 @@ class SceneBundleData:
     """Scene-specific lore bundle data"""
     location: Dict[str, Any] = field(default_factory=dict)
     world: Dict[str, Any] = field(default_factory=dict)
-    canonical_rules: List[Union[str, Dict[str, str]]] = field(default_factory=list)  # Can be strings or {text, source} dicts
+    canonical_rules: List[Union[str, Dict[str, str]]] = field(default_factory=list)
     nations: List[Dict[str, Any]] = field(default_factory=list)
     religions: List[Dict[str, Any]] = field(default_factory=list)
     conflicts: List[Dict[str, Any]] = field(default_factory=list)
     myths: List[Dict[str, Any]] = field(default_factory=list)
+    languages: List[Dict[str, Any]] = field(default_factory=list)
+    cultural_norms: List[Dict[str, Any]] = field(default_factory=list)
+    etiquette: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -184,7 +187,10 @@ class SceneBundleData:
             'nations': self.nations,
             'religions': self.religions,
             'conflicts': self.conflicts,
-            'myths': self.myths
+            'myths': self.myths,
+            'languages': self.languages,
+            'cultural_norms': self.cultural_norms,
+            'etiquette': self.etiquette,
         }
 
 
@@ -488,7 +494,10 @@ class LoreOrchestrator:
             tasks.append(('world', self._fetch_world_lore_for_bundle(list(scope.lore_tags)[:10])))
         
         if hasattr(scope, 'nation_ids') and scope.nation_ids:
-            tasks.append(('nations', self._fetch_nations_for_bundle(list(scope.nation_ids)[:5])))
+            nid_list = list(scope.nation_ids)[:5]
+            tasks.append(('nations', self._fetch_nations_for_bundle(nid_list)))
+            # NEW cultural data task
+            tasks.append(('culture', self._fetch_cultural_data_for_bundle(nid_list)))
         
         if hasattr(scope, 'conflict_ids') and scope.conflict_ids:
             tasks.append(('conflicts', self._fetch_conflicts_for_bundle(list(scope.conflict_ids)[:5])))
@@ -533,6 +542,11 @@ class LoreOrchestrator:
                 elif label == 'nations':
                     bundle_data.nations = data
                     canonical = True  # Nations are canonical
+
+                elif label == 'culture':
+                    bundle_data.languages = data.get('languages', [])
+                    bundle_data.cultural_norms = data.get('norms', [])
+                    bundle_data.etiquette = data.get('etiquette', [])
                     
                 elif label == 'religions':
                     bundle_data.religions = data[:3]  # Top 3 religions
@@ -592,6 +606,80 @@ class LoreOrchestrator:
             self._cache_bundle(cache_key, result)
         
         return result
+    
+    async def _fetch_cultural_data_for_bundle(self, nation_ids: List[int]) -> Dict[str, Any]:
+        """Fetch cultural data (languages, norms, etiquette) for nations in bundle."""
+        try:
+            data = {'languages': [], 'norms': [], 'etiquette': []}
+    
+            async with get_db_connection_context() as conn:
+                # Languages linked to nation_ids (primary or minority)
+                langs = await conn.fetch("""
+                    SELECT l.id, l.name, l.language_family, l.writing_system,
+                           l.difficulty, l.relation_to_power
+                    FROM Languages l
+                    WHERE EXISTS (
+                        SELECT 1 FROM unnest($1::int[]) AS nid
+                        WHERE nid = ANY(l.primary_regions) OR nid = ANY(l.minority_regions)
+                    )
+                    LIMIT 5
+                """, nation_ids[:10])
+    
+                for r in langs:
+                    data['languages'].append({
+                        'id': r['id'],
+                        'name': r['name'],
+                        'family': r['language_family'],
+                        'writing': r['writing_system'],
+                        'difficulty': r['difficulty'],
+                        'power_relation': r['relation_to_power'],
+                    })
+    
+                # Cultural norms for those nations
+                norms = await conn.fetch("""
+                    SELECT cn.id, cn.category, cn.description, cn.taboo_level, cn.gender_specific,
+                           COALESCE(n.name, n.nation_name) AS nation_name
+                    FROM CulturalNorms cn
+                    JOIN Nations n ON cn.nation_id = COALESCE(n.id, n.nation_id)
+                    WHERE cn.nation_id = ANY($1::int[])
+                    ORDER BY cn.taboo_level DESC
+                    LIMIT 10
+                """, nation_ids[:5])
+    
+                for r in norms:
+                    data['norms'].append({
+                        'id': r['id'],
+                        'category': r['category'],
+                        'description': (r['description'] or '')[:150],
+                        'taboo_level': r['taboo_level'],
+                        'gender_specific': r['gender_specific'],
+                        'nation': r['nation_name'],
+                    })
+    
+                # Etiquette for those nations
+                etqs = await conn.fetch("""
+                    SELECT e.id, e.context, e.greeting_ritual, e.power_display, e.gender_distinctions,
+                           COALESCE(n.name, n.nation_name) AS nation_name
+                    FROM Etiquette e
+                    JOIN Nations n ON e.nation_id = COALESCE(n.id, n.nation_id)
+                    WHERE e.nation_id = ANY($1::int[])
+                    LIMIT 5
+                """, nation_ids[:3])
+    
+                for r in etqs:
+                    data['etiquette'].append({
+                        'id': r['id'],
+                        'context': r['context'],
+                        'greeting': (r['greeting_ritual'] or '')[:100],
+                        'power_display': (r['power_display'] or '')[:100],
+                        'gender_rules': r['gender_distinctions'],
+                        'nation': r['nation_name'],
+                    })
+    
+            return data
+        except Exception as e:
+            logger.debug(f"Could not fetch cultural data: {e}")
+            return {'languages': [], 'norms': [], 'etiquette': []}
     
     async def get_scene_delta(self, scope: Any, since_ts: float) -> Dict[str, Any]:
         """
@@ -2610,7 +2698,7 @@ class LoreOrchestrator:
         from lore.lore_agents import integrate_npc_lore
         return await integrate_npc_lore(npc_id, relevant_lore, context)
 
-    # ===== REGIONAL CULTURE SYSTEM – WRAPPERS =====
+    # ===== REGIONAL CULTURE OPERATIONS (wrappers) =====
     
     async def rc_generate_languages(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
         rcs = await self._get_regional_culture_system()
@@ -2624,19 +2712,6 @@ class LoreOrchestrator:
         rcs = await self._get_regional_culture_system()
         return await rcs.generate_etiquette(ctx, nation_id)
     
-    async def rc_get_nation_culture(self, ctx, nation_id: int) -> Dict[str, Any]:
-        rcs = await self._get_regional_culture_system()
-        return await rcs.get_nation_culture(ctx, nation_id)
-    
-    async def rc_summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
-        rcs = await self._get_regional_culture_system()
-        # function_tool methods are regular async functions; safe to call directly
-        return await rcs.summarize_culture(nation_id=nation_id, format_type=format_type)
-    
-    async def rc_detect_cultural_conflicts(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
-        rcs = await self._get_regional_culture_system()
-        return await rcs.detect_cultural_conflicts(nation_id1=nation_id1, nation_id2=nation_id2)
-    
     async def rc_simulate_cultural_diffusion(self, ctx, nation1_id: int, nation2_id: int, years: int = 50) -> Dict[str, Any]:
         rcs = await self._get_regional_culture_system()
         return await rcs.simulate_cultural_diffusion(ctx, nation1_id, nation2_id, years)
@@ -2645,7 +2720,19 @@ class LoreOrchestrator:
         rcs = await self._get_regional_culture_system()
         return await rcs.evolve_dialect(ctx, language_id, region_id, years)
     
-    async def rc_get_all_languages(self) -> List[Dict[str, Any]]:
+    async def rc_get_nation_culture(self, ctx, nation_id: int) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.get_nation_culture(ctx, nation_id)
+    
+    async def rc_summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.summarize_culture(nation_id=nation_id, format_type=format_type)
+    
+    async def rc_detect_cultural_conflicts(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
+        rcs = await self._get_regional_culture_system()
+        return await rcs.detect_cultural_conflicts(nation_id1=nation_id1, nation_id2=nation_id2)
+    
+    async def rc_get_all_languages(self) -> List[Dict[str, Any]:
         rcs = await self._get_regional_culture_system()
         return await rcs.get_all_languages()
     
@@ -3089,7 +3176,72 @@ class LoreOrchestrator:
             return await canon.log_canonical_event(
                 ctx, conn, event_description, tags, significance
             )
+            
+    async def initialize_nation_culture(
+        self,
+        ctx,
+        nation_id: int,
+        language_count: int = 2,
+        generate_norms: bool = True,
+        generate_etiquette: bool = True
+    ) -> Dict[str, Any]:
+        """Initialize cultural system for a nation via RegionalCultureSystem."""
+        results: Dict[str, Any] = {}
     
+        if language_count > 0:
+            results['languages'] = await self.rc_generate_languages(ctx, language_count)
+    
+        if generate_norms:
+            results['cultural_norms'] = await self.rc_generate_cultural_norms(ctx, nation_id)
+    
+        if generate_etiquette:
+            results['etiquette'] = await self.rc_generate_etiquette(ctx, nation_id)
+    
+        await self.record_lore_change('nation_culture', nation_id, 'initialize', new_data=results)
+        return results
+    
+    async def evolve_world_culture(
+        self,
+        ctx,
+        years: int = 100,
+        include_diffusion: bool = True,
+        include_dialects: bool = True
+    ) -> Dict[str, Any]:
+        """Run culture evolution across nations: diffusion and dialects."""
+        results = {'diffusions': [], 'dialects': [], 'summary': {}}
+    
+        async with get_db_connection_context() as conn:
+            relations = await conn.fetch("""
+                SELECT DISTINCT nation1_id, nation2_id
+                FROM InternationalRelations
+                WHERE relationship_quality >= 5
+                LIMIT 5
+            """)
+    
+            if include_diffusion and relations:
+                for rel in relations[:3]:
+                    d = await self.rc_simulate_cultural_diffusion(ctx, rel['nation1_id'], rel['nation2_id'], years)
+                    results['diffusions'].append(d)
+    
+            if include_dialects:
+                langs = await conn.fetch("""
+                    SELECT id, primary_regions
+                    FROM Languages
+                    WHERE array_length(primary_regions, 1) > 0
+                    LIMIT 3
+                """)
+                for l in langs:
+                    region_ids = l['primary_regions'] or []
+                    if region_ids:
+                        evo = await self.rc_evolve_dialect(ctx, l['id'], region_ids[0], years)
+                        results['dialects'].append(evo)
+    
+        results['summary'] = {
+            'years_simulated': years,
+            'diffusions_created': len(results['diffusions']),
+            'dialects_evolved': len(results['dialects']),
+        }
+        return results
     
     # ===== PUBLIC CHANGE TRACKING API =====
     
@@ -3114,6 +3266,20 @@ class LoreOrchestrator:
         Returns:
             True if change was recorded successfully
         """
+        # Normalize common cultural shorthand to stable types
+        cultural_map = {
+            'language': 'language',
+            'languages': 'language',
+            'cultural_norm': 'cultural_norm',
+            'cultural_norms': 'cultural_norm',
+            'etiquette': 'etiquette',
+            'dialect': 'dialect',
+            'language_dialect': 'dialect',
+            'cultural_element': 'cultural_element',
+        }
+        et_lower = (element_type or '').lower()
+        element_type = cultural_map.get(et_lower, element_type)
+
         if not self._change_tracking_enabled:
             return False
         
