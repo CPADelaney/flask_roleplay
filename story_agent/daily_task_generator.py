@@ -15,9 +15,7 @@ from agents import Agent, Runner, function_tool, ModelSettings
 from agents.exceptions import AgentsException
 from pydantic import BaseModel, Field, ConfigDict
 
-from story_agent.world_director_agent import (
-    TimeOfDay, ActivityType, PowerDynamicType, WorldMood
-)
+from story_agent.world_simulation_models import TimeOfDay, ActivityType, PowerDynamicType, WorldMood
 
 logger = logging.getLogger(__name__)
 
