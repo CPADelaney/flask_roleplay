@@ -14,7 +14,7 @@ from enum import Enum
 
 from db.connection import get_db_connection_context
 from story_templates.preset_stories import PresetStory, StoryBeat
-from story_agent.world_director_agent import (
+from story_agent.world_simulation_models import (
     WorldDirector,
     SliceOfLifeEvent,
     PowerExchange,
