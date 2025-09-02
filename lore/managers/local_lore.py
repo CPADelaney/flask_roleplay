@@ -2626,8 +2626,17 @@ Show specific differences in language, detail, and emphasis.
         return super().invalidate_cache(f"{self.cache_namespace}:{key}")
     
     def invalidate_cache_pattern(self, pattern: str):
-        """Invalidate cache keys matching pattern."""
-        return super().invalidate_cache_pattern(f"{self.cache_namespace}:{pattern}")
+        """
+        Fire-and-forget invalidation so existing non-awaited calls keep working.
+        Use invalidate_cache_pattern_async(...) if you need to await completion.
+        """
+        return asyncio.create_task(super().invalidate_cache_pattern(f"{self.cache_namespace}:{pattern}"))
+    
+    async def invalidate_cache_pattern_async(self, pattern: str):
+        """
+        Awaitable invalidation for use in new code.
+        """
+        await super().invalidate_cache_pattern(f"{self.cache_namespace}:{pattern}")
 
 # ===== FUNCTION TOOL WRAPPERS =====
 # These are the decorated wrappers that external code will call
