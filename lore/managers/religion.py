@@ -620,18 +620,16 @@ class ReligionManager(BaseLoreManager):
     @function_tool(strict_mode=True)
     async def add_deity(self, ctx, params: DeityParams) -> int:
         """Prepares deity data and uses the Canon to create the entity."""
+        from lore.core import canon  # <- ensure canon is imported here
         await self.ensure_initialized()
-        
-        # This manager's job is to PREPARE the data.
+    
         embed_text = f"{params.name} {params.gender} {' '.join(params.domain)} {params.description}"
         embedding = await generate_embedding(embed_text)
-
         relationships_json = json.dumps({
             rel.deity_name: {"type": rel.relationship_type, "description": rel.description}
             for rel in params.relationships
         })
-
-        # Assemble all data into a dictionary for the Canon.
+    
         deity_data_package = {
             "name": params.name,
             "gender": params.gender,
@@ -647,12 +645,11 @@ class ReligionManager(BaseLoreManager):
             "worshippers": params.worshippers,
             "embedding": embedding
         }
-        
-        # The LoreSystem will manage the transaction, so we just need the connection.
-        async with self.get_connection_pool() as conn:
-            # Call the SINGLE, CENTRALIZED function from the canon.
-            deity_id = await canon.find_or_create_deity(ctx, conn, **deity_data_package)
-        
+    
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                deity_id = await canon.find_or_create_deity(ctx, conn, **deity_data_package)
+    
         self.invalidate_cache_pattern("deity")
         return deity_id
             
@@ -1538,63 +1535,49 @@ class ReligionManager(BaseLoreManager):
     @function_tool(strict_mode=True)
     async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
         """Distribute religions across nations with canon checks."""
+        from lore.core import canon  # ensure canon is imported
         nations = await self.geopolitical_manager.get_all_nations(ctx)
-        
+    
         async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheons = await conn.fetch("""
                     SELECT id, name, description, matriarchal_elements
                     FROM Pantheons
                 """)
-                
-                # Check existing distributions
-                existing = await conn.fetch("""
-                    SELECT nation_id FROM NationReligion
-                """)
+                existing = await conn.fetch("SELECT nation_id FROM NationReligion")
                 existing_nation_ids = {row['nation_id'] for row in existing}
-        
+    
         if not nations or not pantheons:
             return []
-        
+    
         distributions = []
-        
         for nation in nations:
-            # Skip if already has religion distribution
             if nation['id'] in existing_nation_ids:
-                logger.info(f"Nation {nation['name']} already has religious distribution")
                 continue
-                
-            # Generate distribution using agent
+    
             prompt = f"""
             Determine religious distribution for nation: {nation['name']}
-            
+    
             NATION DATA:
             Government: {nation.get('government_type')}
             Matriarchy Level: {nation.get('matriarchy_level', 5)}/10
             Cultural Traits: {nation.get('cultural_traits', [])}
-            
+    
             AVAILABLE PANTHEONS:
             {json.dumps([dict(p) for p in pantheons], indent=2)}
-            
+    
             Create realistic distribution considering the nation's characteristics.
             Nation ID is: {nation['id']}
             """
-            
+    
             run_config = RunConfig(workflow_name="ReligiousDistribution")
-            result = await Runner.run(
-                self.distribution_agent,
-                prompt,
-                context=ctx.context,
-                run_config=run_config
-            )
-            
+            result = await Runner.run(self.distribution_agent, prompt, context=ctx.context, run_config=run_config)
+    
             try:
                 dist_data = result.final_output_as(NationReligionDistribution)
                 dist_data.nation_id = nation["id"]
-                
-                # Store distribution
+    
                 embed_text = f"religion {nation['name']} {dist_data.religious_leadership}"
-                
                 create_data = {
                     'nation_id': dist_data.nation_id,
                     'state_religion': dist_data.state_religion,
@@ -1608,10 +1591,10 @@ class ReligionManager(BaseLoreManager):
                     'religious_conflicts': dist_data.religious_conflicts,
                     'religious_minorities': dist_data.religious_minorities
                 }
-                
+    
                 async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
-                        distribution_id = await find_or_create_entity(
+                        distribution_id = await canon.find_or_create_entity(
                             ctx=ctx,
                             conn=conn,
                             entity_type="religious_distribution",
@@ -1620,19 +1603,18 @@ class ReligionManager(BaseLoreManager):
                             create_data=create_data,
                             table_name="NationReligion",
                             embedding_text=embed_text,
-                            similarity_threshold=0.95  # Very high threshold
+                            similarity_threshold=0.95
                         )
-                        
+    
                         dist_dict = dist_data.dict()
                         dist_dict["id"] = distribution_id
                         distributions.append(dist_dict)
-                        
-                        # Generate regional practices
+    
                         await self._generate_regional_practices(ctx, dist_dict)
-                        
+    
             except Exception as e:
                 logger.error(f"Error distributing religion for nation {nation['id']}: {e}")
-        
+    
         return distributions
 
     @with_governance(
