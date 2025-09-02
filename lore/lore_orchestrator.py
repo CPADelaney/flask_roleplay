@@ -660,6 +660,362 @@ class LoreOrchestrator:
     
         return result
 
+    async def quick_setup_world(self, world_description: str) -> Dict[str, Any]:
+        """
+        Quick setup for a new world with core systems seeded.
+        Note: nations are generated via GeopoliticalSystemManager tool function.
+        """
+        results = {
+            'world': None,
+            'nations': [],
+            'religions': [],
+            'education': [],
+            'cultures': [],
+            'status': 'initializing'
+        }
+        try:
+            await self.initialize()
+            ctx = self._create_mock_context()
+            
+            # Base world
+            world = await self.generate_complete_world(ctx, world_description)
+            results['world'] = world
+            
+            # Nations (use class static tool to avoid instance-binding pitfalls)
+            from agents.run_context import RunContextWrapper
+            run_ctx = RunContextWrapper(context={'user_id': self.user_id, 'conversation_id': self.conversation_id})
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            nations = await GeopoliticalSystemManager.generate_world_nations(run_ctx, count=5)
+            results['nations'] = nations or []
+            
+            # Faith system
+            religion_mgr = await self._get_religion_manager()
+            faith_system = await religion_mgr.generate_complete_faith_system(run_ctx)
+            results['religions'] = faith_system
+            
+            # Educational systems
+            education_mgr = await self._get_education_manager()
+            edu_systems = await education_mgr.generate_educational_systems(run_ctx)
+            results['education'] = edu_systems
+            
+            # Initialize cultures for some nations
+            for nation in (nations or [])[:3]:
+                try:
+                    culture_data = await self.initialize_nation_culture(run_ctx, nation['id'], language_count=2)
+                    results['cultures'].append({'nation_id': nation['id'], 'culture': culture_data})
+                except Exception:
+                    continue
+            
+            results['status'] = 'complete'
+        except Exception as e:
+            results['status'] = 'error'
+            results['error'] = str(e)
+            logger.error(f"quick_setup_world failed: {e}", exc_info=True)
+        return results
+
+    async def perform_system_health_check(self) -> Dict[str, Any]:
+        """Perform comprehensive health check across all systems."""
+        health_report = {
+            'timestamp': datetime.now().isoformat(),
+            'overall_status': 'healthy',
+            'systems': {},
+            'issues': [],
+            'recommendations': []
+        }
+        
+        systems_to_check = [
+            ('world_lore', self._world_lore_manager),
+            ('education', self._education_manager),
+            ('religion', self._religion_manager),
+            ('politics', self._politics_manager),
+            ('geopolitical', self._geopolitical_manager),
+            ('local_lore', self._local_lore_manager),
+            ('regional_culture', self._regional_culture_system),
+        ]
+        
+        for name, sys_attr in systems_to_check:
+            try:
+                if sys_attr is None:
+                    health_report['systems'][name] = {'status': 'not_loaded', 'healthy': True}
+                    continue
+                system = sys_attr
+                sys_health = {'status': 'loaded', 'healthy': True}
+                
+                if hasattr(system, 'initialized'):
+                    sys_health['initialized'] = bool(system.initialized)
+                    if not system.initialized:
+                        sys_health['healthy'] = False
+                        health_report['issues'].append(f"{name} not initialized")
+                
+                # DB ping
+                if hasattr(system, 'get_connection_pool'):
+                    try:
+                        pool = await system.get_connection_pool()
+                        async with pool.acquire() as conn:
+                            await conn.fetchval("SELECT 1")
+                        sys_health['db_connection'] = 'ok'
+                    except Exception as e:
+                        sys_health['db_connection'] = 'failed'
+                        sys_health['healthy'] = False
+                        health_report['issues'].append(f"{name} DB ping failed: {e}")
+                
+                # Cache
+                if hasattr(system, '_cache_stats'):
+                    stats = getattr(system, '_cache_stats', {})
+                    hits = float(stats.get('hits', 0))
+                    misses = float(stats.get('misses', 0))
+                    hit_rate = (hits / (hits + misses)) if (hits + misses) > 0 else 0.0
+                    sys_health['cache_hit_rate'] = hit_rate
+                    if hit_rate < 0.30:
+                        health_report['recommendations'].append(f"Low cache hit rate for {name}: {hit_rate:.2%}")
+                
+                health_report['systems'][name] = sys_health
+                if not sys_health['healthy'] and health_report['overall_status'] != 'unhealthy':
+                    health_report['overall_status'] = 'degraded'
+            
+            except Exception as e:
+                health_report['systems'][name] = {'status': 'error', 'healthy': False, 'error': str(e)}
+                health_report['overall_status'] = 'unhealthy'
+        
+        # Canon consistency check
+        try:
+            canonical = await self.check_canonical_consistency()
+            health_report['canonical_consistency'] = canonical
+            if not canonical.get('is_consistent', True):
+                health_report['overall_status'] = 'degraded'
+                health_report['issues'].extend(canonical.get('violations', []))
+        except Exception as e:
+            health_report['canonical_consistency'] = {'error': str(e)}
+            health_report['overall_status'] = 'degraded'
+        
+        return health_report
+    
+    async def get_scene_bundle_enhanced(self, scope: Any) -> Dict[str, Any]:
+        """
+        Enhanced scene bundle that integrates multiple subsystems on top of base bundle.
+        Non-fatal on missing subsystem methods.
+        """
+        bundle = await self.get_scene_bundle(scope)  # keep your original
+        
+        # Add education (best-effort, generic search by tag/location name)
+        try:
+            if getattr(scope, 'location_id', None):
+                # No direct API exists; best-effort: fetch top systems (if any) or leave empty
+                bundle['data']['education'] = bundle['data'].get('education', [])
+        except Exception as e:
+            logger.debug(f"Education enrichment skipped: {e}")
+        
+        # Add geopolitical border disputes (best-effort general sample)
+        try:
+            if getattr(scope, 'nation_ids', None):
+                # If you later add a real API, swap this block to call it
+                from db.connection import get_db_connection_context
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch("""
+                        SELECT id, region1_id, region2_id, dispute_type, severity, status
+                        FROM BorderDisputes
+                        ORDER BY severity DESC
+                        LIMIT 5
+                    """)
+                if rows:
+                    bundle['data'].setdefault('geopolitical', {})
+                    bundle['data']['geopolitical']['sample_disputes'] = [dict(r) for r in rows]
+        except Exception as e:
+            logger.debug(f"Geopolitical enrichment skipped: {e}")
+        
+        # Add world events/relationships per tags/location
+        try:
+            world_mgr = await self._get_world_lore_manager()
+            # Events by tags
+            if getattr(scope, 'lore_tags', None):
+                for tag in list(scope.lore_tags)[:3]:
+                    events = await world_mgr.get_world_events(f"tag_{tag}")
+                    if events:
+                        bundle['data'].setdefault('world_events', [])
+                        bundle['data']['world_events'].extend(events[:2])
+            # Relationships by location
+            loc_id = getattr(scope, 'location_id', None)
+            if loc_id:
+                rel = await world_mgr.get_world_relationships(f"location_{loc_id}")
+                if rel:
+                    bundle['data']['world_relationships'] = rel
+        except Exception as e:
+            logger.debug(f"World lore enrichment skipped: {e}")
+        
+        return bundle
+    
+    async def propagate_change_across_systems(
+        self, 
+        change_type: str,
+        entity_type: str,
+        entity_id: int,
+        changes: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Propagate a canonical change across relevant systems and caches.
+        Uses LoreSystem.propose_and_enact_change for durable updates.
+        """
+        from lore.core.lore_system import LoreSystem
+        results = {
+            'primary_change': {'entity_type': entity_type, 'entity_id': entity_id, 'changes': changes},
+            'cascaded_changes': [],
+            'affected_systems': []
+        }
+        lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        ctx = self._create_mock_context()
+        
+        # Apply canonical change per entity type
+        try:
+            if entity_type == 'nation':
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="Nations",
+                    entity_identifier={"id": entity_id},
+                    updates=changes,
+                    reason=f"{change_type} propagated via orchestrator"
+                )
+                results['affected_systems'].append('politics')
+                results['affected_systems'].append('geopolitical')
+                results['affected_systems'].append('regional_culture')
+            
+            elif entity_type == 'location':
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="Locations",
+                    entity_identifier={"id": entity_id},
+                    updates=changes,
+                    reason=f"{change_type} propagated via orchestrator"
+                )
+                results['affected_systems'].append('local_lore')
+                results['affected_systems'].append('world_lore')
+            
+            elif entity_type == 'religion':
+                # Choose best table for your domain model; ReligiousConflicts/Religion/NationReligion etc.
+                # Here, best-effort example for Religions
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="Religions",
+                    entity_identifier={"id": entity_id},
+                    updates=changes,
+                    reason=f"{change_type} propagated via orchestrator"
+                )
+                results['affected_systems'].append('religion')
+                results['affected_systems'].append('education')
+            
+            elif entity_type == 'conflict':
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NationalConflicts",
+                    entity_identifier={"id": entity_id},
+                    updates=changes,
+                    reason=f"{change_type} propagated via orchestrator"
+                )
+                results['affected_systems'].append('politics')
+                results['affected_systems'].append('geopolitical')
+            
+        except Exception as e:
+            logger.error(f"Propagation apply failed for {entity_type}:{entity_id}: {e}")
+        
+        # Track + invalidate
+        await self.record_lore_change(entity_type, entity_id, 'update', new_data=changes)
+        scope_keys = self._get_affected_scope_keys(entity_type, entity_id, changes)
+        await self._invalidate_scope_keys(scope_keys)
+        
+        # Invalidate world data best-effort (broad)
+        try:
+            world_mgr = await self._get_world_lore_manager()
+            await world_mgr.invalidate_world_data(None, recursive=True)
+            results['affected_systems'].append('world_lore')
+        except Exception:
+            pass
+        
+        return results
+
+    async def create_unified_context(
+        self, 
+        location_id: Optional[int] = None,
+        nation_ids: Optional[List[int]] = None,
+        include_cultural: bool = True,
+        include_religious: bool = True,
+        include_political: bool = True
+    ) -> Dict[str, Any]:
+        """Create a unified context combining data from all subsystems."""
+        ctx = self._create_mock_context()
+        
+        context = {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'timestamp': datetime.now().isoformat(),
+        }
+        
+        # World foundation
+        try:
+            world_mgr = await self._get_world_lore_manager()
+            context['world'] = await world_mgr.get_world_data('main')
+        except Exception as e:
+            context['world'] = None
+            logger.debug(f"Unified context: world data unavailable: {e}")
+        
+        # Location-specific
+        if location_id:
+            try:
+                context['location'] = await self._fetch_location_lore_for_bundle(location_id)
+            except Exception as e:
+                logger.debug(f"Unified context: location bundle fetch failed: {e}")
+                context['location'] = {}
+            
+            # Local lore (structured)
+            try:
+                local_mgr = await self._get_local_lore_manager()
+                from agents.run_context import RunContextWrapper
+                run_ctx = RunContextWrapper(context={'user_id': self.user_id, 'conversation_id': self.conversation_id})
+                context['local_lore'] = await local_mgr.get_location_lore(run_ctx, location_id)
+            except Exception as e:
+                logger.debug(f"Unified context: local lore fetch failed: {e}")
+                context['local_lore'] = None
+        
+        # Nation-related
+        if nation_ids:
+            try:
+                context['nations'] = await self._fetch_nations_for_bundle(nation_ids)
+            except Exception as e:
+                logger.debug(f"Unified context: nations fetch failed: {e}")
+                context['nations'] = []
+            
+            if include_cultural:
+                try:
+                    context['cultural'] = await self._fetch_cultural_data_for_bundle(nation_ids)
+                except Exception as e:
+                    logger.debug(f"Unified context: cultural fetch failed: {e}")
+                    context['cultural'] = {}
+            
+            if include_political:
+                try:
+                    politics_mgr = await self._get_politics_manager()
+                    from agents.run_context import RunContextWrapper
+                    run_ctx = RunContextWrapper(context={'user_id': self.user_id, 'conversation_id': self.conversation_id})
+                    context['political_relations'] = []
+                    for nid in nation_ids[:3]:
+                        try:
+                            # Reuse existing comprehensive method
+                            rel = await politics_mgr.get_nation_politics(run_ctx, nid)
+                            context['political_relations'].append(rel)
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.debug(f"Unified context: political relations fetch failed: {e}")
+                    context['political_relations'] = []
+        
+        # Religious (best-effort)
+        if include_religious and location_id:
+            try:
+                context['religions'] = await self._fetch_religions_for_location(location_id)
+            except Exception as e:
+                logger.debug(f"Unified context: religion fetch failed: {e}")
+                context['religions'] = []
+        
+        return context
+
     async def apply_matriarchal_lens_to_bundle(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
         """
         Optionally rewrite parts of the bundle to reflect matriarchal themes more strongly.
