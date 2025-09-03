@@ -268,6 +268,7 @@ class LoreOrchestrator:
         self.conversation_id = conversation_id
         self.config = config or OrchestratorConfig()
         self.initialized = False
+        self._governor: Optional[Any] = None
         
         # Core components (lazy loaded)
         self._lore_system = None
@@ -341,6 +342,9 @@ class LoreOrchestrator:
         logger.info(f"Initializing LoreOrchestrator for user {self.user_id}")
     
         try:
+            # obtain governor up-front (best-effort)
+            await self._get_governor()
+            
             # Initialize core systems
             await self._get_lore_system()
             await self._get_canon_module()
@@ -362,10 +366,41 @@ class LoreOrchestrator:
     
             self.initialized = True
             logger.info("LoreOrchestrator initialization complete")
-    
-        except Exception as e:
-            logger.error(f"Failed to initialize LoreOrchestrator: {e}", exc_info=True)
+            
+        except Exception:
+            logger.exception("LoreOrchestrator initialization failed")
+            self.initialized = False
             raise
+
+    async def _get_governor(self) -> Optional[Any]:
+        """
+        Fetch and cache the central governor (best-effort, lazy import to avoid cycles).
+        """
+        if getattr(self, "_governor", None) is not None:
+            return self._governor
+        try:
+            from nyx.integrate import get_central_governance  # lazy to avoid import cycles
+            self._governor = await get_central_governance(self.user_id, self.conversation_id)
+        except Exception as e:
+            logger.debug(f"Governance not available: {e}")
+            self._governor = None
+        return self._governor
+    
+    def _attach_governor_if_supported(self, component: Any) -> None:
+        """
+        Attach cached governor to a component if it exposes either set_governor(...) or .governor.
+        Soft-fails on errors.
+        """
+        gov = getattr(self, "_governor", None)
+        if not gov or not component:
+            return
+        try:
+            if hasattr(component, "set_governor"):
+                component.set_governor(gov)
+            elif hasattr(component, "governor"):
+                setattr(component, "governor", gov)
+        except Exception as e:
+            logger.debug(f"Attach governor failed: {e}")
     
     async def _ensure_database_setup(self) -> None:
         """Ensure database tables and indexes exist."""
@@ -3229,99 +3264,136 @@ class LoreOrchestrator:
         Get or initialize the canon module.
         CRITICAL: This is lazy loaded as many other modules depend on it.
         """
-        if not self._canon_module:
+        if not getattr(self, "_canon_module", None):
             # Import here to avoid circular dependencies
             from lore.core import canon
+            # NOTE: canon is a module, not an instance — no governor to attach
             self._canon_module = canon
             logger.info("Canon module loaded")
         return self._canon_module
     
     async def _get_cache_system(self):
         """Get or initialize the cache system."""
-        if not self._cache_system:
+        if not getattr(self, "_cache_system", None):
             from lore.core.cache import LoreCache
+            await self._get_governor()  # ensure cached
             self._cache_system = LoreCache(
                 max_size=self.config.cache_max_size,
-                ttl=self.config.cache_ttl
+                ttl=self.config.cache_ttl,
             )
+            # Attach if the cache supports governor (harmless if not)
+            self._attach_governor_if_supported(self._cache_system)
             logger.info("Cache system initialized")
         return self._cache_system
     
     async def _get_registry_system(self):
         """Get or initialize the manager registry."""
-        if not self._registry_system:
+        if not getattr(self, "_registry_system", None):
             from lore.core.registry import ManagerRegistry
+            await self._get_governor()  # ensure cached
             self._registry_system = ManagerRegistry(self.user_id, self.conversation_id)
+            self._attach_governor_if_supported(self._registry_system)
             logger.info("Registry system initialized")
         return self._registry_system
     
     async def _get_canon_validation(self):
         """Get or initialize the canon validation agent."""
-        if not self._canon_validation:
+        if not getattr(self, "_canon_validation", None):
             from lore.core.validation import CanonValidationAgent
+            await self._get_governor()  # ensure cached
             self._canon_validation = CanonValidationAgent()
+            self._attach_governor_if_supported(self._canon_validation)
             logger.info("Canon validation agent initialized")
         return self._canon_validation
     
     def _get_canonical_context_class(self):
         """Get the CanonicalContext class (lazy loaded)."""
-        if not self._canonical_context_class:
+        if not getattr(self, "_canonical_context_class", None):
             from lore.core.context import CanonicalContext
+            # Class object, not an instance — skip governor attachment
             self._canonical_context_class = CanonicalContext
             logger.info("CanonicalContext class loaded")
         return self._canonical_context_class
     
+    # ---- Managers ---------------------------------------------------------------
+    
     async def _get_education_manager(self):
         """Get or initialize the education manager."""
-        if not self._education_manager:
+        if not getattr(self, "_education_manager", None):
             from lore.managers.education import EducationalSystemManager
+            await self._get_governor()
             self._education_manager = EducationalSystemManager(self.user_id, self.conversation_id)
+            self._attach_governor_if_supported(self._education_manager)
             await self._education_manager.ensure_initialized()
             logger.info("Education manager initialized")
         return self._education_manager
     
     async def _get_religion_manager(self):
         """Get or initialize the religion manager."""
-        if not self._religion_manager:
+        if not getattr(self, "_religion_manager", None):
             from lore.managers.religion import ReligionManager
+            await self._get_governor()
             self._religion_manager = ReligionManager(self.user_id, self.conversation_id)
+            self._attach_governor_if_supported(self._religion_manager)
             await self._religion_manager.ensure_initialized()
             logger.info("Religion manager initialized")
         return self._religion_manager
     
     async def _get_local_lore_manager(self):
         """Get or initialize the local lore manager."""
-        if not self._local_lore_manager:
+        if not getattr(self, "_local_lore_manager", None):
             from lore.managers.local_lore import LocalLoreManager
+            await self._get_governor()
             self._local_lore_manager = LocalLoreManager(self.user_id, self.conversation_id)
+            self._attach_governor_if_supported(self._local_lore_manager)
             await self._local_lore_manager.ensure_initialized()
             logger.info("Local lore manager initialized")
         return self._local_lore_manager
     
     async def _get_geopolitical_manager(self):
         """Get or initialize the geopolitical manager."""
-        if not self._geopolitical_manager:
+        if not getattr(self, "_geopolitical_manager", None):
             from lore.managers.geopolitical import GeopoliticalSystemManager
+            await self._get_governor()
             self._geopolitical_manager = GeopoliticalSystemManager(self.user_id, self.conversation_id)
+            self._attach_governor_if_supported(self._geopolitical_manager)
             await self._geopolitical_manager.ensure_initialized()
             logger.info("Geopolitical manager initialized")
         return self._geopolitical_manager
     
     async def _get_politics_manager(self):
         """Get or initialize the politics manager."""
-        if not self._politics_manager:
+        if not getattr(self, "_politics_manager", None):
             from lore.managers.politics import WorldPoliticsManager
+            await self._get_governor()
             self._politics_manager = WorldPoliticsManager(self.user_id, self.conversation_id)
+            self._attach_governor_if_supported(self._politics_manager)
             await self._politics_manager.ensure_initialized()
             logger.info("Politics manager initialized")
         return self._politics_manager
     
     async def _get_lore_system(self):
-        """Get or initialize the core lore system."""
-        if not self._lore_system:
+        if not getattr(self, "_lore_system", None):
             from lore.core.lore_system import LoreSystem
             self._lore_system = LoreSystem(self.user_id, self.conversation_id)
-            await self._lore_system.initialize()
+    
+            # Attach governor BEFORE initialize
+            gov = await self._get_governor()
+            try:
+                if gov:
+                    if hasattr(self._lore_system, "set_governor"):
+                        self._lore_system.set_governor(gov)
+                    else:
+                        self._lore_system.governor = gov
+    
+                # Pass through as kwarg if supported; otherwise call plain initialize()
+                try:
+                    await self._lore_system.initialize(governor=gov)
+                except TypeError:
+                    await self._lore_system.initialize()
+            except Exception as e:
+                logger.debug(f"Could not attach/register governor to LoreSystem: {e}")
+    
             logger.info("Core lore system initialized")
         return self._lore_system
     
