@@ -31,6 +31,11 @@ from datetime import datetime
 from collections import defaultdict, OrderedDict
 import weakref
 
+from logic.conflict_system.background_processor import (
+    get_conflict_scheduler,
+    BackgroundConflictProcessor
+)
+
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from agents import function_tool, RunContextWrapper, Runner
 
@@ -394,10 +399,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.conflict_victory import ConflictVictorySubsystem
             from logic.conflict_system.multi_party_dynamics import MultiPartyConflictSubsystem
             from logic.conflict_system.integration_hooks import ConflictEventHooks
-            from logic.conflict_system.background_processor import (
-                get_conflict_scheduler,
-                BackgroundConflictProcessor
-            )
+
     
             subsystems = [
                 TensionSubsystem(self.user_id, self.conversation_id),
