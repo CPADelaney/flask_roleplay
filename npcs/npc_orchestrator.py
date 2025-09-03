@@ -1,9 +1,9 @@
 # npcs/npc_orchestrator.py
-
 """
 NPC System Orchestrator with Scene Bundle Optimization
 Complete implementation with calendar, time, and relationship system integrations
 """
+from __future__ import annotations
 
 import logging
 import asyncio
