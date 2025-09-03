@@ -654,6 +654,17 @@ class LoreContextManager:
         self.context_cache = LoreContextCache()
         self.impact_analyzer = LoreImpactAnalyzer(user_id, conversation_id)
         self.propagation_system = LorePropagationSystem(user_id, conversation_id)
+
+    async def initialize(self):
+        """Initialize the LoreContextManager and its subsystems."""
+        # The manager is already mostly initialized in __init__
+        # This method exists for compatibility with NPCOrchestrator's initialization pattern
+        logger.info(f"LoreContextManager initialized for user {self.user_id}, conversation {self.conversation_id}")
+        
+        # You could add any async initialization here if needed in the future
+        # For example, warming up caches, loading initial data, etc.
+        pass
+    
         
     async def get_lore_context(self, npc_id: int, context_type: str) -> Dict[str, Any]:
         """Get lore context for an NPC, using cache if available."""
@@ -768,4 +779,5 @@ class LoreContextManager:
             "impact_analysis": impact_analysis,
             "propagation_result": propagation_result
         }
+
 
