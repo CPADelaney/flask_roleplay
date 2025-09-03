@@ -235,11 +235,11 @@ logger = logging.getLogger(__name__)
 
 def to_keyvalues(obj) -> list[dict]:
 # kvlist_from_obj returns List[KVPair]; convert to plain {"key","value"} dicts
-return [{"key": kv.key, "value": kv.value} for kv in kvlist_from_obj(obj or {})]
+    return [{"key": kv.key, "value": kv.value} for kv in kvlist_from_obj(obj or {})]
 
 def to_keyvalues_indexed(seq) -> list[dict]:
 # list -> {"0": item, "1": item2, ...} then to KeyValues
-return [{"key": str(i), "value": v} for i, v in enumerate(seq or [])]
+    return [{"key": str(i), "value": v} for i, v in enumerate(seq or [])]
 
 def _kv_scalar(v):
     return isinstance(v, (str, int, float, bool)) or v is None
