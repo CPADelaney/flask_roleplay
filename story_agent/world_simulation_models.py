@@ -20,7 +20,7 @@ class KVPair(BaseModel):
     value: JsonValue
 
 
-    class KVList(BaseModel):
+class KVList(BaseModel):
     items: List[KVPair] = Field(default_factory=list)
 
 KVItem = KVPair
