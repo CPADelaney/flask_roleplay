@@ -15,7 +15,7 @@ from agents import RunContextWrapper
 from lore.core.registry import ManagerRegistry
 from lore.core import canon
 from db.connection import get_db_connection_context
-from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority, NyxUnifiedGovernor
 from nyx.governance_helpers import with_governance
 from datetime import timedelta
 
@@ -109,41 +109,66 @@ class LoreSystem:
         
         logger.info(f"LoreSystem initialized for user {self.user_id}, conversation {self.conversation_id}.")
 
+    async def _maybe_acquire_governor(self) -> None:
+        """
+        Try to obtain a central governor if one wasn't provided.
+        Uses a lazy import to avoid module-level import cycles.
+        """
+        if getattr(self, "governor", None):
+            return
+    
+        try:
+            # Import here to avoid import cycles on module load
+            from nyx.integrate import get_central_governance
+    
+            gov = await get_central_governance(self.user_id, self.conversation_id)
+            if gov:
+                self.governor = gov
+                logger.info("[LoreSystem] Governor acquired via central governance")
+        except Exception as e:
+            logger.debug(f"[LoreSystem] Could not acquire governor automatically: {e}")
 
     def set_governor(self, governor: Any) -> None:
-        """Set the governor instance. Should be called by the governor after creation."""
+        """Set the governor instance (can be called before or after initialize)."""
         self.governor = governor
         logger.info(f"[LoreSystem] Governor set for user {self.user_id}, conversation {self.conversation_id}")
+        # If we’re already initialized, register components now (fire-and-forget)
+        if self.initialized:
+            try:
+                asyncio.create_task(self._register_all_with_governance())
+            except Exception:
+        logger.debug("[LoreSystem] Deferred governance registration scheduling failed", exc_info=True)
 
     async def initialize(self, governor=None) -> bool:
-        """Initialize the LoreSystem and all its components."""
-        # Guard against re-entry
-        if self.initialized or self._initializing:
+        """
+        Initialize the LoreSystem. Optionally accept a governor instance.
+        Attempts to auto-acquire a governor if not provided.
+        """
+        # Guard against re-entrancy
+        if getattr(self, "initialized", False) or getattr(self, "_initializing", False):
             logger.debug("[LoreSystem] Already initialized or initializing, skipping")
             return True
     
         self._initializing = True
         try:
-            # Use provided governor if available
-            if governor:
+            if governor is not None:
                 self.governor = governor
                 logger.info("[LoreSystem] Using provided governor instance")
-            
-            logger.info("[LoreSystem] Starting initialization of data access components")
-            
-            # Check if governor is set
-            if self.governor:
-                logger.info("[LoreSystem] Governor already set, proceeding with initialization")
+    
+            # NEW: attempt to acquire governor if not provided
+            if not getattr(self, "governor", None):
+                await self._maybe_acquire_governor()
+    
+            if getattr(self, "governor", None):
+                logger.info("[LoreSystem] Governor set, proceeding with initialization")
             else:
                 logger.warning("[LoreSystem] No governor set yet, some features may be limited")
     
-            # Initialize all components WITHOUT governance registration
             await self._initialize_components()
-            
-            # Now that all components are initialized, register with governance
-            if self.governor:
+    
+            if getattr(self, "governor", None):
                 await self._register_all_with_governance()
-            
+    
             self.initialized = True
             logger.info("[LoreSystem] Initialization successful.")
             return True
