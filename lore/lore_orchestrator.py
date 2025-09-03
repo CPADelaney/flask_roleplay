@@ -1,3 +1,4 @@
+# lore/lore_orchestrator.py
 """
 Lore Orchestrator - ENHANCED with Scene Bundle Support
 =====================================================
@@ -9,6 +10,7 @@ and world lore managers with all their specialized functionality.
 
 NEW: Scene-scoped bundle methods for optimized context assembly.
 """
+from __future__ import annotations
 
 import logging
 import asyncio
@@ -1015,6 +1017,37 @@ class LoreOrchestrator:
                 context['religions'] = []
         
         return context
+
+    async def get_scene_brief(self, scope) -> Dict[str, Any]:
+        brief: Dict[str, Any] = {"anchors": {}, "signals": {}, "links": {}}
+        try:
+            brief["anchors"]["location_id"] = getattr(scope, "location_id", None)
+
+            # canonical rules (best-effort & time-boxed by caller as well)
+            try:
+                rules: List[str] = await asyncio.wait_for(self._get_canonical_rules_for_scope(scope), timeout=0.35)
+                brief["signals"]["canonical_rules"] = list(rules or [])[:3]
+            except Exception:
+                pass
+
+            # quick nation from location
+            loc_id = getattr(scope, "location_id", None)
+            if isinstance(loc_id, int):
+                data = await self.get_location_context(loc_id)
+                nid = (data or {}).get("nation_id")
+                if nid is not None:
+                    try:
+                        brief["anchors"]["nation_ids"] = [int(nid)]
+                    except Exception:
+                        pass
+
+            # surface lore tags if scope already has them
+            lore_tags = list(getattr(scope, "lore_tags", []) or [])
+            if lore_tags:
+                brief["anchors"]["lore_tags"] = lore_tags[:5]
+        except Exception:
+            pass
+        return brief
 
     async def apply_matriarchal_lens_to_bundle(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
         """
