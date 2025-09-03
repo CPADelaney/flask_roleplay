@@ -36,9 +36,9 @@ def keyvalue_list_to_dict(kvs: List[KeyValue]) -> dict:
 
 def kvlist_from_obj(obj: Any) -> List[KVItem]:
     if isinstance(obj, dict):
-    return [KVItem(key=str(k), value=v) for k, v in obj.items()]
+        return [KVItem(key=str(k), value=v) for k, v in obj.items()]
     if isinstance(obj, list):
-    return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
+        return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
     return [KVItem(key="value", value=obj)]
 
 def kvdict(items: List[KVItem]) -> Dict[str, Any]:
