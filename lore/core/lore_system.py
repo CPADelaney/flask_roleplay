@@ -133,11 +133,15 @@ class LoreSystem:
         self.governor = governor
         logger.info(f"[LoreSystem] Governor set for user {self.user_id}, conversation {self.conversation_id}")
         # If we’re already initialized, register components now (fire-and-forget)
-        if self.initialized:
+        if getattr(self, "initialized", False):
             try:
-                asyncio.create_task(self._register_all_with_governance())
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._register_all_with_governance())
+            except RuntimeError:
+                # No running loop available — skip scheduling but don’t fail
+                logger.debug("[LoreSystem] No running loop; deferred governance registration not scheduled")
             except Exception:
-        logger.debug("[LoreSystem] Deferred governance registration scheduling failed", exc_info=True)
+                logger.debug("[LoreSystem] Deferred governance registration scheduling failed", exc_info=True)
 
     async def initialize(self, governor=None) -> bool:
         """
