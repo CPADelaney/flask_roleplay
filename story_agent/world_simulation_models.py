@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field, ConfigDict
 import logging
 
+
 logger = logging.getLogger(__name__)
+
+JsonScalar = Union[str, int, float, bool, None]
+JsonValue = Union[JsonScalar, List[JsonScalar]]
 
 # ===== Agent-Safe Base Model with Complete Schema Sanitization =====
 class KeyValue(BaseModel):
@@ -98,8 +102,7 @@ StrictBaseModel = AgentSafeModel
 
 # ===== Canonical Key-Value and helpers =====
 
-JsonScalar = Union[str, int, float, bool, None]
-JsonValue = Union[JsonScalar, List[JsonScalar]]
+
 
 class KeyValue(BaseModel):
     """Key-value pair used across tools for Agent compatibility"""
