@@ -1196,6 +1196,33 @@ class ConflictSynthesizer:
     
         return bundle
 
+    async def get_scene_brief(self, scope) -> Dict[str, Any]:
+        """
+        Lightweight hint only. Time-box callers via ContextBroker.
+        """
+        ctx = {
+            "location": getattr(scope, "location_id", None),
+            "npcs": list(getattr(scope, "npc_ids", []) or []),
+            "topics": list(getattr(scope, "topics", []) or []),
+        }
+        brief: Dict[str, Any] = {"anchors": {"npc_ids": ctx["npcs"], "topics": ctx["topics"]}, "signals": {}, "links": {}}
+        try:
+            scene = await self.conflict_context_for_scene(ctx)  # you already have this
+            brief["signals"]["world_tension_hint"] = float((scene or {}).get("world_tension", 0.0) or 0.0)
+
+            cids: List[int] = []
+            for c in (scene or {}).get("conflicts", []) or []:
+                cid = (c or {}).get("id")
+                if cid is not None:
+                    try:
+                        cids.append(int(cid))
+                    except Exception:
+                        continue
+            if cids:
+                brief["anchors"]["conflict_ids"] = cids[:5]
+        except Exception:
+            pass
+        return brief
     
     async def get_scene_delta(self, scope: 'SceneScope', since_ts: float) -> Dict[str, Any]:
         """
