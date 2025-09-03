@@ -25,7 +25,7 @@ import hashlib
 import time
 import inspect
 import re
-from agents.guardrails import InputGuardrailTripwireTriggered
+from agents import InputGuardrailTripwireTriggered
 
 # Core imports
 from db.connection import get_db_connection_context
