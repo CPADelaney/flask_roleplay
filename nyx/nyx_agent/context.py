@@ -2369,6 +2369,22 @@ class NyxContext:
         # Keep error log bounded
         if len(self.error_log) > 100:
             self.error_log = self.error_log[-100:]
+
+    def update_performance(self, metric_name: str, value: Any) -> None:
+        """Update a performance metric value"""
+        if metric_name in self.performance_metrics:
+            # For lists, append the value
+            if isinstance(self.performance_metrics[metric_name], list):
+                self.performance_metrics[metric_name].append(value)
+                # Keep lists bounded to reasonable sizes
+                if metric_name == "response_times" and len(self.performance_metrics[metric_name]) > 100:
+                    self.performance_metrics[metric_name] = self.performance_metrics[metric_name][-100:]
+            # For counters, set the value directly
+            else:
+                self.performance_metrics[metric_name] = value
+        else:
+            # If metric doesn't exist, create it
+            self.performance_metrics[metric_name] = value
     
     # ────────── COMPATIBILITY METHODS ──────────
     
