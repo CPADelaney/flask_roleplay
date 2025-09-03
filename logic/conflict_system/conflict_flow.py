@@ -17,8 +17,15 @@ from agents import Agent, function_tool, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 from typing import TYPE_CHECKING
 
+
 if TYPE_CHECKING:
-    from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer  # only for type hints
+    # Only for type hints — does not execute at runtime
+    from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
+    from logic.conflict_system.conflict_synthesizer import ConflictSubsystem as ConflictSubsystemBase
+else:
+    # Runtime shim to avoid circular import during class creation
+    class ConflictSubsystemBase:  # no methods needed; duck-typed by synthesizer
+        pass
 
 def _orch_types():
     from logic.conflict_system.conflict_synthesizer import (
@@ -106,7 +113,7 @@ class FlowModifier:
 # CONFLICT FLOW SUBSYSTEM
 # ===============================================================================
 
-class ConflictFlowSubsystem(ConflictSubsystem):
+class ConflictFlowSubsystem(ConflictSubsystemBase):
     """
     Manages conflict pacing and flow as a subsystem of the synthesizer.
     Controls dramatic rhythm and ensures engaging progression.
@@ -163,7 +170,6 @@ class ConflictFlowSubsystem(ConflictSubsystem):
             EventType.STATE_SYNC,
         }
     
-    import weakref
     async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
         self.synthesizer = weakref.ref(synthesizer)
         return True
