@@ -79,13 +79,16 @@ from logic.memory_logic import (
     EnhancedMemory,
     MemoryType,
     MemorySignificance,
-    ProgressiveRevealManager,
-    RevealType,
-    RevealSeverity,
-    NPCMask,
     get_shared_memory,
     propagate_shared_memories,
     fetch_formatted_locations
+)
+
+from memory.masks import (
+    ProgressiveRevealManager,
+    RevealType,
+    RevealSeverity,
+    NPCMask
 )
 
 # Stats System Integration
