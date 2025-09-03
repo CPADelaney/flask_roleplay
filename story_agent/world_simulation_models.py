@@ -12,36 +12,37 @@ logger = logging.getLogger(__name__)
 
 # ===== Agent-Safe Base Model with Complete Schema Sanitization =====
 class KeyValue(BaseModel):
-key: str
-value: JsonValue
+    key: str
+    value: JsonValue
 
 class KVPair(BaseModel):
-key: str
-value: JsonValue
+    key: str
+    value: JsonValue
+
+
+    class KVList(BaseModel):
+    items: List[KVPair] = Field(default_factory=list)
 
 KVItem = KVPair
 
-class KVList(BaseModel):
-items: List[KVPair] = Field(default_factory=list)
-
 def dict_to_kvlist(d: dict) -> KVList:
-return KVList(items=[KVPair(key=k, value=v) for k, v in d.items()])
-
+    return KVList(items=[KVPair(key=k, value=v) for k, v in d.items()])
+    
 def kvlist_to_dict(kv: KVList) -> dict:
-return {pair.key: pair.value for pair in kv.items}
+    return {pair.key: pair.value for pair in kv.items}
 
 def keyvalue_list_to_dict(kvs: List[KeyValue]) -> dict:
-return {kv.key: kv.value for kv in kvs}
+    return {kv.key: kv.value for kv in kvs}
 
 def kvlist_from_obj(obj: Any) -> List[KVItem]:
-if isinstance(obj, dict):
-return [KVItem(key=str(k), value=v) for k, v in obj.items()]
-if isinstance(obj, list):
-return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
-return [KVItem(key="value", value=obj)]
+    if isinstance(obj, dict):
+    return [KVItem(key=str(k), value=v) for k, v in obj.items()]
+    if isinstance(obj, list):
+    return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
+    return [KVItem(key="value", value=obj)]
 
 def kvdict(items: List[KVItem]) -> Dict[str, Any]:
-return {it.key: it.value for it in (items or [])}
+    return {it.key: it.value for it in (items or [])}
 
 # ===== Canonical Agent-Safe Base =====
 
