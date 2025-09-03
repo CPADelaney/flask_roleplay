@@ -378,8 +378,9 @@ from logic.memory_logic import (
     EnhancedMemory,
     MemoryType,
     MemorySignificance,
-    ProgressiveRevealManager
 )
+
+from memory.masks import ProgressiveRevealManager
 
 # Stats and rules
 from logic.stats_logic import (
