@@ -83,7 +83,7 @@ _game_time_helper_module = None
 
 logger = logging.getLogger(__name__)
 
-cache_ttl = (self.memory_config or {}).get("performance", {}).get("cache_ttl_seconds", 300)
+MEMORY_CACHE_TTL = 300  # 5 minutes default
 # ============================================================================
 # Scene Bundle Data Classes
 # ============================================================================
