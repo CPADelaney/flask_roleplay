@@ -125,7 +125,7 @@ class NPCOrchestrator:
         self._belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
         self._lore_manager = LoreContextManager(self.user_id, self.conversation_id)
         self._behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
-        self._creation_handler = NPCCreationHandler(self.user_id, self.conversation_id)
+        self._creation_handler = NPCCreationHandler()
         self._preset_handler = PresetNPCHandler
 
         self.enable_learning_adaptation = bool(self.config.get("enable_learning_adaptation", True))
