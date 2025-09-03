@@ -5,7 +5,7 @@
 from typing import Dict, List, Any, Optional, Tuple, Union, Literal
 from enum import Enum
 from datetime import datetime, timezone
-from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ def kvdict(items: List[KVItem]) -> Dict[str, Any]:
 
 # ===== Canonical Agent-Safe Base =====
 
-class AgentSafeModel(_PydanticBaseModel):
+class AgentSafeModel(BaseModel):
     """
     Canonical Pydantic v2 base model for Agents SDK strict mode:
     - extra="forbid" (reject undeclared fields)
