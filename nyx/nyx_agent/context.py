@@ -110,7 +110,10 @@ try:
         CompleteWorldDirectorContext, WorldDirectorContext,
     )
     WORLD_SIMULATION_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    import traceback
+    logger.error(f"ACTUAL IMPORT ERROR: {e}")
+    traceback.print_exc()  # This will show the full stack trace
     logger.warning("World simulation models not available - slice-of-life features disabled")
     WORLD_SIMULATION_AVAILABLE = False
 
