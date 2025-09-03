@@ -1770,6 +1770,41 @@ class NPCOrchestrator:
             }
             await self._calendar_system['ensure_tables'](self.user_id, self.conversation_id)
         return self._calendar_system
+
+    async def get_scene_brief(self, scope) -> Dict[str, Any]:
+        brief: Dict[str, Any] = {"anchors": {}, "signals": {}, "links": {}}
+        try:
+            npc_ids: List[int] = []
+            for nid in list(getattr(scope, "npc_ids", []) or [])[:10]:
+                try:
+                    npc_ids.append(int(nid))
+                except Exception:
+                    continue
+
+            if npc_ids:
+                brief["anchors"]["npc_ids"] = npc_ids
+
+            # related_npcs heuristic: if multiple in scene, surface them
+            if len(npc_ids) > 1:
+                brief["links"]["related_npcs"] = npc_ids[:10]
+
+            # minimal relationship hints for player → npc
+            rel_map: Dict[str, Dict[str, int]] = {}
+            for nid in npc_ids[:5]:
+                try:
+                    rel = await self.get_relationship_dynamics("player", self.user_id, "npc", int(nid))
+                    dims = (rel or {}).get("dimensions", {}) or {}
+                    rel_map[str(nid)] = {
+                        "player_trust": int(dims.get("trust", 0)),
+                        "closeness": int(dims.get("intimacy", 0)),
+                    }
+                except Exception:
+                    continue
+            if rel_map:
+                brief["links"]["relations_by_npc"] = rel_map
+        except Exception:
+            pass
+        return brief
     
     async def schedule_npc_event(
         self,
