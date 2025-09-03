@@ -341,10 +341,7 @@ class MemoryOrchestrator:
 
             # Retrieval/cache for per-entity calls
             from memory.core import MemoryCache
-            self.cache = MemoryCache(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
+            self.cache = MemoryCache(ttl_seconds=MEMORY_CACHE_TTL)
 
             # --- Configuration (NEW if available) ---
             if self.memory_config is None:
@@ -1973,7 +1970,7 @@ class MemoryOrchestrator:
     
         # 2) Evict retrieval caches (narrowed to this user/conversation)
         prefix = f"mem:{self.user_id}:{self.conversation_id}:"
-        await self.cache.clear_pattern(prefix + "*")
+        await self.cache.clear()
     
     def _invalidate_by_metadata(self, metadata: Optional[Dict[str, Any]], tags: Optional[List[str]] = None):
         """
