@@ -1,9 +1,9 @@
 # memory/memory_orchestrator.py
-
 """
 Memory Orchestrator with Scene Bundle Optimization
 Complete refactor for optimized context assembly pipeline
 """
+from __future__ import annotations
 
 import logging
 import asyncio
@@ -2185,6 +2185,30 @@ class MemoryOrchestrator:
             except Exception:
                 pass
             raise
+
+    async def get_scene_brief(self, scope) -> Dict[str, Any]:
+        brief: Dict[str, Any] = {"anchors": {}, "signals": {}, "links": {}}
+        try:
+            topics: List[str] = list(getattr(scope, "topics", []) or [])
+            lore_tags: List[str] = list(getattr(scope, "lore_tags", []) or [])
+            if topics:
+                brief["anchors"]["topics"] = topics[:5]
+            if lore_tags:
+                brief["anchors"]["lore_tags"] = lore_tags[:5]
+
+            # optional tiny mood hint; soft-fail if not available
+            try:
+                emo = await self.emotional_manager.get_entity_emotional_state(  # type: ignore[attr-defined]
+                    entity_type="player", entity_id=self.user_id
+                )
+                mood = (emo or {}).get("current_emotion", {}).get("primary")
+                if mood:
+                    brief["signals"]["dominant_mood"] = str(mood)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return brief
     
     # ========================================================================
     # Vector Store Operations
