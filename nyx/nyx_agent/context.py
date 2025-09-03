@@ -901,24 +901,14 @@ class ContextBroker:
             return
         
         try:
+            # Use environment variable with fallback to localhost
+            redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
             self.redis_client = redis.from_url(
-                "redis://localhost:6379",
-                encoding=None,  # Handle bytes ourselves
+                redis_url,  # Now uses the environment variable
+                encoding=None,
                 decode_responses=False,
                 socket_connect_timeout=2.0
             )
-            await self.redis_client.ping()
-            logger.info("Redis cache connected for context broker")
-            self._redis_failures = 0
-            self._redis_backoff_until = 0
-        except Exception as e:
-            self._redis_failures += 1
-            # Exponential backoff with jitter
-            backoff = min(300, 2 ** self._redis_failures) + random.uniform(0, 1)
-            self._redis_backoff_until = time.time() + backoff
-            logger.warning(f"Redis not available (attempt {self._redis_failures}), "
-                         f"retrying in {backoff:.1f}s: {e}")
-            self.redis_client = None
     
     def _set_redis_backoff(self):
         """Set backoff after Redis operation failure"""
