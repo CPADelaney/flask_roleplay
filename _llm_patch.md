@@ -1,0 +1,1 @@
+It looks like the individual lint errors and code snippets didn’t come through. Could you please paste the list of lint issues along with the relevant code contexts? Once I have those, I can draft minimal, high‑impact unified diffs to address each one.
