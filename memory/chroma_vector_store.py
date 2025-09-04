@@ -3,11 +3,16 @@
 ChromaDB Vector Store (New Clients API)
 
 - Uses chromadb.PersistentClient(path=...) per the new architecture.
-- No legacy Settings(chroma_db_impl=..., persist_directory=...) usage.
-- All blocking Chroma calls are wrapped with asyncio.to_thread.
-- Safe batching, robust result-shape handling, and gentle persistence on close.
+- Disables Chroma telemetry before import to avoid PostHog noise.
+- Wraps all blocking Chroma calls with asyncio.to_thread.
+- Safe batching, retry w/ backoff, and defensive result parsing.
+- DEFAULT EMBEDDINGS: OpenAI text-embedding-3-small (1536 dims).
 
-Compatible with your VectorDatabase interface expected by MemoryEmbeddingService.
+Note: Chroma collections do not enforce vector dimensionality themselves,
+but if you use text-only queries via Chroma's embedding_function, this file
+now ensures 1536-dim embeddings by default. If you pass your own embeddings
+from upstream (e.g., MemoryEmbeddingService), ensure they are also 1536-dim
+for consistency.
 """
 
 from __future__ import annotations
@@ -15,14 +20,18 @@ from __future__ import annotations
 import os
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 
 from pathlib import Path
+
+# Disable Chroma telemetry BEFORE importing chromadb (prevents PostHog init/noise)
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+
 import chromadb
-from chromadb.config import Settings  # still OK to pass telemetry flag only
+from chromadb.config import Settings  # used to disable anonymized telemetry
 from chromadb.utils import embedding_functions
 
-# Import the abstract VectorDatabase class
+# Import the abstract VectorDatabase interface used by your service layer
 from context.optimized_db import VectorDatabase
 
 logger = logging.getLogger(__name__)
@@ -31,7 +40,6 @@ logger = logging.getLogger(__name__)
 class ChromaVectorDatabase(VectorDatabase):
     """ChromaDB vector database integration using the new PersistentClient."""
 
-    # sane defaults
     _DEFAULT_COLLECTION: str = "memories"
     _DEFAULT_BATCH_SIZE: int = 128
 
@@ -45,12 +53,13 @@ class ChromaVectorDatabase(VectorDatabase):
         """
         Args:
             persist_directory: Directory to store Chroma data (created if missing).
-            collection_name: Default collection name to fall back on.
-            embedding_function: Optional chromadb embedding function (only used if you query by text).
-            config: Optional config dict:
-                - max_retries (int, default 3)
-                - retry_delay (float seconds, default 0.5)
-                - batch_size (int, default 128)
+            collection_name: Default collection name.
+            embedding_function: Optional Chroma embedding function. If omitted, this class
+                                will default to OpenAI text-embedding-3-small (1536 dims).
+            config: Optional dict:
+                - max_retries: int (default 3)
+                - retry_delay: float seconds (default 0.5)
+                - batch_size: int (default 128)
         """
         self.persist_directory = persist_directory or os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
         self.default_collection_name = collection_name or self._DEFAULT_COLLECTION
@@ -60,11 +69,11 @@ class ChromaVectorDatabase(VectorDatabase):
         self.client: Optional[chromadb.PersistentClient] = None
         self.collections: Dict[str, Any] = {}
 
-        # Create persist directory if it doesn't exist
+        # Ensure persistence path exists
         if self.persist_directory:
             Path(self.persist_directory).mkdir(parents=True, exist_ok=True)
 
-        # Retry & batching
+        # Tunables
         self.max_retries: int = int(self.config.get("max_retries", 3))
         self.retry_delay: float = float(self.config.get("retry_delay", 0.5))
         self.batch_size: int = int(self.config.get("batch_size", self._DEFAULT_BATCH_SIZE))
@@ -78,29 +87,31 @@ class ChromaVectorDatabase(VectorDatabase):
         if self.client is not None:
             return
         try:
-            # Only disable telemetry; do NOT pass legacy db impl or persist dir here.
-            client_settings = Settings(anonymized_telemetry=False)
+            # New client style (no deprecated chroma_db_impl/persist_directory in Settings)
+            settings = Settings(anonymized_telemetry=False)
+            self.client = chromadb.PersistentClient(path=self.persist_directory, settings=settings)
 
-            # New client API
-            self.client = chromadb.PersistentClient(
-                path=self.persist_directory,
-                settings=client_settings,
-            )
-
-            # If you never query by text, this isn't required; harmless to set.
+            # Default to 1536-dim OpenAI embeddings for text-only queries
+            # (If you supply embeddings externally, this is only used when you query by text)
             if not self.embedding_function:
-                self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name="all-MiniLM-L6-v2"
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise RuntimeError(
+                        "OPENAI_API_KEY is required to use 1536-dim OpenAI embeddings "
+                        "(text-embedding-3-small) as the default embedding_function."
+                    )
+                self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
+                    api_key=api_key,
+                    model_name="text-embedding-3-small",  # 1536 dimensions
                 )
 
             logger.info("Chroma PersistentClient ready at %s", self.persist_directory)
-
         except Exception as e:
             logger.error("Error initializing ChromaDB client: %s", e)
             raise
 
     async def close(self) -> None:
-        """Close the ChromaDB connection (best-effort persist for older client shapes)."""
+        """Close the ChromaDB connection (best-effort persist for older shapes)."""
         if self.client:
             try:
                 if hasattr(self.client, "persist"):
@@ -115,9 +126,13 @@ class ChromaVectorDatabase(VectorDatabase):
     # Internals
     # -------------------------------------------------------------------------
 
+    async def _ensure_client(self) -> None:
+        if self.client is None:
+            await self.initialize()
+
     async def _retry_sync(self, fn, *args, **kwargs):
         """
-        Run a synchronous function in a thread with retry & backoff.
+        Run a synchronous function in a thread with retry/backoff.
         Returns fn(*args, **kwargs) result or raises last exception.
         """
         for attempt in range(1, self.max_retries + 1):
@@ -134,14 +149,15 @@ class ChromaVectorDatabase(VectorDatabase):
                 await asyncio.sleep(sleep_for)
 
     async def _get_collection(self, collection_name: str):
-        """Get or create a collection (cached; race-safe enough for single-process)."""
+        """Get or create a collection (cached)."""
         await self._ensure_client()
-
         name = collection_name or self.default_collection_name
-        if name in self.collections:
-            return self.collections[name]
 
-        # New Clients support get_or_create_collection
+        cached = self.collections.get(name)
+        if cached is not None:
+            return cached
+
+        # New clients support get_or_create_collection — race-safe enough for single process
         collection = await self._retry_sync(
             self.client.get_or_create_collection,  # type: ignore[attr-defined]
             name=name,
@@ -150,18 +166,14 @@ class ChromaVectorDatabase(VectorDatabase):
         self.collections[name] = collection
         return collection
 
-    async def _ensure_client(self):
-        if self.client is None:
-            await self.initialize()
-
     # -------------------------------------------------------------------------
     # Public API (VectorDatabase)
     # -------------------------------------------------------------------------
 
     async def create_collection(self, collection_name: str, dimension: int) -> bool:
         """
-        Create a new collection in ChromaDB. (dimension is ignored by Chroma;
-        it’s kept for interface compatibility with other backends.)
+        Create a collection. `dimension` is ignored by Chroma (kept for interface compat).
+        Keep your upstream embedding pipeline at 1536 dims to be consistent.
         """
         try:
             await self._get_collection(collection_name)
@@ -181,36 +193,35 @@ class ChromaVectorDatabase(VectorDatabase):
         Upsert vectors into a collection. Assumes ids, vectors, metadata are aligned.
         """
         if not ids:
-            return True  # nothing to do
+            return True
 
         try:
             if not (len(ids) == len(vectors) == len(metadata)):
                 raise ValueError("ids, vectors, and metadata lengths must match")
 
             collection = await self._get_collection(collection_name)
-            documents = [""] * len(ids)  # since we provide embeddings directly
+            docs = [""] * len(ids)  # since we supply embeddings directly
 
             bs = max(1, min(self.batch_size, len(ids)))
             for i in range(0, len(ids), bs):
                 batch_ids = ids[i : i + bs]
-                batch_vectors = vectors[i : i + bs]
-                batch_metadata = metadata[i : i + bs]
-                batch_docs = documents[i : i + bs]
+                batch_vecs = vectors[i : i + bs]
+                batch_meta = metadata[i : i + bs]
+                batch_docs = docs[i : i + bs]
 
                 await self._retry_sync(
                     collection.upsert,
                     ids=batch_ids,
-                    embeddings=batch_vectors,
-                    metadatas=batch_metadata,
+                    embeddings=batch_vecs,
+                    metadatas=batch_meta,
                     documents=batch_docs,
                 )
 
-            # Persist (PersistentClient generally writes through, but this is safe)
+            # PersistentClient generally writes through; still safe to persist if available
             if self.client and hasattr(self.client, "persist"):
                 await asyncio.to_thread(self.client.persist)
 
             return True
-
         except Exception as e:
             logger.error("Error inserting vectors into ChromaDB: %s", e)
             return False
@@ -223,7 +234,7 @@ class ChromaVectorDatabase(VectorDatabase):
         filter_dict: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Query most similar vectors. Returns a list of dicts:
+        Query similar vectors. Returns list of dicts:
         {
             "id": str,
             "score": float,  # similarity (1 - distance)
@@ -246,7 +257,7 @@ class ChromaVectorDatabase(VectorDatabase):
                 include=["metadatas", "distances", "documents", "embeddings"],
             )
 
-            # Expected shape (new clients):
+            # Expected new-client shape: nested lists for query results
             # {
             #   "ids": [[...]],
             #   "distances": [[...]],
@@ -270,21 +281,20 @@ class ChromaVectorDatabase(VectorDatabase):
                 formatted.append(
                     {
                         "id": _id,
-                        "score": 1.0 - dist,  # convert distance→similarity (approx; metric-dependent)
+                        "score": 1.0 - dist,  # distance -> similarity (metric-dependent)
                         "metadata": meta or {},
                         "embedding": emb,
                     }
                 )
 
             return formatted
-
         except Exception as e:
             logger.error("Error searching vectors in ChromaDB: %s", e)
             return []
 
     async def get_by_id(self, collection_name: str, ids: List[str]) -> List[Dict[str, Any]]:
         """
-        Fetch documents by IDs. Returns a list of:
+        Fetch by IDs. Returns a list of:
         { "id": str, "metadata": dict, "embedding": Optional[List[float]] }
         """
         if not ids:
@@ -292,18 +302,18 @@ class ChromaVectorDatabase(VectorDatabase):
 
         try:
             collection = await self._get_collection(collection_name)
+
             results = await self._retry_sync(
                 collection.get,
                 ids=ids,
                 include=["metadatas", "documents", "embeddings"],
             )
 
-            # New clients often return flat lists for get()
+            # Many new-client get() responses are flat lists; be defensive
             got_ids = results.get("ids") or []
             metadatas = results.get("metadatas") or []
             embeddings = results.get("embeddings") or []
 
-            # But be defensive in case a nested shape appears
             if got_ids and isinstance(got_ids[0], list):
                 got_ids = got_ids[0]
             if metadatas and isinstance(metadatas[0], list):
