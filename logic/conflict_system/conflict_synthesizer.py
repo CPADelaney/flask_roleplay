@@ -388,7 +388,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.tension import TensionSubsystem
             from logic.conflict_system.autonomous_stakeholder_actions import StakeholderAutonomySystem
             from logic.conflict_system.conflict_flow import ConflictFlowSubsystem
-            from logic.conflict_system.social_circle import SocialDynamicsSubsystem
+            from logic.conflict_system.social_circle import SocialCircleConflictSubsystem
             from logic.conflict_system.leverage import LeverageSubsystem
             from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
             from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
@@ -405,7 +405,7 @@ class ConflictSynthesizer:
                 TensionSubsystem(self.user_id, self.conversation_id),
                 StakeholderAutonomySystem(self.user_id, self.conversation_id),
                 ConflictFlowSubsystem(self.user_id, self.conversation_id),
-                SocialDynamicsSubsystem(self.user_id, self.conversation_id),
+                SocialCircleConflictSubsystem(self.user_id, self.conversation_id),
                 MultiPartyConflictSubsystem(self.user_id, self.conversation_id),
                 LeverageSubsystem(self.user_id, self.conversation_id),
                 BackgroundConflictSubsystem(self.user_id, self.conversation_id),
