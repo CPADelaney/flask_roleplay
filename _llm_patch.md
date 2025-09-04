@@ -1,0 +1,1 @@
+I’ll need the specific lint errors (messages, file names/locations, and relevant code snippets) in order to propose precise diffs. Could you please paste the lint output or at least one example of the error plus the surrounding code? Once I have that, I can draft minimal unified‐diff patches to resolve them.
