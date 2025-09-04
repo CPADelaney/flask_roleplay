@@ -1,0 +1,1 @@
+It looks like the lint issues and code snippets didn’t come through—could you please paste them here? Once I have the specific warnings (and relevant code snippets), I can draft minimal unified diffs to address each.
