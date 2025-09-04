@@ -1,0 +1,1 @@
+It looks like the lint output and context snippets didn’t come through—could you please paste the reported issues (with file paths/line numbers) and any relevant code snippets? With those I can craft precise unified-diff patches to clean them up.
