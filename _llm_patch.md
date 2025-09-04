@@ -1,0 +1,1 @@
+I’m ready to draft minimal, high‑impact patches—but I’ll need the specific lint errors and the relevant code snippets (file names, line numbers, and context) to work from. Could you please share the lint output or the problematic code sections?
