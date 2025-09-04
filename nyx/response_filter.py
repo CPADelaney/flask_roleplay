@@ -511,6 +511,25 @@ class ResponseFilter:
                 ]
             }
         }
+    
+    def filter_text(self, text: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Synchronous wrapper for filtering text.
+        This is what the SDK expects to find.
+        """
+        import asyncio
+        
+        # Use the existing async method
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're already in an async context, create a task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, self.filter_response(text, context or {}))
+                return future.result()
+        else:
+            # We can run it directly
+            return loop.run_until_complete(self.filter_response(text, context or {}))
 
     def _add_psychological_manipulation(self, response: str, context: Dict[str, Any]) -> str:
         """Add sophisticated psychological manipulation elements"""
@@ -1146,3 +1165,4 @@ class ResponseFilter:
             response = response.replace(word, f"**{word}**")
             
         return response 
+
