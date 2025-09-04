@@ -1,0 +1,1 @@
+I’ll need the specific lint errors and relevant code snippets to craft precise unified diffs. Could you please paste the lint messages along with the surrounding code context for each issue?
