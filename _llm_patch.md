@@ -1,0 +1,1 @@
+I’m ready to propose targeted diffs, but I’ll need the specific lint warnings/errors and the relevant code excerpts. Could you please paste the lint output and the surrounding code snippets so I can craft precise unified diffs?
