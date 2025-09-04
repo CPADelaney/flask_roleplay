@@ -1,0 +1,1 @@
+It looks like you haven’t included the actual lint errors or the code snippets in your message. Could you please paste the list of lint issues along with the relevant code context? Once I have those, I’ll draft minimal, high‑impact patch diffs to address them.
