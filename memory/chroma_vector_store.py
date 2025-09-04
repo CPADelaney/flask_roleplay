@@ -1,319 +1,323 @@
 # memory/chroma_vector_store.py
-
 """
-ChromaDB Vector Store Implementation
+ChromaDB Vector Store (New Clients API)
 
-This module provides a ChromaDB-based implementation of the VectorDatabase interface
-for semantic search and memory retrieval in the system.
+- Uses chromadb.PersistentClient(path=...) per the new architecture.
+- No legacy Settings(chroma_db_impl=..., persist_directory=...) usage.
+- All blocking Chroma calls are wrapped with asyncio.to_thread.
+- Safe batching, robust result-shape handling, and gentle persistence on close.
+
+Compatible with your VectorDatabase interface expected by MemoryEmbeddingService.
 """
+
+from __future__ import annotations
 
 import os
 import logging
-import time
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple
-import numpy as np
-import uuid
-import chromadb
-from chromadb.config import Settings
-from chromadb.utils import embedding_functions
+from typing import Dict, List, Any, Optional, Tuple
+
 from pathlib import Path
+import chromadb
+from chromadb.config import Settings  # still OK to pass telemetry flag only
+from chromadb.utils import embedding_functions
 
 # Import the abstract VectorDatabase class
 from context.optimized_db import VectorDatabase
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
+
 class ChromaVectorDatabase(VectorDatabase):
-    """ChromaDB vector database integration with performance optimizations."""
-    
+    """ChromaDB vector database integration using the new PersistentClient."""
+
+    # sane defaults
+    _DEFAULT_COLLECTION: str = "memories"
+    _DEFAULT_BATCH_SIZE: int = 128
+
     def __init__(
-        self, 
+        self,
         persist_directory: Optional[str] = None,
         collection_name: str = "memories",
-        embedding_function = None,
-        config: Optional[Dict[str, Any]] = None
+        embedding_function=None,
+        config: Optional[Dict[str, Any]] = None,
     ):
         """
-        Initialize the ChromaDB client.
-        
         Args:
-            persist_directory: Directory to persist the database
-            collection_name: Default collection name
-            embedding_function: Optional custom embedding function
-            config: Optional configuration dictionary
+            persist_directory: Directory to store Chroma data (created if missing).
+            collection_name: Default collection name to fall back on.
+            embedding_function: Optional chromadb embedding function (only used if you query by text).
+            config: Optional config dict:
+                - max_retries (int, default 3)
+                - retry_delay (float seconds, default 0.5)
+                - batch_size (int, default 128)
         """
         self.persist_directory = persist_directory or os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
-        self.default_collection_name = collection_name
-        self.client = None
-        self.collections = {}
+        self.default_collection_name = collection_name or self._DEFAULT_COLLECTION
         self.embedding_function = embedding_function
         self.config = config or {}
-        
+
+        self.client: Optional[chromadb.PersistentClient] = None
+        self.collections: Dict[str, Any] = {}
+
         # Create persist directory if it doesn't exist
         if self.persist_directory:
             Path(self.persist_directory).mkdir(parents=True, exist_ok=True)
-        
-        # Retry settings
-        self.max_retries = self.config.get("max_retries", 3)
-        self.retry_delay = self.config.get("retry_delay", 0.5)
-    
+
+        # Retry & batching
+        self.max_retries: int = int(self.config.get("max_retries", 3))
+        self.retry_delay: float = float(self.config.get("retry_delay", 0.5))
+        self.batch_size: int = int(self.config.get("batch_size", self._DEFAULT_BATCH_SIZE))
+
+    # -------------------------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------------------------
+
     async def initialize(self) -> None:
-        """Initialize the ChromaDB client."""
+        """Initialize the ChromaDB client (PersistentClient)."""
+        if self.client is not None:
+            return
         try:
-            # Configure client with optimized settings
-            client_settings = Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=self.persist_directory,
-                anonymized_telemetry=False
+            # Only disable telemetry; do NOT pass legacy db impl or persist dir here.
+            client_settings = Settings(anonymized_telemetry=False)
+
+            # New client API
+            self.client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=client_settings,
             )
-            
-            # Create the client
-            self.client = chromadb.Client(client_settings)
-            
-            # Set up default embedding function if not provided
+
+            # If you never query by text, this isn't required; harmless to set.
             if not self.embedding_function:
                 self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name="all-MiniLM-L6-v2"  # Fast and efficient model for most use cases
+                    model_name="all-MiniLM-L6-v2"
                 )
-            
-            logger.info(f"Successfully connected to ChromaDB at {self.persist_directory}")
-            
+
+            logger.info("Chroma PersistentClient ready at %s", self.persist_directory)
+
         except Exception as e:
-            logger.error(f"Error initializing ChromaDB client: {e}")
+            logger.error("Error initializing ChromaDB client: %s", e)
             raise
-    
+
     async def close(self) -> None:
-        """Close the ChromaDB connection."""
+        """Close the ChromaDB connection (best-effort persist for older client shapes)."""
         if self.client:
-            # ChromaDB doesn't have an explicit close method, but we can persist data
-            if self.persist_directory:
-                self.client.persist()
-            self.client = None
-            self.collections = {}
-    
-    async def _retry_operation(self, operation, *args, **kwargs):
-        """Retry operation with exponential backoff."""
-        for attempt in range(self.max_retries):
             try:
-                return await operation(*args, **kwargs)
+                if hasattr(self.client, "persist"):
+                    await asyncio.to_thread(self.client.persist)
+            except Exception:
+                logger.debug("Chroma persist() on close failed", exc_info=True)
+            finally:
+                self.client = None
+                self.collections.clear()
+
+    # -------------------------------------------------------------------------
+    # Internals
+    # -------------------------------------------------------------------------
+
+    async def _retry_sync(self, fn, *args, **kwargs):
+        """
+        Run a synchronous function in a thread with retry & backoff.
+        Returns fn(*args, **kwargs) result or raises last exception.
+        """
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                return await asyncio.to_thread(fn, *args, **kwargs)
             except Exception as e:
-                if attempt == self.max_retries - 1:
+                if attempt >= self.max_retries:
                     raise
-                wait_time = self.retry_delay * (2 ** attempt)
-                logger.warning(f"Retrying operation after error: {e}. Attempt {attempt + 1}/{self.max_retries}")
-                await asyncio.sleep(wait_time)
-    
+                sleep_for = self.retry_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "Chroma op failed (attempt %d/%d): %s; retrying in %.2fs",
+                    attempt, self.max_retries, e, sleep_for
+                )
+                await asyncio.sleep(sleep_for)
+
     async def _get_collection(self, collection_name: str):
-        """Get or create a collection."""
-        # Check if we already have this collection cached
-        if collection_name in self.collections:
-            return self.collections[collection_name]
-            
-        # Wrapping the synchronous calls in an asyncio executor
-        loop = asyncio.get_event_loop()
-        
-        try:
-            # First try to get the collection
-            collection = await loop.run_in_executor(
-                None, 
-                lambda: self.client.get_collection(
-                    name=collection_name,
-                    embedding_function=self.embedding_function
-                )
-            )
-        except Exception:
-            # If it doesn't exist, create it
-            collection = await loop.run_in_executor(
-                None, 
-                lambda: self.client.create_collection(
-                    name=collection_name,
-                    embedding_function=self.embedding_function
-                )
-            )
-        
-        # Cache the collection
-        self.collections[collection_name] = collection
+        """Get or create a collection (cached; race-safe enough for single-process)."""
+        await self._ensure_client()
+
+        name = collection_name or self.default_collection_name
+        if name in self.collections:
+            return self.collections[name]
+
+        # New Clients support get_or_create_collection
+        collection = await self._retry_sync(
+            self.client.get_or_create_collection,  # type: ignore[attr-defined]
+            name=name,
+            embedding_function=self.embedding_function,
+        )
+        self.collections[name] = collection
         return collection
-    
+
+    async def _ensure_client(self):
+        if self.client is None:
+            await self.initialize()
+
+    # -------------------------------------------------------------------------
+    # Public API (VectorDatabase)
+    # -------------------------------------------------------------------------
+
     async def create_collection(self, collection_name: str, dimension: int) -> bool:
         """
-        Create a new collection in ChromaDB.
-        
-        Args:
-            collection_name: Collection name
-            dimension: Vector dimension (ignored for ChromaDB as it's determined by the embedding function)
-            
-        Returns:
-            Success status
+        Create a new collection in ChromaDB. (dimension is ignored by Chroma;
+        it’s kept for interface compatibility with other backends.)
         """
         try:
-            # Get or create collection - ChromaDB handles this automatically
             await self._get_collection(collection_name)
             return True
         except Exception as e:
-            logger.error(f"Error creating ChromaDB collection: {e}")
+            logger.error("Error creating ChromaDB collection %s: %s", collection_name, e)
             return False
-    
+
     async def insert_vectors(
-        self, 
+        self,
         collection_name: str,
         ids: List[str],
         vectors: List[List[float]],
-        metadata: List[Dict[str, Any]]
+        metadata: List[Dict[str, Any]],
     ) -> bool:
         """
-        Insert vectors into ChromaDB.
-        
-        Args:
-            collection_name: Collection name
-            ids: List of document IDs
-            vectors: List of embedding vectors
-            metadata: List of metadata dictionaries
-            
-        Returns:
-            Success status
+        Upsert vectors into a collection. Assumes ids, vectors, metadata are aligned.
         """
+        if not ids:
+            return True  # nothing to do
+
         try:
-            # Get the collection
+            if not (len(ids) == len(vectors) == len(metadata)):
+                raise ValueError("ids, vectors, and metadata lengths must match")
+
             collection = await self._get_collection(collection_name)
-            
-            # ChromaDB requires documents when not providing embeddings directly
-            # Since we're providing embeddings directly, we'll use empty strings
-            documents = [""] * len(ids)
-            
-            # Prepare batch operation
-            batch_size = min(len(ids), 100)  # ChromaDB recommends smaller batches
-            
-            # Process in batches
-            for i in range(0, len(ids), batch_size):
-                batch_ids = ids[i:i+batch_size]
-                batch_vectors = vectors[i:i+batch_size]
-                batch_metadata = metadata[i:i+batch_size]
-                batch_documents = documents[i:i+batch_size]
-                
-                # Execute the batch insert/update
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: collection.upsert(
-                        ids=batch_ids,
-                        embeddings=batch_vectors,
-                        metadatas=batch_metadata,
-                        documents=batch_documents
-                    )
+            documents = [""] * len(ids)  # since we provide embeddings directly
+
+            bs = max(1, min(self.batch_size, len(ids)))
+            for i in range(0, len(ids), bs):
+                batch_ids = ids[i : i + bs]
+                batch_vectors = vectors[i : i + bs]
+                batch_metadata = metadata[i : i + bs]
+                batch_docs = documents[i : i + bs]
+
+                await self._retry_sync(
+                    collection.upsert,
+                    ids=batch_ids,
+                    embeddings=batch_vectors,
+                    metadatas=batch_metadata,
+                    documents=batch_docs,
                 )
-            
-            # Persist if using a persistent directory
-            if self.persist_directory:
-                await loop.run_in_executor(None, self.client.persist)
-            
+
+            # Persist (PersistentClient generally writes through, but this is safe)
+            if self.client and hasattr(self.client, "persist"):
+                await asyncio.to_thread(self.client.persist)
+
             return True
+
         except Exception as e:
-            logger.error(f"Error inserting vectors into ChromaDB: {e}")
+            logger.error("Error inserting vectors into ChromaDB: %s", e)
             return False
-    
+
     async def search_vectors(
         self,
         collection_name: str,
         query_vector: List[float],
         top_k: int = 10,
-        filter_dict: Optional[Dict[str, Any]] = None
+        filter_dict: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar vectors in ChromaDB.
-        
-        Args:
-            collection_name: Collection name
-            query_vector: Query embedding vector
-            top_k: Number of results to return
-            filter_dict: Optional metadata filter
-            
-        Returns:
-            List of search results
+        Query most similar vectors. Returns a list of dicts:
+        {
+            "id": str,
+            "score": float,  # similarity (1 - distance)
+            "metadata": dict,
+            "embedding": Optional[List[float]]
+        }
         """
-        try:
-            # Get the collection
-            collection = await self._get_collection(collection_name)
-            
-            # Prepare filter if provided
-            where = {}
-            if filter_dict:
-                where = filter_dict
-            
-            # Execute the query
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                None,
-                lambda: collection.query(
-                    query_embeddings=[query_vector],
-                    n_results=top_k,
-                    where=where or None,
-                    include=["metadatas", "distances", "documents", "embeddings"]
-                )
-            )
-            
-            # Format the results to match our interface
-            formatted_results = []
-            
-            if results["ids"] and len(results["ids"][0]) > 0:
-                for i in range(len(results["ids"][0])):
-                    formatted_results.append({
-                        "id": results["ids"][0][i],
-                        "score": 1.0 - float(results["distances"][0][i]),  # Convert distance to similarity
-                        "metadata": results["metadatas"][0][i],
-                        "embedding": results["embeddings"][0][i] if "embeddings" in results else None
-                    })
-            
-            return formatted_results
-            
-        except Exception as e:
-            logger.error(f"Error searching vectors in ChromaDB: {e}")
+        if not query_vector:
             return []
-    
-    async def get_by_id(
-        self,
-        collection_name: str,
-        ids: List[str]
-    ) -> List[Dict[str, Any]]:
-        """
-        Get vectors by their IDs from ChromaDB.
-        
-        Args:
-            collection_name: Collection name
-            ids: List of document IDs
-            
-        Returns:
-            List of retrieved documents
-        """
+
         try:
-            # Get the collection
             collection = await self._get_collection(collection_name)
-            
-            # Execute the get operation
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                None,
-                lambda: collection.get(
-                    ids=ids,
-                    include=["metadatas", "documents", "embeddings"]
-                )
+            where = dict(filter_dict or {})
+
+            results = await self._retry_sync(
+                collection.query,
+                query_embeddings=[query_vector],
+                n_results=max(1, int(top_k)),
+                where=where or None,
+                include=["metadatas", "distances", "documents", "embeddings"],
             )
-            
-            # Format the results
-            formatted_results = []
-            
-            if results["ids"]:
-                for i in range(len(results["ids"])):
-                    formatted_results.append({
-                        "id": results["ids"][i],
-                        "metadata": results["metadatas"][i],
-                        "embedding": results["embeddings"][i] if "embeddings" in results else None
-                    })
-            
-            return formatted_results
-            
+
+            # Expected shape (new clients):
+            # {
+            #   "ids": [[...]],
+            #   "distances": [[...]],
+            #   "metadatas": [[...]],
+            #   "embeddings": [[...]]  (if requested)
+            # }
+            formatted: List[Dict[str, Any]] = []
+            ids_nested = results.get("ids") or [[]]
+            if not ids_nested or not ids_nested[0]:
+                return formatted
+
+            ids = ids_nested[0]
+            distances = (results.get("distances") or [[]])[0] if results.get("distances") else []
+            metadatas = (results.get("metadatas") or [[]])[0] if results.get("metadatas") else []
+            embeddings = (results.get("embeddings") or [[]])[0] if results.get("embeddings") else []
+
+            for idx, _id in enumerate(ids):
+                dist = float(distances[idx]) if idx < len(distances) else 0.0
+                meta = metadatas[idx] if idx < len(metadatas) else {}
+                emb = embeddings[idx] if idx < len(embeddings) else None
+                formatted.append(
+                    {
+                        "id": _id,
+                        "score": 1.0 - dist,  # convert distance→similarity (approx; metric-dependent)
+                        "metadata": meta or {},
+                        "embedding": emb,
+                    }
+                )
+
+            return formatted
+
         except Exception as e:
-            logger.error(f"Error getting vectors by ID from ChromaDB: {e}")
+            logger.error("Error searching vectors in ChromaDB: %s", e)
+            return []
+
+    async def get_by_id(self, collection_name: str, ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Fetch documents by IDs. Returns a list of:
+        { "id": str, "metadata": dict, "embedding": Optional[List[float]] }
+        """
+        if not ids:
+            return []
+
+        try:
+            collection = await self._get_collection(collection_name)
+            results = await self._retry_sync(
+                collection.get,
+                ids=ids,
+                include=["metadatas", "documents", "embeddings"],
+            )
+
+            # New clients often return flat lists for get()
+            got_ids = results.get("ids") or []
+            metadatas = results.get("metadatas") or []
+            embeddings = results.get("embeddings") or []
+
+            # But be defensive in case a nested shape appears
+            if got_ids and isinstance(got_ids[0], list):
+                got_ids = got_ids[0]
+            if metadatas and isinstance(metadatas[0], list):
+                metadatas = metadatas[0]
+            if embeddings and isinstance(embeddings[0], list) and len(embeddings) == 1:
+                embeddings = embeddings[0]
+
+            out: List[Dict[str, Any]] = []
+            for i, _id in enumerate(got_ids):
+                meta = metadatas[i] if i < len(metadatas) else {}
+                emb = embeddings[i] if i < len(embeddings) else None
+                out.append({"id": _id, "metadata": meta or {}, "embedding": emb})
+            return out
+
+        except Exception as e:
+            logger.error("Error getting vectors by ID from ChromaDB: %s", e)
             return []
