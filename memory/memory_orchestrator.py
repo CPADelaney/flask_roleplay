@@ -313,6 +313,10 @@ class MemoryOrchestrator:
         self.interference_manager = None
         self.integrated_system = None
 
+        self.conflict_manager = None
+        self.lore_manager = None
+        self.context_manager = None
+
         # New managers/integrations
         self.reconsolidation_manager = None
 
@@ -427,12 +431,26 @@ class MemoryOrchestrator:
             # --- Specialized managers (mixed NEW/LEGACY) ---
 
             # Nyx memory (LEGACY manager; keep as-is)
-            from memory.managers import NyxMemoryManager
-            self.nyx_memory_manager = NyxMemoryManager(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                unified_manager=self.unified_manager  # may be None; matches existing signature
-            )
+            from memory.managers import NyxMemoryManager, ConflictMemoryManager, LoreMemoryManager, ContextEvolutionManager
+            try:
+                self.nyx_memory_manager = NyxMemoryManager(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+            except TypeError:
+                # extremely legacy fallback (keep init resilient)
+                self.nyx_memory_manager = NyxMemoryManager(self.user_id, self.conversation_id)
+
+            # Initialize other specialized managers so the orchestrator can leverage them directly
+            try:
+                self.conflict_manager = ConflictMemoryManager(self.user_id, self.conversation_id)
+            except Exception:
+                self.conflict_manager = None
+            try:
+                self.lore_manager = LoreMemoryManager(self.user_id, self.conversation_id)
+            except Exception:
+                self.lore_manager = None
+            self.context_manager = ContextEvolutionManager(self.user_id, self.conversation_id)
 
             # Emotions (LEGACY manager; keep as-is)
             from memory.emotional import EmotionalMemoryManager
@@ -732,7 +750,7 @@ class MemoryOrchestrator:
         tasks.append(self.retrieve_memories(
             entity_type=EntityType.PLAYER.value,
             entity_id=self.user_id,
-            filters={'modified_after': iso_since, 'location': scope.location_id} if scope.location_id else {'modified_after': iso_since},
+            filters={'created_after': iso_since, 'location': scope.location_id} if scope.location_id else {'created_after': iso_since},
             limit=30,
         ))
     
@@ -741,12 +759,12 @@ class MemoryOrchestrator:
             tasks.append(self.retrieve_memories(
                 entity_type=EntityType.NPC.value,
                 entity_id=npc_id,
-                filters={'modified_after': iso_since},
+                filters={'created_after': iso_since},
                 limit=20,
             ))
     
         # Location/topic/lore deltas via vector store (if supported by filters)
-        vs_filters = {'modified_after': iso_since}
+        vs_filters = {'created_after': iso_since}
         if scope.location_id:
             tasks.append(self.search_vector_store(
                 query=f"location:{scope.location_id}",
@@ -1388,69 +1406,29 @@ class MemoryOrchestrator:
         is_canon: bool = False
     ) -> Dict[str, Any]:
         """
-        Store a new memory (telemetry-instrumented).
+        Store a new memory. Route through integrated system so all hooks run.
         """
-        t0 = time.time()
     
         if not self.initialized:
             await self.initialize()
     
-        try:
-            manager = await self._get_entity_manager(entity_type, entity_id)
-    
-            md: Dict[str, Any] = dict(metadata or {})
-            if is_canon:
-                md["is_canon"] = True
-                md["canonical"] = True
-    
-            memory = await manager.store_memory(
-                content=content,
-                memory_type=memory_type,
-                significance=significance,
-                emotional_intensity=emotional_intensity,
-                tags=tags,
-                metadata=md
-            )
-    
-            # Invalidate caches using both entity and metadata signals
-            await self._invalidate_caches_for_entity(entity_type, entity_id)
-            self._invalidate_by_metadata(md, tags)
-    
-            out = {
-                "memory_id": getattr(memory, "memory_id", None) or getattr(memory, "id", None),
-                "success": True,
-                "entity_type": entity_type,
-                "entity_id": entity_id
+        # Canonical path: integrated system (handles vector, schema, side-effects etc.)
+        md: Dict[str, Any] = dict(metadata or {})
+        if is_canon:
+            md["is_canon"] = True
+            md["canonical"] = True
+        return await self.integrated_add_memory(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_text=content,
+            memory_kwargs={
+                "memory_type": memory_type,
+                "significance": significance,
+                "emotional_intensity": emotional_intensity,
+                "tags": tags or [],
+                "metadata": md
             }
-    
-            # Telemetry (success)
-            try:
-                await self._telemetry(
-                    "store_memory",
-                    started_at=t0,
-                    success=True,
-                    metadata={"et": entity_type, "eid": entity_id, "tags": (tags or [])}
-                )
-            except Exception:
-                pass
-    
-            return out
-    
-        except Exception as e:
-            # Telemetry (failure)
-            try:
-                await self._telemetry(
-                    "store_memory",
-                    started_at=t0,
-                    success=False,
-                    error=str(e),
-                    metadata={"et": entity_type, "eid": entity_id, "tags": (tags or [])}
-                )
-            except Exception:
-                pass
-    
-            logger.error(f"Error storing memory: {e}")
-            return {"error": str(e), "success": False}
+        )
 
     @staticmethod
     def _as_et_str(et: Union[str, Enum]) -> str:
@@ -1510,7 +1488,8 @@ class MemoryOrchestrator:
                 # Get entity manager
                 manager = await self._get_entity_manager(entity_type, entity_id)
     
-                # Retrieve memories with robust fallbacks
+                # Retrieve memories with robust fallbacks.
+                # Prefer methods that accept filters/memory_type if available.
                 mem_list = []
                 if query:
                     vs = await self.search_vector_store(
@@ -1521,12 +1500,30 @@ class MemoryOrchestrator:
                     )
                     mem_list = self._as_mem_list(vs)
                 else:
-                    if hasattr(manager, "retrieve_memories"):
-                        raw = await manager.retrieve_memories(
-                            query=None,
-                            tags=tags,
-                            limit=max(limit, 20)
+                    if hasattr(manager, "query_memories"):
+                        res = await manager.query_memories(
+                            filters=filters or {},
+                            limit=limit,
+                            memory_type=memory_type,
+                            tags=tags
                         )
+                        mem_list = res if isinstance(res, list) else res.get("memories", [])
+                    elif hasattr(manager, "retrieve_memories"):
+                        try:
+                            raw = await manager.retrieve_memories(
+                                query=None,
+                                tags=tags,
+                                limit=max(limit, 20),
+                                filters=filters or {},
+                                memory_type=memory_type
+                            )
+                        except TypeError:
+                            # legacy signature without filters/memory_type
+                            raw = await manager.retrieve_memories(
+                                query=None,
+                                tags=tags,
+                                limit=max(limit, 20)
+                            )
                         mem_list = [m.to_dict() if hasattr(m, "to_dict") else m for m in raw]
                         ca = (filters or {}).get("created_after")
                         if ca:
@@ -1544,14 +1541,6 @@ class MemoryOrchestrator:
                             mt = str(memory_type).lower()
                             mem_list = [m for m in mem_list if str(m.get("memory_type","")).lower() == mt]
                         mem_list = mem_list[:limit]
-                    elif hasattr(manager, "query_memories"):
-                        res = await manager.query_memories(
-                            filters=filters or {},
-                            limit=limit,
-                            memory_type=memory_type,
-                            tags=tags
-                        )
-                        mem_list = res if isinstance(res, list) else res.get("memories", [])
                     elif hasattr(manager, "get_recent_memories"):
                         res = await manager.get_recent_memories(limit=limit)
                         mem_list = res if isinstance(res, list) else res.get("memories", [])
@@ -1835,16 +1824,17 @@ class MemoryOrchestrator:
     # ========================================================================
     
     async def _get_entity_manager(self, entity_type: str, entity_id: int):
-            key = f"{entity_type}_{entity_id}"
+            et = str(entity_type).lower()
+            key = f"{et}_{entity_id}"
             if key not in self.memory_managers:
-                if entity_type == EntityType.NPC.value:
+                if et == EntityType.NPC.value:
                     from memory.managers import NPCMemoryManager
                     manager = NPCMemoryManager(
                         npc_id=entity_id,
                         user_id=self.user_id,
                         conversation_id=self.conversation_id
                     )
-                elif entity_type == EntityType.PLAYER.value:
+                elif et == EntityType.PLAYER.value:
                     # Player manager in managers.py requires player_name; source from DB or default.
                     from memory.managers import PlayerMemoryManager
                     player_name = "Chase"
@@ -1864,6 +1854,31 @@ class MemoryOrchestrator:
                         user_id=self.user_id,
                         conversation_id=self.conversation_id
                     )
+                elif et == EntityType.NYX.value:
+                    # reuse initialized instance if available
+                    if self.nyx_memory_manager:
+                        manager = self.nyx_memory_manager
+                    else:
+                        from memory.managers import NyxMemoryManager
+                        manager = NyxMemoryManager(self.user_id, self.conversation_id)
+                elif et == EntityType.CONFLICT.value:
+                    if self.conflict_manager:
+                        manager = self.conflict_manager
+                    else:
+                        from memory.managers import ConflictMemoryManager
+                        manager = ConflictMemoryManager(self.user_id, self.conversation_id)
+                elif et == EntityType.LORE.value:
+                    if self.lore_manager:
+                        manager = self.lore_manager
+                    else:
+                        from memory.managers import LoreMemoryManager
+                        manager = LoreMemoryManager(self.user_id, self.conversation_id)
+                elif et == EntityType.CONTEXT.value:
+                    if self.context_manager:
+                        manager = self.context_manager
+                    else:
+                        from memory.managers import ContextEvolutionManager
+                        manager = ContextEvolutionManager(self.user_id, self.conversation_id)
                 else:
                     # Fallback: core UnifiedMemoryManager (per-entity instance)
                     from memory.core import UnifiedMemoryManager
@@ -2192,6 +2207,19 @@ class MemoryOrchestrator:
                 brief["anchors"]["topics"] = topics[:5]
             if lore_tags:
                 brief["anchors"]["lore_tags"] = lore_tags[:5]
+
+            # Optional: add high-level narrative signals from Nyx
+            try:
+                if self.nyx_memory_manager and hasattr(self.nyx_memory_manager, "get_narrative_state"):
+                    ns = await self.nyx_memory_manager.get_narrative_state()
+                    if ns:
+                        if ns.get("goals"):
+                            brief["signals"]["nyx_goals"] = ns["goals"][:3]
+                        if ns.get("arcs"):
+                            brief["signals"]["narrative_arcs"] = list((ns["arcs"] or {}).keys())[:3]
+            except Exception:
+                pass
+
 
             # optional tiny mood hint; soft-fail if not available
             try:
