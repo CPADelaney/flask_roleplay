@@ -1,0 +1,1 @@
+It looks like the specific lint warnings and code snippets didn’t come through. Could you please paste the lint messages and the relevant code contexts? Once I have those, I can draft minimal, high‑impact unified diff patches.
