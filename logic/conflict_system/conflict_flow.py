@@ -3,7 +3,7 @@
 Conflict Flow System with LLM-generated pacing and transitions.
 Refactored to work as a ConflictSubsystem with the synthesizer.
 """
-
+from __future__ import annotations
 import logging
 import json
 import random
@@ -138,7 +138,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     # ========== ConflictSubsystem Interface ==========
     
     @property
-    def subsystem_type(self):
+    def subsystem_type(self) -> "SubsystemType":
         SubsystemType, _, _, _ = _orch_types()
         return SubsystemType.FLOW
     
@@ -154,12 +154,12 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
         }
     
     @property
-    def dependencies(self) -> Set[SubsystemType]:
+    def dependencies(self) -> Set["SubsystemType"]:
         return set()  # Flow is foundational
     
     @property
-    def event_subscriptions(self) -> Set[EventType]:
-        # Include HEALTH_CHECK and STATE_SYNC for orchestration integration
+    def event_subscriptions(self) -> Set["EventType"]:
+        _, EventType, _, _ = _orch_types()
         return {
             EventType.CONFLICT_CREATED,
             EventType.CONFLICT_UPDATED,
@@ -262,7 +262,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     # ========== Event Handlers ==========
     
-    async def _handle_conflict_created(self, event: SystemEvent) -> SubsystemResponse:
+    async def _handle_conflict_created(self, event: "SystemEvent") -> "SubsystemResponse":
         """Initialize flow for new conflict, deferring if id is not present."""
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
@@ -314,7 +314,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             side_effects=side_effects
         )
     
-    async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
+    async def _handle_state_sync(self, event: "SystemEvent") -> "SubsystemResponse":
         """Finalize deferred initialization when we receive conflict_id via STATE_SYNC."""
         payload = event.payload or {}
         op_id = payload.get('operation_id')
@@ -348,7 +348,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             side_effects=[]
         )
     
-    async def _handle_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
+    async def _handle_conflict_updated(self, event: "SystemEvent") -> "SubsystemResponse":
         """Update flow based on conflict changes"""
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
@@ -399,7 +399,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             side_effects=side_effects
         )
     
-    async def _handle_tension_changed(self, event: SystemEvent) -> SubsystemResponse:
+    async def _handle_tension_changed(self, event: "SystemEvent") -> "SubsystemResponse":
         """Handle tension changes affecting flow"""
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
@@ -435,7 +435,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             side_effects=[]
         )
     
-    async def _handle_player_choice(self, event: SystemEvent) -> SubsystemResponse:
+    async def _handle_player_choice(self, event: "SystemEvent") -> "SubsystemResponse":
         """Handle player choices affecting flow"""
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
@@ -479,7 +479,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             side_effects=[]
         )
     
-    async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
+    async def _handle_stakeholder_action(self, event: "SystemEvent") -> "SubsystemResponse":
         """Handle stakeholder actions affecting flow."""
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
