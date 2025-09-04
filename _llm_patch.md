@@ -1,0 +1,1 @@
+It looks like the specific lint errors and code snippets didn’t come through. Could you paste the list of lint messages along with the relevant code contexts? Once I have those, I can propose targeted unified diff-style patches.
