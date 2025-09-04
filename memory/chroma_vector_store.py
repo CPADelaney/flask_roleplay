@@ -14,7 +14,6 @@ now ensures 1536-dim embeddings by default. If you pass your own embeddings
 from upstream (e.g., MemoryEmbeddingService), ensure they are also 1536-dim
 for consistency.
 """
-
 from __future__ import annotations
 
 import os
