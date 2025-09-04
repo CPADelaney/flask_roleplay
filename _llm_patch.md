@@ -1,0 +1,1 @@
+It looks like the “## Lint issues” section came through empty—could you please paste in the actual lint errors (and any relevant code snippets) you’d like me to address? Once I have those, I can provide concrete unified‑diff patches.
