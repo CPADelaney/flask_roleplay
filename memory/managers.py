@@ -973,7 +973,7 @@ class LoreMemoryManager(UnifiedMemoryManager):
             patterns = self._analyze_memory_patterns(memories)
             
             # Cache the patterns
-            await set_cache(cache_key, patterns, ttl=300)  # Cache for 5 minutes
+            await cache_set(cache_key, patterns, ttl=300)  # Cache for 5 minutes
         
         # Generate lore based on patterns and context
         lore = self._generate_lore_from_patterns(patterns, context)
@@ -1254,7 +1254,7 @@ class LoreMemoryManager(UnifiedMemoryManager):
             relevance_score = self._calculate_lore_relevance(lore_memory, context)
             
             # Cache the result
-            await set_cache(cache_key, relevance_score, ttl=300)  # Cache for 5 minutes
+            await cache_set(cache_key, relevance_score, ttl=300)  # Cache for 5 minutes
         
         # Persist relevance in memory metadata (unified_memories has no relevance_score column)
         row = await conn.fetchrow("SELECT metadata FROM unified_memories WHERE id=$1", lore_id)
