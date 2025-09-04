@@ -1,0 +1,1 @@
+Could you please provide the lint issues and relevant code snippets? Once I have those details, I can propose minimal unified-diff patches to address them.
