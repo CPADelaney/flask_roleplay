@@ -427,7 +427,7 @@ class MemoryOrchestrator:
             # --- Specialized managers (mixed NEW/LEGACY) ---
 
             # Nyx memory (LEGACY manager; keep as-is)
-            from memory.nyx_memory import NyxMemoryManager
+            from memory.memory_nyx_integration import NyxMemoryManager
             self.nyx_memory_manager = NyxMemoryManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
