@@ -1,0 +1,1 @@
+I’m ready to help—could you please share the specific lint errors and the relevant code snippets? Once I have those, I can draft minimal, high‑impact unified diffs to fix them.
