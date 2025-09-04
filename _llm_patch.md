@@ -1,0 +1,1 @@
+It looks like no lint issues or code snippets came through. Could you please paste the reported lint errors and the relevant code snippets? Once I have those, I can propose minimal, high-impact patch diffs.
