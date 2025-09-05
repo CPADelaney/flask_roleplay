@@ -80,6 +80,8 @@ def _sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     walk(s)
     return s
 
+# Export the sanitize function for use in other modules
+sanitize_json_schema = _sanitize_json_schema
 
 class BaseModel(_PydanticBaseModel):
     """Pydantic base with JSON-schema cleanup to avoid 'additionalProperties' issues."""
@@ -426,4 +428,5 @@ __all__ = [
     "ContextBundle",
     "SceneScope",
     "BundleMetadata",
+    "sanitize_json_schema",
 ]
