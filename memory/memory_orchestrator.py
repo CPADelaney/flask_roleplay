@@ -493,7 +493,7 @@ class MemoryOrchestrator:
             )
 
             # Mask manager (LEGACY; basic masking)
-            from memory.mask import MaskManager
+            from memory.masks import MaskManager
             self.mask_manager = MaskManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
