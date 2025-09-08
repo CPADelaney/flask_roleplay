@@ -14,17 +14,17 @@ import asyncio
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
-# LangChain imports
-from langchain_community.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
+# Updated LangChain imports
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI  # Updated import
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain_core.vectorstores import VectorStore
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
+from langchain_core.runnables import RunnablePassthrough  # New import for chain
+from langchain_core.output_parsers import PydanticOutputParser  # Updated import
 from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatOpenAI
 from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline
-from langchain.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -82,6 +82,7 @@ class MemoryRetrieverAgent:
         # Initialize variables to be set later
         self.llm = None
         self.memory_analysis_chain = None
+        self.memory_analysis_parser = None
         self.initialized = False
     
     async def initialize(self) -> None:
@@ -125,14 +126,15 @@ class MemoryRetrieverAgent:
             if not openai_api_key:
                 raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI")
             
-            model_name = self.config.get("openai_model_name", "gpt-5-nano")
+            model_name = self.config.get("openai_model_name", "gpt-4o-mini")
             temp = self.config.get("temperature")
 
+            # Updated ChatOpenAI import and initialization
             self.llm = await loop.run_in_executor(
                 None,
                 lambda: ChatOpenAI(
-                    model_name=model_name,
-                    openai_api_key=openai_api_key,
+                    model=model_name,  # Changed from model_name to model
+                    api_key=openai_api_key,  # Changed from openai_api_key to api_key
                     **({"temperature": temp} if temp is not None else {})
                 )
             )
@@ -152,14 +154,14 @@ class MemoryRetrieverAgent:
                     repo_id=model_name,
                     huggingfacehub_api_token=hf_token,
                     model_kwargs={"max_length": 512}
-            )
+                )
             )
             
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
     
     async def _setup_chains(self) -> None:
-        """Set up LangChain components."""
+        """Set up LangChain components using the new Runnable pattern."""
         # Define prompt template for memory analysis
         memory_analysis_template = """
         You are analyzing a set of memories retrieved for an AI assistant.
@@ -180,21 +182,17 @@ class MemoryRetrieverAgent:
         """
         
         # Output parser for structured output
-        parser = PydanticOutputParser(pydantic_object=MemoryAnalysis)
+        self.memory_analysis_parser = PydanticOutputParser(pydantic_object=MemoryAnalysis)
         
         # Create prompt with template and output parser
         prompt = PromptTemplate(
             template=memory_analysis_template,
             input_variables=["query", "memories"],
-            partial_variables={"format_instructions": parser.get_format_instructions()}
+            partial_variables={"format_instructions": self.memory_analysis_parser.get_format_instructions()}
         )
         
-        # Create the chain
-        self.memory_analysis_chain = LLMChain(
-            llm=self.llm,
-            prompt=prompt,
-            output_parser=parser
-        )
+        # Create the chain using the new Runnable pattern (prompt | llm | parser)
+        self.memory_analysis_chain = prompt | self.llm | self.memory_analysis_parser
     
     async def retrieve_memories(
         self,
@@ -278,19 +276,48 @@ class MemoryRetrieverAgent:
             formatted_memories += f"Memory {i+1} [ID: {memory['id']}, Type: {entity_type}, Relevance: {relevance:.2f}]:\n"
             formatted_memories += f"{memory_text}\n\n"
         
-        # Use the memory analysis chain to analyze memories
-        loop = asyncio.get_event_loop()
-        
-        # Run the LLM chain (potentially blocking) in an executor
-        result = await loop.run_in_executor(
-            None,
-            lambda: self.memory_analysis_chain.run(
-                query=query,
-                memories=formatted_memories
-            )
-        )
-        
-        return result
+        # Use the new chain pattern with async invoke
+        try:
+            # Invoke the chain asynchronously
+            result = await self.memory_analysis_chain.ainvoke({
+                "query": query,
+                "memories": formatted_memories
+            })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error analyzing memories: {e}")
+            # If parsing fails, try to get raw response and parse manually
+            try:
+                # Run without parser to get raw response
+                chain_without_parser = (
+                    PromptTemplate(
+                        template=self.memory_analysis_chain.first.template,
+                        input_variables=["query", "memories"],
+                        partial_variables={"format_instructions": self.memory_analysis_parser.get_format_instructions()}
+                    ) | self.llm
+                )
+                
+                raw_result = await chain_without_parser.ainvoke({
+                    "query": query,
+                    "memories": formatted_memories
+                })
+                
+                # Try to parse the raw result
+                if hasattr(raw_result, 'content'):
+                    return self.memory_analysis_parser.parse(raw_result.content)
+                else:
+                    return self.memory_analysis_parser.parse(str(raw_result))
+                    
+            except Exception as parse_error:
+                logger.error(f"Error parsing memory analysis: {parse_error}")
+                # Return a default analysis if all fails
+                return MemoryAnalysis(
+                    primary_theme="Unable to analyze memories",
+                    insights=[],
+                    suggested_response="I found some relevant memories but encountered an error analyzing them."
+                )
     
     async def retrieve_and_analyze(
         self,
