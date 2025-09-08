@@ -913,6 +913,74 @@ class ConflictSynthesizer:
         await self._invalidate_caches_for_conflict(conflict_id)
         
         return result
+
+    async def get_system_state(self) -> Dict[str, Any]:
+        """
+        Get the complete system state for external consumers.
+        Returns active conflicts, metrics, and subsystem states.
+        """
+        try:
+            # Get active conflicts (non-resolved)
+            active_conflicts = []
+            for conflict_id, state in self._conflict_states.items():
+                if not state.get('resolved', False):
+                    active_conflicts.append({
+                        'id': conflict_id,
+                        'type': state.get('conflict_type', 'unknown'),
+                        'intensity': state.get('intensity_level', 0.5),
+                        'phase': state.get('phase', 'unknown'),
+                        'participants': state.get('stakeholder_ids', []),
+                        'last_updated': state.get('last_updated', 0)
+                    })
+            
+            # Get performance metrics
+            metrics = await self.get_performance_metrics()
+            
+            # Add global metrics
+            metrics.update({
+                'total_conflicts': self._global_metrics.get('total_conflicts', 0),
+                'active_conflicts': self._global_metrics.get('active_conflicts', 0),
+                'resolved_conflicts': self._global_metrics.get('resolved_conflicts', 0),
+                'complexity_score': self._global_metrics.get('complexity_score', 0.0),
+                'system_health': self._global_metrics.get('system_health', 1.0)
+            })
+            
+            # Get subsystem states
+            subsystem_states = {}
+            for subsystem_type, subsystem in self._subsystems.items():
+                if hasattr(subsystem, 'get_state'):
+                    try:
+                        subsystem_states[subsystem_type.value] = await subsystem.get_state()
+                    except Exception as e:
+                        logger.debug(f"Could not get state for {subsystem_type}: {e}")
+                        subsystem_states[subsystem_type.value] = {'available': True}
+                else:
+                    subsystem_states[subsystem_type.value] = {'available': True}
+            
+            return {
+                'active_conflicts': active_conflicts,
+                'metrics': metrics,
+                'subsystem_states': subsystem_states,
+                'conflict_count': len(active_conflicts),
+                'system_initialized': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting system state: {e}")
+            return {
+                'active_conflicts': [],
+                'metrics': {
+                    'total_conflicts': 0,
+                    'active_conflicts': 0,
+                    'resolved_conflicts': 0,
+                    'complexity_score': 0.0,
+                    'system_health': 1.0
+                },
+                'subsystem_states': {},
+                'conflict_count': 0,
+                'system_initialized': False,
+                'error': str(e)
+            }
     
     async def resolve_conflict(
         self,
