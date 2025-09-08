@@ -34,7 +34,7 @@ SQLAlchemy==2.0.41
 alembic==1.15.2
 mysqlclient==2.2.7
 
-langchain-openai==0.3.32
+langchain-openai==0.2.2
 
 # Celery and Redis
 celery==5.5.2
