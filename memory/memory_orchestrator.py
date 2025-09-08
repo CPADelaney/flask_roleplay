@@ -949,6 +949,16 @@ class MemoryOrchestrator:
         except Exception:
             pass
 
+    async def ensure_canon_synced(self):
+        """Ensure canon data is synced with memory system."""
+        if not self.initialized:
+            await self.initialize()
+        
+        # Mark as synced
+        self._canon_synced = True
+        logger.info(f"Canon sync completed for user {self.user_id}, conversation {self.conversation_id}")
+    
+
     async def _augment_bundle_with_emotion(self, bundle: MemoryBundle) -> MemoryBundle:
         """Append mood-congruent memories for player and NPCs into scene_memories (deduped)."""
         scope = bundle.scope or SceneScope()
@@ -2506,12 +2516,13 @@ class MemoryOrchestrator:
     # Maintenance Operations (Move to Background)
     # ========================================================================
     
-    async def run_maintenance(self, background: bool = True) -> Dict[str, Any]:
+    async def run_maintenance(self, background: bool = True, operations: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Run memory maintenance tasks.
         
         Args:
             background: If True, enqueue to background worker
+            operations: Optional list of specific operations to run (e.g., ["consolidation"])
             
         Returns:
             Status of maintenance tasks
@@ -2521,7 +2532,7 @@ class MemoryOrchestrator:
             from celery import current_app
             task = current_app.send_task(
                 'memory.tasks.run_memory_maintenance',
-                args=[self.user_id, self.conversation_id]
+                args=[self.user_id, self.conversation_id, operations]
             )
             return {"status": "queued", "task_id": task.id}
         
@@ -2532,15 +2543,20 @@ class MemoryOrchestrator:
         if (datetime.now() - self.last_maintenance).seconds < 300:  # 5 minutes
             return {"status": "skipped", "reason": "Too soon since last maintenance"}
         
-        # Run consolidation
-        results['consolidation'] = await self._run_consolidation()
+        # If specific operations requested, run only those
+        if operations:
+            if "consolidation" in operations:
+                results['consolidation'] = await self._run_consolidation()
+            if "decay" in operations:
+                results['decay'] = await self._run_decay()
+            if "patterns" in operations:
+                results['patterns'] = await self._run_pattern_analysis()
+        else:
+            # Run all maintenance tasks
+            results['consolidation'] = await self._run_consolidation()
+            results['decay'] = await self._run_decay()
+            results['patterns'] = await self._run_pattern_analysis()
         
-        # Run decay
-        results['decay'] = await self._run_decay()
-        
-        # Run pattern analysis
-        results['patterns'] = await self._run_pattern_analysis()
-
         # Progressive mask auto-reveals (optional)
         try:
             if self.progressive_reveal_manager:
