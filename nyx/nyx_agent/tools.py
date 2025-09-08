@@ -1012,9 +1012,33 @@ async def generate_universal_updates_impl(
     if not isinstance(ctx, RunContextWrapper):
         ctx = RunContextWrapper(context=app_ctx)
 
-    # Use an empty-typed payload to satisfy the schema (though it’s unused here)
-    return await generate_universal_updates(ctx, EmptyInput())
+    # Direct implementation instead of calling the tool
+    broker = await _get_context_broker(ctx)
+    bundle = await _get_bundle(ctx)
 
+    # Collect all pending changes from bundle
+    updates = await broker.collect_universal_updates(bundle)
+
+    # Apply updates in background with error handling
+    task = asyncio.create_task(broker.apply_updates_async(updates))
+    task.add_done_callback(_log_task_exc)
+
+    result = {
+        'world_updates': updates.get('world', {}),
+        'npc_updates': updates.get('npcs', {}),
+        'memory_consolidation': updates.get('memory', {}),
+        'conflict_progression': updates.get('conflicts', {}),
+        'lore_evolution': updates.get('lore', {}),
+        'applied_async': True
+    }
+
+    # Return a compatible object for the orchestrator
+    from .models import UniversalUpdateResult
+    return UniversalUpdateResult(
+        success=True,
+        updates_generated=bool(updates),
+        error=None
+    )
 
 def ok_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """Wrap successful response in standard envelope."""
