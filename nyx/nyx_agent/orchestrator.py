@@ -358,7 +358,7 @@ async def process_user_input(
             resp = await resolve_scene_requests(resp, nyx_context)
             
             # Assemble final response
-            assembled = assemble_nyx_response(resp)
+            assembled = await assemble_nyx_response(resp)
             
             # Save state changes
             await _save_context_state(nyx_context)
