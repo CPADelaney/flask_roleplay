@@ -1492,9 +1492,9 @@ class MemoryOrchestrator:
                 manager = await self._get_entity_manager(entity_type, entity_id)
     
                 # Retrieve memories with robust fallbacks.
-                # Prefer methods that accept filters/memory_type if available.
                 mem_list = []
                 if query:
+                    # Use vector store for query-based retrieval
                     vs = await self.search_vector_store(
                         query=query,
                         entity_type=entity_type,
@@ -1503,7 +1503,9 @@ class MemoryOrchestrator:
                     )
                     mem_list = self._as_mem_list(vs)
                 else:
+                    # Check what methods the manager supports
                     if hasattr(manager, "query_memories"):
+                        # Newer method that supports filters
                         res = await manager.query_memories(
                             filters=filters or {},
                             limit=limit,
@@ -1512,41 +1514,117 @@ class MemoryOrchestrator:
                         )
                         mem_list = res if isinstance(res, list) else res.get("memories", [])
                     elif hasattr(manager, "retrieve_memories"):
+                        # Legacy method - don't pass unsupported parameters
                         try:
+                            # Try with basic parameters only
                             raw = await manager.retrieve_memories(
                                 query=None,
                                 tags=tags,
-                                limit=max(limit, 20),
-                                filters=filters or {},
-                                memory_type=memory_type
+                                limit=max(limit, 20)  # Get extra to account for filtering
                             )
-                        except TypeError:
-                            # legacy signature without filters/memory_type
-                            raw = await manager.retrieve_memories(
-                                query=None,
-                                tags=tags,
-                                limit=max(limit, 20)
-                            )
-                        mem_list = [m.to_dict() if hasattr(m, "to_dict") else m for m in raw]
-                        ca = (filters or {}).get("created_after")
-                        if ca:
+                        except Exception as e:
+                            logger.debug(f"Error calling retrieve_memories: {e}")
+                            # Fallback with even more basic call
                             try:
-                                from datetime import datetime as _dt
-                                cutoff = _dt.fromisoformat(str(ca).replace("Z", "+00:00"))
-                                def _p_ts(x):
-                                    s = x.get("timestamp") or x.get("created_at") or x.get("created")
-                                    if not s: return None
-                                    return _dt.fromisoformat(str(s).replace("Z", "+00:00"))
-                                mem_list = [m for m in mem_list if (_p_ts(m) and _p_ts(m) >= cutoff)]
-                            except Exception:
-                                pass
+                                raw = await manager.retrieve_memories(limit=max(limit, 20))
+                            except:
+                                raw = []
+                        
+                        # Convert to dict format
+                        mem_list = []
+                        for m in raw:
+                            if hasattr(m, "to_dict"):
+                                mem_list.append(m.to_dict())
+                            elif isinstance(m, dict):
+                                mem_list.append(m)
+                            else:
+                                # Try to extract basic fields
+                                try:
+                                    mem_list.append({
+                                        "id": getattr(m, "id", None),
+                                        "text": getattr(m, "text", ""),
+                                        "memory_type": getattr(m, "memory_type", None),
+                                        "timestamp": getattr(m, "timestamp", None),
+                                        "tags": getattr(m, "tags", []),
+                                        "significance": getattr(m, "significance", 0),
+                                        "emotional_intensity": getattr(m, "emotional_intensity", 0),
+                                    })
+                                except:
+                                    continue
+                        
+                        # Apply filters manually since retrieve_memories doesn't support them
+                        if filters:
+                            # Filter by created_after if present
+                            ca = filters.get("created_after")
+                            if ca:
+                                try:
+                                    from datetime import datetime as _dt
+                                    cutoff = _dt.fromisoformat(str(ca).replace("Z", "+00:00"))
+                                    
+                                    def _parse_timestamp(mem):
+                                        for field in ["timestamp", "created_at", "created"]:
+                                            ts = mem.get(field)
+                                            if ts:
+                                                try:
+                                                    if isinstance(ts, str):
+                                                        return _dt.fromisoformat(ts.replace("Z", "+00:00"))
+                                                    elif hasattr(ts, "isoformat"):
+                                                        return ts
+                                                except:
+                                                    continue
+                                        return None
+                                    
+                                    filtered = []
+                                    for m in mem_list:
+                                        ts = _parse_timestamp(m)
+                                        if ts and ts >= cutoff:
+                                            filtered.append(m)
+                                    mem_list = filtered
+                                except Exception as e:
+                                    logger.debug(f"Could not filter by created_after: {e}")
+                            
+                            # Filter by location if present
+                            location = filters.get("location")
+                            if location:
+                                mem_list = [
+                                    m for m in mem_list 
+                                    if (m.get("metadata", {}).get("location") == location or
+                                        location in m.get("tags", []))
+                                ]
+                        
+                        # Apply memory_type filter manually
                         if memory_type:
                             mt = str(memory_type).lower()
-                            mem_list = [m for m in mem_list if str(m.get("memory_type","")).lower() == mt]
+                            filtered = []
+                            for m in mem_list:
+                                m_type = m.get("memory_type", "")
+                                if hasattr(m_type, "value"):
+                                    m_type = m_type.value
+                                if str(m_type).lower() == mt:
+                                    filtered.append(m)
+                            mem_list = filtered
+                        
+                        # Apply tag filter if not already applied
+                        if tags and not any(t in str(raw) for t in tags):
+                            # Tags weren't filtered by retrieve_memories
+                            filtered = []
+                            for m in mem_list:
+                                m_tags = m.get("tags", [])
+                                if any(tag in m_tags for tag in tags):
+                                    filtered.append(m)
+                            mem_list = filtered
+                        
+                        # Apply limit
                         mem_list = mem_list[:limit]
+                        
                     elif hasattr(manager, "get_recent_memories"):
+                        # Fallback method
                         res = await manager.get_recent_memories(limit=limit)
                         mem_list = res if isinstance(res, list) else res.get("memories", [])
+                    else:
+                        # No suitable method found
+                        logger.warning(f"Manager for {entity_type} has no suitable retrieval method")
+                        mem_list = []
     
                 result = {
                     "memories": mem_list or [],
