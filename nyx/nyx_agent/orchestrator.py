@@ -413,13 +413,21 @@ async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
     async with get_db_connection_context() as conn:
         try:
+            # Get emotional state from current_context or provide default
+            emotional_state = ctx.current_context.get('emotional_state', {
+                'valence': 0.0,
+                'arousal': 0.5,
+                'dominance': 0.7
+            })
+            
             # Save emotional state
             await conn.execute("""
                 INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
                 ON CONFLICT (user_id, conversation_id) 
                 DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
-            """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.emotional_state, ensure_ascii=False))
+            """, ctx.user_id, ctx.conversation_id, json.dumps(emotional_state, ensure_ascii=False))
+            
             
             # Save scenario state if active
             if ctx.scenario_state and ctx.scenario_state.get("active") and ctx._tables_available.get("scenario_states", True):
