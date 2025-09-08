@@ -492,13 +492,6 @@ class MemoryOrchestrator:
                 conversation_id=self.conversation_id
             )
 
-            # Mask manager (LEGACY; basic masking)
-            from memory.masks import ProgressiveRevealManager
-            self.mask_manager = ProgressiveRevealManager(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
-
             # Progressive Reveal (NEW masks system; additive)
             try:
                 if ProgressiveRevealManager:
