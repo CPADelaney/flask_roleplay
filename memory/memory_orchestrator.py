@@ -1395,12 +1395,13 @@ class MemoryOrchestrator:
     # ========================================================================
     # Core Memory Operations (Existing)
     # ========================================================================
-    
+        
     async def store_memory(
         self,
         entity_type: str,
         entity_id: int,
-        content: str,
+        content: str = None,  # Made optional
+        memory_text: str = None,  # Added for backward compatibility
         memory_type: Optional[str] = None,
         significance: float = 0.5,
         emotional_intensity: float = 0.0,
@@ -1410,20 +1411,29 @@ class MemoryOrchestrator:
     ) -> Dict[str, Any]:
         """
         Store a new memory. Route through integrated system so all hooks run.
+        
+        Accepts either 'content' or 'memory_text' for the memory content.
+        'memory_text' is preferred for consistency with canon.py.
         """
-    
+        
         if not self.initialized:
             await self.initialize()
-    
+        
+        # Handle both parameter names for backward compatibility
+        text = memory_text if memory_text is not None else content
+        if text is None:
+            raise ValueError("Either 'memory_text' or 'content' must be provided")
+        
         # Canonical path: integrated system (handles vector, schema, side-effects etc.)
         md: Dict[str, Any] = dict(metadata or {})
         if is_canon:
             md["is_canon"] = True
             md["canonical"] = True
+        
         return await self.integrated_add_memory(
             entity_type=entity_type,
             entity_id=entity_id,
-            memory_text=content,
+            memory_text=text,  # integrated_add_memory uses memory_text
             memory_kwargs={
                 "memory_type": memory_type,
                 "significance": significance,
