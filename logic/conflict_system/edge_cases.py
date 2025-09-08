@@ -513,12 +513,12 @@ class ConflictEdgeCaseSubsystem:
         edge_cases: List[EdgeCase] = []
         async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
-                SELECT c.id AS conflict_id, c.conflict_name, COALESCE(c.description,'') AS description
+                SELECT c.conflict_id, c.conflict_name, COALESCE(c.description,'') AS description
                 FROM Conflicts c
                 LEFT JOIN stakeholders s
-                  ON s.conflict_id = c.id AND s.user_id = $1 AND s.conversation_id = $2
+                  ON s.conflict_id = c.conflict_id AND s.user_id = $1 AND s.conversation_id = $2
                 WHERE c.user_id = $1 AND c.conversation_id = $2 AND c.is_active = true
-                GROUP BY c.id, c.conflict_name, c.description
+                GROUP BY c.conflict_id, c.conflict_name, c.description
                 HAVING COUNT(s.stakeholder_id) = 0
             """, self.user_id, self.conversation_id)
     
@@ -595,7 +595,7 @@ class ConflictEdgeCaseSubsystem:
         edge_cases: List[EdgeCase] = []
         async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
-                SELECT id AS conflict_id, conflict_name, phase, progress,
+                SELECT conflict_id, conflict_name, phase, progress,
                        last_updated, (CURRENT_TIMESTAMP - last_updated) AS stale_duration
                 FROM Conflicts
                 WHERE user_id = $1 AND conversation_id = $2
@@ -636,7 +636,7 @@ class ConflictEdgeCaseSubsystem:
                 return None
     
             conflicts = await conn.fetch("""
-                SELECT id AS conflict_id FROM Conflicts
+                SELECT conflict_id FROM Conflicts
                 WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
             """, self.user_id, self.conversation_id)
     
@@ -662,13 +662,13 @@ class ConflictEdgeCaseSubsystem:
         edge_cases: List[EdgeCase] = []
         async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
-                SELECT c1.id AS conflict1, c2.id AS conflict2,
+                SELECT c1.conflict_id AS conflict1, c2.conflict_id AS conflict2,
                        c1.conflict_name AS name1, c2.conflict_name AS name2
                 FROM Conflicts c1
                 JOIN Conflicts c2
                   ON c1.user_id = c2.user_id
                  AND c1.conversation_id = c2.conversation_id
-                 AND c1.id < c2.id
+                 AND c1.conflict_id < c2.conflict_id
                 WHERE c1.user_id = $1 AND c1.conversation_id = $2
                   AND c1.is_active = true AND c2.is_active = true
                   AND EXISTS (
@@ -678,8 +678,8 @@ class ConflictEdgeCaseSubsystem:
                       ON s1.npc_id = s2.npc_id
                      AND s1.user_id = s2.user_id
                      AND s1.conversation_id = s2.conversation_id
-                    WHERE s1.conflict_id = c1.id
-                      AND s2.conflict_id = c2.id
+                    WHERE s1.conflict_id = c1.conflict_id
+                      AND s2.conflict_id = c2.conflict_id
                       AND COALESCE(s1.role, s1.faction, '') != COALESCE(s2.role, s2.faction, '')
                   )
             """, self.user_id, self.conversation_id)
@@ -966,7 +966,7 @@ class ConflictEdgeCaseSubsystem:
                     SET is_active = false,
                         resolution_description = $1,
                         resolved_at = CURRENT_TIMESTAMP
-                    WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                    WHERE conflict_id = $2 AND user_id = $3 AND conversation_id = $4
                 """, recovery.get('narrative', 'Conflict resolved'), conflict_id, self.user_id, self.conversation_id)
                 # Notify synthesizer best-effort
                 if self.synthesizer:
@@ -990,7 +990,7 @@ class ConflictEdgeCaseSubsystem:
                     UPDATE Conflicts
                     SET conflict_type = 'personal',
                         description = $1
-                    WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                    WHERE conflict_id = $2 AND user_id = $3 AND conversation_id = $4
                 """, recovery.get('narrative', 'Conflict transforms'), conflict_id, self.user_id, self.conversation_id)
                 return {'success': True, 'action': 'pivoted_to_player'}
     
@@ -1014,7 +1014,7 @@ class ConflictEdgeCaseSubsystem:
                     UPDATE Conflicts
                     SET is_active = false
                     WHERE user_id = $1 AND conversation_id = $2
-                      AND id = ANY($3::int[])
+                      AND conflict_id = ANY($3::int[])
                 """, self.user_id, self.conversation_id, conflicts[1:])
                 return {'success': True, 'action': 'merged_conflicts'}
     
@@ -1032,7 +1032,7 @@ class ConflictEdgeCaseSubsystem:
                         ELSE phase
                     END,
                     last_updated = CURRENT_TIMESTAMP
-                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
             """, conflict_id, self.user_id, self.conversation_id)
             await conn.execute("""
                 INSERT INTO conflict_events
@@ -1052,8 +1052,8 @@ class ConflictEdgeCaseSubsystem:
             await conn.execute("""
                 UPDATE Conflicts
                 SET is_active = false
-                WHERE id IN (
-                    SELECT id
+                WHERE conflict_id IN (
+                    SELECT conflict_id
                     FROM Conflicts
                     WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
                     ORDER BY 
@@ -1095,8 +1095,8 @@ class ConflictEdgeCaseSubsystem:
             similar = await conn.fetchval("""
                 SELECT COUNT(*) FROM Conflicts c
                 WHERE c.user_id = $1 AND c.conversation_id = $2
-                  AND c.id != $3 AND c.is_active = true
-                  AND c.conflict_type = (SELECT conflict_type FROM Conflicts WHERE id = $3)
+                  AND c.conflict_id != $3 AND c.is_active = true
+                  AND c.conflict_type = (SELECT conflict_type FROM Conflicts WHERE conflict_id = $3)
             """, self.user_id, self.conversation_id, conflict_id)
             if (similar or 0) > 2:
                 issues.append("Multiple similar conflicts active")
@@ -1313,7 +1313,7 @@ async def auto_recover_conflicts(
 
     # 2) For each case, ask EDGE_HANDLER to execute the first recovery option (if any)
     for case in edge_cases:
-        # We’ll be defensive about shapes
+        # We'll be defensive about shapes
         case_type = str(case.get('case_type', case.get('type', 'unknown')))
         recovery_options = case.get('recovery_options') or []
         option_index = 0 if recovery_options else None
