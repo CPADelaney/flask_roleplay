@@ -50,7 +50,11 @@ async def _load_rules_and_caps(nyx_ctx: NyxContext):
         """, nyx_ctx.user_id, nyx_ctx.conversation_id)
         if rc and rc["value"]:
             reality_context = rc["value"]
-        rows = await conn.fetch("""SELECT rule_name, condition, effect FROM GameRules""")
+        rows = await conn.fetch("""
+          SELECT rule_name, condition, effect
+          FROM GameRules
+          WHERE user_id=$1 AND conversation_id=$2 AND enabled=TRUE
+        """, nyx_ctx.user_id, nyx_ctx.conversation_id)
         for r in rows:
             item = {"rule_name": r["rule_name"], "condition": r["condition"], "effect": r["effect"]}
             if (r["effect"] or "").lower().startswith("prohibit"):
