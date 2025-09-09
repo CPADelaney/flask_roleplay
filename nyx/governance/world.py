@@ -359,9 +359,10 @@ class WorldGovernanceMixin:
     
                 # Generic rule checks
                 rules = await conn.fetch("""
-                    SELECT rule_name, condition, effect
-                      FROM GameRules
-                """)
+                  SELECT condition, effect
+                  FROM GameRules
+                  WHERE user_id=$1 AND conversation_id=$2 AND enabled=TRUE
+                """, self.user_id, self.conversation_id)
                 for rule in rules:
                     condition = (rule["condition"] or "").lower()
                     effect = (rule["effect"] or "").lower()
