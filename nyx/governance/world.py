@@ -315,76 +315,114 @@ class WorldGovernanceMixin:
             logger.error(f"Error retrieving nation ID for '{nation_name}': {e}")
             return None
 
-    async def _violates_world_rules(self, action_type: str, action_details: Dict[str, Any], 
-                                   world_state: Dict[str, Any]) -> bool:
-        """Check if an action violates established world rules using GameRules table."""
+    async def _violates_world_rules(
+        self,
+        action_type: str,
+        action_details: Dict[str, Any],
+        world_state: Dict[str, Any],
+    ) -> bool:
+        """Check if an action violates established world rules using GameRules (with fast category denies)."""
         try:
+            # Fast category-level denies from parsed intent (if provided)
+            try:
+                cats = set((action_details or {}).get("intent", {}).get("categories", []))
+            except Exception:
+                cats = set()
+    
+            # Absolute deny categories across all settings
+            hard_deny_cats = {
+                "ex_nihilo_conjuration",
+                "projectile_creation_from_body",
+                "spontaneous_body_morph",
+                "unaided_flight",
+                "physics_violation",
+                "weapon_conjuration",
+                "transmutation_of_animals",
+            }
+            if cats & hard_deny_cats:
+                return True
+    
             async with get_db_connection_context() as conn:
-                # Get all active game rules
+                # DB rules with "category:<name>" conditions (fast path)
+                try:
+                    rows = await conn.fetch("SELECT condition, effect FROM GameRules")
+                    for r in rows:
+                        cond = (r["condition"] or "").lower()
+                        eff = (r["effect"] or "").lower()
+                        if cond.startswith("category:"):
+                            name = cond.split(":", 1)[1].strip()
+                            if name in cats and any(w in eff for w in ("prohibit", "forbid", "cannot")):
+                                return True
+                except Exception:
+                    # Non-fatal: fall through to generic checks
+                    pass
+    
+                # Generic rule checks
                 rules = await conn.fetch("""
                     SELECT rule_name, condition, effect
-                    FROM GameRules
+                      FROM GameRules
                 """)
-                
                 for rule in rules:
-                    condition = rule['condition'].lower()
-                    effect = rule['effect'].lower()
-                    
-                    # Parse conditions and check against action
-                    # This is a simplified version - you might want more complex parsing
+                    condition = (rule["condition"] or "").lower()
+                    effect = (rule["effect"] or "").lower()
+    
+                    # Simple text containment
                     if action_type.lower() in condition:
-                        if 'prohibited' in effect or 'forbidden' in effect or 'cannot' in effect:
+                        if any(w in effect for w in ("prohibited", "forbidden", "cannot")):
                             return True
-                            
-                    # Check stat-based rules
-                    if 'stat:' in condition:
-                        # Extract stat requirements
-                        stat_match = re.search(r'stat:(\w+)\s*([<>=]+)\s*(\d+)', condition)
+    
+                    # Stat-based rules: e.g., "stat:strength >= 12"
+                    if "stat:" in condition:
+                        stat_match = re.search(r"stat:(\w+)\s*([<>]=|[<>=])\s*(\d+)", condition)
                         if stat_match:
-                            stat_name = stat_match.group(1)
-                            operator = stat_match.group(2)
-                            value = int(stat_match.group(3))
-                            
-                            # Get player's current stat
+                            stat_name, operator, value_str = stat_match.groups()
+                            target_value = int(value_str)
+    
                             player_stat = await conn.fetchval(f"""
-                                SELECT {stat_name} FROM PlayerStats
-                                WHERE user_id = $1 AND conversation_id = $2 
-                                AND player_name = 'Chase'
-                                ORDER BY timestamp DESC
-                                LIMIT 1
+                                SELECT {stat_name}
+                                  FROM PlayerStats
+                                 WHERE user_id = $1
+                                   AND conversation_id = $2
+                                 ORDER BY timestamp DESC
+                                 LIMIT 1
                             """, self.user_id, self.conversation_id)
-                            
+    
                             if player_stat is not None:
-                                if operator == '<' and player_stat < value:
-                                    if action_type in effect:
-                                        return True
-                                elif operator == '>' and player_stat > value:
-                                    if action_type in effect:
-                                        return True
-                                        
-                # Check location-based restrictions
-                if 'location' in action_details:
-                    location = action_details['location']
-                    location_data = await conn.fetchrow("""
+                                a = int(player_stat)
+                                b = target_value
+                                cmp_ok = (
+                                    (operator == "<"  and a <  b) or
+                                    (operator == ">"  and a >  b) or
+                                    (operator in ("=", "==") and a == b) or
+                                    (operator == "<=" and a <= b) or
+                                    (operator == ">=" and a >= b)
+                                )
+                                if cmp_ok and action_type.lower() in effect:
+                                    return True
+    
+                # Location-based restrictions
+                if "location" in (action_details or {}):
+                    location = action_details["location"]
+                    location_row = await conn.fetchrow("""
                         SELECT access_restrictions, local_customs
-                        FROM Locations
-                        WHERE user_id = $1 AND conversation_id = $2
-                        AND location_name = $3
+                          FROM Locations
+                         WHERE user_id = $1
+                           AND conversation_id = $2
+                           AND location_name = $3
                     """, self.user_id, self.conversation_id, location)
-                    
-                    if location_data:
-                        restrictions = location_data['access_restrictions'] or []
-                        customs = location_data['local_customs'] or []
-                        
-                        # Check if action violates local customs
+    
+                    if location_row:
+                        ld = dict(location_row)
+                        customs = ld.get("local_customs") or []
                         for custom in customs:
-                            if action_type in custom.lower():
+                            if isinstance(custom, str) and action_type.lower() in custom.lower():
                                 return True
-                                
+    
             return False
         except Exception as e:
-            logger.error(f"Error checking world rule violations: {e}")
+            logger.error(f"Error checking world rule violations: {e}", exc_info=True)
             return False
+
 
     def _maintains_logical_consistency(
         self,
