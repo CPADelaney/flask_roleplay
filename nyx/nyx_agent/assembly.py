@@ -461,6 +461,20 @@ Output format:
                 f"choices: {len(choices)}, "
                 f"emergent: {len(emergent_events)})"
             )
+
+            # --- Feasibility-based clamp (safety net) ---
+            try:
+                feas = (processing_metadata or {}).get("feasibility") or {}
+                if isinstance(feas, dict) and feas.get("overall", {}).get("feasible") is False:
+                    per = feas.get("per_intent") or []
+                    guidance = per[0].get("narrator_guidance") if per and isinstance(per[0], dict) else None
+                    response.narrative = guidance or (
+                        "You try, but reality holds. The attempt collapses harmlessly; perhaps another approach."
+                    )
+                    response.metadata = dict(response.metadata or {})
+                    response.metadata["moderated_for_feasibility"] = True
+            except Exception:
+                pass
             
             return response
             
@@ -2056,6 +2070,33 @@ async def assemble_nyx_response(
     if ctx is not None:
         from .orchestrator import process_user_input
         return await process_user_input(ctx, user_input, **{k: v for k, v in kwargs.items() if k not in {"ctx"}})
+
+    try:
+        feas = processing_metadata.get("feasibility") if processing_metadata else None
+        if isinstance(feas, dict) and feas.get("overall", {}).get("feasible") is False:
+            per = feas.get("per_intent") or []
+            guidance = per[0].get("narrator_guidance") if per and isinstance(per[0], dict) else None
+            narrative = guidance or "You try, but reality holds. The attempt collapses harmlessly; perhaps another approach."
+            return NyxResponse(
+                id=str(uuid4()),
+                conversation_id=conversation_id or "",
+                narrative=narrative,
+                world_state=WorldState(),
+                npc_dialogues=[],
+                memory_highlights=[],
+                emergent_events=[],
+                choices=[Choice(
+                    id="continue",
+                    text="Continue...",
+                    category="continuation",
+                    requirements={},
+                    consequences={},
+                    canon_alignment=1.0,
+                )],
+                metadata={"fallback": True, "moderated_for_feasibility": True, "timestamp": datetime.utcnow().isoformat()},
+            )
+    except Exception:
+        pass
 
     # Last resort: minimal safe object so callers don't explode
     return NyxResponse(
