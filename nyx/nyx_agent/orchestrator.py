@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from agents import Agent, Runner, RunConfig, RunContextWrapper, ModelSettings
 from db.connection import get_db_connection_context
 
+from nyx.nyx_agent.feasibility import assess_action_feasibility
+
 from .config import Config
 from .context import NyxContext
 from .models import *
@@ -46,118 +48,6 @@ async def _log_step(name: str, trace_id: str, **meta):
         logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
         raise
 
-@asynccontextmanager
-async def _log_step(name: str, trace_id: str, **meta):
-    """Async context manager for logging step execution"""
-    t0 = time.time()
-    logger.debug(f"[{trace_id}] ▶ START {name} meta={_js(meta)}")
-    try:
-        yield
-        dt = time.time() - t0
-        logger.info(f"[{trace_id}] ✔ DONE  {name} in {dt:.3f}s")
-    except Exception:
-        dt = time.time() - t0
-        logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
-        raise
-
-async def run_agent_safely(
-    agent: Agent,
-    input_data: Any,
-    context: Any,
-    run_config: Optional[RunConfig] = None,
-    fallback_response: Any = None
-) -> Any:
-    """Run agent with automatic fallback on strict schema errors"""
-    try:
-        # First attempt with the agent as-is
-        result = await Runner.run(
-            agent,
-            input_data,
-            context=context,
-            run_config=run_config
-        )
-        return result
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "additionalproperties" in error_msg or "strict schema" in error_msg:
-            logger.warning(f"Strict schema error, attempting without structured output: {e}")
-            
-            # Create a simple text-only agent
-            fallback_agent = Agent[type(context)](
-                name=f"{agent.name} (Fallback)",
-                instructions=agent.instructions,
-                model=agent.model,
-                model_settings=DEFAULT_MODEL_SETTINGS,
-                # No tools, no structured output
-            )
-            
-            try:
-                result = await Runner.run(
-                    fallback_agent,
-                    input_data,
-                    context=context,
-                    run_config=run_config
-                )
-                return result
-            except Exception as e2:
-                logger.error(f"Fallback agent also failed: {e2}")
-                if fallback_response is not None:
-                    return fallback_response
-                raise
-        else:
-            # Not a schema error, re-raise
-            raise
-
-async def run_agent_with_error_handling(
-    agent: Agent,
-    input_data: Any,
-    context: NyxContext,
-    output_type: Optional[type] = None,
-    fallback_value: Any = None
-) -> Any:
-    """Legacy compatibility wrapper for running agents with error handling"""
-    try:
-        result = await run_agent_safely(
-            agent,
-            input_data,
-            context,
-            run_config=RunConfig(workflow_name=f"Nyx {getattr(agent, 'name', 'Agent')}"),
-            fallback_response=fallback_value
-        )
-        if output_type:
-            return result.final_output_as(output_type)
-        return getattr(result, "final_output", None) or getattr(result, "output_text", None)
-    except Exception as e:
-        logger.error(f"Error running agent {getattr(agent, 'name', 'unknown')}: {e}")
-        if fallback_value is not None:
-            return fallback_value
-        raise
-
-async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
-    """Standalone image generation decision without tool context"""
-    from nyx.nyx_agent.models import ImageGenerationDecision  # Changed from .models
-    from nyx.nyx_agent.utils import _score_scene_text, _build_image_prompt  # Changed from .utils
-    
-    # Ensure we have the actual NyxContext, not a wrapper
-    if hasattr(ctx, 'context'):
-        ctx = ctx.context
-    
-    score = _score_scene_text(scene_text)
-    recent_images = ctx.current_context.get("recent_image_count", 0)
-    threshold = 0.7 if recent_images > 3 else 0.6 if recent_images > 1 else 0.5
-
-    should_generate = score > threshold
-    image_prompt = _build_image_prompt(scene_text) if should_generate else None
-
-    if should_generate:
-        ctx.current_context["recent_image_count"] = recent_images + 1
-
-    return ImageGenerationDecision(
-        should_generate=should_generate,
-        score=score,
-        image_prompt=image_prompt,
-        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})",
-    ).model_dump_json()
 
 # ===== Error Handling =====
 async def run_agent_safely(
@@ -233,6 +123,34 @@ async def run_agent_with_error_handling(
             return fallback_value
         raise
 
+
+async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
+    """Standalone image generation decision without tool context"""
+    from nyx.nyx_agent.models import ImageGenerationDecision  # Changed from .models
+    from nyx.nyx_agent.utils import _score_scene_text, _build_image_prompt  # Changed from .utils
+    
+    # Ensure we have the actual NyxContext, not a wrapper
+    if hasattr(ctx, 'context'):
+        ctx = ctx.context
+    
+    score = _score_scene_text(scene_text)
+    recent_images = ctx.current_context.get("recent_image_count", 0)
+    threshold = 0.7 if recent_images > 3 else 0.6 if recent_images > 1 else 0.5
+
+    should_generate = score > threshold
+    image_prompt = _build_image_prompt(scene_text) if should_generate else None
+
+    if should_generate:
+        ctx.current_context["recent_image_count"] = recent_images + 1
+
+    return ImageGenerationDecision(
+        should_generate=should_generate,
+        score=score,
+        image_prompt=image_prompt,
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})",
+    ).model_dump_json()
+
+
 # ===== Main Process Function =====
 async def process_user_input(
     user_id: int,
@@ -240,7 +158,7 @@ async def process_user_input(
     user_input: str,
     context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Process user input with post-run enforcement and robust assembly"""
+    """Process user input with feasibility gate, post-run enforcement, and robust assembly"""
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     nyx_context = None
@@ -264,12 +182,44 @@ async def process_user_input(
                 world_state = nyx_context.world_director.context.current_world_state
                 nyx_context.current_world_state = world_state
 
-        # ===== STEP 3: Tool sanitization =====
+        # ===== STEP 3: Feasibility check (pre-generation) =====
+        async with _log_step("feasibility_check", trace_id):
+            try:
+                feas = await assess_action_feasibility(nyx_context, user_input)
+                # Persist feasibility into context for downstream steps and post-assembly clamp
+                nyx_context.current_context["feasibility"] = feas
+
+                if feas.get("overall", {}).get("feasible") is False:
+                    per = feas.get("per_intent") or []
+                    first = per[0] if per and isinstance(per[0], dict) else {}
+                    guidance = first.get("narrator_guidance") or "That can’t happen here. Try a grounded approach that fits the setting."
+                    options = [{"text": o} for o in (first.get("suggested_alternatives") or [])]
+
+                    # Optional: track performance metrics for early refusal
+                    nyx_context.update_performance("total_actions", nyx_context.performance_metrics.get("total_actions", 0) + 1)
+                    nyx_context.update_performance("refused_actions", nyx_context.performance_metrics.get("refused_actions", 0) + 1)
+
+                    # Early-return: governance-style refusal with alternatives
+                    return {
+                        'success': True,
+                        'response': guidance,
+                        'metadata': {
+                            'choices': options,
+                            'universal_updates': False,
+                            'feasibility': feas
+                        },
+                        'trace_id': trace_id,
+                        'processing_time': time.time() - start_time,
+                    }
+            except Exception as e:
+                logger.debug(f"[{trace_id}] Feasibility check failed softly: {e}")
+
+        # ===== STEP 4: Tool sanitization =====
         async with _log_step("tool_sanitization", trace_id):
             sanitize_agent_tools_in_place(nyx_main_agent)
             log_strict_hits(nyx_main_agent)
 
-        # ===== STEP 4: Running the agent =====
+        # ===== STEP 5: Running the agent =====
         async with _log_step("agent_run", trace_id):
             runner_context = RunContextWrapper(nyx_context)
             safe_settings = ModelSettings(strict_tools=False, response_format=None)
@@ -318,7 +268,7 @@ async def process_user_input(
                     }
                 ]
 
-        # ===== STEP 5: Post-run enforcement =====
+        # ===== STEP 6: Post-run enforcement =====
         async with _log_step("post_run_enforcement", trace_id):
             # Check and inject generate_universal_updates if missing
             if not _did_call_tool(resp, "generate_universal_updates"):
@@ -352,13 +302,16 @@ async def process_user_input(
                     except Exception as e:
                         logger.exception(f"[{trace_id}] Post-run image decision failed: {e}")
 
-        # ===== STEP 6: Response assembly =====
+        # ===== STEP 7: Response assembly =====
         async with _log_step("response_assembly", trace_id):
             # Resolve any scene requests
             resp = await resolve_scene_requests(resp, nyx_context)
             
-            # Assemble final response
-            assembled = await assemble_nyx_response(resp)
+            # Assemble final response; pass feasibility for post-assembly clamp
+            assembled = await assemble_nyx_response(
+                agent_output=resp,
+                processing_metadata={"feasibility": nyx_context.current_context.get("feasibility")}
+            )
             
             # Save state changes
             await _save_context_state(nyx_context)
