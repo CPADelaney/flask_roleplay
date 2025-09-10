@@ -658,31 +658,32 @@ class ConflictEdgeCaseSubsystem:
         )
     
     async def _detect_narrative_breaks(self) -> List[EdgeCase]:
-        """Detect narrative continuity breaks via stakeholder role conflicts."""
-        edge_cases: List[EdgeCase] = []
-        async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT c1.conflict_id AS conflict1, c2.conflict_id AS conflict2,
-                       c1.conflict_name AS name1, c2.conflict_name AS name2
-                FROM Conflicts c1
-                JOIN Conflicts c2
-                  ON c1.user_id = c2.user_id
-                 AND c1.conversation_id = c2.conversation_id
-                 AND c1.conflict_id < c2.conflict_id
-                WHERE c1.user_id = $1 AND c1.conversation_id = $2
-                  AND c1.is_active = true AND c2.is_active = true
-                  AND EXISTS (
-                    SELECT 1
-                    FROM stakeholders s1
-                    JOIN stakeholders s2
-                      ON s1.npc_id = s2.npc_id
-                     AND s1.user_id = s2.user_id
-                     AND s1.conversation_id = s2.conversation_id
-                    WHERE s1.conflict_id = c1.conflict_id
-                      AND s2.conflict_id = c2.conflict_id
-                      AND COALESCE(s1.role, s1.faction, '') != COALESCE(s2.role, s2.faction, '')
-                  )
-            """, self.user_id, self.conversation_id)
+            """Detect narrative continuity breaks via stakeholder role conflicts."""
+            edge_cases: List[EdgeCase] = []
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT c1.conflict_id AS conflict1, c2.conflict_id AS conflict2,
+                           c1.conflict_name AS name1, c2.conflict_name AS name2
+                    FROM Conflicts c1
+                    JOIN Conflicts c2
+                      ON c1.user_id = c2.user_id
+                     AND c1.conversation_id = c2.conversation_id
+                     AND c1.conflict_id < c2.conflict_id
+                    WHERE c1.user_id = $1 AND c1.conversation_id = $2
+                      AND c1.is_active = true AND c2.is_active = true
+                      AND EXISTS (
+                        SELECT 1
+                        FROM stakeholders s1
+                        JOIN stakeholders s2
+                          ON s1.npc_id = s2.npc_id
+                         AND s1.user_id = s2.user_id
+                         AND s1.conversation_id = s2.conversation_id
+                        WHERE s1.conflict_id = c1.conflict_id
+                          AND s2.conflict_id = c2.conflict_id
+                          AND (COALESCE(s1.role, '') != COALESCE(s2.role, '') 
+                               OR COALESCE(s1.faction_id, 0) != COALESCE(s2.faction_id, 0))
+                      )
+                """, self.user_id, self.conversation_id)
     
         for r in rows:
             recovery = await self._generate_contradiction_recovery(dict(r))
