@@ -595,47 +595,78 @@ async def get_or_generate_activity_effects(
 # GAME RULES & STAT DEFINITIONS
 # ============================
 
-async def insert_or_update_game_rules():
+async def insert_or_update_game_rules(
+    user_id: int = -1,
+    conversation_id: int = -1,
+    rules_data: Optional[List[Dict[str, Any]]] = None,
+    enabled: bool = True,
+) -> int:
     """
-    Inserts or updates game rules into the GameRules table.
-    If a rule_name already exists, we update the condition/effect.
-    Otherwise we insert a new record.
+    Insert or update GameRules scoped to (user_id, conversation_id).
+    Defaults to global templates with (-1, -1) if not provided.
+
+    Returns the number of rules processed.
     """
-    # Example rules:
-    rules_data = [
+    # Default rules if none provided
+    rules_data = rules_data or [
         {
             "rule_name": "Agency Override: Lust or Dependency",
             "condition": "Lust > 90 or Dependency > 80",
-            "effect": "Locks independent choices"
+            "effect": "Locks independent choices",
         },
         {
             "rule_name": "Agency Override: Corruption and Obedience",
             "condition": "Corruption > 90 and Obedience > 80",
-            "effect": "Total compliance; no defiance possible"
+            "effect": "Total compliance; no defiance possible",
         },
         {
             "rule_name": "NPC Exploitation: Low Resilience",
             "condition": "Mental_Resilience < 30",
-            "effect": "NPC Cruelty intensifies to break you further"
+            "effect": "NPC Cruelty intensifies to break you further",
         },
         {
             "rule_name": "NPC Exploitation: Low Endurance",
             "condition": "Physical_Endurance < 30",
-            "effect": "Collaborative physical punishments among NPCs"
-        }
+            "effect": "Collaborative physical punishments among NPCs",
+        },
     ]
 
-    async with get_db_connection_context() as conn:
-        for rule in rules_data:
-            await conn.execute("""
-                INSERT INTO GameRules (rule_name, condition, effect)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (rule_name)
-                DO UPDATE SET condition=EXCLUDED.condition,
-                          effect=EXCLUDED.effect
-            """, rule["rule_name"], rule["condition"], rule["effect"])
+    # Clean + validate
+    rows: List[tuple] = []
+    for r in rules_data:
+        rn = (r.get("rule_name") or "").strip()
+        cond = (r.get("condition") or "").strip()
+        eff = (r.get("effect") or "").strip()
+        en = bool(r.get("enabled", enabled))
+        if not (rn and cond and eff):
+            logger.debug("Skipping invalid rule (missing fields): %s", r)
+            continue
+        rows.append((user_id, conversation_id, rn, cond, eff, en))
 
-    print("Game rules inserted or updated successfully.")
+    if not rows:
+        logger.info("No valid rules to insert/update.")
+        return 0
+
+    sql = """
+        INSERT INTO GameRules (
+            user_id, conversation_id, rule_name, condition, effect, enabled
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, conversation_id, rule_name)
+        DO UPDATE SET
+            condition = EXCLUDED.condition,
+            effect    = EXCLUDED.effect,
+            enabled   = EXCLUDED.enabled
+    """
+
+    async with get_db_connection_context() as conn:
+        await conn.executemany(sql, rows)
+
+    logger.info(
+        "Inserted/updated %d GameRules for user=%s conversation=%s",
+        len(rows), user_id, conversation_id
+    )
+    return len(rows)
 
 async def insert_stat_definitions():
     """
