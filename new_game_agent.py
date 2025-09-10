@@ -10,6 +10,8 @@ import random
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+from logic.setting_rules import synthesize_setting_rules
+
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, OutputGuardrail
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
@@ -658,7 +660,6 @@ class NewGameAgent:
             except Exception as e:
                 retry_count += 1
                 logger.warning(f"Environment generation failed (attempt {retry_count}/{max_retries}): {e}")
-                
                 if retry_count >= max_retries:
                     logger.error("Borked")
                 else:
@@ -680,7 +681,7 @@ class NewGameAgent:
         # Validate
         env_obj = EnvironmentData.model_validate(raw_data)
         
-        # NOW create calendar after environment is ready
+        # Create calendar after environment is ready
         cal_data = await self.create_calendar(
             ctx, CreateCalendarParams(environment_desc=env_obj.environment_desc)
         )
@@ -697,8 +698,7 @@ class NewGameAgent:
         # Wait for calendar to be ready
         await self._require_day_names(user_id, conversation_id)
         
-        # Store everything in database
-        from lore.core import canon
+        # Store everything in database (single connection and transaction)
         async with get_db_connection_context() as conn, conn.transaction():
             cctx = RunContextWrapper(context={
                 'user_id': user_id,
@@ -741,12 +741,45 @@ class NewGameAgent:
                 progress_detail=qd.quest_description,
                 status="In Progress",
             )
+    
+            # Synthesize and persist setting rules, capabilities, kind, reality context
+            try:
+                rules = await synthesize_setting_rules(env_obj.environment_desc, env_obj.setting_name)
+    
+                # Store capabilities + setting kind for fast lookup
+                await canon.update_current_roleplay(
+                    cctx, conn, "SettingCapabilities", json.dumps(rules.get("capabilities", {}))
+                )
+                await canon.update_current_roleplay(
+                    cctx, conn, "SettingKind", rules.get("setting_kind", "modern_realistic")
+                )
+                await canon.update_current_roleplay(
+                    cctx, conn, "RealityContext", rules.get("_reality_context","normal")
+                )
+    
+                # Persist rules (scoped per conversation)
+                for r in rules.get("hard_rules", []):
+                    await conn.execute("""
+                      INSERT INTO GameRules (user_id, conversation_id, rule_name, condition, effect)
+                      VALUES ($1, $2, $3, $4, $5)
+                      ON CONFLICT (user_id, conversation_id, rule_name)
+                      DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+                    """, user_id, conversation_id, r.get("rule_name"), r.get("condition"), r.get("effect"))
+                for r in rules.get("soft_rules", []):
+                    await conn.execute("""
+                      INSERT INTO GameRules (user_id, conversation_id, rule_name, condition, effect)
+                      VALUES ($1, $2, $3, $4, $5)
+                      ON CONFLICT (user_id, conversation_id, rule_name)
+                      DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+                    """, user_id, conversation_id, r.get("rule_name"), r.get("condition"), r.get("effect"))
+            except Exception as e:
+                logger.warning(f"Setting rule synthesis failed: {e}")
         
         return env_obj
+        
     
-
     async def process_new_game_with_preset(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str) -> ProcessNewGameResult:
-        """Process new game creation with a preset story"""
+        """Process new game creation with a preset story (LLM environment generation)."""
         user_id = ctx.user_id
         conversation_id = None
         
@@ -757,11 +790,9 @@ class NewGameAgent:
                     "SELECT story_data FROM PresetStories WHERE story_id = $1",
                     preset_story_id
                 )
-                
-                if not story_row:
-                    raise ValueError(f"Preset story {preset_story_id} not found")
-                
-                preset_story_data = json.loads(story_row['story_data'])
+            if not story_row:
+                raise ValueError(f"Preset story {preset_story_id} not found")
+            preset_story_data = json.loads(story_row['story_data'])
             
             # Create conversation
             async with get_db_connection_context() as conn:
@@ -775,6 +806,14 @@ class NewGameAgent:
             # Initialize player stats
             await insert_default_player_stats_chase(user_id, conversation_id)
             
+            # Build context wrapper
+            ctx_wrap = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id,
+                'db_dsn': DB_DSN,
+                'agent_instance': self
+            })
+            
             # Generate environment based on preset story
             env_params = GenerateEnvironmentParams(
                 mega_name=preset_story_data['name'],
@@ -783,30 +822,54 @@ class NewGameAgent:
                 enhanced_features=[],
                 stat_modifiers=[]
             )
-            
-            ctx_wrap = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id,
-                'db_dsn': DB_DSN,
-                'agent_instance': self
-            })
-            
             env = await self.generate_environment(ctx_wrap, env_params)
+    
+            # Immediately synthesize and persist rules/capabilities for this conversation
+            try:
+                env_desc = preset_story_data['synopsis']
+                setting_name = preset_story_data['name']
+                rules = await synthesize_setting_rules(env_desc, setting_name)
+                async with get_db_connection_context() as conn:
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "SettingCapabilities", json.dumps(rules.get("capabilities", {}))
+                    )
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "SettingKind", rules.get("setting_kind", "modern_realistic")
+                    )
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "RealityContext", rules.get("_reality_context","normal")
+                    )
+                    for r in rules.get("hard_rules", []):
+                        await conn.execute("""
+                          INSERT INTO GameRules (user_id, conversation_id, rule_name, condition, effect)
+                          VALUES ($1, $2, $3, $4, $5)
+                          ON CONFLICT (user_id, conversation_id, rule_name)
+                          DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+                        """, user_id, conversation_id, r.get("rule_name"), r.get("condition"), r.get("effect"))
+                    for r in rules.get("soft_rules", []):
+                        await conn.execute("""
+                          INSERT INTO GameRules (user_id, conversation_id, rule_name, condition, effect)
+                          VALUES ($1, $2, $3, $4, $5)
+                          ON CONFLICT (user_id, conversation_id, rule_name)
+                          DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+                        """, user_id, conversation_id, r.get("rule_name"), r.get("condition"), r.get("effect"))
+            except Exception as e:
+                logger.warning(f"Preset rules synthesis failed: {e}")
             
             # Create required locations from preset
-            for location_data in preset_story_data['required_locations']:
-                await canon.find_or_create_location(
-                    ctx_wrap, conn,
-                    location_data['name'],
-                    description=location_data.get('description', ''),
-                    location_type=location_data.get('type', 'building')
-                )
+            async with get_db_connection_context() as conn:
+                for location_data in preset_story_data.get('required_locations', []):
+                    await canon.find_or_create_location(
+                        ctx_wrap, conn,
+                        location_data['name'],
+                        description=location_data.get('description', ''),
+                        location_type=location_data.get('type', 'building')
+                    )
             
             # Create required NPCs from preset
             npc_handler = NPCCreationHandler()
             npc_ids = []
-            
-            for npc_data in preset_story_data['required_npcs']:
+            for npc_data in preset_story_data.get('required_npcs', []):
                 npc_id = await npc_handler.create_preset_npc(
                     ctx=ctx_wrap,
                     npc_data=npc_data,
@@ -827,9 +890,7 @@ class NewGameAgent:
                     1, json.dumps([]), json.dumps({}))
             
             # Create opening narrative
-            opening = await self._create_preset_opening(
-                ctx_wrap, preset_story_data
-            )
+            opening = await self._create_preset_opening(ctx_wrap, preset_story_data)
             
             # Store opening message
             async with get_db_connection_context() as conn:
@@ -847,10 +908,9 @@ class NewGameAgent:
             async with get_db_connection_context() as conn:
                 await conn.execute("""
                     UPDATE conversations 
-                    SET status='ready', 
-                        conversation_name=$3
+                    SET status='ready', conversation_name=$3
                     WHERE id=$1 AND user_id=$2
-                """, conversation_id, user_id, f"{preset_story_data['name']}")
+                """, conversation_id, user_id, preset_story_data['name'])
             
             return ProcessNewGameResult(
                 message=f"Started preset story: {preset_story_data['name']}",
@@ -1324,6 +1384,39 @@ class NewGameAgent:
             
             # 1. Set up environment directly (NO LLM)
             await self._setup_preset_environment(ctx_wrap, preset_story_data)
+
+            try:
+                env_desc = preset_story_data['synopsis']
+                setting_name = preset_story_data['name']
+                rules = await synthesize_setting_rules(env_desc, setting_name)
+                async with get_db_connection_context() as conn:
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "SettingCapabilities", json.dumps(rules.get("capabilities", {}))
+                    )
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "SettingKind", rules.get("setting_kind", "modern_realistic")
+                    )
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "RealityContext", rules.get("_reality_context","normal")
+                    )
+                    for r in rules.get("hard_rules", []):
+                        # INSERT with per-conversation scope
+                        await conn.execute("""
+                          INSERT INTO GameRules (user_id, conversation_id, rule_name, condition, effect)
+                          VALUES ($1, $2, $3, $4, $5)
+                          ON CONFLICT (user_id, conversation_id, rule_name)
+                          DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+                        """, user_id, conversation_id, r.get("rule_name"), r.get("condition"), r.get("effect"))
+                    for r in rules.get("soft_rules", []):
+                        # INSERT with per-conversation scope
+                        await conn.execute("""
+                          INSERT INTO GameRules (user_id, conversation_id, rule_name, condition, effect)
+                          VALUES ($1, $2, $3, $4, $5)
+                          ON CONFLICT (user_id, conversation_id, rule_name)
+                          DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+                        """, user_id, conversation_id, r.get("rule_name"), r.get("condition"), r.get("effect"))
+            except Exception as e:
+                logger.warning(f"Preset rules synthesis failed: {e}")
             
             # 2. Set up standard calendar (NO LLM)
             await self._setup_standard_calendar(ctx_wrap)
