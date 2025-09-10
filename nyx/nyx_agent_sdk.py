@@ -222,23 +222,24 @@ class NyxAgentSDK:
         Final-stop pipeline:
         1) (opt) pre-moderation on input
         2) per-conversation rate-limit + idempotency cache
-        3) orchestrator call with timeout (+ single retry)
-        4) normalize to NyxResponse
-        5) (opt) post-moderation on output
-        6) (opt) response filter
-        7) (opt) post hooks
-        8) (opt) telemetry + background tasks
+        3) feasibility/rule enforcement pre-gate  ← added
+        4) orchestrator call with timeout (+ single retry)
+        5) normalize to NyxResponse
+        6) (opt) post-moderation on output
+        7) (opt) response filter
+        8) (opt) post hooks
+        9) (opt) telemetry + background tasks
         """
         t0 = time.time()
         trace_id = uuid.uuid4().hex[:8]
         meta = metadata or {}
-
+    
         # rate-limit per conversation (optional)
         lock = None
         if self.config.rate_limit_per_conversation:
             lock = self._locks.setdefault(conversation_id, asyncio.Lock())
             await lock.acquire()  # release in finally
-
+    
         # idempotency cache (short horizon)
         cache_key = self._cache_key(conversation_id, user_id, message, meta)
         cached = self._read_cache(cache_key)
@@ -247,7 +248,7 @@ class NyxAgentSDK:
             if lock and lock.locked():
                 lock.release()
             return cached
-
+    
         try:
             # 1) PRE moderation (optional)
             if self.config.pre_moderate_input and content_moderation_guardrail:
@@ -262,8 +263,53 @@ class NyxAgentSDK:
                         meta = {**meta, "moderation_pre": verdict}
                 except Exception:
                     logger.debug("pre-moderation failed (non-fatal)", exc_info=True)
-
-            # 2) Primary path with timeout + retry
+    
+            # 2) FEASIBILITY / RULE ENFORCEMENT PRE-GATE (before orchestrator)
+            if getattr(self.config, "enforce_rules_pre_orchestrator", True):
+                feas = None
+                try:
+                    # Prefer a fast, context-free checker if you have one
+                    assess_fn = None
+                    try:
+                        from nyx.nyx_agent.feasibility import assess_action_feasibility_fast as assess_fn  # type: ignore
+                    except Exception:
+                        try:
+                            from nyx.nyx_agent.feasibility import assess_action_feasibility as assess_fn  # type: ignore
+                        except Exception:
+                            assess_fn = None
+    
+                    if assess_fn:
+                        feas = await assess_fn(
+                            user_id=int(user_id),
+                            conversation_id=int(conversation_id),
+                            text=message,
+                        )
+                        meta = {**meta, "feasibility": feas}
+    
+                        overall = (feas or {}).get("overall", {})
+                        if overall.get("feasible") is False:
+                            per = (feas or {}).get("per_intent") or []
+                            first = per[0] if per and isinstance(per[0], dict) else {}
+                            guidance = first.get("narrator_guidance") or "That can’t happen here. Try a grounded approach that fits the setting."
+                            # Map alternatives into a simple list for UI
+                            options = first.get("suggested_alternatives") or []
+    
+                            # Reuse your blocked-response helper for consistent shape/telemetry
+                            resp = self._blocked_response(
+                                guidance, trace_id, t0, stage="feasibility",
+                                details={"feasibility": feas, "suggested_alternatives": options}
+                            )
+                            # Mark moderation-ish flag so downstream knows it was gated
+                            resp.metadata.setdefault("moderated", True)
+                            resp.metadata["moderation_reason"] = "feasibility_gate"
+                            self._write_cache(cache_key, resp)
+                            return resp
+                    else:
+                        logger.debug("feasibility module not available; skipping pre-gate")
+                except Exception:
+                    logger.debug("feasibility pre-gate failed softly (skipped)", exc_info=True)
+    
+            # 3) Primary path with timeout + retry (orchestrator)
             result = await self._call_orchestrator_with_timeout(
                 message=message,
                 conversation_id=conversation_id,
@@ -273,8 +319,8 @@ class NyxAgentSDK:
             resp = NyxResponse.from_orchestrator(result)
             resp.processing_time = resp.processing_time or (time.time() - t0)
             resp.trace_id = resp.trace_id or trace_id
-
-            # 3) POST moderation (optional)
+    
+            # 4) POST moderation (optional)
             if self.config.post_moderate_output and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
@@ -287,14 +333,13 @@ class NyxAgentSDK:
                             resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
                 except Exception:
                     logger.debug("post-moderation failed (non-fatal)", exc_info=True)
-
-            # 4) Response filter (optional)
+    
+            # 5) Response filter (optional)
             if self._filter_class and resp.narrative:
                 try:
-                    # Create filter instance with proper user_id and conversation_id
                     filter_instance = self._filter_class(
                         user_id=int(user_id),
-                        conversation_id=int(conversation_id)
+                        conversation_id=int(conversation_id),
                     )
                     filtered = filter_instance.filter_text(resp.narrative)
                     if filtered != resp.narrative:
@@ -302,23 +347,23 @@ class NyxAgentSDK:
                         resp.metadata.setdefault("filters", {})["response_filter"] = True
                 except Exception:
                     logger.debug("ResponseFilter failed softly", exc_info=True)
-
-            # 5) Post hooks (optional)
+    
+            # 6) Post hooks (optional)
             if self._post_hooks:
                 for hook in self._post_hooks:
                     try:
                         resp = await hook(resp)
                     except Exception:
                         logger.debug("post_hook failed softly", exc_info=True)
-
-            # 6) Telemetry + background queue (optional)
+    
+            # 7) Telemetry + background queue (optional)
             await self._maybe_log_perf(resp)
             await self._maybe_enqueue_maintenance(resp, conversation_id)
-
-            # 7) Cache and return
+    
+            # 8) Cache and return
             self._write_cache(cache_key, resp)
             return resp
-
+    
         except Exception as e:
             logger.error("orchestrator path failed; attempting fallback. err=%s", e, exc_info=True)
             try:
@@ -330,7 +375,7 @@ class NyxAgentSDK:
                     trace_id=trace_id,
                     t0=t0,
                 )
-
+    
                 # Post moderation/filter/hooks even on fallback
                 if self.config.post_moderate_output and content_moderation_guardrail:
                     try:
@@ -344,14 +389,12 @@ class NyxAgentSDK:
                                 resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
                     except Exception:
                         logger.debug("post-moderation failed (non-fatal)", exc_info=True)
-
-                # Response filter on fallback path
+    
                 if self._filter_class and resp.narrative:
                     try:
-                        # Create filter instance with proper user_id and conversation_id
                         filter_instance = self._filter_class(
                             user_id=int(user_id),
-                            conversation_id=int(conversation_id)
+                            conversation_id=int(conversation_id),
                         )
                         filtered = filter_instance.filter_text(resp.narrative)
                         if filtered != resp.narrative:
@@ -359,29 +402,31 @@ class NyxAgentSDK:
                             resp.metadata.setdefault("filters", {})["response_filter"] = True
                     except Exception:
                         logger.debug("ResponseFilter failed softly", exc_info=True)
-
+    
                 if self._post_hooks:
                     for hook in self._post_hooks:
                         try:
                             resp = await hook(resp)
                         except Exception:
                             logger.debug("post_hook failed softly", exc_info=True)
-
+    
                 await self._maybe_log_perf(resp)
                 await self._maybe_enqueue_maintenance(resp, conversation_id)
-
+    
                 self._write_cache(cache_key, resp)
                 return resp
-
+    
             except Exception as e2:
                 logger.error("fallback path also failed", exc_info=True)
                 resp = self._error_response(str(e2), trace_id, t0)
                 self._write_cache(cache_key, resp)
                 return resp
-
+    
         finally:
             if lock and lock.locked():
                 lock.release()
+
+
 
     async def stream_user_input(
         self,
