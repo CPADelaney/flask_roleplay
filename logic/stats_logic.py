@@ -595,45 +595,50 @@ async def get_or_generate_activity_effects(
 # GAME RULES & STAT DEFINITIONS
 # ============================
 
+DEFAULT_RULES: List[Dict[str, Any]] = [
+    {
+        "rule_name": "Agency Override: Lust or Dependency",
+        "condition": "Lust > 90 or Dependency > 80",
+        "effect": "Locks independent choices",
+    },
+    {
+        "rule_name": "Agency Override: Corruption and Obedience",
+        "condition": "Corruption > 90 and Obedience > 80",
+        "effect": "Total compliance; no defiance possible",
+    },
+    {
+        "rule_name": "NPC Exploitation: Low Resilience",
+        "condition": "Mental_Resilience < 30",
+        "effect": "NPC Cruelty intensifies to break you further",
+    },
+    {
+        "rule_name": "NPC Exploitation: Low Endurance",
+        "condition": "Physical_Endurance < 30",
+        "effect": "Collaborative physical punishments among NPCs",
+    },
+]
+
 async def insert_or_update_game_rules(
-    user_id: int = -1,
-    conversation_id: int = -1,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
     rules_data: Optional[List[Dict[str, Any]]] = None,
     enabled: bool = True,
 ) -> int:
     """
-    Insert or update GameRules scoped to (user_id, conversation_id).
-    Defaults to global templates with (-1, -1) if not provided.
+    Seed/Upsert GameRules with the composite key (user_id, conversation_id, rule_name).
 
-    Returns the number of rules processed.
+    Modes:
+      - Specific: pass both user_id and conversation_id.
+      - Seed-all: pass neither -> seeds for every conversation in Conversations.
+      - If there are no conversations yet, this safely no-ops (logs a hint).
+
+    Returns: number of rules upserted.
     """
-    # Default rules if none provided
-    rules_data = rules_data or [
-        {
-            "rule_name": "Agency Override: Lust or Dependency",
-            "condition": "Lust > 90 or Dependency > 80",
-            "effect": "Locks independent choices",
-        },
-        {
-            "rule_name": "Agency Override: Corruption and Obedience",
-            "condition": "Corruption > 90 and Obedience > 80",
-            "effect": "Total compliance; no defiance possible",
-        },
-        {
-            "rule_name": "NPC Exploitation: Low Resilience",
-            "condition": "Mental_Resilience < 30",
-            "effect": "NPC Cruelty intensifies to break you further",
-        },
-        {
-            "rule_name": "NPC Exploitation: Low Endurance",
-            "condition": "Physical_Endurance < 30",
-            "effect": "Collaborative physical punishments among NPCs",
-        },
-    ]
+    rules = rules_data or DEFAULT_RULES
 
-    # Clean + validate
-    rows: List[tuple] = []
-    for r in rules_data:
+    # Validate rules
+    clean_rules: List[Tuple[str, str, str, bool]] = []
+    for r in rules:
         rn = (r.get("rule_name") or "").strip()
         cond = (r.get("condition") or "").strip()
         eff = (r.get("effect") or "").strip()
@@ -641,9 +646,9 @@ async def insert_or_update_game_rules(
         if not (rn and cond and eff):
             logger.debug("Skipping invalid rule (missing fields): %s", r)
             continue
-        rows.append((user_id, conversation_id, rn, cond, eff, en))
+        clean_rules.append((rn, cond, eff, en))
 
-    if not rows:
+    if not clean_rules:
         logger.info("No valid rules to insert/update.")
         return 0
 
@@ -659,14 +664,43 @@ async def insert_or_update_game_rules(
             enabled   = EXCLUDED.enabled
     """
 
+    total = 0
     async with get_db_connection_context() as conn:
-        await conn.executemany(sql, rows)
+        targets: List[Tuple[int, int]] = []
 
-    logger.info(
-        "Inserted/updated %d GameRules for user=%s conversation=%s",
-        len(rows), user_id, conversation_id
-    )
-    return len(rows)
+        if user_id is not None and conversation_id is not None:
+            # Specific scope
+            targets = [(int(user_id), int(conversation_id))]
+        else:
+            # Seed-all scope: pull every conversation from Conversations table
+            try:
+                rows = await conn.fetch("""
+                    SELECT user_id, id AS conversation_id
+                      FROM Conversations
+                """)
+                targets = [(int(r["user_id"]), int(r["conversation_id"])) for r in rows]
+            except Exception as e:
+                logger.error("Failed to enumerate conversations for seeding: %s", e)
+                return 0
+
+        if not targets:
+            logger.info(
+                "No conversations found; skipping GameRules seeding. "
+                "Create a conversation first, then call insert_or_update_game_rules(user_id, conversation_id)."
+            )
+            return 0
+
+        # Build batched rows for all targets
+        batch_rows: List[tuple] = []
+        for uid, cid in targets:
+            for rn, cond, eff, en in clean_rules:
+                batch_rows.append((uid, cid, rn, cond, eff, en))
+
+        await conn.executemany(sql, batch_rows)
+        total = len(batch_rows)
+
+    logger.info("Inserted/updated %d GameRules rows across %d conversation(s).", total, len(set(targets)))
+    return total
 
 async def insert_stat_definitions():
     """
