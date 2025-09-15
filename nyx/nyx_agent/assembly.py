@@ -343,50 +343,39 @@ Output format:
     ) -> NyxResponse:
         """
         Main assembly function - transforms agent output and context into final response.
-        
-        Args:
-            agent_output: Raw output from the Nyx agent
-            context_bundle: Pre-assembled context bundle with canon data
-            scene_scope: Current scene scope for focused context
-            conversation_id: Current conversation identifier
-            user_input: Original user input for reference
-            processing_metadata: Performance and debug metadata
-            
-        Returns:
-            Fully assembled NyxResponse with narrative, world state, and metadata
         """
         start_time = datetime.utcnow()
-        
+    
         try:
-            # 1. Extract and validate core narrative
+            # 1) Extract and validate core narrative
             narrative_content = await self._extract_narrative(
-                agent_output, 
+                agent_output,
                 context_bundle,
                 scene_scope
             )
-            
-            # 2. Build world state with canon-first priority
+    
+            # 2) Build world state with canon-first priority
             world_state = await self._build_world_state(
                 context_bundle.world_bundle,
                 context_bundle.narrator_bundle,
                 agent_output.get("world_updates", {})
             )
-            
-            # 3. Process NPC dialogue and interactions
+    
+            # 3) Process NPC dialogue and interactions
             npc_dialogues = await self._process_npc_dialogues(
                 agent_output.get("npc_interactions", []),
                 context_bundle.npc_bundle,
                 scene_scope
             )
-            
-            # 4. Extract memory highlights and emergent connections
+    
+            # 4) Extract memory highlights and emergent connections
             memory_highlights = await self._extract_memory_highlights(
                 context_bundle.memory_bundle,
                 agent_output.get("memory_references", []),
                 scene_scope
             )
-            
-            # 5. Identify emergent events and connections
+    
+            # 5) Identify emergent events and connections
             emergent_events = []
             if self.config.enable_emergent_connections:
                 emergent_events = await self._identify_emergent_events(
@@ -394,16 +383,16 @@ Output format:
                     agent_output,
                     scene_scope
                 )
-            
-            # 6. Generate player choices
+    
+            # 6) Generate player choices
             choices = await self._generate_choices(
                 agent_output.get("choices", []),
                 context_bundle.conflict_bundle,
                 world_state,
                 context_bundle
             )
-            
-            # 7. Apply on-demand expansions if requested
+    
+            # 7) On-demand expansions
             expansion_results = {}
             if self.config.enable_on_demand_expansion:
                 expansion_results = await self._apply_expansions(
@@ -415,22 +404,29 @@ Output format:
                     narrative_content,
                     expansion_results
                 )
-            
-            # 8. Calculate performance metrics
+    
+            # 8) Performance metrics
             assembly_time = (datetime.utcnow() - start_time).total_seconds()
             performance_metrics = self._build_performance_metrics(
                 assembly_time,
                 processing_metadata,
                 context_bundle
             )
-            
-            # 9. Construct final response
+    
+            # 9) Precompute frequently reused metadata pieces
             # Safely serialize scene_scope
             try:
                 scope_meta = scene_scope.to_dict()
             except Exception:
                 scope_meta = {k: v for k, v in vars(scene_scope).items() if not k.startswith("_")}
-            
+    
+            context_stats = self._get_context_stats(context_bundle)
+            canon_score = await self._calculate_canon_adherence(
+                agent_output,
+                context_bundle
+            )
+    
+            # 10) Construct the normal response (this is our "happy path" object)
             response = NyxResponse(
                 id=str(uuid4()),
                 conversation_id=conversation_id,
@@ -442,18 +438,15 @@ Output format:
                 choices=choices,
                 metadata={
                     "scene_scope": scope_meta,
-                    "context_stats": self._get_context_stats(context_bundle),
+                    "context_stats": context_stats,
                     "performance": performance_metrics,
                     "timestamp": datetime.utcnow().isoformat(),
-                    "canon_adherence_score": await self._calculate_canon_adherence(
-                        agent_output,
-                        context_bundle
-                    ),
+                    "canon_adherence_score": canon_score,
                     "expansions": expansion_results if self.config.enable_on_demand_expansion else {},
                 }
             )
-            
-            # 10. Log and validate
+    
+            # Log and validate BEFORE feasibility clamp so we still see what the agent produced.
             await self._validate_response(response, context_bundle)
             logger.info(
                 f"Assembled response in {assembly_time:.2f}s "
@@ -461,23 +454,99 @@ Output format:
                 f"choices: {len(choices)}, "
                 f"emergent: {len(emergent_events)})"
             )
-
-            # --- Feasibility-based clamp (safety net) ---
-            try:
-                feas = (processing_metadata or {}).get("feasibility") or {}
-                if isinstance(feas, dict) and feas.get("overall", {}).get("feasible") is False:
+    
+            # ---- MANDATORY feasibility clamp (robust to partial metadata) ----
+            feas = None
+            if processing_metadata and isinstance(processing_metadata, dict):
+                feas = processing_metadata.get("feasibility")
+    
+            if isinstance(feas, dict):
+                overall = feas.get("overall") or {}
+                feasible_flag = overall.get("feasible")
+                strategy = (overall.get("strategy") or "").lower()
+    
+                logger.info(f"[Assembly] Feasibility meta present: feasible={feasible_flag} strategy={strategy}")
+    
+                # HARD DENY: override narrative & prevent committing impossible world updates
+                if feasible_flag is False and strategy == "deny":
+                    logger.warning("[Assembly] POST-ASSEMBLY BLOCK: infeasible action reached assembly.")
                     per = feas.get("per_intent") or []
-                    guidance = per[0].get("narrator_guidance") if per and isinstance(per[0], dict) else None
-                    response.narrative = guidance or (
-                        "You try, but reality holds. The attempt collapses harmlessly; perhaps another approach."
+                    guidance = "You try, but reality holds. The attempt collapses harmlessly."
+                    if per and isinstance(per[0], dict):
+                        guidance = per[0].get("narrator_guidance") or guidance
+    
+                    return NyxResponse(
+                        id=str(uuid4()),
+                        conversation_id=conversation_id or "",
+                        narrative=guidance,
+                        world_state=WorldState(),  # do NOT apply agent world updates on deny
+                        npc_dialogues=[],
+                        memory_highlights=[],
+                        emergent_events=[],
+                        choices=[Choice(
+                            id="continue",
+                            text="Try something else",
+                            category="continuation",
+                            requirements={},
+                            consequences={},
+                            canon_alignment=1.0,
+                        )],
+                        metadata={
+                            "scene_scope": scope_meta,
+                            "context_stats": context_stats,
+                            "performance": performance_metrics,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "canon_adherence_score": canon_score,
+                            "expansions": {},  # avoid committing expansions from an impossible beat
+                            "fallback": True,
+                            "moderated_for_feasibility": True,
+                            "assembly_override": True,
+                            "strategy": "deny",
+                        },
                     )
-                    response.metadata = dict(response.metadata or {})
-                    response.metadata["moderated_for_feasibility"] = True
-            except Exception:
-                pass
-            
+    
+                # SOFT ASK: reshape into a gentle prompt + grounded options
+                if feasible_flag is False and strategy == "ask":
+                    logger.info("[Assembly] ASK strategy: converting to a gentle IC prompt.")
+                    per = feas.get("per_intent") or []
+                    first = per[0] if per and isinstance(per[0], dict) else {}
+                    ask_line = first.get("narrator_guidance") or \
+                               "That might not fit this reality—want to adapt it to what’s already present?"
+                    alternatives = first.get("suggested_alternatives") or []
+    
+                    return NyxResponse(
+                        id=str(uuid4()),
+                        conversation_id=conversation_id or "",
+                        narrative=ask_line,
+                        world_state=WorldState(),  # neutral world state for ASK
+                        npc_dialogues=[],
+                        memory_highlights=[],
+                        emergent_events=[],
+                        choices=[Choice(
+                            id=f"alt_{i}",
+                            text=alt,
+                            category="suggestion",
+                            requirements={},
+                            consequences={},
+                            canon_alignment=1.0,
+                        ) for i, alt in enumerate(alternatives[:4])],
+                        metadata={
+                            "scene_scope": scope_meta,
+                            "context_stats": context_stats,
+                            "performance": performance_metrics,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "canon_adherence_score": canon_score,
+                            "expansions": {},
+                            "fallback": True,
+                            "moderated_for_feasibility": True,
+                            "assembly_override": True,
+                            "strategy": "ask",
+                        },
+                    )
+    
+            # If no clamp triggered, return the normal response.
             return response
-            
+    
         except Exception as e:
             logger.error(f"Error assembling response: {str(e)}", exc_info=True)
             return self._create_fallback_response(
@@ -485,7 +554,7 @@ Output format:
                 user_input,
                 error=str(e)
             )
-    
+
     async def _extract_narrative(
         self,
         agent_output: Dict[str, Any],
