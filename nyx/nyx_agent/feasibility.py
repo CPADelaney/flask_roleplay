@@ -13,6 +13,9 @@ from nyx.nyx_agent.context import NyxContext
 from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
 
+import logging
+logger = logging.getLogger(__name__)
+
 # Dynamic rejection narrator for unique, contextual rejections
 REJECTION_NARRATOR_AGENT = Agent(
     name="RejectionNarrator",
@@ -1061,82 +1064,250 @@ def _default_feasibility_response(intents: List[Dict]) -> Dict[str, Any]:
 
 # Fast context-free feasibility check for pre-gate
 async def assess_action_feasibility_fast(user_id: int, conversation_id: int, text: str) -> Dict[str, Any]:
-    """Quick feasibility check without full context initialization"""
-    
-    # Parse intents
+    """
+    Conversation/scene-aware quick feasibility gate.
+    Reads CurrentRoleplay + GameRules (per conversation) and blocks only when this
+    particular setting/scene says it should.
+    """
+    # 1) Parse intents (may be empty/low-signal for short inputs)
     intents = await parse_action_intents(text)
-    
-    # Quick load of critical context only
+    text_l = (text or "").lower()
+
+    # 2) Load minimal but decisive context
+    setting_kind = "modern_realistic"
+    setting_type = "realistic_modern"
+    reality_context = "normal"
+    physics_model = "realistic"
+    capabilities: Dict[str, Any] = {}
+    scene: Dict[str, Any] = {}
+    location_name: Optional[str] = None
+    impossibilities: List[Dict[str, Any]] = []
+
     async with get_db_connection_context() as conn:
-        # Get setting type and kind
-        setting_data = await conn.fetch("""
+        # CurrentRoleplay keys we care about
+        rows = await conn.fetch(
+            """
             SELECT key, value FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2 
-            AND key IN ('SettingType', 'SettingKind', 'RealityContext')
-        """, user_id, conversation_id)
-        
-        setting_type = "realistic_modern"
-        setting_kind = "modern_realistic"
-        reality_context = "normal"
-        
-        for row in setting_data:
-            if row["key"] == "SettingType":
-                setting_type = row["value"]
-            elif row["key"] == "SettingKind":
-                setting_kind = row["value"]
-            elif row["key"] == "RealityContext":
-                reality_context = row["value"]
-        
-        # Get recent impossibilities for quick check
-        imp_raw = await conn.fetchval("""
-            SELECT value FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2 AND key='EstablishedImpossibilities'
-        """, user_id, conversation_id)
-        
-        impossibilities = json.loads(imp_raw) if imp_raw else []
-    
-    # Quick evaluation based on setting
-    for intent in intents:
-        categories = set(intent.get("categories", []))
-        
-        # Check established impossibilities
-        for imp in impossibilities[-10:]:  # Check only recent ones for speed
-            if set(imp.get("categories", [])) & categories:
-                return {
-                    "overall": {"feasible": False, "strategy": "deny"},
-                    "per_intent": [{
-                        "feasible": False,
-                        "strategy": "deny",
-                        "violations": [{"rule": "established", "reason": imp["reason"]}],
-                        "narrator_guidance": "Reality maintains its established boundaries.",
-                        "suggested_alternatives": ["Try something within established possibilities"]
-                    }]
-                }
-        
-        # Quick rules based on reality context
-        if reality_context == "normal" and setting_kind in ["modern_realistic", "realistic_modern", "realistic_historical"]:
-            forbidden = {
-                "dimensional_portal", "extradimensional_access",
-                "ex_nihilo_conjuration", "weapon_conjuration",
-                "spellcasting", "ritual_magic", "psionics",
-                "physics_violation", "reality_warping",
-                "unaided_flight", "teleportation", "time_travel"
-            }
-            
-            if categories & forbidden:
-                return {
-                    "overall": {"feasible": False, "strategy": "deny"},
-                    "per_intent": [{
-                        "feasible": False,
-                        "strategy": "deny",
-                        "violations": [{"rule": "physics", "reason": f"Impossible in {setting_kind} setting"}],
-                        "narrator_guidance": "The laws of reality remain immutable.",
-                        "suggested_alternatives": ["Work within the constraints of this world"]
-                    }]
-                }
-    
-    # Default allow for non-violating actions
+            WHERE user_id=$1 AND conversation_id=$2
+              AND key = ANY($3)
+            """,
+            user_id,
+            conversation_id,
+            [
+                "SettingType",
+                "SettingKind",
+                "RealityContext",
+                "PhysicsModel",
+                "SettingCapabilities",
+                "CurrentScene",
+                "CurrentLocation",
+                "EstablishedImpossibilities",
+            ],
+        )
+        kv = {r["key"]: r["value"] for r in rows}
+
+        setting_type = kv.get("SettingType") or setting_type
+        setting_kind = kv.get("SettingKind") or setting_kind
+        reality_context = kv.get("RealityContext") or reality_context
+        physics_model = kv.get("PhysicsModel") or physics_model
+
+        try:
+            capabilities = json.loads(kv.get("SettingCapabilities") or "{}")
+        except Exception:
+            capabilities = {}
+
+        try:
+            scene = json.loads(kv.get("CurrentScene") or "{}") or {}
+        except Exception:
+            scene = {}
+
+        location_name = kv.get("CurrentLocation") or scene.get("location")
+
+        try:
+            impossibilities = json.loads(kv.get("EstablishedImpossibilities") or "[]")
+        except Exception:
+            impossibilities = []
+
+        # Conversation-scoped category rules from GameRules
+        rules = await conn.fetch(
+            """
+            SELECT condition, effect
+            FROM GameRules
+            WHERE user_id=$1 AND conversation_id=$2 AND enabled=TRUE
+            """,
+            user_id,
+            conversation_id,
+        )
+
+    # 3) Build dynamic allow/deny sets from DB rules
+    hard_deny_cats: Set[str] = set()
+    allow_cats: Set[str] = set()
+
+    for r in rules:
+        cond = (r["condition"] or "").strip().lower()
+        eff = (r["effect"] or "").strip().lower()
+        if cond.startswith("category:"):
+            name = cond.split(":", 1)[1].strip()
+            if any(k in eff for k in ("prohibit", "forbid", "cannot", "not allowed", "disallow")):
+                hard_deny_cats.add(name)
+            if any(k in eff for k in ("allow", "permitted", "can", "enabled", "allowed")):
+                allow_cats.add(name)
+
+    # 4) Implied forbids from capabilities / physics (only if not explicitly allowed)
+    implied_forbids: Set[str] = set()
+    tech = (capabilities.get("technology") or "").lower()  # primitive|medieval|modern|advanced|futuristic
+    magic = (capabilities.get("magic") or "").lower()      # none|limited|common|ubiquitous
+    phys = (capabilities.get("physics") or physics_model or "").lower()  # realistic|flexible|surreal
+    supernatural = (capabilities.get("supernatural") or "").lower()      # none|hidden|known|common
+    spaceflight_enabled = bool(capabilities.get("spaceflight") or capabilities.get("space_travel"))
+
+    if magic in {"none", ""}:
+        implied_forbids.update({"spellcasting", "ritual_magic", "conjuration", "summoning", "teleportation", "time_travel", "psionics"})
+    if phys in {"realistic", ""}:
+        implied_forbids.update({"physics_violation", "reality_warping", "ex_nihilo_conjuration", "unaided_flight"})
+    if not spaceflight_enabled and tech in {"primitive", "medieval", "modern"}:
+        implied_forbids.update({"spaceflight", "orbital_travel", "spaceship_piloting", "laser_weapons", "plasma_weapons", "vacuum_survival"})
+
+    if supernatural in {"none"}:
+        implied_forbids.update({"undead_control", "demon_summoning", "spirit_binding", "necromancy", "psionics"})
+
+    # Scene-scoped bans (if present in your scene JSON)
+    scene_banned = set(scene.get("banned_categories", []) or [])
+    scene_allowed = set(scene.get("allowed_categories", []) or [])
+
+    # Final deny set = (hard_deny ∪ implied ∪ scene_banned) \ allow
+    deny_cats = (hard_deny_cats | implied_forbids | scene_banned) - (allow_cats | scene_allowed)
+
+    # 5) Evaluate each intent (fallback to text-derived categories if parser sparse)
+    per_intent = []
+    any_blocked = False
+
+    def reasons_for(blocking_cats: Set[str]) -> List[Dict[str, str]]:
+        reasons: List[Dict[str, str]] = []
+        for c in sorted(blocking_cats):
+            if c in hard_deny_cats:
+                reasons.append({"rule": f"category:{c}", "reason": "Prohibited by world rule"})
+            elif c in scene_banned:
+                reasons.append({"rule": f"scene:{c}", "reason": "Not available in this scene"})
+            elif c in implied_forbids:
+                if c in {"spaceflight", "orbital_travel", "spaceship_piloting", "laser_weapons", "plasma_weapons"}:
+                    src = "technology"
+                    detail = f"Technology level '{tech or 'unknown'}' does not support spaceflight/weapons"
+                elif c in {"spellcasting", "ritual_magic", "conjuration", "summoning"}:
+                    src = "magic"
+                    detail = f"Magic level '{magic or 'none'}' is insufficient"
+                elif c in {"physics_violation", "reality_warping", "ex_nihilo_conjuration", "unaided_flight", "time_travel", "teleportation"}:
+                    src = "physics"
+                    detail = f"Physics model '{phys or 'realistic'}' forbids it"
+                else:
+                    src, detail = "capabilities", "Not supported by setting capabilities"
+                reasons.append({"rule": f"{src}:{c}", "reason": detail})
+            else:
+                reasons.append({"rule": f"unknown:{c}", "reason": "Unavailable here"})
+        return reasons
+
+    # Load quick scene affordances for alternatives
+    scene_npcs = scene.get("npcs", []) or scene.get("present_npcs", []) or []
+    scene_items = scene.get("items", []) or scene.get("available_items", []) or []
+    location_features = scene.get("location_features", []) or []
+    time_phase = scene.get("time_phase", "day")
+
+    for intent in intents or [{}]:  # ensure at least one pass
+        cats = set(intent.get("categories", []) or [])
+        if not cats:
+            cats = _infer_categories_from_text(text_l)
+
+        # Respect EstablishedImpossibilities (recent entries are most relevant)
+        established_block = False
+        for imp in (impossibilities or [])[-10:]:
+            imp_cats = set((imp or {}).get("categories", []) or [])
+            if imp_cats and (imp_cats & cats):
+                per_intent.append({
+                    "feasible": False,
+                    "strategy": "deny",
+                    "violations": [{"rule": "established_impossibility", "reason": (imp.get("reason") or "Previously established as impossible")}],
+                    "narrator_guidance": "Reality keeps its earlier promise: that door stays shut here.",
+                    "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
+                    "categories": list(sorted(cats)),
+                })
+                any_blocked = True
+                established_block = True
+                break
+        if established_block:
+            continue
+
+        blocking = cats & deny_cats
+        if blocking:
+            per_intent.append({
+                "feasible": False,
+                "strategy": "deny",
+                "violations": reasons_for(blocking),
+                "narrator_guidance": _compose_guidance(setting_kind, location_name, blocking),
+                "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
+                "categories": list(sorted(cats)),
+            })
+            any_blocked = True
+        else:
+            per_intent.append({
+                "feasible": True,
+                "strategy": "allow",
+                "categories": list(sorted(cats)),
+            })
+
     return {
-        "overall": {"feasible": True, "strategy": "allow"},
-        "per_intent": [{"feasible": True, "strategy": "allow"} for _ in intents]
+        "overall": {"feasible": not any_blocked, "strategy": "deny" if any_blocked else "allow"},
+        "per_intent": per_intent
     }
+
+def _infer_categories_from_text(text_l: str) -> Set[str]:
+    """
+    Very light, capability-gated hints — only used when the parser gives us nothing.
+    We map obvious phrases to canonical categories the rest of the system understands.
+    """
+    mapping = [
+        ({"cast", "spell", "ritual", "incantation"}, "spellcasting"),
+        ({"teleport", "blink", "warp"}, "teleportation"),
+        ({"time travel", "go back in time", "rewind"}, "time_travel"),
+        ({"fly unaided", "take off myself", "levitate"}, "unaided_flight"),
+        ({"spaceship", "rocket", "shuttle", "orbit", "space", "plasma", "laser"}, "spaceflight"),
+        ({"summon", "conjure", "from nothing"}, "ex_nihilo_conjuration"),
+        ({"mind control", "telepathy", "psychic"}, "psionics"),
+        ({"reality warp", "bend physics"}, "physics_violation"),
+    ]
+    cats: Set[str] = set()
+    for keys, cat in mapping:
+        if any(k in text_l for k in keys):
+            cats.add(cat)
+    return cats
+
+
+def _scene_alternatives(npcs: List[str], items: List[str], features: List[str], time_phase: str) -> List[str]:
+    alts: List[str] = []
+    if npcs:
+        alts.append(f"approach {npcs[0]} for help")
+    if items:
+        alts.append(f"examine the {items[0]} more closely")
+    if features:
+        alts.append(f"investigate the {features[0]}")
+    if time_phase == "night":
+        alts.append("wait until dawn for better visibility")
+    elif time_phase == "day":
+        alts.append("survey the area for a grounded advantage")
+    # keep it tight
+    return alts[:3]
+
+
+def _compose_guidance(setting_kind: str, location_name: Optional[str], blocking: Set[str]) -> str:
+    loc = f" in {location_name}" if location_name else ""
+    # Pick one dominant block to speak to
+    if {"spaceflight", "orbital_travel", "spaceship_piloting"} & blocking:
+        return f"This isn’t a spacefaring world{loc}; the sky stays near and no engines like that exist here."
+    if {"spellcasting", "ritual_magic", "conjuration", "summoning"} & blocking:
+        return f"Whatever power hums here, it isn’t magic you can wield{loc}."
+    if {"physics_violation", "reality_warping", "ex_nihilo_conjuration"} & blocking:
+        return f"The world keeps its seams tight{loc}; physics don’t bend that way."
+    if {"unaided_flight"} & blocking:
+        return f"Gravity still owns the air{loc}; you can’t take wing without help."
+    if {"time_travel", "teleportation"} & blocking:
+        return f"Time and distance refuse shortcuts{loc}."
+    return f"This setting{loc} doesn’t support that move; try a grounded approach."
