@@ -80,13 +80,13 @@ async def run_agent_safely(
             logger.warning(f"Strict schema error, attempting without structured output: {e}")
             
             # Create a simple text-only agent
-            fallback_agent = Agent[type(context)](
-                name=f"{agent.name} (Fallback)",
-                instructions=agent.instructions,
-                model=agent.model,
+            fallback_agent = Agent(
+                name=f"{getattr(agent, 'name', 'Agent')} (Fallback)",
+                instructions=getattr(agent, 'instructions', ''),
+                model=getattr(agent, 'model', None),
                 model_settings=DEFAULT_MODEL_SETTINGS,
-                # No tools, no structured output
             )
+
             
             try:
                 result = await Runner.run(
@@ -176,6 +176,33 @@ async def process_user_input(
     logger.info(f"[{trace_id}] context_data keys: {list(context_data.keys()) if context_data else 'None'}")
 
     try:
+        # ===== STEP 0: Fast feasibility gate (blocks obvious impossibilities up front) =====
+        async with _log_step("feasibility_fast_gate", trace_id):
+            try:
+                fast = await assess_action_feasibility_fast(user_id, conversation_id, user_input)
+                if fast.get("overall", {}).get("feasible") is False:
+                    per = fast.get("per_intent") or []
+                    first = per[0] if per and isinstance(per[0], dict) else {}
+                    guidance = first.get("narrator_guidance") or "That can’t happen here. Try a grounded approach that fits the setting."
+                    options = [{"text": o} for o in (first.get("suggested_alternatives") or [])]
+
+                    return {
+                        "success": True,
+                        "response": guidance,
+                        "metadata": {
+                            "choices": options,
+                            "universal_updates": False,
+                            "feasibility": fast,
+                            "action_blocked": True,
+                            "block_reason": (first.get("violations") or [{}])[0].get("reason", "setting constraints"),
+                            "reality_maintained": True
+                        },
+                        "trace_id": trace_id,
+                        "processing_time": time.time() - start_time,
+                    }
+            except Exception as e:
+                logger.debug(f"[{trace_id}] feasibility_fast_gate failed softly: {e}")
+
         # ===== STEP 1: Context initialization =====
         async with _log_step("context_init", trace_id):
             nyx_context = NyxContext(user_id, conversation_id)
@@ -377,6 +404,18 @@ async def process_user_input(
                     "setting_type": await nyx_context._get_from_db("SettingType")
                 }
             )
+            # Normalize assembler output (dict or NyxResponse)
+            if hasattr(assembled, "narrative"):
+                assembled = {
+                    "narrative": assembled.narrative,
+                    "world": getattr(assembled, "world_state", {}),
+                    "choices": getattr(assembled, "choices", []),
+                    "emergent": getattr(assembled, "emergent_events", []),
+                    "image": getattr(assembled, "image", None),
+                    "telemetry": (assembled.metadata or {}).get("performance", {}),
+                    "nyx_commentary": (assembled.metadata or {}).get("nyx_commentary"),
+                    "universal_updates": (assembled.metadata or {}).get("universal_updates", False),
+                }
             
             # Save state changes
             await _save_context_state(nyx_context)
