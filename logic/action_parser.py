@@ -39,8 +39,6 @@ INTENT_AGENT = Agent(
       ]
     """,
     model="gpt-5-nano",
-    # If your Runner supports it, this guarantees a JSON object string:
-    response_format={"type": "json_object"},
 )
 
 def _strip_code_fences(s: str) -> str:
