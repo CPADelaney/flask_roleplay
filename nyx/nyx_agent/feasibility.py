@@ -1063,201 +1063,339 @@ def _default_feasibility_response(intents: List[Dict]) -> Dict[str, Any]:
     }
 
 # Fast context-free feasibility check for pre-gate
+# nyx/nyx_agent/feasibility.py
+import json
+import asyncio
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from .db import get_db_connection_context  # adjust import path if different
+from .action_parser import parse_action_intents  # your existing parser
+from .logging import logger  # your logger
+
+# Optional helpers (kept soft — only used if present in your codebase)
+try:
+    from .helpers import _infer_categories_from_text, _scene_alternatives, _compose_guidance
+except Exception:
+    def _infer_categories_from_text(text_l: str) -> Set[str]:
+        # ultra-light fallback; intentionally weak (keeps system dynamic)
+        hits = set()
+        if any(k in text_l for k in ("summon", "conjure", "spawn", "manifest", "materialize")):
+            hits.add("ex_nihilo_conjuration")
+        if any(k in text_l for k in ("fly", "levitate", "hover")):
+            hits.add("physics_violation")
+        if any(k in text_l for k in ("spaceship", "laser", "plasma", "warp")):
+            hits.add("scifi_setpiece")
+        if any(k in text_l for k in ("hack drone", "access ai", "drone")):
+            hits.add("ai_system_access")
+        return hits
+
+    def _scene_alternatives(npcs, items, features, time_phase) -> List[str]:
+        alts = []
+        if items:
+            alts.append(f"use the {items[0]}")
+        if features:
+            alts.append(f"interact with {features[0]}")
+        if npcs:
+            alts.append(f"ask {npcs[0].get('name','someone')} for help")
+        if not alts:
+            alts.append("try a simpler, grounded action that uses something visible in the scene")
+        return alts
+
+    def _compose_guidance(setting_kind: str, location_name: Optional[str], blocking: Set[str]) -> str:
+        loc = f" in {location_name}" if location_name else ""
+        cats = ", ".join(sorted(blocking))
+        return f"Reality{loc} doesn’t support that ({cats}). Try something that fits what’s actually present."
+
+def _normalize_bool(v: Any) -> bool:
+    if isinstance(v, bool): return v
+    if v is None: return False
+    s = str(v).strip().lower()
+    return s in {"1","true","yes","y","on","allowed","enable","enabled"}
+
+def _safe_json_loads(s: Optional[str], default):
+    try:
+        return json.loads(s or "") if s else default
+    except Exception:
+        return default
+
 async def assess_action_feasibility_fast(user_id: int, conversation_id: int, text: str) -> Dict[str, Any]:
     """
-    Conversation/scene-aware quick feasibility gate.
-    Reads CurrentRoleplay + GameRules (per conversation) and blocks only when this
-    particular setting/scene says it should.
+    Conversation/scene-aware quick feasibility gate with LOUD logging and dynamic judgments.
+    - Uses per-conversation GameRules + CurrentRoleplay to decide.
+    - Explicit rules/scene bans/EstablishedImpossibilities can deny.
+    - Capability mismatches only downgrade to ASK (soft block) rather than hard DENY.
+    - If context is missing, prefer ALLOW (keep world flexible).
     """
-    # 1) Parse intents (may be empty/low-signal for short inputs)
-    intents = await parse_action_intents(text)
+    logger.info(f"[FEASIBILITY] Checking: {text[:160]!r}")
     text_l = (text or "").lower()
 
-    # 2) Load minimal but decisive context
+    # ---- 1) Parse intents (never hard-block on parse errors) -----------------
+    parse_error: Optional[str] = None
+    try:
+        intents = await parse_action_intents(text or "")
+        logger.info(f"[FEASIBILITY] Parsed {len(intents)} intents "
+                    f"-> cats: {[i.get('categories', []) for i in intents]}")
+    except Exception as e:
+        parse_error = f"{type(e).__name__}: {e}"
+        logger.error(f"[FEASIBILITY] Intent parsing FAILED: {parse_error}", exc_info=True)
+        intents = []
+
+    # Fallback single-pass intent so we still produce a decision
+    if not intents:
+        intents = [{"categories": list(_infer_categories_from_text(text_l)) or []}]
+
+    # ---- 2) Load dynamic context ------------------------------------------------
     setting_kind = "modern_realistic"
     setting_type = "realistic_modern"
     reality_context = "normal"
     physics_model = "realistic"
+
     capabilities: Dict[str, Any] = {}
     scene: Dict[str, Any] = {}
     location_name: Optional[str] = None
-    impossibilities: List[Dict[str, Any]] = []
+    established_impossibilities: List[Dict[str, Any]] = []
+    rules: List[Dict[str, Any]] = []
 
-    async with get_db_connection_context() as conn:
-        # CurrentRoleplay keys we care about
-        rows = await conn.fetch(
-            """
-            SELECT key, value FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2
-              AND key = ANY($3)
-            """,
-            user_id,
-            conversation_id,
-            [
-                "SettingType",
-                "SettingKind",
-                "RealityContext",
-                "PhysicsModel",
-                "SettingCapabilities",
-                "CurrentScene",
-                "CurrentLocation",
-                "EstablishedImpossibilities",
-            ],
-        )
-        kv = {r["key"]: r["value"] for r in rows}
+    try:
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT key, value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND key = ANY($3)
+                """,
+                user_id,
+                conversation_id,
+                [
+                    "SettingType",
+                    "SettingKind",
+                    "RealityContext",
+                    "PhysicsModel",
+                    "SettingCapabilities",
+                    "CurrentScene",
+                    "CurrentLocation",
+                    "EstablishedImpossibilities",
+                ],
+            )
+            kv = {r["key"]: r["value"] for r in rows}
 
-        setting_type = kv.get("SettingType") or setting_type
-        setting_kind = kv.get("SettingKind") or setting_kind
-        reality_context = kv.get("RealityContext") or reality_context
-        physics_model = kv.get("PhysicsModel") or physics_model
+            setting_type = kv.get("SettingType") or setting_type
+            setting_kind = kv.get("SettingKind") or setting_kind
+            reality_context = kv.get("RealityContext") or reality_context
+            physics_model = kv.get("PhysicsModel") or physics_model
 
-        try:
-            capabilities = json.loads(kv.get("SettingCapabilities") or "{}")
-        except Exception:
-            capabilities = {}
+            capabilities = _safe_json_loads(kv.get("SettingCapabilities"), {}) or {}
+            scene = _safe_json_loads(kv.get("CurrentScene"), {}) or {}
+            location_name = kv.get("CurrentLocation") or (scene.get("location") if isinstance(scene, dict) else None)
+            established_impossibilities = _safe_json_loads(kv.get("EstablishedImpossibilities"), []) or []
 
-        try:
-            scene = json.loads(kv.get("CurrentScene") or "{}") or {}
-        except Exception:
-            scene = {}
+            rules = await conn.fetch(
+                """
+                SELECT condition, effect
+                FROM GameRules
+                WHERE user_id=$1 AND conversation_id=$2 AND enabled=TRUE
+                """,
+                user_id,
+                conversation_id,
+            )
+    except Exception as e:
+        logger.error(f"[FEASIBILITY] DB read failed (soft): {e}", exc_info=True)
+        # Keep defaults; remain permissive
 
-        location_name = kv.get("CurrentLocation") or scene.get("location")
+    logger.info("[FEASIBILITY] Setting "
+                f"type={setting_type} kind={setting_kind} reality={reality_context} physics={physics_model}")
+    logger.debug(f"[FEASIBILITY] Capabilities: {capabilities}")
+    logger.debug(f"[FEASIBILITY] Scene keys: {list(scene.keys()) if isinstance(scene, dict) else 'n/a'}")
 
-        try:
-            impossibilities = json.loads(kv.get("EstablishedImpossibilities") or "[]")
-        except Exception:
-            impossibilities = []
-
-        # Conversation-scoped category rules from GameRules
-        rules = await conn.fetch(
-            """
-            SELECT condition, effect
-            FROM GameRules
-            WHERE user_id=$1 AND conversation_id=$2 AND enabled=TRUE
-            """,
-            user_id,
-            conversation_id,
-        )
-
-    # 3) Build dynamic allow/deny sets from DB rules
+    # ---- 3) Build dynamic allow/deny sets from conversation rules/scene --------
     hard_deny_cats: Set[str] = set()
     allow_cats: Set[str] = set()
 
-    for r in rules:
-        cond = (r["condition"] or "").strip().lower()
-        eff = (r["effect"] or "").strip().lower()
+    for r in (rules or []):
+        cond = (r.get("condition") or "").strip().lower()
+        eff = (r.get("effect") or "").strip().lower()
         if cond.startswith("category:"):
             name = cond.split(":", 1)[1].strip()
-            if any(k in eff for k in ("prohibit", "forbid", "cannot", "not allowed", "disallow")):
+            # explicit allows/denies ONLY from DB rules (dynamic)
+            if any(k in eff for k in ("prohibit", "forbid", "cannot", "not allowed", "disallow", "deny")):
                 hard_deny_cats.add(name)
             if any(k in eff for k in ("allow", "permitted", "can", "enabled", "allowed")):
                 allow_cats.add(name)
 
-    # 4) Implied forbids from capabilities / physics (only if not explicitly allowed)
-    implied_forbids: Set[str] = set()
-    tech = (capabilities.get("technology") or "").lower()  # primitive|medieval|modern|advanced|futuristic
-    magic = (capabilities.get("magic") or "").lower()      # none|limited|common|ubiquitous
-    phys = (capabilities.get("physics") or physics_model or "").lower()  # realistic|flexible|surreal
-    supernatural = (capabilities.get("supernatural") or "").lower()      # none|hidden|known|common
-    spaceflight_enabled = bool(capabilities.get("spaceflight") or capabilities.get("space_travel"))
+    scene_banned = set((scene.get("banned_categories") or []) if isinstance(scene, dict) else [])
+    scene_allowed = set((scene.get("allowed_categories") or []) if isinstance(scene, dict) else [])
 
-    if magic in {"none", ""}:
-        implied_forbids.update({"spellcasting", "ritual_magic", "conjuration", "summoning", "teleportation", "time_travel", "psionics"})
-    if phys in {"realistic", ""}:
-        implied_forbids.update({"physics_violation", "reality_warping", "ex_nihilo_conjuration", "unaided_flight"})
-    if not spaceflight_enabled and tech in {"primitive", "medieval", "modern"}:
-        implied_forbids.update({"spaceflight", "orbital_travel", "spaceship_piloting", "laser_weapons", "plasma_weapons", "vacuum_survival"})
+    # ---- 4) Soft constraints from capabilities/physics (NO hard rules) ---------
+    # We compute "mismatch" categories to nudge toward ASK rather than DENY.
+    # You can define your own mapping from capabilities to category clusters in CurrentRoleplay.SettingCapabilities.
+    # Example capabilities you might store: { "magic":"none|limited|common", "physics":"realistic|flexible|surreal",
+    #   "technology":"primitive|medieval|modern|advanced|futuristic", "supernatural":"none|hidden|known|common" }
+    caps_magic = str((capabilities.get("magic") or "")).lower()
+    caps_physics = str((capabilities.get("physics") or physics_model or "")).lower()
+    caps_tech = str((capabilities.get("technology") or "")).lower()
+    caps_supernatural = str((capabilities.get("supernatural") or "")).lower()
 
-    if supernatural in {"none"}:
-        implied_forbids.update({"undead_control", "demon_summoning", "spirit_binding", "necromancy", "psionics"})
+    # Dynamic feature flags that creators can set per conversation:
+    # e.g. {"feature_flags": {"public_magic_ok": true, "sci_fi_elements_ok": false}}
+    feature_flags = (capabilities.get("feature_flags") or {}) if isinstance(capabilities, dict) else {}
 
-    # Scene-scoped bans (if present in your scene JSON)
-    scene_banned = set(scene.get("banned_categories", []) or [])
-    scene_allowed = set(scene.get("allowed_categories", []) or [])
+    # Category groups to *soft*-warn on when mismatch:
+    soft_map: List[Tuple[bool, Set[str], str]] = []
 
-    # Final deny set = (hard_deny ∪ implied ∪ scene_banned) \ allow
-    deny_cats = (hard_deny_cats | implied_forbids | scene_banned) - (allow_cats | scene_allowed)
+    # Magic-sensitive categories
+    if caps_magic in {"none", ""} and not _normalize_bool(feature_flags.get("magic_ok")):
+        soft_map.append((
+            True,
+            {"spellcasting", "ritual_magic", "summoning", "necromancy", "ex_nihilo_conjuration", "psionics", "public_magic"},
+            "magic_limited_by_setting"
+        ))
 
-    # 5) Evaluate each intent (fallback to text-derived categories if parser sparse)
-    per_intent = []
-    any_blocked = False
+    # Physics-sensitive categories
+    if caps_physics in {"realistic", ""} and not _normalize_bool(feature_flags.get("loose_physics_ok")):
+        soft_map.append((
+            True,
+            {"physics_violation", "reality_warping", "unaided_flight", "time_travel", "teleportation", "ex_nihilo_conjuration"},
+            "physics_constrained"
+        ))
 
-    def reasons_for(blocking_cats: Set[str]) -> List[Dict[str, str]]:
+    # Tech/scifi-sensitive categories
+    if caps_tech in {"primitive", "medieval", "modern", ""} and not _normalize_bool(feature_flags.get("sci_fi_elements_ok")):
+        soft_map.append((
+            True,
+            {"vehicle_operation_space", "ai_system_access", "drone_control", "scifi_setpiece", "vacuum_exposure", "spacewalk"},
+            "tech_level_constrained"
+        ))
+
+    # Supernatural-sensitive
+    if caps_supernatural in {"none", ""} and not _normalize_bool(feature_flags.get("supernatural_ok")):
+        soft_map.append((
+            True,
+            {"undead_control", "spirit_binding", "demon_summoning", "necromancy"},
+            "supernatural_constrained"
+        ))
+
+    soft_constraints_map: Dict[str, str] = {}
+    for _active, cats, tag in soft_map:
+        if _active:
+            for c in cats:
+                # only soft when *not* explicitly allowed
+                if c not in allow_cats and c not in scene_allowed:
+                    soft_constraints_map[c] = tag
+
+    # ---- 5) Per-intent evaluation ---------------------------------------------
+    per_intent: List[Dict[str, Any]] = []
+    any_hard_block = False
+
+    # Quick scene affordances for alternatives
+    scene_npcs = (scene.get("npcs") or scene.get("present_npcs") or []) if isinstance(scene, dict) else []
+    scene_items = (scene.get("items") or scene.get("available_items") or []) if isinstance(scene, dict) else []
+    location_features = (scene.get("location_features") or []) if isinstance(scene, dict) else []
+    time_phase = (scene.get("time_phase") or scene.get("time_of_day") or "day") if isinstance(scene, dict) else "day"
+
+    # Use only the last few impossibilities (most recent canon)
+    last_imps = (established_impossibilities or [])[-12:]
+
+    def reasons_for(category_hits: Set[str]) -> List[Dict[str, str]]:
         reasons: List[Dict[str, str]] = []
-        for c in sorted(blocking_cats):
+        for c in sorted(category_hits):
             if c in hard_deny_cats:
                 reasons.append({"rule": f"category:{c}", "reason": "Prohibited by world rule"})
             elif c in scene_banned:
                 reasons.append({"rule": f"scene:{c}", "reason": "Not available in this scene"})
-            elif c in implied_forbids:
-                if c in {"spaceflight", "orbital_travel", "spaceship_piloting", "laser_weapons", "plasma_weapons"}:
-                    src = "technology"
-                    detail = f"Technology level '{tech or 'unknown'}' does not support spaceflight/weapons"
-                elif c in {"spellcasting", "ritual_magic", "conjuration", "summoning"}:
-                    src = "magic"
-                    detail = f"Magic level '{magic or 'none'}' is insufficient"
-                elif c in {"physics_violation", "reality_warping", "ex_nihilo_conjuration", "unaided_flight", "time_travel", "teleportation"}:
-                    src = "physics"
-                    detail = f"Physics model '{phys or 'realistic'}' forbids it"
-                else:
-                    src, detail = "capabilities", "Not supported by setting capabilities"
-                reasons.append({"rule": f"{src}:{c}", "reason": detail})
             else:
-                reasons.append({"rule": f"unknown:{c}", "reason": "Unavailable here"})
+                # established impossibility covered elsewhere; default:
+                reasons.append({"rule": f"unavailable:{c}", "reason": "Unavailable here"})
         return reasons
 
-    # Load quick scene affordances for alternatives
-    scene_npcs = scene.get("npcs", []) or scene.get("present_npcs", []) or []
-    scene_items = scene.get("items", []) or scene.get("available_items", []) or []
-    location_features = scene.get("location_features", []) or []
-    time_phase = scene.get("time_phase", "day")
-
-    for intent in intents or [{}]:  # ensure at least one pass
-        cats = set(intent.get("categories", []) or [])
+    for intent in intents or [{}]:
+        cats = set(intent.get("categories") or [])
         if not cats:
-            cats = _infer_categories_from_text(text_l)
+            inferred = _infer_categories_from_text(text_l)
+            if inferred:
+                cats = inferred
 
-        # Respect EstablishedImpossibilities (recent entries are most relevant)
-        established_block = False
-        for imp in (impossibilities or [])[-10:]:
-            imp_cats = set((imp or {}).get("categories", []) or [])
-            if imp_cats and (imp_cats & cats):
-                per_intent.append({
-                    "feasible": False,
-                    "strategy": "deny",
-                    "violations": [{"rule": "established_impossibility", "reason": (imp.get("reason") or "Previously established as impossible")}],
-                    "narrator_guidance": "Reality keeps its earlier promise: that door stays shut here.",
-                    "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
-                    "categories": list(sorted(cats)),
-                })
-                any_blocked = True
-                established_block = True
-                break
-        if established_block:
-            continue
-
-        blocking = cats & deny_cats
-        if blocking:
+        # (A) Established Impossibilities (hard deny if categories overlap)
+        hit_imposs = []
+        if last_imps and cats:
+            for imp in last_imps:
+                imp_cats = set((imp or {}).get("categories", []) or [])
+                if imp_cats & cats:
+                    hit_imposs.append(imp)
+        if hit_imposs:
+            logger.info(f"[FEASIBILITY] Hard deny by EstablishedImpossibilities -> {cats}")
             per_intent.append({
                 "feasible": False,
                 "strategy": "deny",
-                "violations": reasons_for(blocking),
-                "narrator_guidance": _compose_guidance(setting_kind, location_name, blocking),
+                "violations": [{"rule": "established_impossibility", "reason": (hit_imposs[-1].get("reason") or "Previously established as impossible")}],
+                "narrator_guidance": _compose_guidance(setting_kind, location_name, cats),
                 "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
-                "categories": list(sorted(cats)),
+                "categories": sorted(cats),
             })
-            any_blocked = True
-        else:
-            per_intent.append({
-                "feasible": True,
-                "strategy": "allow",
-                "categories": list(sorted(cats)),
-            })
+            any_hard_block = True
+            continue
 
+        # (B) Explicit world/scene rule bans (hard deny)
+        hard_bans = (cats & (hard_deny_cats | scene_banned)) - (allow_cats | scene_allowed)
+        if hard_bans:
+            logger.info(f"[FEASIBILITY] Hard deny by explicit rule/scene -> {hard_bans}")
+            per_intent.append({
+                "feasible": False,
+                "strategy": "deny",
+                "violations": reasons_for(hard_bans),
+                "narrator_guidance": _compose_guidance(setting_kind, location_name, hard_bans),
+                "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
+                "categories": sorted(cats),
+            })
+            any_hard_block = True
+            continue
+
+        # (C) Soft constraints (ASK for clarification or propose grounded rewrite)
+        soft_hits = {c for c in cats if c in soft_constraints_map}
+        if soft_hits:
+            tag = soft_constraints_map[next(iter(soft_hits))]
+            logger.info(f"[FEASIBILITY] Soft constraint (ASK) -> cats={soft_hits} tag={tag}")
+            per_intent.append({
+                "feasible": False,
+                "strategy": "ask",
+                "violations": [{"rule": tag, "reason": "May not be supported here without setup"}],
+                "narrator_guidance": (
+                    "That might stretch this setting. Want to adapt it to what's already present, "
+                    "or describe how your character attempts it within realistic bounds?"
+                ),
+                "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
+                "categories": sorted(cats),
+            })
+            # ASK is not a hard block; we won’t set any_hard_block = True
+            continue
+
+        # (D) No issues => allow
+        per_intent.append({
+            "feasible": True,
+            "strategy": "allow",
+            "categories": sorted(cats),
+        })
+
+    overall = {"feasible": not any_hard_block, "strategy": "deny" if any_hard_block else "allow"}
+
+    # If parse failed and we had literally no signal, prefer ASK rather than deny
+    if parse_error and all((not i.get("categories") for i in intents)):
+        logger.info("[FEASIBILITY] Parse failed & no categories inferred -> soft ASK")
+        overall = {"feasible": False, "strategy": "ask"}
+        per_intent = [{
+            "feasible": False,
+            "strategy": "ask",
+            "violations": [{"rule": "parse_error", "reason": "Unclear intent"}],
+            "narrator_guidance": "I didn’t quite follow that. Say it as a single, concrete action or break it into steps.",
+            "suggested_alternatives": ["Describe one action you take", "Name an object in the scene you use"],
+            "categories": []
+        }]
+
+    logger.info(f"[FEASIBILITY] overall={overall}")
     return {
-        "overall": {"feasible": not any_blocked, "strategy": "deny" if any_blocked else "allow"},
+        "overall": overall,
         "per_intent": per_intent
     }
+
 
 def _infer_categories_from_text(text_l: str) -> Set[str]:
     """
