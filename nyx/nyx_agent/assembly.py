@@ -225,7 +225,7 @@ Output format:
 }"""
         
         # Use PATTERN_JSON_SCHEMA for structured output
-        runner = _make_runner(system_prompt, model_name, 0.7, PATTERN_JSON_SCHEMA)
+        runner = _make_runner(system_prompt, model_name, PATTERN_JSON_SCHEMA)
         
         class PatternAgent:
             def __init__(self, runner: Runner):
@@ -299,7 +299,7 @@ Output format:
             "required": ["is_valid", "consistency_score"]
         }
         
-        runner = _make_runner(system_prompt, model_name, 0.2, world_validation_schema)
+        runner = _make_runner(system_prompt, model_name, world_validation_schema)
         
         class WorldValidator:
             def __init__(self, runner: Runner):
