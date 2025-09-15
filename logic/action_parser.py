@@ -1,7 +1,7 @@
 # logic/action_parser.py
 import json
-from typing import List, Dict, Any
-from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Tuple
+from pydantic import BaseModel, Field, ValidationError
 from agents import Agent, Runner
 
 class ActionIntent(BaseModel):
@@ -38,14 +38,65 @@ INTENT_AGENT = Agent(
         "surreal_transformation","dream_sequence","vr_only_action"
       ]
     """,
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    # If your Runner supports it, this guarantees a JSON object string:
+    response_format={"type": "json_object"},
 )
 
+def _strip_code_fences(s: str) -> str:
+    s = (s or "").strip()
+    if s.startswith("```"):
+        parts = s.split("```")
+        # take the first block that looks like JSON
+        for p in parts:
+            ps = p.strip()
+            if ps.startswith("{") and ps.endswith("}"):
+                return ps
+        # fallback: middle section
+        if len(parts) >= 2:
+            return parts[1].strip()
+    return s
+
+def _loads_maybe_double(s: str) -> Dict[str, Any]:
+    """
+    Handles:
+      - raw dict string -> dict
+      - code-fenced JSON
+      - double-encoded JSON: e.g. "{\"intents\":[...]}"
+    """
+    s = _strip_code_fences(s)
+    data = json.loads(s)
+    # If the first loads gives a str that itself is JSON, load again
+    if isinstance(data, str):
+        ds = data.strip()
+        if ds.startswith("{") and ds.endswith("}"):
+            data = json.loads(ds)
+    if not isinstance(data, dict):
+        raise ValueError("Extractor returned non-object JSON")
+    return data
+
 async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
-    run = await Runner.run(INTENT_AGENT, user_input)
-    text = getattr(run, "final_output", None) or "{}"
+    # Ask Runner to enforce JSON if it supports response_format; otherwise it’s ignored harmlessly.
+    run = await Runner.run(INTENT_AGENT, user_input, response_format={"type": "json_object"})
+    # Pull the text payload safely (Runner implementations vary)
+    text = getattr(run, "final_output", None)
+    if not text:
+        # try common shapes
+        text = getattr(getattr(run, "output", None), "text", None) \
+               or getattr(getattr(run, "output", None), "content", None) \
+               or ""
     try:
-        data = json.loads(text)
-        return data.get("intents", [])
-    except Exception:
-        return []
+        payload = _loads_maybe_double(text)
+        raw_intents = payload.get("intents", [])
+        intents: List[Dict[str, Any]] = []
+        for item in raw_intents:
+            try:
+                ai = ActionIntent.model_validate(item)
+                intents.append(ai.model_dump())
+            except ValidationError as ve:
+                # skip malformed entries but keep the good ones
+                continue
+        return intents
+    except Exception as e:
+        # Let callers/logs see a real message; do NOT swallow silently.
+        raise ValueError(f"Failed to parse ActionIntent JSON: {e}") from e
