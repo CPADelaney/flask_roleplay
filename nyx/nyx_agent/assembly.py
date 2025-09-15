@@ -1,3 +1,4 @@
+# nyx/nyx_agent/assembly.py
 """
 Nyx Response Assembly Module - Refactored for ContextBundle Architecture
 Assembles final responses from agent outputs with canon-first priority and on-demand expansion
