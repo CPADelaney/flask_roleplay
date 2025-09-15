@@ -1,5 +1,5 @@
 # nyx/nyx_agent/orchestrator.py
-"""Main orchestration and runtime functions for Nyx Agent SDK"""
+"""Main orchestration and runtime functions for Nyx Agent SDK with enhanced reality enforcement"""
 
 import json
 import logging
@@ -11,7 +11,14 @@ from contextlib import asynccontextmanager
 from agents import Agent, Runner, RunConfig, RunContextWrapper, ModelSettings
 from db.connection import get_db_connection_context
 
-from nyx.nyx_agent.feasibility import assess_action_feasibility
+# Import enhanced feasibility functions
+from nyx.nyx_agent.feasibility import (
+    assess_action_feasibility,
+    record_impossibility,
+    record_possibility,
+    detect_setting_type,
+    assess_action_feasibility_fast
+)
 
 from .config import Config
 from .context import NyxContext
@@ -126,8 +133,8 @@ async def run_agent_with_error_handling(
 
 async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
     """Standalone image generation decision without tool context"""
-    from nyx.nyx_agent.models import ImageGenerationDecision  # Changed from .models
-    from nyx.nyx_agent.utils import _score_scene_text, _build_image_prompt  # Changed from .utils
+    from nyx.nyx_agent.models import ImageGenerationDecision
+    from nyx.nyx_agent.utils import _score_scene_text, _build_image_prompt
     
     # Ensure we have the actual NyxContext, not a wrapper
     if hasattr(ctx, 'context'):
@@ -151,14 +158,14 @@ async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -
     ).model_dump_json()
 
 
-# ===== Main Process Function =====
+# ===== Main Process Function with Enhanced Reality Enforcement =====
 async def process_user_input(
     user_id: int,
     conversation_id: int,
     user_input: str,
     context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Process user input with feasibility gate, post-run enforcement, and robust assembly"""
+    """Process user input with enhanced feasibility gate and reality enforcement"""
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     nyx_context = None
@@ -175,6 +182,13 @@ async def process_user_input(
             await nyx_context.initialize()
             nyx_context.current_context = (context_data or {}).copy()
             nyx_context.current_context["user_input"] = user_input
+            
+            # Auto-detect setting type if not set
+            setting_type = await nyx_context._get_from_db("SettingType")
+            if not setting_type:
+                setting_type = await detect_setting_type(nyx_context)
+                await nyx_context._save_to_db("SettingType", setting_type)
+                logger.info(f"[{trace_id}] Auto-detected setting type: {setting_type}")
 
         # ===== STEP 2: World state integration =====
         async with _log_step("world_state", trace_id):
@@ -182,44 +196,92 @@ async def process_user_input(
                 world_state = nyx_context.world_director.context.current_world_state
                 nyx_context.current_world_state = world_state
 
-        # ===== STEP 3: Feasibility check (pre-generation) =====
+        # ===== STEP 3: Enhanced Feasibility Check (Reality Gate) =====
         async with _log_step("feasibility_check", trace_id):
             try:
+                # Use full context-aware feasibility check
                 feas = await assess_action_feasibility(nyx_context, user_input)
-                # Persist feasibility into context for downstream steps and post-assembly clamp
+                
+                # Store in context for downstream use
                 nyx_context.current_context["feasibility"] = feas
-
+                
+                # Check if action is blocked
                 if feas.get("overall", {}).get("feasible") is False:
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
-                    guidance = first.get("narrator_guidance") or "That can’t happen here. Try a grounded approach that fits the setting."
-                    options = [{"text": o} for o in (first.get("suggested_alternatives") or [])]
-
-                    # Optional: track performance metrics for early refusal
+                    
+                    # Extract rejection details
+                    violations = first.get("violations", [])
+                    violation_text = violations[0]["reason"] if violations else "That violates the laws of this reality"
+                    reality_response = first.get("reality_response", "Reality ripples and refuses.")
+                    narrator_guidance = first.get("narrator_guidance", "The world itself resists your attempt.")
+                    
+                    # Record this impossibility for future consistency
+                    await record_impossibility(
+                        nyx_context,
+                        user_input,
+                        violation_text
+                    )
+                    
+                    # Build immersive rejection narrative
+                    rejection_narrative = f"*{reality_response}*\n\n{narrator_guidance}"
+                    
+                    # Add alternatives if available
+                    alternatives = first.get("suggested_alternatives", [])
+                    if alternatives:
+                        rejection_narrative += f"\n\n*Perhaps you could {alternatives[0]} instead.*"
+                    
+                    # Create choice objects from alternatives
+                    choices = []
+                    for alt in alternatives:
+                        choices.append({
+                            "text": alt,
+                            "description": "A possible action within this reality",
+                            "feasible": True
+                        })
+                    
+                    # Track performance metrics
                     nyx_context.update_performance("total_actions", nyx_context.performance_metrics.get("total_actions", 0) + 1)
                     nyx_context.update_performance("refused_actions", nyx_context.performance_metrics.get("refused_actions", 0) + 1)
-
-                    # Early-return: governance-style refusal with alternatives
+                    
+                    # Return early with reality-enforced rejection
                     return {
                         'success': True,
-                        'response': guidance,
+                        'response': rejection_narrative,
                         'metadata': {
-                            'choices': options,
+                            'choices': choices,
                             'universal_updates': False,
-                            'feasibility': feas
+                            'feasibility': feas,
+                            'action_blocked': True,
+                            'block_reason': violation_text,
+                            'reality_maintained': True,
+                            'setting_type': await nyx_context._get_from_db("SettingType")
                         },
                         'trace_id': trace_id,
                         'processing_time': time.time() - start_time,
                     }
+                else:
+                    # Action is feasible - record what's possible for future reference
+                    intents = feas.get("per_intent", [])
+                    if intents:
+                        categories = intents[0].get("categories", [])
+                        if categories:
+                            await record_possibility(nyx_context, user_input, categories)
+                            
             except Exception as e:
-                logger.debug(f"[{trace_id}] Feasibility check failed softly: {e}")
+                logger.warning(f"[{trace_id}] Feasibility check failed, allowing action: {e}")
+                # On error, default to allowing the action but log it
+                nyx_context.current_context["feasibility"] = {
+                    "overall": {"feasible": True, "strategy": "allow"},
+                    "error": str(e)
+                }
 
         # ===== STEP 4: Tool sanitization =====
         async with _log_step("tool_sanitization", trace_id):
             sanitize_agent_tools_in_place(nyx_main_agent)
             log_strict_hits(nyx_main_agent)
 
-        # ===== STEP 5: Running the agent =====
+        # ===== STEP 5: Running the agent (action is feasible) =====
         async with _log_step("agent_run", trace_id):
             runner_context = RunContextWrapper(nyx_context)
             safe_settings = ModelSettings(strict_tools=False, response_format=None)
@@ -302,15 +364,18 @@ async def process_user_input(
                     except Exception as e:
                         logger.exception(f"[{trace_id}] Post-run image decision failed: {e}")
 
-        # ===== STEP 7: Response assembly =====
+        # ===== STEP 7: Response assembly with feasibility awareness =====
         async with _log_step("response_assembly", trace_id):
             # Resolve any scene requests
             resp = await resolve_scene_requests(resp, nyx_context)
             
-            # Assemble final response; pass feasibility for post-assembly clamp
+            # Pass feasibility data for assembly awareness
             assembled = await assemble_nyx_response(
                 agent_output=resp,
-                processing_metadata={"feasibility": nyx_context.current_context.get("feasibility")}
+                processing_metadata={
+                    "feasibility": nyx_context.current_context.get("feasibility"),
+                    "setting_type": await nyx_context._get_from_db("SettingType")
+                }
             )
             
             # Save state changes
@@ -326,7 +391,9 @@ async def process_user_input(
                     'image': assembled['image'],
                     'telemetry': assembled['telemetry'],
                     'nyx_commentary': assembled.get('nyx_commentary'),
-                    'universal_updates': assembled.get('universal_updates', False)
+                    'universal_updates': assembled.get('universal_updates', False),
+                    'setting_type': await nyx_context._get_from_db("SettingType"),
+                    'reality_maintained': True
                 },
                 'trace_id': trace_id,
                 'processing_time': time.time() - start_time,
@@ -381,6 +448,19 @@ async def _save_context_state(ctx: NyxContext):
                 DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
             """, ctx.user_id, ctx.conversation_id, json.dumps(emotional_state, ensure_ascii=False))
             
+            # Save current scene state for future feasibility checks
+            scene_state = {
+                "location": ctx.current_context.get("current_location"),
+                "items": ctx.current_context.get("available_items", []),
+                "npcs": ctx.current_context.get("present_npcs", [])
+            }
+            
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'CurrentScene', $3)
+                ON CONFLICT (user_id, conversation_id, key) 
+                DO UPDATE SET value = EXCLUDED.value
+            """, ctx.user_id, ctx.conversation_id, json.dumps(scene_state))
             
             # Save scenario state if active
             if ctx.scenario_state and ctx.scenario_state.get("active") and ctx._tables_available.get("scenario_states", True):
