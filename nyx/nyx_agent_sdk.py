@@ -27,6 +27,8 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
 from .nyx_agent.context import NyxContext, SceneScope
 
+from nyx.nyx_agent.models import NyxResponse
+
 # Fallback agent runtime (loaded lazily; optional in some environments)
 try:
     from agents import Runner, RunConfig, ModelSettings, RunContextWrapper
@@ -218,98 +220,89 @@ class NyxAgentSDK:
         user_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> NyxResponse:
-        """
-        Final-stop pipeline:
-        1) (opt) pre-moderation on input
-        2) per-conversation rate-limit + idempotency cache
-        3) feasibility/rule enforcement pre-gate  ← added
-        4) orchestrator call with timeout (+ single retry)
-        5) normalize to NyxResponse
-        6) (opt) post-moderation on output
-        7) (opt) response filter
-        8) (opt) post hooks
-        9) (opt) telemetry + background tasks
-        """
+        """Process with MANDATORY feasibility checks (dynamic & robust)."""
         t0 = time.time()
         trace_id = uuid.uuid4().hex[:8]
-        meta = metadata or {}
-    
-        # rate-limit per conversation (optional)
+        meta = dict(metadata or {})
+
+        logger.info(f"[SDK-{trace_id}] Processing input: {message[:120]}")
+
+        # Rate limiting (unchanged)
         lock = None
-        if self.config.rate_limit_per_conversation:
+        if getattr(self.config, "rate_limit_per_conversation", False):
             lock = self._locks.setdefault(conversation_id, asyncio.Lock())
-            await lock.acquire()  # release in finally
-    
-        # idempotency cache (short horizon)
-        cache_key = self._cache_key(conversation_id, user_id, message, meta)
-        cached = self._read_cache(cache_key)
-        if cached:
-            cached.processing_time = cached.processing_time or (time.time() - t0)
-            if lock and lock.locked():
-                lock.release()
-            return cached
-    
+            await lock.acquire()
+
         try:
-            # 1) PRE moderation (optional)
-            if self.config.pre_moderate_input and content_moderation_guardrail:
+            # 1) Optional pre-moderation (leave as in your codebase)
+            if getattr(self.config, "pre_moderate_input", False) and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(message)
+                    meta["moderation_pre"] = verdict
                     if verdict and verdict.get("blocked"):
                         safe_text = verdict.get("safe_text") or "Your message couldn't be processed."
-                        resp = self._blocked_response(safe_text, trace_id, t0, stage="pre", details=verdict)
-                        self._write_cache(cache_key, resp)
-                        return resp
-                    else:
-                        meta = {**meta, "moderation_pre": verdict}
-                except Exception:
-                    logger.debug("pre-moderation failed (non-fatal)", exc_info=True)
-    
-            # 2) FEASIBILITY / RULE ENFORCEMENT PRE-GATE (before orchestrator)
-            if getattr(self.config, "enforce_rules_pre_orchestrator", True):
-                feas = None
-                try:
-                    # Prefer a fast, context-free checker if you have one
-                    assess_fn = None
-                    try:
-                        from nyx.nyx_agent.feasibility import assess_action_feasibility_fast as assess_fn  # type: ignore
-                    except Exception:
-                        try:
-                            from nyx.nyx_agent.feasibility import assess_action_feasibility as assess_fn  # type: ignore
-                        except Exception:
-                            assess_fn = None
-    
-                    if assess_fn:
-                        feas = await assess_fn(
-                            user_id=int(user_id),
-                            conversation_id=int(conversation_id),
-                            text=message,
+                        resp = NyxResponse(
+                            narrative=safe_text,
+                            metadata={"blocked_by": "pre_moderation", "verdict": verdict},
+                            success=True,
+                            trace_id=trace_id,
+                            processing_time=time.time() - t0,
                         )
-                        meta = {**meta, "feasibility": feas}
-    
-                        overall = (feas or {}).get("overall", {})
-                        if overall.get("feasible") is False:
-                            per = (feas or {}).get("per_intent") or []
-                            first = per[0] if per and isinstance(per[0], dict) else {}
-                            guidance = first.get("narrator_guidance") or "That can’t happen here. Try a grounded approach that fits the setting."
-                            # Map alternatives into a simple list for UI
-                            options = first.get("suggested_alternatives") or []
-    
-                            # Reuse your blocked-response helper for consistent shape/telemetry
-                            resp = self._blocked_response(
-                                guidance, trace_id, t0, stage="feasibility",
-                                details={"feasibility": feas, "suggested_alternatives": options}
-                            )
-                            # Mark moderation-ish flag so downstream knows it was gated
-                            resp.metadata.setdefault("moderated", True)
-                            resp.metadata["moderation_reason"] = "feasibility_gate"
-                            self._write_cache(cache_key, resp)
-                            return resp
-                    else:
-                        logger.debug("feasibility module not available; skipping pre-gate")
+                        self._write_cache(self._cache_key(conversation_id, user_id, message, meta), resp)
+                        return resp
                 except Exception:
-                    logger.debug("feasibility pre-gate failed softly (skipped)", exc_info=True)
-    
-            # 3) Primary path with timeout + retry (orchestrator)
+                    logger.debug(f"[SDK-{trace_id}] pre-moderation failed softly", exc_info=True)
+
+            # 2) MANDATORY fast feasibility gate (dynamic)
+            feas = None
+            try:
+                from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
+                feas = await assess_action_feasibility_fast(
+                    user_id=int(user_id),
+                    conversation_id=int(conversation_id),
+                    text=message
+                )
+                meta["feasibility"] = feas
+            except ImportError as e:
+                # Configuration issue should not kill user flow; log and continue
+                logger.error(f"[SDK-{trace_id}] Feasibility module not found: {e}")
+            except Exception as e:
+                logger.error(f"[SDK-{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
+
+            if isinstance(feas, dict):
+                overall = feas.get("overall", {})
+                feasible_flag = overall.get("feasible")
+                strategy = (overall.get("strategy") or "").lower()
+
+                # Hard block at SDK if 'deny'
+                if feasible_flag is False and strategy == "deny":
+                    per = feas.get("per_intent") or []
+                    first = per[0] if per and isinstance(per[0], dict) else {}
+                    guidance = first.get("narrator_guidance") or "That can't happen here."
+                    alternatives = first.get("suggested_alternatives") or []
+                    violations = first.get("violations") or []
+
+                    resp = NyxResponse(
+                        narrative=guidance,
+                        choices=[{"text": alt} for alt in alternatives[:4]],
+                        metadata={
+                            "action_blocked": True,
+                            "feasibility": feas,
+                            "block_stage": "pre_orchestrator",
+                            "violations": violations,
+                            "strategy": "deny",
+                        },
+                        success=True,
+                        trace_id=trace_id,
+                        processing_time=time.time() - t0
+                    )
+                    self._write_cache(self._cache_key(conversation_id, user_id, message, meta), resp)
+                    return resp
+
+                # If ASK, we let it pass to orchestrator but keep meta so assembly can steer
+                logger.info(f"[SDK-{trace_id}] Feasibility: feasible={feasible_flag} strategy={strategy}")
+
+            # 3) Orchestrator call (unchanged except we pass feasibility meta)
             result = await self._call_orchestrator_with_timeout(
                 message=message,
                 conversation_id=conversation_id,
@@ -413,18 +406,22 @@ class NyxAgentSDK:
                 await self._maybe_log_perf(resp)
                 await self._maybe_enqueue_maintenance(resp, conversation_id)
     
-                self._write_cache(cache_key, resp)
+                self._write_cache(self._cache_key(conversation_id, user_id, message, meta), resp)
                 return resp
     
-            except Exception as e2:
-                logger.error("fallback path also failed", exc_info=True)
-                resp = self._error_response(str(e2), trace_id, t0)
-                self._write_cache(cache_key, resp)
-                return resp
-    
-        finally:
-            if lock and lock.locked():
-                lock.release()
+            except Exception as e:
+                logger.error(f"[SDK-{trace_id}] Process failed", exc_info=True)
+                return NyxResponse(
+                    narrative=f"System error: {e}",
+                    metadata={"error": "sdk_process_failure", "details": str(e)},
+                    success=False,
+                    trace_id=trace_id,
+                    processing_time=time.time() - t0,
+                    error=str(e),
+                )
+            finally:
+                if lock and lock.locked():
+                    lock.release()
 
 
 
