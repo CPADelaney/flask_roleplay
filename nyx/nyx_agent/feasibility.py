@@ -7,11 +7,12 @@ Maintains reality consistency without hard-coded rules or repetitive responses.
 import json
 import random
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from agents import Agent, Runner
 from nyx.nyx_agent.context import NyxContext
 from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
+import asyncio
 
 import logging
 logger = logging.getLogger(__name__)
@@ -150,6 +151,40 @@ SETTING_DETECTIVE_AGENT = Agent(
     """,
     model="gpt-5-nano"
 )
+
+# Optional helpers (kept soft — only used if present in your codebase)
+try:
+    from .helpers import _infer_categories_from_text, _scene_alternatives, _compose_guidance
+except Exception:
+    def _infer_categories_from_text(text_l: str) -> Set[str]:
+        # ultra-light fallback; intentionally weak (keeps system dynamic)
+        hits = set()
+        if any(k in text_l for k in ("summon", "conjure", "spawn", "manifest", "materialize")):
+            hits.add("ex_nihilo_conjuration")
+        if any(k in text_l for k in ("fly", "levitate", "hover")):
+            hits.add("physics_violation")
+        if any(k in text_l for k in ("spaceship", "laser", "plasma", "warp")):
+            hits.add("scifi_setpiece")
+        if any(k in text_l for k in ("hack drone", "access ai", "drone")):
+            hits.add("ai_system_access")
+        return hits
+
+    def _scene_alternatives(npcs, items, features, time_phase) -> List[str]:
+        alts = []
+        if items:
+            alts.append(f"use the {items[0]}")
+        if features:
+            alts.append(f"interact with {features[0]}")
+        if npcs:
+            alts.append(f"ask {npcs[0].get('name','someone')} for help")
+        if not alts:
+            alts.append("try a simpler, grounded action that uses something visible in the scene")
+        return alts
+
+    def _compose_guidance(setting_kind: str, location_name: Optional[str], blocking: Set[str]) -> str:
+        loc = f" in {location_name}" if location_name else ""
+        cats = ", ".join(sorted(blocking))
+        return f"Reality{loc} doesn’t support that ({cats}). Try something that fits what’s actually present."
 
 async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dict[str, Any]:
     """
@@ -1062,49 +1097,7 @@ def _default_feasibility_response(intents: List[Dict]) -> Dict[str, Any]:
         "per_intent": per_intent
     }
 
-# Fast context-free feasibility check for pre-gate
-# nyx/nyx_agent/feasibility.py
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .db import get_db_connection_context  # adjust import path if different
-from .action_parser import parse_action_intents  # your existing parser
-from .logging import logger  # your logger
-
-# Optional helpers (kept soft — only used if present in your codebase)
-try:
-    from .helpers import _infer_categories_from_text, _scene_alternatives, _compose_guidance
-except Exception:
-    def _infer_categories_from_text(text_l: str) -> Set[str]:
-        # ultra-light fallback; intentionally weak (keeps system dynamic)
-        hits = set()
-        if any(k in text_l for k in ("summon", "conjure", "spawn", "manifest", "materialize")):
-            hits.add("ex_nihilo_conjuration")
-        if any(k in text_l for k in ("fly", "levitate", "hover")):
-            hits.add("physics_violation")
-        if any(k in text_l for k in ("spaceship", "laser", "plasma", "warp")):
-            hits.add("scifi_setpiece")
-        if any(k in text_l for k in ("hack drone", "access ai", "drone")):
-            hits.add("ai_system_access")
-        return hits
-
-    def _scene_alternatives(npcs, items, features, time_phase) -> List[str]:
-        alts = []
-        if items:
-            alts.append(f"use the {items[0]}")
-        if features:
-            alts.append(f"interact with {features[0]}")
-        if npcs:
-            alts.append(f"ask {npcs[0].get('name','someone')} for help")
-        if not alts:
-            alts.append("try a simpler, grounded action that uses something visible in the scene")
-        return alts
-
-    def _compose_guidance(setting_kind: str, location_name: Optional[str], blocking: Set[str]) -> str:
-        loc = f" in {location_name}" if location_name else ""
-        cats = ", ".join(sorted(blocking))
-        return f"Reality{loc} doesn’t support that ({cats}). Try something that fits what’s actually present."
 
 def _normalize_bool(v: Any) -> bool:
     if isinstance(v, bool): return v
