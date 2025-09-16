@@ -75,7 +75,7 @@ def _loads_maybe_double(s: str) -> Dict[str, Any]:
 
 async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
     # Ask Runner to enforce JSON if it supports response_format; otherwise it’s ignored harmlessly.
-    run = await Runner.run(INTENT_AGENT, user_input, response_format={"type": "json_object"})
+    run = await Runner.run(INTENT_AGENT, user_input)
     # Pull the text payload safely (Runner implementations vary)
     text = getattr(run, "final_output", None)
     if not text:
