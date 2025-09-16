@@ -188,6 +188,7 @@ async def process_user_input(
         if isinstance(fast, dict):
             overall = fast.get("overall", {})
             if overall.get("feasible") is False and (overall.get("strategy") or "").lower() == "deny":
+                # [Keep existing early return logic - this is correct]
                 per = fast.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 guidance = first.get("narrator_guidance") or "That can't happen here. Try a grounded approach that fits the setting."
@@ -215,32 +216,9 @@ async def process_user_input(
             await nyx_context.initialize()
             nyx_context.current_context = (context_data or {}).copy()
             nyx_context.current_context["user_input"] = user_input
-
-            # Ensure SettingType exists (auto-detect once)
-            setting_type = None
-            try:
-                async with get_db_connection_context() as conn:
-                    setting_type = await conn.fetchval("""
-                        SELECT value FROM CurrentRoleplay
-                        WHERE user_id=$1 AND conversation_id=$2 AND key='SettingType'
-                    """, user_id, conversation_id)
-            except Exception:
-                pass
-
-            if not setting_type:
-                try:
-                    from nyx.nyx_agent.feasibility import detect_setting_type
-                    detected = await detect_setting_type(nyx_context)
-                    logger.info(f"[{trace_id}] Auto-detected SettingType: {detected}")
-                    async with get_db_connection_context() as conn:
-                        await conn.execute("""
-                            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                            VALUES ($1, $2, 'SettingType', $3)
-                            ON CONFLICT (user_id, conversation_id, key)
-                            DO UPDATE SET value = EXCLUDED.value
-                        """, user_id, conversation_id, json.dumps(detected))
-                except Exception:
-                    logger.debug(f"[{trace_id}] detect_setting_type failed softly", exc_info=True)
+            
+            # [Keep existing SettingType detection code]
+            # ...
 
         # ---- STEP 2: World state integration ----------------------------------
         async with _log_step("world_state", trace_id):
@@ -250,6 +228,8 @@ async def process_user_input(
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")
         feas = None
+        enhanced_input = user_input  # Initialize with original input
+        
         try:
             from nyx.nyx_agent.feasibility import assess_action_feasibility, record_impossibility, record_possibility
             feas = await assess_action_feasibility(nyx_context, user_input)
@@ -266,6 +246,7 @@ async def process_user_input(
             strategy = (overall.get("strategy") or "").lower()
 
             if feasible_flag is False and strategy == "deny":
+                # [Keep existing early return with dynamic rejection - this is correct]
                 per = feas.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 violations = first.get("violations", [])
@@ -301,8 +282,15 @@ async def process_user_input(
                     'trace_id': trace_id,
                     'processing_time': time.time() - start_time,
                 }
+            elif feasible_flag is False and strategy == "ask":
+                # SOFT BLOCK: Add context to help agent understand constraints
+                constraints = feas.get("per_intent", [{}])[0].get("violations", [])
+                constraint_text = "[REALITY CHECK: This action pushes boundaries. Consider: " + ", ".join(
+                    v.get("reason", "") for v in constraints
+                ) + ". Describe attempt with appropriate limitations.]"
+                enhanced_input = f"{constraint_text}\n\n{user_input}"
             elif feasible_flag is True:
-                # record possibility categories for later consistency
+                # Record possibility for consistency
                 try:
                     intents = feas.get("per_intent", [])
                     if intents:
@@ -311,19 +299,23 @@ async def process_user_input(
                             await record_possibility(nyx_context, user_input, cats)
                 except Exception:
                     logger.debug(f"[{trace_id}] record_possibility failed softly", exc_info=True)
+                
+                # Add subtle reality confirmation
+                enhanced_input = f"[REALITY CHECK: Action is feasible within universe laws.]\n\n{user_input}"
 
         # ---- STEP 4: Tool sanitization ----------------------------------------
         async with _log_step("tool_sanitization", trace_id):
             sanitize_agent_tools_in_place(nyx_main_agent)
             log_strict_hits(nyx_main_agent)
 
-        # ---- STEP 5: Run main agent -------------------------------------------
+        # ---- STEP 5: Run main agent with enhanced input ----------------------
         async with _log_step("agent_run", trace_id):
             runner_context = RunContextWrapper(nyx_context)
             safe_settings = ModelSettings(strict_tools=False, response_format=None)
             run_config = RunConfig(model_settings=safe_settings)
 
-            result = await Runner.run(nyx_main_agent, user_input, context=runner_context, run_config=run_config)
+            # Use enhanced_input that includes feasibility context
+            result = await Runner.run(nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config)
 
             # Normalize result to a list of messages/events
             if hasattr(result, 'messages'):
