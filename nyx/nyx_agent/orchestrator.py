@@ -38,6 +38,13 @@ from .utils import (
     extract_runner_response,
 )
 
+# ---- optional punishment enforcer (refactored to accept meta) ---------------
+try:
+    # expects signature: enforce_all_rules_on_player(player_name, user_id, conversation_id, metadata)
+    from logic.rule_enforcement import enforce_all_rules_on_player  # type: ignore
+except Exception:  # pragma: no cover
+    enforce_all_rules_on_player = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # ===== Logging Helper =====
@@ -344,23 +351,9 @@ async def process_user_input(
                     "content": [{"type": "output_text", "text": str(text_out)}]
                 }]
 
-        # ---- STEP 6: Post-run enforcement (updates/image hooks) ----------------
+        # ---- STEP 6: Post-run enforcement (updates/image hooks + punishment) ---
         async with _log_step("post_run_enforcement", trace_id):
             # Inject universal updates if missing
-            def _did_call_tool(stream, name: str) -> bool:
-                for ev in (stream or []):
-                    if ev.get("type") == "function_call" and ev.get("name") == name:
-                        return True
-                return False
-
-            def _extract_last_assistant_text(stream) -> Optional[str]:
-                for ev in reversed(stream or []):
-                    if ev.get("role") == "assistant":
-                        for c in (ev.get("content") or []):
-                            if c.get("type") == "output_text":
-                                return c.get("text")
-                return None
-
             if not _did_call_tool(resp_stream, "generate_universal_updates"):
                 narrative = _extract_last_assistant_text(resp_stream)
                 if narrative and len(narrative) > 20:
@@ -378,6 +371,7 @@ async def process_user_input(
                     except Exception as e:
                         logger.debug(f"[{trace_id}] Post-run universal updates failed softly: {e}")
 
+            # Image decision if not already done
             if not _did_call_tool(resp_stream, "decide_image_generation"):
                 narrative = _extract_last_assistant_text(resp_stream)
                 if narrative and len(narrative) > 20:
@@ -391,6 +385,41 @@ async def process_user_input(
                     except Exception as e:
                         logger.debug(f"[{trace_id}] Post-run image decision failed softly: {e}")
 
+            # Punishment enforcement — runs every turn, gate decides tier/emit
+            if enforce_all_rules_on_player:
+                try:
+                    player_name = (
+                        nyx_context.current_context.get("player_name")
+                        or getattr(nyx_context, "player_name", None)
+                        or "Chase"
+                    )
+
+                    punishment_meta = {
+                        "scene_tags": nyx_context.current_context.get("scene_tags", []),
+                        "stimuli": nyx_context.current_context.get("stimuli", []),
+                        "feasibility": (feas or fast),
+                        "turn_index": nyx_context.current_context.get("turn_index", 0),
+                    }
+
+                    punishment_result = await enforce_all_rules_on_player(
+                        player_name=player_name,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        metadata=punishment_meta,
+                    )
+
+                    resp_stream.append({
+                        "type": "function_call_output",
+                        "name": "enforce_punishments",
+                        "output": json.dumps(punishment_result)
+                    })
+
+                    nyx_context.current_context["punishment"] = punishment_result
+                except Exception as e:
+                    logger.debug(f"[{trace_id}] Punishment enforcement failed softly: {e}")
+            else:
+                logger.debug(f"[{trace_id}] punishment module unavailable; skipping enforcement")
+
         # ---- STEP 7: Response assembly (feasibility-aware) ---------------------
         async with _log_step("response_assembly", trace_id):
             resp_stream = await resolve_scene_requests(resp_stream, nyx_context)
@@ -398,6 +427,7 @@ async def process_user_input(
                 agent_output=resp_stream,
                 processing_metadata={
                     "feasibility": (feas or fast),
+                    "punishment": nyx_context.current_context.get("punishment"),  # <-- pass through
                 },
                 user_input=user_input,
                 conversation_id=str(conversation_id),
@@ -416,6 +446,7 @@ async def process_user_input(
                     "nyx_commentary": (assembled.metadata or {}).get("nyx_commentary"),
                     "universal_updates": (assembled.metadata or {}).get("universal_updates", False),
                     "reality_maintained": True,
+                    "punishment": nyx_context.current_context.get("punishment"),   # <-- include in output
                 },
                 "trace_id": trace_id,
                 "processing_time": time.time() - start_time,
@@ -612,7 +643,7 @@ async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, An
                 trust_change = 0.1 if interaction_data.get("outcome") == "success" else -0.05
                 bond_change = 0.05 if interaction_data.get("emotional_impact", {}).get("positive", 0) > 0 else 0
                 power_change = 0.0
-                
+                 
                 if interaction_data.get("interaction_type") == "training":
                     power_change = 0.05
                 elif interaction_data.get("interaction_type") == "conflict":
