@@ -184,12 +184,44 @@ class NyxAgentSDK:
         return None
 
     async def cleanup_conversation(self, conversation_id: str) -> None:
-        """Free rate-limit lock, cached results, and any warmed context for a conversation."""
+        """Free rate-limit lock, cached results, warmed context, and addiction gate state for a conversation."""
         self._locks.pop(conversation_id, None)
         self._warm_contexts.pop(conversation_id, None)
+        
+        # Clear result cache for this conversation
         keys = [k for k in self._result_cache if k.startswith(f"{conversation_id}|")]
         for k in keys:
             self._result_cache.pop(k, None)
+        
+        # Purge addiction gate state if available
+        try:
+            from logic.addiction_system_sdk import purge_gate_state
+            # We need user_id which might not be available here
+            # If you track user_id per conversation, use it:
+            # user_id = self._get_user_id_for_conversation(conversation_id)
+            # purge_gate_state(int(user_id), int(conversation_id))
+            
+            # Alternative: expose a version that just needs conversation_id
+            # For now, we can iterate through all keys looking for matches
+            from logic.addiction_system_sdk import _GATE_STATE, _GATE_LOCKS, _GATE_TOUCH
+            
+            # Find and remove all entries for this conversation
+            conv_id = int(conversation_id) if str(conversation_id).isdigit() else conversation_id
+            keys_to_remove = []
+            for key in _GATE_STATE.keys():
+                if key[1] == conv_id:  # key is (user_id, conversation_id)
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                _GATE_STATE.pop(key, None)
+                _GATE_LOCKS.pop(key, None)
+                _GATE_TOUCH.pop(key, None)
+                
+            logger.debug(f"Purged {len(keys_to_remove)} addiction gate entries for conversation {conversation_id}")
+        except ImportError:
+            pass  # Addiction system not available
+        except Exception as e:
+            logger.debug(f"Failed to purge addiction gate state: {e}")
 
     async def warmup_cache(self, conversation_id: str, location: str) -> None:
         """
@@ -220,21 +252,75 @@ class NyxAgentSDK:
         user_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> NyxResponse:
-        """Process with MANDATORY feasibility checks (dynamic & robust)."""
+        """Process with MANDATORY feasibility checks (dynamic & robust) + addiction meta (turn_index, scene_tags, stimuli)."""
+        import time, uuid, re
         t0 = time.time()
         trace_id = uuid.uuid4().hex[:8]
         meta = dict(metadata or {})
-
+    
         logger.info(f"[SDK-{trace_id}] Processing input: {message[:120]}")
-
-        # Rate limiting (unchanged)
+    
+        # --- rate limiting (unchanged) ---
         lock = None
         if getattr(self.config, "rate_limit_per_conversation", False):
             lock = self._locks.setdefault(conversation_id, asyncio.Lock())
             await lock.acquire()
-
+    
+        # --- small helpers (local, side-effect free) ---
+        def _lower(s: Optional[str]) -> str:
+            return (s or "").lower()
+    
+        def _compile_stimuli_regex() -> Optional[re.Pattern]:
+            """Union of known stimuli; prefer shared vocab from addiction_system_sdk, else fallback local set."""
+            tokens = None
+            try:
+                # Prefer the canonical mapping from the addiction SDK
+                from logic.addiction_system_sdk import AddictionTriggerConfig  # type: ignore
+                cfg = AddictionTriggerConfig()
+                vocab = set()
+                for vs in cfg.stimuli_affinity.values():
+                    vocab |= set(vs or [])
+                tokens = sorted(vocab)
+            except Exception:
+                # Minimal fallback; keep it tiny and safe to change
+                tokens = [
+                    "feet","toes","ankle","barefoot","sandals","flipflops","heels",
+                    "perfume","musk","sweat","locker","gym","laundry","socks",
+                    "ankle_socks","knee_highs","thigh_highs","stockings",
+                    "hips","ass","shorts","tight_skirt",
+                    "snicker","laugh","eye_roll","dismissive",
+                    "order","command","kneel","obedience",
+                    "perspiration","moist"
+                ]
+            # turn underscores into a pattern that also matches spaces/dashes
+            escaped = []
+            for t in tokens:
+                if "_" in t:
+                    escaped.append(r"\b" + re.escape(t).replace(r"\_", r"[-_ ]") + r"\b")
+                else:
+                    escaped.append(r"\b" + re.escape(t) + r"\b")
+            return re.compile(r"(?:%s)" % "|".join(escaped), flags=re.IGNORECASE)
+    
+        def _extract_stimuli(text: str) -> List[str]:
+            rx = getattr(self, "_stimuli_rx", None)
+            if rx is None:
+                rx = _compile_stimuli_regex()
+                setattr(self, "_stimuli_rx", rx)
+            if not rx:
+                return []
+            return sorted({m.group(0).lower().replace("-", "_").replace(" ", "_") for m in rx.finditer(text or "")})
+    
+        # --- cache key set EARLY so all early returns use the same key ---
+        cache_key = self._cache_key(conversation_id, user_id, message, meta)
+    
         try:
-            # 1) Optional pre-moderation (leave as in your codebase)
+            # --- cache check ---
+            cached = self._read_cache(cache_key)
+            if cached:
+                logger.info(f"[SDK-{trace_id}] Cache hit")
+                return cached
+    
+            # --- 1) Optional pre-moderation ---
             if getattr(self.config, "pre_moderate_input", False) and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(message)
@@ -248,12 +334,12 @@ class NyxAgentSDK:
                             trace_id=trace_id,
                             processing_time=time.time() - t0,
                         )
-                        self._write_cache(self._cache_key(conversation_id, user_id, message, meta), resp)
+                        self._write_cache(cache_key, resp)
                         return resp
                 except Exception:
                     logger.debug(f"[SDK-{trace_id}] pre-moderation failed softly", exc_info=True)
-
-            # 2) MANDATORY fast feasibility gate (dynamic)
+    
+            # --- 2) MANDATORY fast feasibility gate ---
             feas = None
             try:
                 from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
@@ -264,16 +350,15 @@ class NyxAgentSDK:
                 )
                 meta["feasibility"] = feas
             except ImportError as e:
-                # Configuration issue should not kill user flow; log and continue
                 logger.error(f"[SDK-{trace_id}] Feasibility module not found: {e}")
             except Exception as e:
                 logger.error(f"[SDK-{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
-
+    
             if isinstance(feas, dict):
                 overall = feas.get("overall", {})
                 feasible_flag = overall.get("feasible")
                 strategy = (overall.get("strategy") or "").lower()
-
+    
                 # Hard block at SDK if 'deny'
                 if feasible_flag is False and strategy == "deny":
                     per = feas.get("per_intent") or []
@@ -281,7 +366,7 @@ class NyxAgentSDK:
                     guidance = first.get("narrator_guidance") or "That can't happen here."
                     alternatives = first.get("suggested_alternatives") or []
                     violations = first.get("violations") or []
-
+    
                     resp = NyxResponse(
                         narrative=guidance,
                         choices=[{"text": alt} for alt in alternatives[:4]],
@@ -296,13 +381,41 @@ class NyxAgentSDK:
                         trace_id=trace_id,
                         processing_time=time.time() - t0
                     )
-                    self._write_cache(self._cache_key(conversation_id, user_id, message, meta), resp)
+                    self._write_cache(cache_key, resp)
                     return resp
-
-                # If ASK, we let it pass to orchestrator but keep meta so assembly can steer
+    
                 logger.info(f"[SDK-{trace_id}] Feasibility: feasible={feasible_flag} strategy={strategy}")
-
-            # 3) Orchestrator call (unchanged except we pass feasibility meta)
+    
+            # --- 2.5) Inject turn_index, scene tags, and stimuli for addiction gating ---
+            # Turn indexing (persistent per (user, conversation))
+            if not hasattr(self, "_turn_indices"):
+                self._turn_indices: Dict[Tuple[str, str], int] = {}
+            key = (str(user_id), str(conversation_id))
+            turn_index = self._turn_indices.get(key, -1) + 1
+            self._turn_indices[key] = turn_index
+            meta["turn_index"] = turn_index
+    
+            # Scene tags (optional; keep your manager wiring if present)
+            if "scene_tags" not in meta:
+                try:
+                    if hasattr(self, "scene_manager"):
+                        current_scene = self.scene_manager.get_current_scene(conversation_id)
+                        if current_scene:
+                            tags = list(current_scene.get("tags", []))
+                            if tags:
+                                meta["scene_tags"] = tags
+                                meta["scene"] = {"tags": tags}
+                except Exception:
+                    logger.debug(f"[SDK-{trace_id}] scene tag lookup failed softly", exc_info=True)
+    
+            # Stimuli from the current user message (plus any incoming metadata hint)
+            msg_stimuli = _extract_stimuli(message)
+            meta_stimuli = set(_lower(s) for s in meta.get("stimuli", []) if isinstance(s, str))
+            combined_stimuli = sorted(set(msg_stimuli) | meta_stimuli)
+            if combined_stimuli:
+                meta["stimuli"] = combined_stimuli
+    
+            # --- 3) Orchestrator call with enriched meta ---
             result = await self._call_orchestrator_with_timeout(
                 message=message,
                 conversation_id=conversation_id,
@@ -313,13 +426,24 @@ class NyxAgentSDK:
             resp.processing_time = resp.processing_time or (time.time() - t0)
             resp.trace_id = resp.trace_id or trace_id
     
-            # 4) POST moderation (optional)
-            if self.config.post_moderate_output and content_moderation_guardrail:
+            # Optionally: glean stimuli from orchestrator narrative to help next turn (cheap & safe)
+            try:
+                if resp and resp.narrative:
+                    out_stimuli = _extract_stimuli(resp.narrative)
+                    if out_stimuli:
+                        # Store a short-term hint; up to you if you want to persist elsewhere
+                        meta.setdefault("observed_stimuli", [])
+                        meta["observed_stimuli"] = sorted({*meta["observed_stimuli"], *out_stimuli})
+            except Exception:
+                logger.debug(f"[SDK-{trace_id}] output stimuli glean failed softly", exc_info=True)
+    
+            # --- 4) Optional post-moderation ---
+            if getattr(self.config, "post_moderate_output", False) and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
                     resp.metadata["moderation_post"] = verdict
                     if verdict and verdict.get("blocked"):
-                        if self.config.redact_on_moderation_block:
+                        if getattr(self.config, "redact_on_moderation_block", False):
                             resp.narrative = verdict.get("safe_text") or "Content redacted."
                             resp.metadata["moderated"] = True
                         else:
@@ -327,8 +451,8 @@ class NyxAgentSDK:
                 except Exception:
                     logger.debug("post-moderation failed (non-fatal)", exc_info=True)
     
-            # 5) Response filter (optional)
-            if self._filter_class and resp.narrative:
+            # --- 5) Optional response filter ---
+            if getattr(self, "_filter_class", None) and resp.narrative:
                 try:
                     filter_instance = self._filter_class(
                         user_id=int(user_id),
@@ -341,19 +465,19 @@ class NyxAgentSDK:
                 except Exception:
                     logger.debug("ResponseFilter failed softly", exc_info=True)
     
-            # 6) Post hooks (optional)
-            if self._post_hooks:
+            # --- 6) Optional post hooks ---
+            if getattr(self, "_post_hooks", None):
                 for hook in self._post_hooks:
                     try:
                         resp = await hook(resp)
                     except Exception:
                         logger.debug("post_hook failed softly", exc_info=True)
     
-            # 7) Telemetry + background queue (optional)
+            # --- 7) Telemetry & background maintenance ---
             await self._maybe_log_perf(resp)
             await self._maybe_enqueue_maintenance(resp, conversation_id)
     
-            # 8) Cache and return
+            # --- 8) Cache & return ---
             self._write_cache(cache_key, resp)
             return resp
     
@@ -370,12 +494,12 @@ class NyxAgentSDK:
                 )
     
                 # Post moderation/filter/hooks even on fallback
-                if self.config.post_moderate_output and content_moderation_guardrail:
+                if getattr(self.config, "post_moderate_output", False) and content_moderation_guardrail:
                     try:
                         verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
                         resp.metadata["moderation_post"] = verdict
                         if verdict and verdict.get("blocked"):
-                            if self.config.redact_on_moderation_block:
+                            if getattr(self.config, "redact_on_moderation_block", False):
                                 resp.narrative = verdict.get("safe_text") or "Content redacted."
                                 resp.metadata["moderated"] = True
                             else:
@@ -383,7 +507,7 @@ class NyxAgentSDK:
                     except Exception:
                         logger.debug("post-moderation failed (non-fatal)", exc_info=True)
     
-                if self._filter_class and resp.narrative:
+                if getattr(self, "_filter_class", None) and resp.narrative:
                     try:
                         filter_instance = self._filter_class(
                             user_id=int(user_id),
@@ -396,7 +520,7 @@ class NyxAgentSDK:
                     except Exception:
                         logger.debug("ResponseFilter failed softly", exc_info=True)
     
-                if self._post_hooks:
+                if getattr(self, "_post_hooks", None):
                     for hook in self._post_hooks:
                         try:
                             resp = await hook(resp)
@@ -406,7 +530,7 @@ class NyxAgentSDK:
                 await self._maybe_log_perf(resp)
                 await self._maybe_enqueue_maintenance(resp, conversation_id)
     
-                self._write_cache(self._cache_key(conversation_id, user_id, message, meta), resp)
+                self._write_cache(cache_key, resp)
                 return resp
     
             except Exception as e:
@@ -422,7 +546,9 @@ class NyxAgentSDK:
             finally:
                 if lock and lock.locked():
                     lock.release()
-
+        finally:
+            if lock and lock.locked():
+                lock.release()
 
 
     async def stream_user_input(
