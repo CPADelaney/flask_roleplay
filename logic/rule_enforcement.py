@@ -15,10 +15,7 @@ from dataclasses import dataclass, field
 import json, random, asyncio, logging, time, hashlib, asyncpg
 
 # Optional LoreSystem canonical writes
-try:
-    from lore.core.lore_system import LoreSystem
-except Exception:
-    LoreSystem = None  # graceful fallback
+from lore.core.lore_system import LoreSystem
 
 rule_enforcement_bp = Blueprint("rule_enforcement_bp", __name__)
 logger = logging.getLogger(__name__)
