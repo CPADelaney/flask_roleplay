@@ -4,18 +4,29 @@ Refactored Punishment Enforcement with Nyx-style gating:
 - Persistent, per-conversation cooldown + de-dupe
 - Feasibility/scene/stimuli-aware tiering ('ambient' | 'soft' | 'major')
 - Deterministic RNG per (user_id, conversation_id)
-- Canonical writes via LoreSystem when possible
+- Canonical writes via LoreSystem when possible (guarded import)
 - Safe fallbacks if LoreSystem or extended columns are unavailable
 """
+
+from __future__ import annotations
 
 from quart import Blueprint, request, jsonify
 from db.connection import get_db_connection_context
 from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
 from dataclasses import dataclass, field
-import json, random, asyncio, logging, time, hashlib, asyncpg
+import json
+import random
+import asyncio
+import logging
+import time
+import hashlib
+import asyncpg
 
-# Optional LoreSystem canonical writes
-from lore.core.lore_system import LoreSystem
+# Optional LoreSystem canonical writes (guarded import)
+try:
+    from lore.core.lore_system import LoreSystem  # type: ignore
+except Exception:
+    LoreSystem = None  # type: ignore
 
 rule_enforcement_bp = Blueprint("rule_enforcement_bp", __name__)
 logger = logging.getLogger(__name__)
@@ -37,7 +48,7 @@ _GATE_TTL_SECONDS = 60 * 60 * 12  # 12h idle GC
 
 def _gate_for(uid: int, cid: int) -> Tuple[_PersistentGate, asyncio.Lock]:
     key = (uid, cid)
-    st = _GA TE_STATE.setdefault(key, _PersistentGate())
+    st = _GATE_STATE.setdefault(key, _PersistentGate())
     lk = _GATE_LOCKS.setdefault(key, asyncio.Lock())
     _GATE_TOUCH[key] = time.time()
     # opportunistic GC
@@ -50,6 +61,7 @@ def _gate_for(uid: int, cid: int) -> Tuple[_PersistentGate, asyncio.Lock]:
     return st, lk
 
 def purge_punishment_gate_state(user_id: int, conversation_id: int):
+    """Explicitly purge gate state for a conversation."""
     key = (user_id, conversation_id)
     for d in (_GATE_STATE, _GATE_LOCKS, _GATE_TOUCH):
         d.pop(key, None)
@@ -79,7 +91,7 @@ class PunishmentTriggerConfig:
         "obedience": {"order", "command", "kneel", "obedience"},
         "implements": {"paddle", "cane", "collar", "leash"},
     })
-    severity_threshold_level: int = 3  # escalate to 'major' above this
+    severity_threshold_level: int = 3  # escalate to 'major' at/above this hint level
 
 # -------------------------------------------------------------------
 # Gate / Context
@@ -128,7 +140,7 @@ class PunishmentContext:
         severity_hint_level: int
     ) -> Optional[str]:
         """
-        Decide None|'ambient'|'soft'|'major' using feasibility/scene/stimuli and violations.
+        Decide None | 'ambient' | 'soft' | 'major' using feasibility/scene/stimuli and violations.
         """
         turn_idx = int(meta.get("turn_index", 0))
         scene_tags = ((meta.get("scene") or {}).get("tags")) or meta.get("scene_tags") or []
@@ -164,7 +176,11 @@ class PunishmentContext:
 # Helpers: Player/NPC stats with graceful fallbacks
 # -------------------------------------------------------------------
 
-async def get_player_stats(player_name="Chase", user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> Dict[str, int]:
+async def get_player_stats(
+    player_name: str = "Chase",
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None
+) -> Dict[str, int]:
     try:
         async with get_db_connection_context() as conn:
             row = None
@@ -204,8 +220,12 @@ async def get_player_stats(player_name="Chase", user_id: Optional[int] = None, c
         logger.error(f"Unexpected error fetching player stats: {e}", exc_info=True)
         return {}
 
-async def get_npc_stats(npc_name: Optional[str] = None, npc_id: Optional[int] = None,
-                        user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> Dict[str, Any]:
+async def get_npc_stats(
+    npc_name: Optional[str] = None,
+    npc_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None
+) -> Dict[str, Any]:
     try:
         async with get_db_connection_context() as conn:
             row = None
@@ -250,7 +270,7 @@ async def get_npc_stats(npc_name: Optional[str] = None, npc_id: Optional[int] = 
         return {}
 
 # -------------------------------------------------------------------
-# Condition parsing/eval (unchanged)
+# Condition parsing/eval
 # -------------------------------------------------------------------
 
 def parse_condition(condition_str: str) -> Tuple[str, List[Tuple[str, str, int]]]:
@@ -270,14 +290,18 @@ def parse_condition(condition_str: str) -> Tuple[str, List[Tuple[str, str, int]]
             stat_name = stat_name.title()
             try:
                 threshold = int(threshold_str)
-            except:
+            except Exception:
                 threshold = 0
             parsed_list.append((stat_name, operator, threshold))
         else:
             logger.warning(f"Unrecognized condition part: '{part}'")
     return (logic_op, parsed_list)
 
-def evaluate_condition(logic_op: str, parsed_conditions: List[Tuple[str, str, int]], stats_dict: Dict[str, int]) -> bool:
+def evaluate_condition(
+    logic_op: str,
+    parsed_conditions: List[Tuple[str, str, int]],
+    stats_dict: Dict[str, int]
+) -> bool:
     results = []
     for (stat_name, operator, threshold) in parsed_conditions:
         actual_value = stats_dict.get(stat_name, 0)
@@ -307,27 +331,28 @@ def evaluate_condition(logic_op: str, parsed_conditions: List[Tuple[str, str, in
 # Effect application (uses LoreSystem if available)
 # -------------------------------------------------------------------
 
-async def _upsert_player_obedience_min(player_name: str, min_value: int, user_id: Optional[int], conversation_id: Optional[int]) -> Optional[int]:
+async def _upsert_player_obedience_min(
+    player_name: str, min_value: int,
+    user_id: Optional[int], conversation_id: Optional[int]
+) -> Optional[int]:
     try:
         if LoreSystem:
-            ls = await LoreSystem.get_instance(int(user_id) if user_id else 0, int(conversation_id) if conversation_id else 0)
-            res = await ls.propose_and_enact_change(
+            ls = await LoreSystem.get_instance(int(user_id or 0), int(conversation_id or 0))
+            await ls.propose_and_enact_change(
                 ctx=None,
                 entity_type="PlayerStats",
-                entity_identifier={"player_name": player_name, "user_id": user_id, "conversation_id": conversation_id},
+                entity_identifier={
+                    "player_name": player_name,
+                    "user_id": user_id,
+                    "conversation_id": conversation_id
+                },
                 updates={"obedience": f"GREATEST(obedience, {int(min_value)})"},
                 reason="Punishment enforcement: raise obedience minimum",
             )
-            return None  # LoreSystem doesn’t return the value directly in many setups
+            return None
         else:
             async with get_db_connection_context() as conn:
-                q = """
-                    UPDATE PlayerStats
-                    SET obedience = GREATEST(obedience, $2)
-                    WHERE player_name=$1
-                    RETURNING obedience
-                """
-                # try extended shape
+                q = "UPDATE PlayerStats SET obedience = GREATEST(obedience, $2) WHERE player_name=$1 RETURNING obedience"
                 if user_id is not None and conversation_id is not None:
                     try:
                         q = """
@@ -344,14 +369,21 @@ async def _upsert_player_obedience_min(player_name: str, min_value: int, user_id
         logger.error(f"obedience min upsert failed: {e}", exc_info=True)
         return None
 
-async def _set_player_obedience(player_name: str, value: int, user_id: Optional[int], conversation_id: Optional[int]) -> Optional[int]:
+async def _set_player_obedience(
+    player_name: str, value: int,
+    user_id: Optional[int], conversation_id: Optional[int]
+) -> Optional[int]:
     try:
         if LoreSystem:
-            ls = await LoreSystem.get_instance(int(user_id) if user_id else 0, int(conversation_id) if conversation_id else 0)
+            ls = await LoreSystem.get_instance(int(user_id or 0), int(conversation_id or 0))
             await ls.propose_and_enact_change(
                 ctx=None,
                 entity_type="PlayerStats",
-                entity_identifier={"player_name": player_name, "user_id": user_id, "conversation_id": conversation_id},
+                entity_identifier={
+                    "player_name": player_name,
+                    "user_id": user_id,
+                    "conversation_id": conversation_id
+                },
                 updates={"obedience": f"{int(value)}"},
                 reason="Punishment enforcement: force obedience",
             )
@@ -375,10 +407,13 @@ async def _set_player_obedience(player_name: str, value: int, user_id: Optional[
         logger.error(f"set obedience failed: {e}", exc_info=True)
         return None
 
-async def _bump_npc_cruelty(npc_id: int, delta: int, user_id: Optional[int], conversation_id: Optional[int]) -> Optional[int]:
+async def _bump_npc_cruelty(
+    npc_id: int, delta: int,
+    user_id: Optional[int], conversation_id: Optional[int]
+) -> Optional[int]:
     try:
         if LoreSystem:
-            ls = await LoreSystem.get_instance(int(user_id) if user_id else 0, int(conversation_id) if conversation_id else 0)
+            ls = await LoreSystem.get_instance(int(user_id or 0), int(conversation_id or 0))
             await ls.propose_and_enact_change(
                 ctx=None,
                 entity_type="NPCStats",
@@ -406,8 +441,13 @@ async def _bump_npc_cruelty(npc_id: int, delta: int, user_id: Optional[int], con
         logger.error(f"npc cruelty bump failed: {e}", exc_info=True)
         return None
 
-async def apply_effect(effect_str: str, player_name: str, npc_id: Optional[int] = None,
-                       user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> Dict[str, Any]:
+async def apply_effect(
+    effect_str: str,
+    player_name: str,
+    npc_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None
+) -> Dict[str, Any]:
     """
     Parse and apply an effect. Returns telemetry + optional generated scenario.
     """
@@ -444,15 +484,21 @@ async def apply_effect(effect_str: str, player_name: str, npc_id: Optional[int] 
 
         intensity_range = (0, 30)
         if npc_intensity is not None:
-            if npc_intensity >= 90: intensity_range = (90, 100)
-            elif npc_intensity >= 60: intensity_range = (60, 90)
-            elif npc_intensity >= 30: intensity_range = (30, 60)
+            if npc_intensity >= 90:
+                intensity_range = (90, 100)
+            elif npc_intensity >= 60:
+                intensity_range = (60, 90)
+            elif npc_intensity >= 30:
+                intensity_range = (30, 60)
         else:
             pstats = await get_player_stats(player_name, user_id, conversation_id)
             corr, obed = pstats.get("Corruption", 0), pstats.get("Obedience", 0)
-            if corr >= 90 or obed >= 90: intensity_range = (90, 100)
-            elif corr >= 60 or obed >= 60: intensity_range = (60, 90)
-            elif corr >= 30 or obed >= 30: intensity_range = (30, 60)
+            if corr >= 90 or obed >= 90:
+                intensity_range = (90, 100)
+            elif corr >= 60 or obed >= 60:
+                intensity_range = (60, 90)
+            elif corr >= 30 or obed >= 30:
+                intensity_range = (30, 60)
 
         # Pull tier row (optional)
         chosen_example = None
@@ -464,11 +510,10 @@ async def apply_effect(effect_str: str, player_name: str, npc_id: Optional[int] 
             """, intensity_range[0], intensity_range[1])
         if row:
             result["intensityTier"] = row["tier_name"]
-            examples = []
             try:
                 examples = json.loads(row["activity_examples"] or "[]")
             except Exception:
-                pass
+                examples = []
             if examples:
                 chosen_example = random.choice(examples)
 
@@ -542,21 +587,24 @@ async def enforce_all_rules_on_player(
 
         violations_count = len(matches)
 
-        # 3) Compute a severity hint (0..4) from player or NPC context
-        # Simple heuristic: map max of (Obedience, Corruption, Dependency) to 0..4
+        # 3) Compute a severity hint (0..4) from player context
         sev = 0
         probe = max(pstats.get("Obedience", 0), pstats.get("Corruption", 0), pstats.get("Dependency", 0))
-        if probe >= 90: sev = 4
-        elif probe >= 70: sev = 3
-        elif probe >= 50: sev = 2
-        elif probe >= 30: sev = 1
+        if probe >= 90:
+            sev = 4
+        elif probe >= 70:
+            sev = 3
+        elif probe >= 50:
+            sev = 2
+        elif probe >= 30:
+            sev = 1
 
         # 4) Decide tier
         tier = ctx.decide_tier(meta, violations_count=violations_count, severity_hint_level=sev)
         if not tier:
             return {"tier": "none", "triggered": [], "telemetry": {"violations": violations_count, "severity": sev}}
 
-        # mark emission now that we act
+        # Mark emission now that we act
         await ctx._mark_emit(int(meta.get("turn_index", 0)))
 
         # 5) Apply according to tier
@@ -564,10 +612,10 @@ async def enforce_all_rules_on_player(
         if tier == "ambient":
             # Return a single gentle warning, no DB writes
             if matches:
-                first = matches[0][1]
+                first = matches[0]
                 triggered.append({
-                    "condition": matches[0][0],
-                    "effect": first,
+                    "condition": first[0],
+                    "effect": first[1],
                     "outcome": {"hint": "A warning presence lingers; consequences may follow."}
                 })
         elif tier == "soft":
@@ -631,8 +679,7 @@ async def enforce_rules_route():
         conversation_id=conversation_id,
         metadata=metadata
     )
-    status = 200
-    return jsonify(result), status
+    return jsonify(result), 200
 
 # Public API
 __all__ = [
