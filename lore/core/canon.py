@@ -22,6 +22,37 @@ logger = logging.getLogger(__name__)
 
 _memory_orchestrators = {}
 
+def convert_importance_to_significance(importance):
+    """
+    Convert importance string or integer to significance float.
+    
+    Args:
+        importance: String ("high", "medium", "low"), integer (1-10), or float (0.0-1.0)
+        
+    Returns:
+        Float between 0.0 and 1.0
+    """
+    if isinstance(importance, (int, float)):
+        # If it's a number 1-10, scale to 0.1-1.0
+        if importance > 1:
+            return min(1.0, max(0.1, importance / 10.0))
+        # If already 0-1, return as is
+        return min(1.0, max(0.0, importance))
+    
+    # String importance to float mapping
+    importance_map = {
+        "critical": 1.0,
+        "high": 0.8,
+        "medium": 0.5,
+        "low": 0.3,
+        "trivial": 0.1
+    }
+    
+    if isinstance(importance, str):
+        return importance_map.get(importance.lower(), 0.5)
+    
+    return 0.5  # Default
+
 def ensure_canonical_context(ctx) -> CanonicalContext:
     """Convert any context to a CanonicalContext."""
     if isinstance(ctx, CanonicalContext):
@@ -569,11 +600,19 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
     )
     
     # Store NPC creation as a memory
+    importance_to_significance = {
+        "critical": 1.0,
+        "high": 0.8,
+        "medium": 0.5,
+        "low": 0.3,
+        "trivial": 0.1
+    }
+    
     await memory_orchestrator.store_memory(
         entity_type=EntityType.NYX,
         entity_id=0,  # Nyx as the canon keeper
         memory_text=f"Created new NPC '{npc_name}' with role '{role or 'unspecified'}'",
-        importance="high",
+        significance=importance_to_significance.get("high", 0.8),  # Convert to float
         tags=["npc_creation", "canon", npc_name.lower()],
         metadata={
             "npc_id": npc_id,
@@ -695,7 +734,7 @@ async def find_or_create_entity(
         entity_type=EntityType.NYX,
         entity_id=0,
         memory_text=f"Created new {entity_type}: {entity_name}",
-        importance="high",
+        significance=convert_importance_to_significance("high"),
         tags=[entity_type.lower(), "creation", "canon"],
         metadata={
             "entity_id": entity_id,
@@ -758,12 +797,14 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
     }
     importance = importance_map.get(significance, "medium")
     
-    # Store as a memory in the memory system
+    # Map significance (1-10 integer) to float (0.0-1.0)
+    significance_float = min(1.0, max(0.1, significance / 10.0))
+    
     await memory_orchestrator.store_memory(
         entity_type=EntityType.LORE,
         entity_id=0,  # Use 0 for general lore
         memory_text=event_text,
-        importance=importance,
+        significance=significance_float,  # Use float instead of string
         tags=tags + ["canonical_event"],
         metadata={
             "event_id": event_id,
@@ -1027,7 +1068,7 @@ async def find_or_create_conflict(
             entity_type="nation",
             entity_id=nation_id,
             memory_text=f"Became involved in conflict: {conflict_name}",
-            importance="critical",
+            significance=convert_importance_to_significance("critical"),
             tags=["conflict", conflict_type, "political"],
             metadata={"conflict_id": conflict_id}
         )
@@ -1685,7 +1726,7 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         entity_type=EntityType.LORE,
         entity_id=0,
         memory_text=f"Location '{location_name}' established: {description}",
-        importance="high",
+        significance=convert_importance_to_significance("high"),
         tags=['location', 'creation', 'canon'],
         metadata={
             "location_id": location_id,
@@ -2068,7 +2109,7 @@ async def update_entity_with_governance(
             entity_type=EntityType.LORE,
             entity_id=0,
             memory_text=event_text,
-            importance="medium" if significance < 7 else "high",
+            significance=convert_importance_to_significance("medium" if significance < 7 else "high"),
             tags=[entity_type.lower(), 'update', 'governance'],
             metadata={
                 "entity_type": entity_type,
@@ -2328,7 +2369,7 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
             entity_type=entity_type,
             entity_id=entity_id,
             memory_text=relationship_text,
-            importance="medium",
+            significance=convert_importance_to_significance("medium"),
             tags=["relationship", "social_link", kwargs.get('link_type', 'neutral')],
             metadata={
                 "link_id": state.link_id,
@@ -2676,7 +2717,7 @@ async def find_or_create_player_stats(ctx, conn, player_name: str, **initial_sta
             entity_type=EntityType.PLAYER,
             entity_id=ctx.user_id,
             memory_text=f"Character {player_name} begins their journey",
-            importance="high",
+            significance=convert_importance_to_significance("high"),
             tags=['player', 'initialization', 'stats'],
             metadata={"player_name": player_name, "initial_stats": stats}
         )
@@ -2786,7 +2827,7 @@ async def update_player_stat_canonically(
         entity_type=EntityType.PLAYER,
         entity_id=ctx.user_id,
         memory_text=memory_text,
-        importance="high" if abs(change) >= 20 else "medium",
+        significance=0.8 if abs(change) >= 20 else 0.5
         emotional=True,
         tags=['stat_change', stat_name, emotion_map.get(stat_name, 'neutral')],
         metadata={
