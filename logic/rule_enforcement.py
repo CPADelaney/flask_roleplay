@@ -1,6 +1,5 @@
+# logic/rule_enforcement.py
 """
-logic/rule_enforcement.py
-
 Refactored Punishment Enforcement with Nyx-style gating:
 - Persistent, per-conversation cooldown + de-dupe
 - Feasibility/scene/stimuli-aware tiering ('ambient' | 'soft' | 'major')
