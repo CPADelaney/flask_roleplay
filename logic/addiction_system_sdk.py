@@ -5,6 +5,7 @@ Refactored Addiction System with full Nyx Governance integration.
 REFACTORED: All database writes now go through canon or LoreSystem
 FIXED: Separated implementation functions from decorated tools to avoid 'FunctionTool' not callable errors
 FIXED: Incorporated feedback from code review
+NEW: Smart gating system to only show addiction messages when contextually appropriate
 
 Features:
 1) Complete integration with Nyx central governance
@@ -12,16 +13,20 @@ Features:
 3) Action reporting for monitoring and tracing
 4) Directive handling for system control
 5) Registration with proper agent types and constants
+6) Smart context-aware message gating with cooldowns
 """
 
 import logging
 import random
 import json
 import asyncio
-import asyncpg
 import os
+import time
+import hashlib
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional, Union, Iterable, Set, Tuple
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -41,8 +46,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # DB connection - UPDATED: Using new async context manager
 from db.connection import get_db_connection_context
 
-# Import canon and lore system for canonical writes
-from lore.core import canon
+# Import lore system for canonical writes
 from lore.core.lore_system import LoreSystem
 
 # Nyx governance integration
@@ -58,6 +62,54 @@ from nyx.governance_helpers import (
     with_governance
 )
 from nyx.directive_handler import DirectiveHandler
+
+# -------------------------------------------------------------------------------
+# Persistent Gate State (per-conversation, survives context recreation)
+# -------------------------------------------------------------------------------
+
+@dataclass
+class _PersistentGate:
+    """Persistent cooldown/dedupe state per conversation"""
+    last_any_turn: int = -1_000_000
+    last_any_ts: float = 0.0
+    last_ambient_turn: int = -1_000_000
+    last_ambient_ts: float = 0.0
+    seen_stimuli: Dict[str, Tuple[str, float]] = field(default_factory=dict)
+    rng_counter: int = 0  # NEW: Counter for deterministic RNG
+
+_GATE_STATE: Dict[Tuple[int, int], _PersistentGate] = {}  # (user_id, conversation_id) -> state
+_GATE_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
+_GATE_TTL_SECONDS = 60 * 60 * 12  # 12h idle GC
+_GATE_TOUCH: Dict[Tuple[int, int], float] = {}
+
+def _gate_for(uid: int, cid: int) -> Tuple[_PersistentGate, asyncio.Lock]:
+    """Get or create gate state with lock, perform opportunistic GC"""
+    key = (uid, cid)
+    st = _GATE_STATE.setdefault(key, _PersistentGate())
+    lk = _GATE_LOCKS.setdefault(key, asyncio.Lock())
+    _GATE_TOUCH[key] = time.time()
+    # opportunistic GC
+    cutoff = time.time() - _GATE_TTL_SECONDS
+    for k, ts in list(_GATE_TOUCH.items()):
+        if ts < cutoff:
+            _GATE_TOUCH.pop(k, None)
+            _GATE_STATE.pop(k, None)
+            _GATE_LOCKS.pop(k, None)
+    return st, lk
+
+def _next_rand(pg: _PersistentGate, user_id: int, conversation_id: int, salt: str = "") -> float:
+    """Generate deterministic random float in [0,1) using counter and salt"""
+    import hashlib
+    pg.rng_counter += 1
+    seed = f"{user_id}:{conversation_id}:{pg.rng_counter}:{salt}".encode()
+    digest = hashlib.blake2b(seed, digest_size=8).digest()
+    return int.from_bytes(digest, "big") / float(2**64)
+
+def purge_gate_state(user_id: int, conversation_id: int):
+    """Explicitly purge gate state for a conversation"""
+    key = (user_id, conversation_id)
+    for d in (_GATE_STATE, _GATE_LOCKS, _GATE_TOUCH):
+        d.pop(key, None)
 
 # -------------------------------------------------------------------------------
 # Pydantic Models for Structured Outputs
@@ -90,7 +142,6 @@ class AddictionSafety(BaseModel):
     reasoning: str = Field(..., description="Reasoning for the decision")
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
 
-
 class ThematicMessage(BaseModel):
     level: int = Field(..., ge=1, le=4, description="Addiction severity tier 1-4")
     text: str = Field(..., description="Short in-world narrative line; 1-2 sentences max.")
@@ -116,6 +167,47 @@ class ThematicMessagesBundle(BaseModel):
     addictions: List[ThematicAddictionMessages]
 
 # -------------------------------------------------------------------------------
+# Trigger Configuration
+# -------------------------------------------------------------------------------
+
+@dataclass
+class AddictionTriggerConfig:
+    """Configuration for when addiction messages should appear"""
+    # Only fire in scenes that smell like kink/fetish—or when feasibility tagged it.
+    allowed_scene_tags: Set[str] = field(default_factory=lambda: {
+        "erotic", "sex", "tease", "humiliation", "punishment", "aftercare", "ritual", "fetish",
+        "kink", "dominance", "submissive", "intimate"
+    })
+    intent_markers: Set[str] = field(default_factory=lambda: {
+        "fetish", "submission", "addiction_trigger", "dominance", "humiliation", "arousal", "kink"
+    })
+
+    # Ambient in neutral scenes if a relevant stimulus is present (e.g., sandals -> feet)
+    ambient_in_neutral: bool = True
+    ambient_prob_base: float = 0.10      # baseline chance if relevant + cooldown
+    ambient_prob_lvl4: float = 0.28      # stronger cravings at higher levels
+    ambient_cooldown_turns: int = 2
+    ambient_cooldown_seconds: float = 45.0
+
+    # Global spam guards (for any tier)
+    min_turn_gap: int = 3
+    min_seconds_between: float = 75.0
+
+    # Which stimuli map to which addictions (extend as needed)
+    stimuli_affinity: dict = field(default_factory=lambda: {
+        "feet": {"feet","toes","ankle","barefoot","sandals","flipflops","heels"},
+        "scent": {"perfume","musk","sweat","locker","gym","laundry","socks"},
+        "socks": {"socks","ankle_socks","knee_highs","thigh_highs","stockings"},
+        "ass": {"hips","ass","shorts","tight_skirt"},
+        "humiliation": {"snicker","laugh","eye_roll","dismissive"},
+        "submission": {"order","command","kneel","obedience"},
+        "sweat": {"gym","workout","locker","perspiration","moist"},
+    })
+
+    # Tier thresholds (soft vs major)
+    priority_level: int = 3      # >= this pushes toward soft/major
+
+# -------------------------------------------------------------------------------
 # Global Constants & Thematic Messages
 # -------------------------------------------------------------------------------
 
@@ -128,10 +220,6 @@ ADDICTION_LEVELS = {
 }
 
 # Default fallback if external JSON is missing
-# ---------------------------------------------------------------------------
-# Thematic message *seeds* (labels only) used if we must synthesize messages.
-# Actual text will be generated agentically at runtime.
-# ---------------------------------------------------------------------------
 ADDICTION_TYPES = ["socks", "feet", "sweat", "ass", "scent", "humiliation", "submission"]
 
 # Minimal bare fallback used only if generation fails catastrophically.
@@ -141,8 +229,6 @@ _DEFAULT_THEMATIC_MESSAGES_MIN = {
 }
 
 THEMATIC_MESSAGES_FILE = os.getenv("THEMATIC_MESSAGES_FILE", "thematic_messages.json")
-# Historical compatibility var kept for callers that may still import it.
-# Point them to the minimal fallback.
 _DEFAULT_THEMATIC_MESSAGES = _DEFAULT_THEMATIC_MESSAGES_MIN
 
 ################################################################################
@@ -205,7 +291,6 @@ class ThematicMessages:
                 )
                 self.file_source = "generated"
                 # write to disk for caching
-                # TODO: Consider atomic write (temp file + rename) to avoid race conditions
                 try:
                     with open(THEMATIC_MESSAGES_FILE, "w") as f:
                         json.dump(generated, f, indent=2, ensure_ascii=False)
@@ -219,14 +304,11 @@ class ThematicMessages:
         for t in ADDICTION_TYPES:
             merged[t] = _DEFAULT_THEMATIC_MESSAGES_MIN[t].copy()
             if generated and t in generated:
-                # Ensure all keys are strings
                 merged[t].update({str(k): v for k, v in generated[t].items()})
             if file_msgs and t in file_msgs:
-                # file already string-keyed; ensure string keys anyway
                 merged[t].update({str(k): v for k, v in file_msgs[t].items()})
         self.messages = merged
 
-    # --- existing public helpers unchanged ----------------------------
     def get_for(self, addiction_type: str, level: Union[int, str]) -> str:
         level_str = str(level)
         return self.messages.get(addiction_type, {}).get(level_str, "")
@@ -238,17 +320,7 @@ class ThematicMessages:
         ]
 
 ################################################################################
-# Agent Model Settings (Configurable)
-################################################################################
-
-def get_openai_client():
-    """Get OpenAI client instance for agents"""
-    from openai import AsyncOpenAI
-    import os
-    return AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-################################################################################
-# Main Context
+# Main Context with Smart Gating
 ################################################################################
 
 class AddictionContext:
@@ -262,7 +334,16 @@ class AddictionContext:
         self.directive_task = None
         self.lore_system = None
 
-    async def initialize(self):
+        # Trigger governance (tiered, stimulus-aware)
+        self.trigger_cfg = AddictionTriggerConfig()
+        self.current_context: Dict[str, Any] = {}
+        self._latched_window = False
+        
+        # Use persistent gate state with lock that survives context recreation
+        self._pg, self._pg_lock = _gate_for(user_id, conversation_id)
+
+    async def initialize(self, start_background: bool = False):
+        """Initialize the addiction context. Only set start_background=True for long-lived contexts."""
         from nyx.integrate import get_central_governance
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
         self.thematic_messages = await ThematicMessages.get(self.user_id, self.conversation_id)
@@ -273,29 +354,162 @@ class AddictionContext:
         )
         self.directive_handler.register_handler(DirectiveType.ACTION, self._handle_action_directive)
         self.directive_handler.register_handler(DirectiveType.PROHIBITION, self._handle_prohibition_directive)
-        self.directive_task = asyncio.create_task(
-            self.directive_handler.start_background_processing(interval=60.0)
-        )
+        
+        # Only start background task for long-lived contexts to avoid task leak
+        if start_background and not self.directive_task:
+            self.directive_task = asyncio.create_task(
+                self.directive_handler.start_background_processing(interval=60.0)
+            )
+
+    # --- trigger helpers (tiered, stimulus-aware) ---------------------------------
+    def _cooldowns_ok(self, turn_idx: int, now: float) -> bool:
+        if (turn_idx - self._pg.last_any_turn) < self.trigger_cfg.min_turn_gap:
+            return False
+        if (now - self._pg.last_any_ts) < self.trigger_cfg.min_seconds_between:
+            return False
+        return True
+
+    def _ambient_cooldowns_ok(self, turn_idx: int, now: float) -> bool:
+        if (turn_idx - self._pg.last_ambient_turn) < self.trigger_cfg.ambient_cooldown_turns:
+            return False
+        if (now - self._pg.last_ambient_ts) < self.trigger_cfg.ambient_cooldown_seconds:
+            return False
+        return True
+
+    def _mark_emit(self, turn_idx: int, tier: str):
+        """Mark emission with thread-safe locking"""
+        now = time.time()
+        # Create task to handle lock acquisition without blocking
+        async def _do():
+            async with self._pg_lock:
+                self._pg.last_any_turn, self._pg.last_any_ts = turn_idx, now
+                if tier == "ambient":
+                    self._pg.last_ambient_turn, self._pg.last_ambient_ts = turn_idx, now
+        asyncio.create_task(_do())
+
+    def _scene_allows(self, scene_tags: Iterable[str]) -> bool:
+        return bool(set(scene_tags or []) & self.trigger_cfg.allowed_scene_tags)
+
+    def _intents_allow(self, feas: Optional[dict]) -> bool:
+        if not isinstance(feas, dict):
+            return False
+        per = feas.get("per_intent") or []
+        for it in per:
+            if set((it or {}).get("tags", [])) & self.trigger_cfg.intent_markers:
+                return True
+        overall = feas.get("overall") or {}
+        return bool(set(overall.get("tags", [])) & self.trigger_cfg.intent_markers)
+
+    def _affinity_hit(self, active_types: Set[str], stimuli: Iterable[str]) -> Optional[str]:
+        """Return one addiction type that matches present stimuli; thread-safe."""
+        stim = set(stimuli or [])
+        if not stim:
+            return None
+        for a_type in active_types:
+            if stim & self.trigger_cfg.stimuli_affinity.get(a_type, set()):
+                # de-dupe same stimulus burst per type
+                key = "|".join(sorted(stim & self.trigger_cfg.stimuli_affinity.get(a_type, set())))
+                h = hashlib.sha1(key.encode()).hexdigest()[:8]
+                last = self._pg.seen_stimuli.get(a_type)
+                if not last or last[0] != h or (time.time() - last[1]) > 120.0:
+                    # Thread-safe update
+                    async def _remember(a_type: str, h: str):
+                        async with self._pg_lock:
+                            self._pg.seen_stimuli[a_type] = (h, time.time())
+                    asyncio.create_task(_remember(a_type, h))
+                    return a_type
+        return None
+
+    def latch_effect_window(self):
+        """Allow exactly one emission attempt on next effects call."""
+        self._latched_window = True
+
+    def decide_effect_tier(
+        self,
+        meta: Dict[str, Any],
+        changed: bool,
+        highest_level: int,
+        active_types: Set[str]
+    ) -> Optional[str]:
+        """
+        Decide None|'ambient'|'soft'|'major' given scene, intents, stimuli, cooldowns.
+        Uses deterministic RNG with counter for reproducible but non-repeating behavior.
+        """
+        turn_idx = int(meta.get("turn_index", 0))
+        now = time.time()
+        scene_tags = ((meta.get("scene") or {}).get("tags")) or meta.get("scene_tags") or []
+        feas = meta.get("feasibility")
+        stimuli = set(meta.get("stimuli", []))  # e.g., {"sandals","cashier"} from orchestrator
+
+        # explicit force respects global cooldowns
+        if meta.get("addiction_force") is True and self._cooldowns_ok(turn_idx, now):
+            return "major"
+
+        relevant = self._scene_allows(scene_tags) or self._intents_allow(feas)
+
+        if changed:
+            # If a stat changed and we're in a relevant slice, escalate by severity
+            if relevant and self._cooldowns_ok(turn_idx, now):
+                return "major" if highest_level >= self.trigger_cfg.priority_level else "soft"
+            # If not a relevant slice, fall back to ambient only if stimuli say so
+            if self.trigger_cfg.ambient_in_neutral:
+                hit = self._affinity_hit(active_types, stimuli)
+                if hit and self._ambient_cooldowns_ok(turn_idx, now):
+                    return "ambient"
+            return None
+
+        # No stat change:
+        if relevant and self._cooldowns_ok(turn_idx, now):
+            # soft craving in relevant scenes even without change, controlled by prob
+            prob = self.trigger_cfg.ambient_prob_base if highest_level < self.trigger_cfg.priority_level else self.trigger_cfg.ambient_prob_lvl4
+            r = _next_rand(self._pg, self.user_id, self.conversation_id, salt=f"tier_soft:{turn_idx}")
+            return "soft" if r < prob else None
+
+        # Neutral scene: allow ambient if a matching stimulus is present and ambient cooldown passes
+        if self.trigger_cfg.ambient_in_neutral:
+            hit = self._affinity_hit(active_types, stimuli)
+            if hit and self._ambient_cooldowns_ok(turn_idx, now):
+                # ambient probability scales with severity
+                prob = self.trigger_cfg.ambient_prob_base + 0.05 * max(0, highest_level - 1)
+                r = _next_rand(self._pg, self.user_id, self.conversation_id, salt=f"tier_ambient:{turn_idx}:{hit}")
+                if r < min(prob, self.trigger_cfg.ambient_prob_lvl4):
+                    return "ambient"
+
+        # one-shot latch (e.g., something upstream decided we should hint once)
+        if self._latched_window and self._cooldowns_ok(turn_idx, now):
+            return "soft"
+
+        return None
 
     async def _handle_action_directive(self, directive):
         instruction = directive.get("instruction", "")
+        meta = directive.get("meta") or {}
+        # Make directive meta available to gate with stimuli support
+        self.current_context = {
+            "scene": {"tags": meta.get("scene_tags", [])},
+            "scene_tags": meta.get("scene_tags", []),
+            "stimuli": meta.get("stimuli", []),  # NEW: pass stimuli from directive
+            "feasibility": meta.get("feasibility"),
+            "turn_index": meta.get("turn_index", 0),
+            "addiction_force": meta.get("addiction_force", False),
+        }
+
         if "monitor addictions" in instruction.lower():
+            # state only; no latch here; gate will decide later
             ctx_wrapper = RunContextWrapper(context=self)
-            return await _check_addiction_levels_impl(
-                ctx_wrapper,
-                directive.get("player_name", "player")
-            )
+            return await _check_addiction_levels_impl(ctx_wrapper, directive.get("player_name", "player"))
+
         if "apply addiction effect" in instruction.lower():
-            addiction_type = directive.get("addiction_type")
-            if addiction_type:
-                ctx_wrapper = RunContextWrapper(context=self)
-                return await _update_addiction_level_impl(
-                    ctx_wrapper,
-                    directive.get("player_name", "player"),
-                    addiction_type,
-                    progression_multiplier=directive.get("multiplier", 1.0),
-                    target_npc_id=directive.get("target_npc_id")
-                )
+            # We do NOT force emission here. We respect the same unified gate.
+            ctx_wrapper = RunContextWrapper(context=self)
+            return await _update_addiction_level_impl(
+                ctx_wrapper,
+                directive.get("player_name", "player"),
+                directive.get("addiction_type"),
+                progression_multiplier=directive.get("multiplier", 1.0),
+                target_npc_id=directive.get("target_npc_id")
+            )
+
         return {"status": "unknown_directive", "instruction": instruction}
 
     async def _handle_prohibition_directive(self, directive):
@@ -362,7 +576,6 @@ async def _check_addiction_levels_impl(
     conversation_id = ctx.context.conversation_id
     try:
         async with get_db_connection_context() as conn:
-            # Ensure table exists through canon
             await ensure_addiction_table_exists(ctx.context, conn)
             
             rows = await conn.fetch(
@@ -378,7 +591,6 @@ async def _check_addiction_levels_impl(
                 if target_npc_id is None:
                     addiction_data[addiction_type] = level
                 else:
-                    # Fetch NPC data while still in connection context
                     npc_row = await conn.fetchrow(
                         "SELECT npc_name FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3",
                         user_id, conversation_id, target_npc_id
@@ -441,7 +653,11 @@ async def _update_addiction_level_impl(
 
             current_level = row["level"] if row else 0
             prev_level = current_level
-            roll = random.random()
+            
+            # Use deterministic RNG with counter for consistent but non-repeating behavior
+            turn_idx = ctx.context.current_context.get("turn_index", 0)
+            roll = _next_rand(ctx.context._pg, user_id, conversation_id, 
+                            salt=f"update:{player_name}:{addiction_type}:{turn_idx}:{target_npc_id}")
 
             # Dynamic progression regression handling
             if roll < (progression_chance * progression_multiplier) and current_level < 4:
@@ -488,17 +704,40 @@ async def _generate_addiction_effects_impl(
     player_name: str,
     addiction_status: AddictionStatus
 ) -> Dict[str, Any]:
-    """Internal implementation of generate_addiction_effects"""
+    """Internal implementation of generate_addiction_effects with tiered output"""
+    meta = getattr(ctx.context, "current_context", {}) or {}
+    tier = (meta.get("addiction_effect_tier") or "").lower()
+    turn_idx = int(meta.get("turn_index", 0))
+
+    # If no tier was decided, let the context make a last-second decision with no-change assumption
+    if not tier:
+        highest = max(list(addiction_status.addiction_levels.values()) + [0])
+        active_types = set(a for a, lvl in addiction_status.addiction_levels.items() if lvl > 0)
+        tier = ctx.context.decide_effect_tier(meta, changed=False, highest_level=highest, active_types=active_types) or ""
+
+    if not tier:
+        return {"effects": [], "has_effects": False}
+
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     thematic = ctx.context.thematic_messages
 
-    effects = []
+    # Prioritize addictions by level and stimulus relevance
+    stim = set((meta.get("stimuli") or []))
+    def _priority_key(item):
+        a_type, lvl = item
+        stim_hit = bool(stim & ctx.context.trigger_cfg.stimuli_affinity.get(a_type, set()))
+        return (lvl, stim_hit)
+
     addiction_levels = addiction_status.addiction_levels
-    for addiction_type, level in addiction_levels.items():
-        if level <= 0:
-            continue
-        effects.extend(thematic.get_levels(addiction_type, level))
+    ordered = sorted(
+        ((a, lvl) for a, lvl in addiction_levels.items() if lvl > 0),
+        key=_priority_key, reverse=True
+    )
+
+    effects = []
+    for a_type, lvl in ordered:
+        effects.extend(thematic.get_levels(a_type, lvl))
 
     npc_specific = addiction_status.npc_specific_addictions
     
@@ -509,7 +748,8 @@ async def _generate_addiction_effects_impl(
             level = entry["level"]
             if level >= 3:
                 effects.append(f"You have a {ADDICTION_LEVELS[level]} addiction to {npc_name}'s {addiction_type}.")
-                if level >= 4:
+                # Only generate special events for major tier
+                if level >= 4 and tier == "major":
                     try:
                         npc_data = await conn.fetchrow("""
                             SELECT npc_name, archetype_summary, personality_traits, dominance, cruelty
@@ -517,15 +757,22 @@ async def _generate_addiction_effects_impl(
                             WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                         """, user_id, conversation_id, entry["npc_id"])
                         if npc_data:
+                            # Convert asyncpg.Record to dict for safe access
+                            rec = dict(npc_data)
+                            archetype = rec.get("archetype_summary", "Unknown")
+                            traits = rec.get("personality_traits") or []
+                            dom = rec.get("dominance", 50)
+                            cru = rec.get("cruelty", 50)
+                            
                             prompt = (
                                 f"Generate a 2-3 paragraph intense narrative scene about the player's extreme addiction "
                                 f"to {npc_name}'s {addiction_type}. This is for a femdom roleplaying game.\n\n"
                                 f"NPC Details:\n"
                                 f"- Name: {npc_name}\n"
-                                f"- Archetype: {npc_data.get('archetype_summary')}\n"
-                                f"- Dominance: {npc_data.get('dominance')}/100\n"
-                                f"- Cruelty: {npc_data.get('cruelty')}/100\n"
-                                f"- Personality: {', '.join(npc_data.get('personality_traits', [])[:3]) if npc_data.get('personality_traits') else 'Unknown'}\n\n"
+                                f"- Archetype: {archetype}\n"
+                                f"- Dominance: {dom}/100\n"
+                                f"- Cruelty: {cru}/100\n"
+                                f"- Personality: {', '.join(traits[:3]) if traits else 'Unknown'}\n\n"
                                 "Write an intense, immersive scene that shows how this addiction is affecting the player."
                             )
                             result = await Runner.run(
@@ -544,6 +791,28 @@ async def _generate_addiction_effects_impl(
                                 effects.append(special_event)
                     except Exception as e:
                         logging.error(f"Error generating special event: {e}")
+    
+    # Dedupe effects before pruning
+    effects = list(dict.fromkeys(effects))
+    
+    # Prune by tier:
+    # - ambient: exactly 1 short line (pick the strongest active addiction)
+    # - soft: up to 2 lines; no special event
+    # - major: keep as-is (including special event at lv4)
+    if tier == "ambient":
+        # Filter to short, single-line effects
+        effects = [e for e in effects if len(e) <= 200 and e.count('\n') <= 1][:1]
+        ctx.context._mark_emit(turn_idx, "ambient")
+    elif tier == "soft":
+        # Filter to medium, mostly single-line effects
+        effects = [e for e in effects if len(e) <= 280 and e.count('\n') <= 1][:2]
+        ctx.context._mark_emit(turn_idx, "soft")
+    else:
+        # major - no filtering needed
+        ctx.context._mark_emit(turn_idx, "major")
+
+    # consume one-shot latch
+    ctx.context._latched_window = False
     
     return {"effects": effects, "has_effects": bool(effects)}
 
@@ -628,6 +897,12 @@ async def addiction_content_safety(ctx, agent, input_data):
 ################################################################################
 # AGENTS - Configuration-Friendly
 ################################################################################
+
+def get_openai_client():
+    """Get OpenAI client instance for agents"""
+    from openai import AsyncOpenAI
+    import os
+    return AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 special_event_agent = Agent[AddictionContext](
     name="Special Event Generator",
@@ -716,13 +991,12 @@ async def generate_thematic_messages_via_agent(
     Ask LLM to synthesize messages. Returns {addiction_type: {1:txt,...,4:txt}, ...}
     Falls back to _DEFAULT_THEMATIC_MESSAGES_MIN on failure.
     """
-    # governance (optional)
     if governor is None:
         from nyx.integrate import get_central_governance
         try:
             governor = await get_central_governance(user_id, conversation_id)
             perm = await governor.check_action_permission(
-                agent_type=AgentType.UNIVERSAL_UPDATER,  # or a dedicated type
+                agent_type=AgentType.UNIVERSAL_UPDATER,
                 agent_id="addiction_thematic_generator",
                 action_type="generate_thematic_messages",
                 action_details={"addiction_types": addiction_types},
@@ -737,12 +1011,10 @@ async def generate_thematic_messages_via_agent(
 
     payload = {
         "addiction_types": addiction_types,
-        # you can add environment / tone knobs here
         "tone": "femdom",
         "max_length": 160,
     }
 
-    # The RunContextWrapper expects something like AddictionContext? We can fake a minimal dict.
     run_ctx = RunContextWrapper(context={
         "user_id": user_id,
         "conversation_id": conversation_id,
@@ -754,11 +1026,9 @@ async def generate_thematic_messages_via_agent(
         bundle = resp.final_output_as(ThematicMessagesBundle)
 
         out: Dict[str, Dict[str, str]] = {}
-        entries = bundle.addictions or []  # Guard against None
+        entries = bundle.addictions or []
         for entry in entries:
-            # Ensure all keys are strings
             out[entry.addiction_type] = {str(m.level): m.text for m in entry.messages}
-        # Basic sanity fill for any missing types
         for t in addiction_types:
             out.setdefault(t, _DEFAULT_THEMATIC_MESSAGES_MIN[t])
             for lvl in ("1", "2", "3", "4"):
@@ -767,7 +1037,6 @@ async def generate_thematic_messages_via_agent(
     except Exception as e:
         logging.error(f"Thematic message generation failed: {e}")
         return _DEFAULT_THEMATIC_MESSAGES_MIN
-
 
 ################################################################################
 # MAIN ENTRY / UTILITY FUNCTIONS (Extensible) - REFACTORED
@@ -778,44 +1047,99 @@ def get_addiction_label(level: int) -> str:
 
 async def process_addiction_update(
     user_id: int, conversation_id: int, player_name: str,
-    addiction_type: str, progression_multiplier: float = 1.0, target_npc_id: Optional[int] = None
+    addiction_type: str, progression_multiplier: float = 1.0, 
+    target_npc_id: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    """Process addiction update with smart tiered gating"""
     addiction_context = AddictionContext(user_id, conversation_id)
-    await addiction_context.initialize()
+    await addiction_context.initialize(start_background=False)  # No background task for transient context
+    
+    # Set context from metadata if provided (from orchestrator/SDK)
+    if metadata:
+        addiction_context.current_context = {
+            "scene": {"tags": metadata.get("scene_tags", [])},
+            "scene_tags": metadata.get("scene_tags", []),
+            "stimuli": metadata.get("stimuli", []),  # NEW: stimuli from scene
+            "feasibility": metadata.get("feasibility"),
+            "turn_index": metadata.get("turn_index", 0),
+            "addiction_force": metadata.get("addiction_force", False),
+        }
     
     with trace(
         workflow_name="Addiction System",
         trace_id=f"trace_addiction-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
-        prompt = f"Update the player's addiction to {addiction_type}{f' related to NPC #{target_npc_id}' if target_npc_id else ''}. Player name: {player_name}. Progression multiplier: {progression_multiplier}"
-        
-        # Create context wrapper without connection
         ctx_wrapper = RunContextWrapper(context=addiction_context)
         
-        # Call implementation function directly
+        # Update addiction level
         update_result = await _update_addiction_level_impl(
             ctx_wrapper, player_name, addiction_type,
             progression_multiplier=progression_multiplier,
             target_npc_id=target_npc_id
         )
         
-        # Get addiction status for effects
-        addiction_status_dict = await _check_addiction_levels_impl(ctx_wrapper, player_name)
-        addiction_status = AddictionStatus(
-            addiction_levels=addiction_status_dict.get("addiction_levels", {}),
-            npc_specific_addictions=addiction_status_dict.get("npc_specific_addictions", []),
-            has_addictions=addiction_status_dict.get("has_addictions", False)
-        )
-        narrative_effects = await _generate_addiction_effects_impl(ctx_wrapper, player_name, addiction_status)
+        # Get current addiction state
+        levels_dict = await _check_addiction_levels_impl(ctx_wrapper, player_name)
+        addiction_levels = levels_dict.get("addiction_levels", {}) or {}
+        active_types = {a for a, lvl in addiction_levels.items() if lvl > 0}
+        highest = max(list(addiction_levels.values()) + [0])
         
-    return {"update": update_result, "narrative_effects": narrative_effects, "addiction_type": addiction_type, "target_npc_id": target_npc_id}
+        meta = addiction_context.current_context or {}
+        changed = bool(update_result.get("progressed") or update_result.get("regressed"))
+        
+        # Decide effect tier based on context, stimuli, and changes
+        tier = addiction_context.decide_effect_tier(
+            meta=meta, changed=changed, highest_level=highest, active_types=active_types
+        )
+        
+        if tier:
+            addiction_context.latch_effect_window()  # consume on next effects call
+            # Tag the chosen tier into meta so generator can prune appropriately
+            addiction_context.current_context["addiction_effect_tier"] = tier
+            addiction_status = AddictionStatus(
+                addiction_levels=addiction_levels,
+                npc_specific_addictions=levels_dict.get("npc_specific_addictions", []),
+                has_addictions=levels_dict.get("has_addictions", False)
+            )
+            narrative_effects = await _generate_addiction_effects_impl(ctx_wrapper, player_name, addiction_status)
+        else:
+            narrative_effects = {"effects": [], "has_effects": False}
+        
+    return {
+        "update": update_result, 
+        "narrative_effects": narrative_effects, 
+        "addiction_type": addiction_type, 
+        "target_npc_id": target_npc_id,
+        "meta": {
+            "tier": tier,
+            "changed": changed,
+            "highest": highest,
+            "stimuli": list(meta.get("stimuli", [])),
+            "scene_tags": list(meta.get("scene_tags", [])),
+        }
+    }
 
 async def process_addiction_effects(
-    user_id: int, conversation_id: int, player_name: str, addiction_status: dict
+    user_id: int, conversation_id: int, player_name: str, 
+    addiction_status: dict,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    """Process addiction effects with smart gating and telemetry"""
     addiction_context = AddictionContext(user_id, conversation_id)
-    await addiction_context.initialize()
+    await addiction_context.initialize(start_background=False)
+    
+    # Set context from metadata if provided
+    if metadata:
+        addiction_context.current_context = {
+            "scene": {"tags": metadata.get("scene_tags", [])},
+            "scene_tags": metadata.get("scene_tags", []),
+            "stimuli": metadata.get("stimuli", []),
+            "feasibility": metadata.get("feasibility"),
+            "turn_index": metadata.get("turn_index", 0),
+            "addiction_force": metadata.get("addiction_force", False),
+        }
     
     addiction_status_obj = AddictionStatus(
         addiction_levels=addiction_status.get("addiction_levels", {}),
@@ -825,13 +1149,27 @@ async def process_addiction_effects(
     effects_result = await _generate_addiction_effects_impl(
         RunContextWrapper(context=addiction_context), player_name, addiction_status_obj
     )
-    return effects_result
+    
+    # Mirror telemetry like process_addiction_update
+    highest = max(list(addiction_status_obj.addiction_levels.values()) + [0])
+    decided_tier = addiction_context.current_context.get("addiction_effect_tier", "")
+    
+    return {
+        **effects_result,
+        "meta": {
+            "tier": decided_tier,
+            "highest": highest,
+            "stimuli": addiction_context.current_context.get("stimuli", []),
+            "scene_tags": addiction_context.current_context.get("scene_tags", []),
+        }
+    }
 
 async def check_addiction_status(
     user_id: int, conversation_id: int, player_name: str
 ) -> Dict[str, Any]:
+    """Check addiction status with effects generation"""
     addiction_context = AddictionContext(user_id, conversation_id)
-    await addiction_context.initialize()
+    await addiction_context.initialize(start_background=False)
     
     with trace(
         workflow_name="Addiction System",
@@ -854,8 +1192,9 @@ async def check_addiction_status(
 async def get_addiction_status(
     user_id: int, conversation_id: int, player_name: str
 ) -> Dict[str, Any]:
+    """Get addiction status without triggering effects"""
     addiction_context = AddictionContext(user_id, conversation_id)
-    await addiction_context.initialize()
+    await addiction_context.initialize(start_background=False)
     
     ctx_wrapper = RunContextWrapper(context=addiction_context)
     levels_result = await _check_addiction_levels_impl(ctx_wrapper, player_name)
@@ -882,6 +1221,7 @@ async def get_addiction_status(
     return result
 
 async def register_with_governance(user_id: int, conversation_id: int):
+    """Register addiction system with governance (for long-lived contexts)"""
     from nyx.integrate import get_central_governance
     governor = await get_central_governance(user_id, conversation_id)
     await governor.register_agent(
@@ -903,13 +1243,14 @@ async def register_with_governance(user_id: int, conversation_id: int):
     logging.info("Addiction system registered with Nyx governance")
 
 async def process_addiction_directive(directive_data: Dict[str, Any], user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """Process directives from governance"""
     addiction_context = AddictionContext(user_id, conversation_id)
-    await addiction_context.initialize()
+    await addiction_context.initialize(start_background=False)
     if not addiction_context.directive_handler:
         addiction_context.directive_handler = DirectiveHandler(
             user_id, conversation_id, AgentType.UNIVERSAL_UPDATER, "addiction_system"
         )
-    # Unified action for both types (use correct method)
+    # Unified action for both types
     if directive_data.get("type") == "prohibition" or directive_data.get("directive_type") == DirectiveType.PROHIBITION:
         return await addiction_context._handle_prohibition_directive(directive_data)
     return await addiction_context._handle_action_directive(directive_data)
@@ -918,3 +1259,17 @@ async def process_addiction_directive(directive_data: Dict[str, Any], user_id: i
 check_addiction_levels_impl = _check_addiction_levels_impl
 update_addiction_level_impl = _update_addiction_level_impl
 generate_addiction_effects_impl = _generate_addiction_effects_impl
+
+# Export gate management for SDK cleanup
+__all__ = [
+    'process_addiction_update',
+    'process_addiction_effects', 
+    'check_addiction_status',
+    'get_addiction_status',
+    'register_with_governance',
+    'process_addiction_directive',
+    'purge_gate_state',
+    '_GATE_STATE',
+    '_GATE_LOCKS',
+    '_GATE_TOUCH'
+]
