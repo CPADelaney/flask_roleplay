@@ -9,8 +9,11 @@ from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding # Assuming you have this
 from lore.core.context import CanonicalContext
 
+from .existence_gate import ExistenceGate, GateDecision
+from .validation import CanonValidationAgent
+
 from typing import List, Dict, Any, Union, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from agents import Runner
 
 from memory.memory_orchestrator import get_memory_orchestrator, EntityType
@@ -21,6 +24,16 @@ from lore.core.validation import CanonValidationAgent
 logger = logging.getLogger(__name__)
 
 _memory_orchestrators = {}
+
+def violates_physics(ctx, action: dict) -> bool:
+    """Check if an action violates physics caps."""
+    # This would be called by the narrative system
+    caps = ctx.physics_caps  # Loaded from world profile
+    return (
+        action.get("jump_height_m", 0) > caps["max_jump_m"] or
+        action.get("projectile_speed_ms", 0) > caps["max_throw_ms"] or
+        action.get("fall_survivable_m", 0) > caps["max_safe_fall_m"]
+    )
 
 def convert_importance_to_significance(importance):
     """
@@ -66,19 +79,13 @@ def ensure_canonical_context(ctx) -> CanonicalContext:
 # --- Helper for Semantic Search ---
 
 async def _find_semantically_similar_npc(conn, ctx, name: str, role: Optional[str], threshold: float = 0.90) -> Optional[int]:
-    """
-    Uses memory orchestrator's vector embeddings to find a semantically similar NPC.
-    Returns the ID of the most similar NPC if above the threshold, otherwise None.
-    """
-    ctx = ensure_canonical_context(ctx)
+    """Uses memory orchestrator's vector embeddings to find a semantically similar NPC."""
     memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    # Create search text for the new NPC proposal
     search_text = f"NPC: {name}"
     if role:
         search_text += f", role: {role}"
     
-    # Search using memory orchestrator's vector store
     search_results = await memory_orchestrator.search_vector_store(
         query=search_text,
         entity_type="npc",
@@ -91,7 +98,6 @@ async def _find_semantically_similar_npc(conn, ctx, name: str, role: Optional[st
         similarity = top_result.get("similarity", 0)
         
         if similarity > threshold:
-            # Extract NPC ID from metadata
             npc_id = top_result.get("metadata", {}).get("entity_id")
             if npc_id:
                 logger.info(
@@ -100,7 +106,7 @@ async def _find_semantically_similar_npc(conn, ctx, name: str, role: Optional[st
                 )
                 return npc_id
     
-    # Fallback to database search if memory search doesn't find anything
+    # Fallback to database search
     search_vector = await memory_orchestrator.generate_embedding(search_text)
     
     query = """
@@ -121,20 +127,14 @@ async def _find_semantically_similar_npc(conn, ctx, name: str, role: Optional[st
     
     return None
 
-
-
-
 async def get_canon_memory_orchestrator(user_id: int, conversation_id: int):
     """Get or create a memory orchestrator for canon operations."""
-    # Use the memory orchestrator's own singleton pattern
     from memory.memory_orchestrator import get_memory_orchestrator
     orchestrator = await get_memory_orchestrator(user_id, conversation_id)
     
     # Ensure canon is synced on first use
     if not hasattr(orchestrator, '_canon_synced') or not orchestrator._canon_synced:
         try:
-            # Check if canon tables exist before syncing
-            from db.connection import get_db_connection_context
             async with get_db_connection_context() as conn:
                 tables_exist = await conn.fetchval("""
                     SELECT EXISTS (
@@ -536,14 +536,8 @@ async def sync_entity_to_memory(
     id_from_context=lambda ctx: "canon"
 )
 async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
-    """
-    Finds an NPC by exact name or semantic similarity, or creates them if they don't exist.
-    Returns the NPC's ID.
-    """
-    ctx = ensure_canonical_context(ctx)
-    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
-    
-    # Step 1: Exact Match Check
+    """Find or create NPC with existence gate validation."""
+    # Check exact match
     existing_npc = await conn.fetchrow(
         "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
         npc_name, ctx.user_id, ctx.conversation_id
@@ -552,7 +546,46 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         logger.warning(f"NPC '{npc_name}' found via exact match with ID {existing_npc['npc_id']}.")
         return existing_npc['npc_id']
     
-    # Step 2: Semantic Similarity Check using Memory Orchestrator
+    # Run existence gate check
+    gate = ExistenceGate(ctx)
+    npc_data = {
+        'npc_name': npc_name,
+        'role': kwargs.get('role'),
+        'affiliations': kwargs.get('affiliations', []),
+        **kwargs
+    }
+    
+    # Get scene context for institution checks
+    scene_context = await conn.fetchrow("""
+        SELECT value FROM CurrentRoleplay
+        WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentScene'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    if scene_context and scene_context['value']:
+        scene_data = json.loads(scene_context['value'])
+    else:
+        scene_data = None
+    
+    decision, details = await gate.assess_entity('npc', npc_data, scene_data)
+    
+    if decision == GateDecision.DENY:
+        # NPC role cannot exist
+        raise ValueError(f"NPC '{npc_name}' with role '{kwargs.get('role')}' cannot exist: {details['reason']}")
+    
+    elif decision == GateDecision.DEFER:
+        # Return as lead
+        logger.warning(f"NPC '{npc_name}' deferred: {details['reason']}")
+        return -1  # Signal deferred NPC
+    
+    elif decision == GateDecision.ANALOG:
+        # Use analog role
+        analog_role = details['analog']
+        logger.info(f"Substituting role '{kwargs.get('role')}' with analog '{analog_role}'")
+        kwargs['role'] = analog_role
+        npc_data = details.get('analog_data', npc_data)
+    
+    # Semantic similarity check
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     role = kwargs.get("role")
     similar_npc_id = await _find_semantically_similar_npc(conn, ctx, npc_name, role)
     
@@ -570,12 +603,11 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         else:
             logger.info(f"LLM determined that proposal '{npc_name}' is NOT a duplicate. Proceeding with creation.")
     
-    # Step 3: Create the new NPC
+    # Create the new NPC (already passed existence gate)
     embedding_text = f"NPC: {npc_name}"
     if role:
         embedding_text += f", role: {role}"
     
-    # Generate embedding using memory orchestrator
     new_embedding = await memory_orchestrator.generate_embedding(embedding_text)
     
     affiliations = kwargs.get("affiliations", [])
@@ -599,20 +631,13 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         new_embedding
     )
     
-    # Store NPC creation as a memory
-    importance_to_significance = {
-        "critical": 1.0,
-        "high": 0.8,
-        "medium": 0.5,
-        "low": 0.3,
-        "trivial": 0.1
-    }
-    
+    # Store in memory system
+    from memory.memory_orchestrator import EntityType
     await memory_orchestrator.store_memory(
         entity_type=EntityType.NYX,
-        entity_id=0,  # Nyx as the canon keeper
+        entity_id=0,
         memory_text=f"Created new NPC '{npc_name}' with role '{role or 'unspecified'}'",
-        significance=importance_to_significance.get("high", 0.8),  # Convert to float
+        significance=0.8,
         tags=["npc_creation", "canon", npc_name.lower()],
         metadata={
             "npc_id": npc_id,
@@ -622,7 +647,7 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         }
     )
     
-    # Also add NPC info to vector store for future searches
+    # Add to vector store
     await memory_orchestrator.add_to_vector_store(
         text=f"NPC: {npc_name}, role: {role or 'unspecified'}, affiliations: {affiliations}",
         metadata={
@@ -770,50 +795,140 @@ async def find_or_create_entity(
 
 
 async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None, significance: int = 5):
-    """
-    Log a canonical event to establish world history.
-    Now also stores as a memory for better retrieval and analysis.
-    """
-    ctx = ensure_canonical_context(ctx)
-    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
-    
+    """Log a canonical event with causality tracking."""
     tags = tags or []
     tags_json = json.dumps(tags)
     
-    # Store in database
+    # Get parent events for causality chain
+    parent_events = await conn.fetch("""
+        SELECT id FROM CanonicalEvents
+        WHERE user_id=$1 AND conversation_id=$2
+        ORDER BY timestamp DESC
+        LIMIT 3
+    """, ctx.user_id, ctx.conversation_id)
+    
+    parent_ids = [p['id'] for p in parent_events]
+    
+    # Store in database with parent links
     event_id = await conn.fetchval("""
         INSERT INTO CanonicalEvents (
-            user_id, conversation_id, event_text, tags, significance, timestamp
+            user_id, conversation_id, event_text, tags, significance, 
+            timestamp, parent_event_ids
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
-    """, ctx.user_id, ctx.conversation_id, event_text, tags_json, significance, datetime.utcnow())
+    """, ctx.user_id, ctx.conversation_id, event_text, tags_json, 
+        significance, datetime.utcnow(), json.dumps(parent_ids))
     
-    # Map significance to importance for memory system
-    importance_map = {
-        1: "trivial", 2: "trivial", 3: "low",
-        4: "low", 5: "medium", 6: "medium",
-        7: "high", 8: "high", 9: "critical", 10: "critical"
-    }
-    importance = importance_map.get(significance, "medium")
+    # Check for wide blast radius events that need propagation
+    if significance >= 8:
+        await _propagate_event_consequences(ctx, conn, event_id, event_text, tags)
     
-    # Map significance (1-10 integer) to float (0.0-1.0)
+    # Store in memory system
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    from memory.memory_orchestrator import EntityType
+    
     significance_float = min(1.0, max(0.1, significance / 10.0))
     
     await memory_orchestrator.store_memory(
         entity_type=EntityType.LORE,
-        entity_id=0,  # Use 0 for general lore
+        entity_id=0,
         memory_text=event_text,
-        significance=significance_float,  # Use float instead of string
+        significance=significance_float,
         tags=tags + ["canonical_event"],
         metadata={
             "event_id": event_id,
             "significance": significance,
+            "parent_events": parent_ids,
             "timestamp": datetime.utcnow().isoformat()
         }
     )
     
     return event_id
+
+async def _propagate_event_consequences(ctx, conn, event_id: int, event_text: str, tags: List[str]):
+    """Propagate consequences of high-impact events."""
+    # Identify event type and affected entities
+    affected_entities = []
+    
+    # Parse event for entity mentions
+    if 'death' in event_text.lower() or 'killed' in event_text.lower():
+        # Find NPCs mentioned
+        npcs = await conn.fetch("""
+            SELECT npc_id, npc_name FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2
+            AND position(LOWER(npc_name) in LOWER($3)) > 0
+        """, ctx.user_id, ctx.conversation_id, event_text)
+        
+        for npc in npcs:
+            # Mark NPC as dead
+            await conn.execute("""
+                UPDATE NPCStats 
+                SET status='dead', death_event_id=$1
+                WHERE npc_id=$2
+            """, event_id, npc['npc_id'])
+            
+            affected_entities.append(('npc', npc['npc_id']))
+    
+    if 'destroyed' in event_text.lower() or 'burned' in event_text.lower():
+        # Find locations mentioned
+        locations = await conn.fetch("""
+            SELECT id, location_name FROM Locations
+            WHERE user_id=$1 AND conversation_id=$2
+            AND position(LOWER(location_name) in LOWER($3)) > 0
+        """, ctx.user_id, ctx.conversation_id, event_text)
+        
+        for loc in locations:
+            # Mark location as destroyed
+            await conn.execute("""
+                UPDATE Locations
+                SET status='destroyed', destruction_event_id=$1
+                WHERE id=$2
+            """, event_id, loc['id'])
+            
+            affected_entities.append(('location', loc['id']))
+    
+    # Update relationships and faction power based on affected entities
+    for entity_type, entity_id in affected_entities:
+        # Remove social links for dead NPCs
+        if entity_type == 'npc':
+            await conn.execute("""
+                DELETE FROM SocialLinks
+                WHERE (entity1_type='npc' AND entity1_id=$1)
+                OR (entity2_type='npc' AND entity2_id=$1)
+            """, entity_id)
+        
+        # Update faction power if leader dies
+        faction = await conn.fetchrow("""
+            SELECT id, power_level FROM Factions
+            WHERE user_id=$1 AND conversation_id=$2
+            AND leader_npc_id=$3
+        """, ctx.user_id, ctx.conversation_id, entity_id)
+        
+        if faction:
+            new_power = max(1, faction['power_level'] - 2)
+            await conn.execute("""
+                UPDATE Factions
+                SET power_level=$1, leader_npc_id=NULL
+                WHERE id=$2
+            """, new_power, faction['id'])
+    
+    # Create follow-up task for narrative consequences
+    await conn.execute("""
+        INSERT INTO CanonicalEvents (
+            user_id, conversation_id, event_text, tags, significance,
+            timestamp, parent_event_ids
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+    """, ctx.user_id, ctx.conversation_id,
+        f"Consequences of: {event_text[:100]}",
+        json.dumps(['consequence'] + tags),
+        significance - 1,
+        datetime.utcnow() + timedelta(seconds=1),
+        json.dumps([event_id])
+    )
+
+
 
 async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, Any]]) -> int:
     """
@@ -1643,11 +1758,8 @@ async def update_landmark(ctx, conn, landmark_id: int, updates: Dict[str, Any]) 
 # Add these functions to canon.py
 
 async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> str:
-    """Find or create a location canonically with memory integration."""
-    ctx = ensure_canonical_context(ctx)
-    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
-    
-    # Check exact match
+    """Find or create a location with existence gate validation."""
+    # First check if location exists
     existing = await conn.fetchrow("""
         SELECT id, location_name, description
         FROM Locations
@@ -1659,8 +1771,52 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         logger.info(f"Location '{location_name}' found via exact match")
         return existing['location_name']
     
-    # Semantic similarity check using memory orchestrator
-    description = kwargs.get('description', f"The area known as {location_name}")
+    # Run existence gate check BEFORE semantic similarity
+    gate = ExistenceGate(ctx)
+    location_data = {
+        'location_name': location_name,
+        'location_type': kwargs.get('location_type', 'settlement'),
+        'district_type': kwargs.get('district_type'),
+        'description': kwargs.get('description', f"The area known as {location_name}"),
+        **kwargs
+    }
+    
+    # Get current scene context for topology checks
+    scene_context = await conn.fetchrow("""
+        SELECT value FROM CurrentRoleplay
+        WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentScene'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    if scene_context and scene_context['value']:
+        scene_data = json.loads(scene_context['value'])
+    else:
+        scene_data = None
+    
+    decision, details = await gate.assess_entity('location', location_data, scene_data)
+    
+    if decision == GateDecision.DENY:
+        # Location cannot exist - throw exception
+        raise ValueError(f"Location '{location_name}' cannot exist: {details['reason']}")
+    
+    elif decision == GateDecision.DEFER:
+        # Return as a lead/rumor, not canon
+        logger.warning(f"Location '{location_name}' deferred: {details['reason']}")
+        return f"LEAD::{details.get('lead', 'Location rumored to exist elsewhere')}"
+    
+    elif decision == GateDecision.ANALOG:
+        # Use the analog instead
+        analog_name = details['analog']
+        analog_data = details.get('analog_data', {})
+        logger.info(f"Substituting '{location_name}' with analog '{analog_name}'")
+        
+        # Update the creation data with analog
+        location_name = analog_name
+        location_data = analog_data
+        kwargs.update(analog_data)
+    
+    # Now proceed with semantic similarity check
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    description = location_data.get('description', f"The area known as {location_name}")
     embedding_text = f"Location: {location_name} - {description}"
     
     search_results = await memory_orchestrator.search_vector_store(
@@ -1688,12 +1844,13 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
             Answer only 'true' or 'false'.
             """
             
+            from agents import Runner
             result = await Runner.run(validation_agent.agent, prompt)
             if result.final_output.strip().lower() == 'true':
                 logger.info(f"Location '{location_name}' matched to existing '{similar_name}'")
                 return similar_name
     
-    # Create new location
+    # Create new location (already passed existence gate)
     search_vector = await memory_orchestrator.generate_embedding(embedding_text)
     
     location_id = await conn.fetchval("""
@@ -1722,11 +1879,12 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     )
     
     # Store in memory system
+    from memory.memory_orchestrator import EntityType
     await memory_orchestrator.store_memory(
         entity_type=EntityType.LORE,
         entity_id=0,
         memory_text=f"Location '{location_name}' established: {description}",
-        significance=convert_importance_to_significance("high"),
+        significance=0.8,
         tags=['location', 'creation', 'canon'],
         metadata={
             "location_id": location_id,
@@ -1756,7 +1914,7 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     )
     
     return location_name
-
+    
 async def find_or_create_faction(ctx, conn, faction_name: str, **kwargs) -> int:
     """
     Find or create a faction with semantic matching.
@@ -3346,11 +3504,7 @@ async def find_or_create_inventory_item(
     item_name: str,
     **kwargs
 ) -> int:
-    """
-    Find or create an inventory item for a player.
-    """
-    ctx = ensure_canonical_context(ctx)
-    
+    """Find or create inventory item with existence gate validation."""
     # Check if item already exists
     existing = await conn.fetchrow("""
         SELECT item_id, quantity FROM PlayerInventory
@@ -3361,7 +3515,37 @@ async def find_or_create_inventory_item(
     if existing:
         return existing['item_id']
     
-    # Create new item
+    # Run existence gate check
+    gate = ExistenceGate(ctx)
+    item_data = {
+        'item_name': item_name,
+        'item_type': kwargs.get('item_category', 'misc'),
+        'tech_band': kwargs.get('tech_band'),
+        'required_materials': kwargs.get('required_materials', []),
+        'is_crafting': kwargs.get('is_crafting', False),
+        'resource_cost': kwargs.get('resource_cost', 0),
+        **kwargs
+    }
+    
+    decision, details = await gate.assess_entity('item', item_data)
+    
+    if decision == GateDecision.DENY:
+        raise ValueError(f"Item '{item_name}' cannot exist: {details['reason']}")
+    
+    elif decision == GateDecision.DEFER:
+        logger.warning(f"Item '{item_name}' deferred: {details['reason']}")
+        # Could create a "quest item" marker instead
+        return -1
+    
+    elif decision == GateDecision.ANALOG:
+        # Use analog item
+        analog_name = details['analog']
+        logger.info(f"Substituting '{item_name}' with analog '{analog_name}'")
+        item_name = analog_name
+        # Update properties for analog
+        kwargs['item_description'] = f"A {analog_name} (substituted for {item_data['item_name']})"
+    
+    # Create new item (passed gate)
     item_id = await conn.fetchval("""
         INSERT INTO PlayerInventory (
             user_id, conversation_id, player_name, item_name,
