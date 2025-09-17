@@ -2827,7 +2827,7 @@ async def update_player_stat_canonically(
         entity_type=EntityType.PLAYER,
         entity_id=ctx.user_id,
         memory_text=memory_text,
-        significance=0.8 if abs(change) >= 20 else 0.5
+        significance=0.8 if abs(change) >= 20 else 0.5,
         emotional=True,
         tags=['stat_change', stat_name, emotion_map.get(stat_name, 'neutral')],
         metadata={
