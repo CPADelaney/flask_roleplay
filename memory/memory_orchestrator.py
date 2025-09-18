@@ -1430,17 +1430,26 @@ class MemoryOrchestrator:
             md["is_canon"] = True
             md["canonical"] = True
         
+        memory_kwargs = {
+            "significance": significance,
+            "emotional_intensity": emotional_intensity,
+            "tags": tags or [],
+            "metadata": md,
+        }
+
+        if memory_type is not None:
+            if isinstance(memory_type, str):
+                trimmed = memory_type.strip()
+                if trimmed:
+                    memory_kwargs["memory_type"] = trimmed
+            else:
+                memory_kwargs["memory_type"] = memory_type
+
         return await self.integrated_add_memory(
             entity_type=entity_type,
             entity_id=entity_id,
             memory_text=text,  # integrated_add_memory uses memory_text
-            memory_kwargs={
-                "memory_type": memory_type,
-                "significance": significance,
-                "emotional_intensity": emotional_intensity,
-                "tags": tags or [],
-                "metadata": md
-            }
+            memory_kwargs=memory_kwargs,
         )
 
     @staticmethod
