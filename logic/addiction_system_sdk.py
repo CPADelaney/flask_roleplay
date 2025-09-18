@@ -228,7 +228,19 @@ _DEFAULT_THEMATIC_MESSAGES_MIN = {
     t: {str(i): _MIN_FALLBACK_MSG for i in range(1, 5)} for t in ADDICTION_TYPES
 }
 
+# Config helpers --------------------------------------------------------------
+
+def _get_env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 THEMATIC_MESSAGES_FILE = os.getenv("THEMATIC_MESSAGES_FILE", "thematic_messages.json")
+THEMATIC_GENERATION_TIMEOUT_ACTIVE = _get_env_float(
+    "ADDICTION_THEMATIC_GENERATION_TIMEOUT", 60.0
+)
 _DEFAULT_THEMATIC_MESSAGES = _DEFAULT_THEMATIC_MESSAGES_MIN
 
 ################################################################################
@@ -244,29 +256,57 @@ class ThematicMessages:
         self.file_source = None
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self._generated = False
 
     @classmethod
-    async def get(cls, user_id: Optional[int] = None, conversation_id: Optional[int] = None, refresh: bool = False):
+    async def get(
+        cls,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None,
+        refresh: bool = False,
+        defer_generation: bool = False,
+        ensure_generated: bool = False,
+        generation_timeout: Optional[float] = None,
+        force_generate: bool = False,
+    ):
         """
         Global singleton. Pass user & convo if available for agent generation / governance.
         refresh=True forces regeneration (ignoring cached file).
         """
         async with cls._lock:
-            if cls._instance is None or refresh:
+            instance = cls._instance
+            if instance is None or refresh:
                 instance = cls(_DEFAULT_THEMATIC_MESSAGES_MIN, user_id, conversation_id)
-                await instance._load(refresh=refresh)
+                await instance._load(
+                    refresh=refresh,
+                    allow_generate=not defer_generation,
+                    generation_timeout=None if defer_generation else generation_timeout,
+                    force_generate=force_generate and not defer_generation,
+                )
                 cls._instance = instance
             else:
-                # attach IDs if newly provided
                 if user_id is not None:
-                    cls._instance.user_id = user_id
+                    instance.user_id = user_id
                 if conversation_id is not None:
-                    cls._instance.conversation_id = conversation_id
+                    instance.conversation_id = conversation_id
+
+            if ensure_generated:
+                await cls._instance.ensure_generated(
+                    generation_timeout=generation_timeout,
+                    force=force_generate,
+                )
+
             return cls._instance
 
-    async def _load(self, refresh: bool = False):
+    async def _load(
+        self,
+        refresh: bool = False,
+        allow_generate: bool = True,
+        generation_timeout: Optional[float] = None,
+        force_generate: bool = False,
+    ):
         """
-        Load from file if present & not refreshing; else generate via agent.
+        Load from file if present & not refreshing; optionally generate via agent.
         Merge user overrides over generated; fill gaps w/ min fallback.
         """
         generated: Dict[str, Dict[str, str]] = {}
@@ -282,20 +322,27 @@ class ThematicMessages:
         except Exception as e:
             logging.warning(f"Could not load external thematic messages: {e}")
 
-        # Generate (always if refresh; else only if no file data)
-        if refresh or not file_msgs:
+        should_generate = allow_generate and (force_generate or refresh or not file_msgs)
+        if should_generate:
             try:
-                generated = await generate_thematic_messages_via_agent(
+                gen_coro = generate_thematic_messages_via_agent(
                     user_id=self.user_id or 0,
                     conversation_id=self.conversation_id or 0,
+                    timeout=generation_timeout,
                 )
+                generated = await gen_coro
                 self.file_source = "generated"
-                # write to disk for caching
+                self._generated = True
                 try:
                     with open(THEMATIC_MESSAGES_FILE, "w") as f:
                         json.dump(generated, f, indent=2, ensure_ascii=False)
                 except Exception as e:
                     logging.warning(f"Failed to persist generated thematic messages: {e}")
+            except asyncio.TimeoutError:
+                timeout_desc = generation_timeout if generation_timeout is not None else "unknown"
+                logging.error(
+                    f"Thematic message generation timed out after {timeout_desc} seconds; using fallback."
+                )
             except Exception as e:
                 logging.error(f"Thematic message generation error: {e}")
 
@@ -308,6 +355,20 @@ class ThematicMessages:
             if file_msgs and t in file_msgs:
                 merged[t].update({str(k): v for k, v in file_msgs[t].items()})
         self.messages = merged
+
+    async def ensure_generated(
+        self,
+        generation_timeout: Optional[float] = None,
+        force: bool = False,
+    ) -> None:
+        if self._generated and not force:
+            return
+        await self._load(
+            refresh=False,
+            allow_generate=True,
+            generation_timeout=generation_timeout,
+            force_generate=force or not self._generated,
+        )
 
     def get_for(self, addiction_type: str, level: Union[int, str]) -> str:
         level_str = str(level)
@@ -329,6 +390,7 @@ class AddictionContext:
         self.conversation_id = conversation_id
         self.governor = None
         self.thematic_messages: Optional[ThematicMessages] = None
+        self.thematic_generation_timeout = THEMATIC_GENERATION_TIMEOUT_ACTIVE
         self.directive_handler: Optional[DirectiveHandler] = None
         self.prohibited_addictions: set = set()
         self.directive_task = None
@@ -346,7 +408,11 @@ class AddictionContext:
         """Initialize the addiction context. Only set start_background=True for long-lived contexts."""
         from nyx.integrate import get_central_governance
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        self.thematic_messages = await ThematicMessages.get(self.user_id, self.conversation_id)
+        self.thematic_messages = await ThematicMessages.get(
+            self.user_id,
+            self.conversation_id,
+            defer_generation=True,
+        )
         self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
         self.directive_handler = DirectiveHandler(
             self.user_id, self.conversation_id,
@@ -360,6 +426,33 @@ class AddictionContext:
             self.directive_task = asyncio.create_task(
                 self.directive_handler.start_background_processing(interval=60.0)
             )
+
+    async def get_thematic_messages(
+        self,
+        require_generation: bool = False,
+        generation_timeout: Optional[float] = None,
+        force: bool = False,
+    ) -> ThematicMessages:
+        """Retrieve thematic messages, generating them lazily when required."""
+        if generation_timeout is None and require_generation:
+            generation_timeout = self.thematic_generation_timeout
+
+        if self.thematic_messages is None:
+            self.thematic_messages = await ThematicMessages.get(
+                self.user_id,
+                self.conversation_id,
+                defer_generation=not require_generation,
+                ensure_generated=require_generation,
+                generation_timeout=generation_timeout,
+                force_generate=force,
+            )
+        elif require_generation:
+            await self.thematic_messages.ensure_generated(
+                generation_timeout=generation_timeout,
+                force=force,
+            )
+
+        return self.thematic_messages
 
     # --- trigger helpers (tiered, stimulus-aware) ---------------------------------
     def _cooldowns_ok(self, turn_idx: int, now: float) -> bool:
@@ -720,7 +813,9 @@ async def _generate_addiction_effects_impl(
 
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    thematic = ctx.context.thematic_messages
+    thematic = await ctx.context.get_thematic_messages(require_generation=True)
+    if thematic is None:
+        return {"effects": [], "has_effects": False}
 
     # Prioritize addictions by level and stimulus relevance
     stim = set((meta.get("stimuli") or []))
@@ -986,6 +1081,7 @@ async def generate_thematic_messages_via_agent(
     conversation_id: int,
     addiction_types: List[str] = ADDICTION_TYPES,
     governor=None,
+    timeout: Optional[float] = None,
 ) -> Dict[str, Dict[str, str]]:
     """
     Ask LLM to synthesize messages. Returns {addiction_type: {1:txt,...,4:txt}, ...}
@@ -1022,7 +1118,11 @@ async def generate_thematic_messages_via_agent(
     })
 
     try:
-        resp = await Runner.run(agent, json.dumps(payload), context=run_ctx.context)
+        run_task = Runner.run(agent, json.dumps(payload), context=run_ctx.context)
+        if timeout is not None:
+            resp = await asyncio.wait_for(run_task, timeout=timeout)
+        else:
+            resp = await run_task
         bundle = resp.final_output_as(ThematicMessagesBundle)
 
         out: Dict[str, Dict[str, str]] = {}
@@ -1034,6 +1134,12 @@ async def generate_thematic_messages_via_agent(
             for lvl in ("1", "2", "3", "4"):
                 out[t].setdefault(lvl, _MIN_FALLBACK_MSG)
         return out
+    except asyncio.TimeoutError:
+        timeout_desc = timeout if timeout is not None else "unknown"
+        logging.error(
+            f"Thematic message agent timed out after {timeout_desc} seconds; propagation to caller."
+        )
+        raise
     except Exception as e:
         logging.error(f"Thematic message generation failed: {e}")
         return _DEFAULT_THEMATIC_MESSAGES_MIN
