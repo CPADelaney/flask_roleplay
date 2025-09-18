@@ -2,17 +2,66 @@
 console.log("Chat page loaded!");
 
 // ===== Utility Functions =====
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeHtml(html) {
+  if (typeof DOMPurify !== 'undefined') {
+    return DOMPurify.sanitize(html);
+  }
+  return html;
+}
+
+function fallbackMarkdownToHtml(markdownText) {
+  const normalized = (markdownText || '').replace(/\r\n/g, '\n');
+  let html = escapeHtml(normalized);
+
+  // Bold (**text** or __text__)
+  html = html.replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '<strong>$2</strong>');
+  // Italic (*text* or _text_)
+  html = html.replace(/(\*|_)(?=\S)(.+?)(?<=\S)\1/g, '<em>$2</em>');
+  // Inline code (`code`)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Strikethrough (~~text~~)
+  html = html.replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '<del>$1</del>');
+
+  // Paragraph and line breaks
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+
+  const trimmed = html.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  return `<p>${trimmed}</p>`;
+}
+
 function sanitizeAndRenderMarkdown(markdownText) {
+  const text = typeof markdownText === 'string' ? markdownText : '';
+
   try {
-    if (typeof marked === 'undefined') {
-      console.warn('Marked library not loaded, returning plain text');
-      return DOMPurify.sanitize(markdownText);
+    if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+      const renderedHTML = marked.parse(text);
+      return sanitizeHtml(renderedHTML);
     }
-    const renderedHTML = marked.parse(markdownText || '');
-    return DOMPurify.sanitize(renderedHTML);
+    console.warn('Marked library not loaded, using fallback markdown renderer');
   } catch (e) {
-    console.error('Error rendering markdown:', e);
-    return DOMPurify.sanitize(markdownText || '');
+    console.error('Error rendering markdown with marked:', e);
+  }
+
+  try {
+    const fallbackHtml = fallbackMarkdownToHtml(text);
+    return sanitizeHtml(fallbackHtml);
+  } catch (fallbackError) {
+    console.error('Fallback markdown rendering failed:', fallbackError);
+    return sanitizeHtml(escapeHtml(text));
   }
 }
 
@@ -995,11 +1044,11 @@ const MessageFactory = {
     
     // Create elements instead of using innerHTML
     const senderStrong = document.createElement("strong");
-    senderStrong.textContent = message.sender + ":";
+    senderStrong.textContent = message.sender ? `${message.sender}: ` : '';
     bubble.appendChild(senderStrong);
-    
+
     const contentSpan = document.createElement("span");
-    contentSpan.innerHTML = " " + sanitizeAndRenderMarkdown(message.content || "");
+    contentSpan.innerHTML = sanitizeAndRenderMarkdown(message.content || "");
     bubble.appendChild(contentSpan);
     
     row.appendChild(bubble);
