@@ -822,7 +822,7 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
     
     # Check for wide blast radius events that need propagation
     if significance >= 8:
-        await _propagate_event_consequences(ctx, conn, event_id, event_text, tags)
+        await _propagate_event_consequences(ctx, conn, event_id, event_text, tags, significance)
     
     # Store in memory system
     memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
@@ -846,7 +846,14 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
     
     return event_id
 
-async def _propagate_event_consequences(ctx, conn, event_id: int, event_text: str, tags: List[str]):
+async def _propagate_event_consequences(
+    ctx,
+    conn,
+    event_id: int,
+    event_text: str,
+    tags: List[str],
+    significance: int,
+):
     """Propagate consequences of high-impact events."""
     # Identify event type and affected entities
     affected_entities = []
@@ -923,7 +930,7 @@ async def _propagate_event_consequences(ctx, conn, event_id: int, event_text: st
     """, ctx.user_id, ctx.conversation_id,
         f"Consequences of: {event_text[:100]}",
         json.dumps(['consequence'] + tags),
-        significance - 1,
+        max(1, significance - 1),
         datetime.utcnow() + timedelta(seconds=1),
         json.dumps([event_id])
     )
