@@ -12,6 +12,12 @@ from celery.schedules import crontab
 from celery.signals import task_failure, task_success, task_retry
 import logging
 
+try:
+    from nyx.tasks.queues import QUEUES as NYX_TASK_QUEUES, ROUTES as NYX_TASK_ROUTES
+except Exception:  # pragma: no cover - queues are optional during tests
+    NYX_TASK_QUEUES = ()
+    NYX_TASK_ROUTES = {}
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,11 @@ except ImportError:
     PROMETHEUS_AVAILABLE = False
     logger.info("Prometheus client not available, metrics disabled")
 
+try:
+    from nyx.tasks.beat.periodic import BEAT_SCHEDULE as NYX_BEAT_SCHEDULE
+except Exception:  # pragma: no cover - optional during tests
+    NYX_BEAT_SCHEDULE = {}
+
 # Broker configuration - support both Redis and RabbitMQ
 USE_RABBITMQ = os.getenv("USE_RABBITMQ", "false").lower() == "true"
 
@@ -66,7 +77,7 @@ celery_app = Celery(
     'tasks',
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=['tasks']  # Explicitly include the tasks module
+    include=['tasks', 'nyx.tasks']  # Explicitly include the legacy and new task modules
 )
 
 # Define queue priorities (only used with RabbitMQ)
@@ -169,6 +180,38 @@ else:
     # Simpler configuration for Redis
     celery_app.conf.update(base_config)
 
+
+def _merge_task_queues():
+    existing = celery_app.conf.get('task_queues')
+    if isinstance(existing, dict):
+        for queue in NYX_TASK_QUEUES:
+            existing[queue.name] = {
+                'exchange': queue.exchange.name if queue.exchange else None,
+                'routing_key': queue.routing_key,
+            }
+        celery_app.conf.task_queues = existing
+    else:
+        queue_list = list(existing or [])
+        existing_names = {getattr(q, 'name', None) for q in queue_list}
+        queue_list.extend(
+            queue for queue in NYX_TASK_QUEUES if getattr(queue, 'name', None) not in existing_names
+        )
+        if queue_list:
+            celery_app.conf.task_queues = tuple(queue_list)
+
+
+def _merge_task_routes():
+    routes = celery_app.conf.get('task_routes') or {}
+    if isinstance(routes, dict) and NYX_TASK_ROUTES:
+        routes.update(NYX_TASK_ROUTES)
+        celery_app.conf.task_routes = routes
+
+
+if NYX_TASK_QUEUES:
+    _merge_task_queues()
+if NYX_TASK_ROUTES:
+    _merge_task_routes()
+
 # Comprehensive beat schedule
 celery_app.conf.beat_schedule = {
     # --- NPC and Game Tasks ---
@@ -217,6 +260,9 @@ celery_app.conf.beat_schedule = {
         'options': {'queue': 'low_priority'}
     },
 }
+
+if NYX_BEAT_SCHEDULE:
+    celery_app.conf.beat_schedule.update(NYX_BEAT_SCHEDULE)
 
 # =====================================================
 # NOTE: Worker process initialization is handled by

@@ -21,6 +21,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # ── Core modern orchestrator
@@ -28,6 +29,21 @@ from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
 from .nyx_agent.context import NyxContext, SceneScope
 
 from nyx.nyx_agent.models import NyxResponse
+from nyx.conversation.snapshot_store import ConversationSnapshotStore
+from nyx.core.side_effects import (
+    ConflictEvent,
+    LoreHint,
+    MemoryEvent,
+    NPCStimulus,
+    SideEffect,
+    WorldDelta,
+    group_side_effects,
+)
+
+try:  # pragma: no cover - Celery is optional in some environments
+    from nyx.tasks.realtime.post_turn import dispatch as post_turn_dispatch
+except Exception:  # pragma: no cover
+    post_turn_dispatch = None  # type: ignore
 
 # Fallback agent runtime (loaded lazily; optional in some environments)
 try:
@@ -188,6 +204,7 @@ class NyxAgentSDK:
         self._filter_class = ResponseFilter if (ResponseFilter and self.config.enable_response_filter) else None
         # optional per-conversation context kept only when explicitly warmed
         self._warm_contexts: Dict[str, NyxContext] = {}
+        self._snapshot_store = ConversationSnapshotStore()
 
     # ── lifecycle -------------------------------------------------------------
 
@@ -493,11 +510,12 @@ class NyxAgentSDK:
                         resp = await hook(resp)
                     except Exception:
                         logger.debug("post_hook failed softly", exc_info=True)
-    
+
             # --- 7) Telemetry & background maintenance ---
             await self._maybe_log_perf(resp)
             await self._maybe_enqueue_maintenance(resp, conversation_id)
-    
+            await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
+
             # --- 8) Cache & return ---
             self._write_cache(cache_key, resp)
             return resp
@@ -550,10 +568,11 @@ class NyxAgentSDK:
                             resp = await hook(resp)
                         except Exception:
                             logger.debug("post_hook failed softly", exc_info=True)
-    
+
                 await self._maybe_log_perf(resp)
                 await self._maybe_enqueue_maintenance(resp, conversation_id)
-    
+                await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
+
                 self._write_cache(cache_key, resp)
                 return resp
     
@@ -884,6 +903,202 @@ class NyxAgentSDK:
             )
         except Exception:
             logger.debug("enqueue_task failed (non-fatal)", exc_info=True)
+
+    def _build_side_effect_payload(
+        self,
+        resp: NyxResponse,
+        user_id: int,
+        conversation_id: int,
+        trace_id: str,
+    ) -> tuple[str, Dict[str, Dict[str, Any]]]:
+        metadata = resp.metadata or {}
+        user_key = str(user_id)
+        conversation_key = str(conversation_id)
+
+        turn_id = metadata.get("turn_id") or f"{trace_id}-{int(time.time() * 1000)}"
+        metadata["turn_id"] = turn_id
+
+        snapshot = self._snapshot_store.get(user_key, conversation_key)
+        current_world_version = int(snapshot.get("world_version", 0))
+
+        scene_scope = metadata.get("scene_scope") or {}
+        if isinstance(scene_scope, str):
+            try:
+                import json
+
+                scene_scope = json.loads(scene_scope)
+            except Exception:
+                scene_scope = {}
+
+        participants: List[str] = []
+        npc_ids = scene_scope.get("npc_ids") if isinstance(scene_scope, dict) else None
+        if isinstance(npc_ids, list):
+            participants = [str(n) for n in npc_ids]
+        elif isinstance(npc_ids, set):
+            participants = [str(n) for n in sorted(npc_ids)]
+
+        context_stats = metadata.get("context_stats") if isinstance(metadata, dict) else None
+        if not participants and isinstance(context_stats, dict):
+            candidate = context_stats.get("npc_names") or context_stats.get("active_npcs")
+            if isinstance(candidate, list):
+                participants = [str(n) for n in candidate]
+
+        nation_ids = scene_scope.get("nation_ids") if isinstance(scene_scope, dict) else None
+        region_id = None
+        if isinstance(nation_ids, list) and nation_ids:
+            region_id = nation_ids[0]
+        elif isinstance(nation_ids, set) and nation_ids:
+            region_id = next(iter(nation_ids))
+
+        scene_id = None
+        if isinstance(scene_scope, dict):
+            scene_id = scene_scope.get("location_id") or scene_scope.get("scene_id")
+
+        world_state = resp.world_state or {}
+        next_world_version = current_world_version + 1 if world_state else current_world_version
+
+        events: List[SideEffect] = []
+        if resp.narrative:
+            events.append(
+                MemoryEvent(
+                    turn_id=turn_id,
+                    user_id=user_key,
+                    conversation_id=conversation_key,
+                    text=resp.narrative,
+                    refs={
+                        "scene_id": scene_id,
+                        "region_id": region_id,
+                        "trace_id": trace_id,
+                    },
+                )
+            )
+
+        if world_state:
+            events.append(
+                WorldDelta(
+                    turn_id=turn_id,
+                    user_id=user_key,
+                    conversation_id=conversation_key,
+                    deltas=world_state,
+                    incoming_world_version=next_world_version,
+                    metadata={"trace_id": trace_id},
+                )
+            )
+
+        conflict_meta = (
+            metadata.get("conflict_event")
+            or metadata.get("conflict")
+            or metadata.get("active_conflict")
+        )
+        conflict_id = None
+        conflict_active = snapshot.get("conflict_active", False)
+        if isinstance(conflict_meta, dict) and conflict_meta:
+            conflict_id = conflict_meta.get("conflict_id") or conflict_meta.get("id")
+            conflict_active = bool(
+                conflict_meta.get("active")
+                or conflict_meta.get("is_active")
+                or conflict_meta.get("ongoing")
+            )
+            events.append(
+                ConflictEvent(
+                    turn_id=turn_id,
+                    user_id=user_key,
+                    conversation_id=conversation_key,
+                    conflict_id=str(conflict_id) if conflict_id is not None else None,
+                    payload=conflict_meta,
+                )
+            )
+
+        if participants:
+            events.append(
+                NPCStimulus(
+                    turn_id=turn_id,
+                    user_id=user_key,
+                    conversation_id=conversation_key,
+                    npcs=participants,
+                    payload={"trace_id": trace_id},
+                )
+            )
+
+        if scene_id is not None or region_id is not None:
+            events.append(
+                LoreHint(
+                    turn_id=turn_id,
+                    user_id=user_key,
+                    conversation_id=conversation_key,
+                    scene_id=str(scene_id) if scene_id is not None else None,
+                    region_id=str(region_id) if region_id is not None else None,
+                    payload={"trace_id": trace_id},
+                )
+            )
+
+        updated_snapshot = dict(snapshot)
+        if isinstance(scene_scope, dict):
+            if scene_scope.get("location_name"):
+                updated_snapshot["location_name"] = scene_scope.get("location_name")
+            if scene_scope.get("location_id") is not None:
+                updated_snapshot["scene_id"] = str(scene_scope.get("location_id"))
+            if scene_scope.get("time_window") is not None:
+                updated_snapshot["time_window"] = scene_scope.get("time_window")
+        if region_id is not None:
+            updated_snapshot["region_id"] = str(region_id)
+        if participants:
+            updated_snapshot["participants"] = participants
+        updated_snapshot["world_version"] = next_world_version
+        if conflict_id is not None:
+            updated_snapshot["conflict_id"] = str(conflict_id)
+        if conflict_meta:
+            updated_snapshot["conflict_active"] = conflict_active
+        updated_snapshot["updated_at"] = datetime.utcnow().isoformat()
+
+        self._snapshot_store.put(user_key, conversation_key, updated_snapshot)
+
+        grouped = group_side_effects(events)
+        return turn_id, grouped
+
+    async def _fanout_post_turn(
+        self,
+        resp: NyxResponse,
+        user_id: int,
+        conversation_id: int,
+        trace_id: str,
+    ) -> None:
+        if post_turn_dispatch is None:
+            return
+        try:
+            turn_id, grouped = self._build_side_effect_payload(resp, user_id, conversation_id, trace_id)
+        except Exception:
+            logger.exception("[SDK-%s] Failed to build side-effect payload", trace_id)
+            return
+        if not grouped:
+            return
+
+        payload = {
+            "user_id": str(user_id),
+            "conversation_id": str(conversation_id),
+            "turn_id": turn_id,
+            "trace_id": trace_id,
+            "side_effects": grouped,
+        }
+
+        def _enqueue() -> None:
+            try:
+                post_turn_dispatch.apply_async(kwargs={"payload": payload}, queue="realtime", priority=0)
+            except Exception:  # pragma: no cover
+                logger.exception("[SDK-%s] Failed to enqueue TurnPostProcessor", trace_id)
+
+        start = time.perf_counter()
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _enqueue)
+        except RuntimeError:
+            _enqueue()
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            resp.metadata.setdefault("telemetry", {}).setdefault("post_turn", {})[
+                "enqueue_ms"
+            ] = round(elapsed_ms, 2)
+            resp.metadata.setdefault("post_turn", {})["turn_id"] = turn_id
 
     def _blocked_response(self, safe_text: str, trace_id: str, t0: float, stage: str, details: Optional[Dict[str, Any]]) -> NyxResponse:
         return NyxResponse(
