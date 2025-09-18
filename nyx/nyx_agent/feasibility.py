@@ -17,6 +17,9 @@ import asyncio
 import logging
 logger = logging.getLogger(__name__)
 
+
+SETTING_DETECTION_TIMEOUT_SECONDS = 8
+
 # Dynamic rejection narrator for unique, contextual rejections
 REJECTION_NARRATOR_AGENT = Agent(
     name="RejectionNarrator",
@@ -996,37 +999,196 @@ async def detect_setting_type(nyx_ctx: NyxContext) -> Dict[str, Any]:
         
         context["locations"] = [{"name": l["location_name"], "type": l["location_type"]} for l in locations]
     
-    # Run detection
-    run = await Runner.run(SETTING_DETECTIVE_AGENT, json.dumps(context))
-    
+    try:
+        run = await asyncio.wait_for(
+            Runner.run(SETTING_DETECTIVE_AGENT, json.dumps(context)),
+            timeout=SETTING_DETECTION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Setting detection timed out after %ss; using heuristic fallback",
+            SETTING_DETECTION_TIMEOUT_SECONDS,
+        )
+        result = _heuristic_setting_detection(context, confidence=0.35)
+        await _persist_detected_setting(nyx_ctx, result)
+        return result
+    except Exception as exc:
+        logger.warning("Setting detection failed: %s", exc)
+        result = _heuristic_setting_detection(context)
+        await _persist_detected_setting(nyx_ctx, result)
+        return result
+
     try:
         result = json.loads(getattr(run, "final_output", "{}"))
-        
-        # Store the detected settings
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
+        if not isinstance(result, dict):
+            raise ValueError("unexpected response type")
+        if "setting_type" not in result:
+            raise ValueError("missing setting_type in response")
+    except Exception as exc:
+        logger.warning("Invalid setting detection response: %s", exc)
+        result = _heuristic_setting_detection(context)
+
+    await _persist_detected_setting(nyx_ctx, result)
+    return result
+
+
+async def _persist_detected_setting(nyx_ctx: NyxContext, result: Dict[str, Any]) -> None:
+    """Persist detected setting information so subsequent runs can reuse it."""
+
+    setting_type = result.get("setting_type", "realistic_modern")
+    setting_kind = result.get("setting_kind")
+    capabilities = result.get("capabilities", {})
+
+    try:
+        capabilities_json = json.dumps(capabilities)
+    except TypeError:
+        capabilities_json = json.dumps({})
+
+    async with get_db_connection_context() as conn:
+        await conn.execute(
+            """
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'SettingType', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value = EXCLUDED.value
+            """,
+            nyx_ctx.user_id,
+            nyx_ctx.conversation_id,
+            setting_type,
+        )
+
+        if setting_kind:
+            await conn.execute(
+                """
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES ($1, $2, 'SettingType', $3)
-                ON CONFLICT (user_id, conversation_id, key) 
+                VALUES ($1, $2, 'SettingKind', $3)
+                ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value = EXCLUDED.value
-            """, nyx_ctx.user_id, nyx_ctx.conversation_id, result.get("setting_type", "realistic_modern"))
-            
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES ($1, $2, 'DetectedCapabilities', $3)
-                ON CONFLICT (user_id, conversation_id, key) 
-                DO UPDATE SET value = EXCLUDED.value
-            """, nyx_ctx.user_id, nyx_ctx.conversation_id, json.dumps(result.get("capabilities", {})))
-        
-        return result
-        
-    except Exception:
-        return {
-            "setting_type": "realistic_modern",
-            "setting_kind": "modern_realistic", 
-            "confidence": 0.5,
-            "capabilities": {}
-        }
+                """,
+                nyx_ctx.user_id,
+                nyx_ctx.conversation_id,
+                setting_kind,
+            )
+
+        await conn.execute(
+            """
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'DetectedCapabilities', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value = EXCLUDED.value
+            """,
+            nyx_ctx.user_id,
+            nyx_ctx.conversation_id,
+            capabilities_json,
+        )
+
+
+def _heuristic_setting_detection(
+    context: Dict[str, Any],
+    confidence: float = 0.3,
+) -> Dict[str, Any]:
+    """Fallback setting detection based on simple keyword heuristics."""
+
+    text_fragments: List[str] = []
+    text_fragments.extend(context.get("narrative", []))
+    text_fragments.extend(context.get("elements", {}).values())
+    text_fragments.extend(npc.get("role", "") for npc in context.get("npcs", []))
+    text_fragments.extend(loc.get("type", "") for loc in context.get("locations", []))
+
+    text = " ".join(fragment for fragment in text_fragments if fragment).lower()
+
+    result = {
+        "setting_type": "realistic_modern",
+        "setting_kind": "modern_realistic",
+        "confidence": confidence,
+        "capabilities": {
+            "magic": "none",
+            "technology": "modern",
+            "physics": "realistic",
+            "supernatural": "none",
+        },
+    }
+
+    heuristic_checks = [
+        (
+            {"dragon", "spell", "wizard", "sorcery", "enchanted", "mana", "mage"},
+            {
+                "setting_type": "high_fantasy",
+                "setting_kind": "fantasy_epic",
+                "confidence": max(confidence, 0.55),
+                "capabilities": {
+                    "magic": "common",
+                    "technology": "medieval",
+                    "physics": "flexible",
+                    "supernatural": "known",
+                },
+            },
+        ),
+        (
+            {"spaceship", "quantum", "laser", "android", "starfleet", "hyperspace", "plasma"},
+            {
+                "setting_type": "sci_fi_futuristic",
+                "setting_kind": "science_fiction",
+                "confidence": max(confidence, 0.5),
+                "capabilities": {
+                    "magic": "none",
+                    "technology": "futuristic",
+                    "physics": "flexible",
+                    "supernatural": "none",
+                },
+            },
+        ),
+        (
+            {"cyber", "augment", "neon", "megacorp", "matrix", "netrunner"},
+            {
+                "setting_type": "cyberpunk",
+                "setting_kind": "science_fiction",
+                "confidence": max(confidence, 0.45),
+                "capabilities": {
+                    "magic": "none",
+                    "technology": "advanced",
+                    "physics": "realistic",
+                    "supernatural": "none",
+                },
+            },
+        ),
+        (
+            {"wasteland", "mutant", "radiation", "ruins", "apocalypse", "fallout"},
+            {
+                "setting_type": "post_apocalyptic",
+                "setting_kind": "dystopian",
+                "confidence": max(confidence, 0.45),
+                "capabilities": {
+                    "magic": "none",
+                    "technology": "scavenged",
+                    "physics": "realistic",
+                    "supernatural": "hidden",
+                },
+            },
+        ),
+        (
+            {"haunted", "ghost", "vampire", "werewolf", "eldritch", "occult"},
+            {
+                "setting_type": "supernatural_modern",
+                "setting_kind": "modern_supernatural",
+                "confidence": max(confidence, 0.5),
+                "capabilities": {
+                    "magic": "limited",
+                    "technology": "modern",
+                    "physics": "flexible",
+                    "supernatural": "known",
+                },
+            },
+        ),
+    ]
+
+    for keywords, overrides in heuristic_checks:
+        if any(keyword in text for keyword in keywords):
+            result.update(overrides)
+            break
+
+    return result
+
 
 async def _extract_action_categories(action: str) -> List[str]:
     """Extract categories from an action string"""
