@@ -40,7 +40,11 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
                 'plumbing': True,
                 'printing': True,
                 'global_trade': True,
-                'instant_communication': True
+                'instant_communication': True,
+                'metalworking': True,
+                'aviation': True,
+                'microprocessors': True,
+                'transistors': True
             },
             'technology': 'modern',
             'era': 'contemporary'
@@ -67,7 +71,8 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
                 'printing': False,
                 'global_trade': False,
                 'instant_communication': False,
-                'magic_communication': True
+                'magic_communication': True,
+                'metalworking': True
             },
             'technology': 'medieval',
             'era': 'medieval'
@@ -95,7 +100,8 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
                 'printing': True,
                 'global_trade': True,
                 'instant_communication': True,  # Scrying
-                'magic_infrastructure': True
+                'magic_infrastructure': True,
+                'metalworking': True
             },
             'technology': 'magical',
             'era': 'timeless'
@@ -125,10 +131,43 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
                 'instant_communication': True,
                 'ai_systems': True,
                 'neural_networks': True,
-                'augmented_reality': True
+                'augmented_reality': True,
+                'advanced_optics': True,
+                'metalworking': True,
+                'microprocessors': True,
+                'transistors': True
             },
             'technology': 'advanced',
             'era': 'near_future'
+        },
+        'industrial': {
+            'physics': {
+                'max_jump_height_m': 1.5,
+                'max_throw_speed_ms': 45,
+                'max_safe_fall_m': 3,
+                'max_carry_weight_kg': 100,
+                'max_running_speed_ms': 12,
+                'teleportation_allowed': False,
+                'time_travel_allowed': False,
+                'ex_nihilo_creation': False,
+                'gravity_constant': 9.8
+            },
+            'infrastructure': {
+                'electricity': True,
+                'refrigeration': False,
+                'mass_packaging': False,
+                'night_economy': False,
+                'plumbing': True,
+                'printing': True,
+                'global_trade': True,
+                'instant_communication': False,
+                'telegraph': True,
+                'steam_power': True,
+                'industrial_machinery': True,
+                'metalworking': True
+            },
+            'technology': 'industrial',
+            'era': 'industrial_revolution'
         },
         'space_opera': {
             'physics': {
@@ -157,10 +196,44 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
                 'ai_systems': True,
                 'nano_fabrication': True,
                 'matter_replication': True,
-                'interstellar_travel': True
+                'interstellar_travel': True,
+                'holographic_projection': True,
+                'power_cells': True,
+                'advanced_optics': True,
+                'augmented_reality': True,
+                'metalworking': True,
+                'microprocessors': True,
+                'transistors': True,
+                'aviation': True
             },
             'technology': 'futuristic',
             'era': 'far_future'
+        },
+        'primitive': {
+            'physics': {
+                'max_jump_height_m': 1.2,
+                'max_throw_speed_ms': 30,
+                'max_safe_fall_m': 2,
+                'max_carry_weight_kg': 80,
+                'max_running_speed_ms': 10,
+                'teleportation_allowed': False,
+                'time_travel_allowed': False,
+                'ex_nihilo_creation': False,
+                'gravity_constant': 9.8
+            },
+            'infrastructure': {
+                'electricity': False,
+                'refrigeration': False,
+                'mass_packaging': False,
+                'night_economy': False,
+                'plumbing': False,
+                'printing': False,
+                'global_trade': False,
+                'instant_communication': False,
+                'metalworking': True  # Bronze/iron age option
+            },
+            'technology': 'primitive',
+            'era': 'prehistoric'
         }
     }
     
@@ -244,9 +317,9 @@ async def validate_entity_creation(
     # Run assessment
     decision, details = await gate.assess_entity(entity_type, entity_data, scene_context)
     
-    # Prepare response
+    # Prepare response - FIXED: Allow ANALOG decision
     result = {
-        'allowed': decision == GateDecision.ALLOW,
+        'allowed': decision in (GateDecision.ALLOW, GateDecision.ANALOG),
         'decision': decision,
         'details': details,
         'modified_data': entity_data.copy()
@@ -378,9 +451,9 @@ async def check_timeline_consistency(
         from datetime import datetime
         import json
         
-        # Get all future events
+        # Get all future events - now checks structured data
         future_events = await conn.fetch("""
-            SELECT id, event_text, tags, timestamp
+            SELECT id, event_text, tags, timestamp, affects_entities
             FROM CanonicalEvents
             WHERE user_id=$1 AND conversation_id=$2
             AND timestamp > $3
@@ -391,6 +464,24 @@ async def check_timeline_consistency(
         
         # Check each future event for dependencies
         for future in future_events:
+            # First check structured data if available
+            if future.get('affects_entities'):
+                try:
+                    affected = json.loads(future['affects_entities'])
+                    # Check if destroying needed location
+                    if 'destroys_id' in event_data:
+                        if event_data['destroys_id'] in affected.get('requires_locations', []):
+                            logger.warning(f"Event would create paradox - location {event_data['destroys_id']} needed for future")
+                            return False
+                    # Check if killing needed NPC
+                    if 'kills_id' in event_data:
+                        if event_data['kills_id'] in affected.get('requires_npcs', []):
+                            logger.warning(f"Event would create paradox - NPC {event_data['kills_id']} needed for future")
+                            return False
+                except:
+                    pass  # Fall back to text-based check
+            
+            # Fallback to text-based checking
             future_text = future['event_text'].lower()
             
             # Check if event would prevent future event
@@ -455,7 +546,9 @@ async def apply_existence_gate(ctx, tool_name: str, tool_args: Dict[str, Any]) -
     Hook called by orchestrator before entity creation tools.
     
     Returns:
-        None if allowed, or error dict if blocked
+        None if allowed to proceed unchanged
+        Modified args dict if ANALOG substitution should be applied
+        Error dict if creation should be blocked entirely
     """
     # Map tool names to entity types
     entity_map = {
@@ -478,12 +571,14 @@ async def apply_existence_gate(ctx, tool_name: str, tool_args: Dict[str, Any]) -
     await log_gate_decision(ctx, entity_type, validation['decision'], validation['details'])
     
     if validation['allowed']:
-        # Transform arguments if analog was suggested
-        if 'analog_used' in validation:
+        # Check if analog substitution was made
+        if validation['decision'] == GateDecision.ANALOG and 'analog_used' in validation:
+            # Return modified arguments for analog substitution
             return validation['modified_data']
+        # Otherwise allow unchanged
         return None
     
-    # Block the creation
+    # Block the creation entirely (DENY or DEFER)
     return {
         'error': 'ExistenceGateViolation',
         'message': validation['details'].get('reason', 'Entity cannot exist'),
@@ -512,4 +607,32 @@ async def create_gate_tables(conn):
     await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_gate_decisions_lookup
         ON GateDecisions(user_id, conversation_id, entity_type)
+    """)
+    
+    # Update CanonicalEvents table to support structured data
+    await conn.execute("""
+        ALTER TABLE CanonicalEvents 
+        ADD COLUMN IF NOT EXISTS affects_entities JSONB
+    """)
+    
+    # Create PlayerResources table if not exists
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS PlayerResources (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(100) NOT NULL,
+            money INTEGER DEFAULT 0,
+            supplies INTEGER DEFAULT 0,
+            mana INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            UNIQUE(user_id, conversation_id, player_name)
+        )
+    """)
+    
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_player_resources_lookup
+        ON PlayerResources(user_id, conversation_id, player_name)
     """)
