@@ -41,6 +41,18 @@ except Exception:  # pragma: no cover
     nyx_main_agent = None
     DEFAULT_MODEL_SETTINGS = None
 
+# Core feasibility + canon tracking helpers (best-effort import)
+try:
+    from .nyx_agent.feasibility import (
+        assess_action_feasibility,
+        record_impossibility,
+        record_possibility,
+    )
+except Exception:  # pragma: no cover
+    assess_action_feasibility = None  # type: ignore
+    record_impossibility = None  # type: ignore
+    record_possibility = None  # type: ignore
+
 # Guardrails (optional)
 try:
     from .nyx_agent.guardrails import content_moderation_guardrail
@@ -425,6 +437,15 @@ class NyxAgentSDK:
             resp = NyxResponse.from_orchestrator(result)
             resp.processing_time = resp.processing_time or (time.time() - t0)
             resp.trace_id = resp.trace_id or trace_id
+            # Strategy metadata may not be present; log best-effort for debugging consistency issues.
+            logger.info(
+                "[SDK-%s] Orchestrator completed success=%s strategy=%s",
+                trace_id,
+                resp.success,
+                (meta.get("feasibility", {}).get("overall", {}).get("strategy")
+                 if isinstance(meta.get("feasibility"), dict)
+                 else None),
+            )
     
             # Optionally: glean stimuli from orchestrator narrative to help next turn (cheap & safe)
             try:
@@ -491,6 +512,9 @@ class NyxAgentSDK:
                     metadata=meta,
                     trace_id=trace_id,
                     t0=t0,
+                )
+                logger.info(
+                    "[SDK-%s] Fallback path completed success=%s", trace_id, resp.success
                 )
     
                 # Post moderation/filter/hooks even on fallback
@@ -635,18 +659,154 @@ class NyxAgentSDK:
         the runner history into a single narrative.
         """
         if not (Runner and RunConfig and RunContextWrapper and nyx_main_agent):
+            logger.error("[SDK-%s] Fallback runtime unavailable", trace_id)
             raise RuntimeError("Fallback agent runtime is unavailable in this environment.")
+
+        logger.info("[SDK-%s] Entering fallback agent run", trace_id)
 
         ctx = NyxContext(user_id=int(user_id), conversation_id=int(conversation_id))
         await ctx.initialize()
         ctx.current_context = (metadata or {}).copy()
         ctx.current_context["user_input"] = message
 
+        enhanced_input = message
+        feasibility: Optional[Dict[str, Any]] = None
+
+        if assess_action_feasibility:
+            try:
+                feasibility = await assess_action_feasibility(ctx, message)
+                ctx.current_context["feasibility"] = feasibility
+                logger.info(
+                    "[SDK-%s] fallback feasibility overall=%s",
+                    trace_id,
+                    (feasibility or {}).get("overall", {}),
+                )
+            except Exception:
+                logger.debug(
+                    "[SDK-%s] fallback feasibility check failed softly",
+                    trace_id,
+                    exc_info=True,
+                )
+
+        if isinstance(feasibility, dict):
+            overall = feasibility.get("overall", {})
+            feasible_flag = overall.get("feasible")
+            strategy = str(overall.get("strategy") or "").lower()
+
+            if feasible_flag is False and strategy == "deny":
+                per = feasibility.get("per_intent") or []
+                first = per[0] if per and isinstance(per[0], dict) else {}
+                violations = first.get("violations", []) or []
+                violation_text = (
+                    violations[0].get("reason")
+                    if violations and isinstance(violations[0], dict)
+                    else "That violates the laws of this reality"
+                )
+
+                if record_impossibility:
+                    try:
+                        await record_impossibility(ctx, message, violation_text)
+                    except Exception:
+                        logger.debug(
+                            "[SDK-%s] record_impossibility failed softly", trace_id, exc_info=True
+                        )
+
+                logger.warning(
+                    "[SDK-%s] Fallback DENY enforced. reason=%s", trace_id, violation_text
+                )
+
+                alternatives = first.get("suggested_alternatives") or []
+                rejection_narrative = (
+                    f"*{first.get('reality_response', 'Reality ripples and refuses.')}*\n\n"
+                )
+                rejection_narrative += first.get(
+                    "narrator_guidance", "The world itself resists your attempt."
+                )
+                if alternatives:
+                    rejection_narrative += (
+                        f"\n\n*Perhaps you could {alternatives[0]} instead.*"
+                    )
+
+                choice_payload = [
+                    {
+                        "text": alt,
+                        "description": "A possible action within this reality",
+                        "feasible": True,
+                    }
+                    for alt in alternatives[:4]
+                ]
+
+                meta = {
+                    "world": {},
+                    "image": {},
+                    "telemetry": {},
+                    "universal_updates": False,
+                    "path": "fallback_feasibility",
+                    "trace_id": trace_id,
+                    "feasibility": feasibility,
+                    "action_blocked": True,
+                    "block_reason": violation_text,
+                    "reality_maintained": True,
+                    "metaphor": first.get("metaphor"),
+                    "violations": violations,
+                }
+
+                return NyxResponse(
+                    narrative=rejection_narrative,
+                    choices=choice_payload,
+                    metadata=meta,
+                    world_state={},
+                    success=True,
+                    trace_id=trace_id,
+                    processing_time=(time.time() - t0),
+                )
+
+            if feasible_flag is False and strategy == "ask":
+                constraints = (feasibility.get("per_intent") or [{}])[0].get(
+                    "violations", []
+                )
+                reason_list = [
+                    v.get("reason", "")
+                    for v in constraints
+                    if isinstance(v, dict) and v.get("reason")
+                ]
+                constraint_text = (
+                    "[REALITY CHECK: This action pushes boundaries. Consider: "
+                    + ", ".join(reason_list)
+                    + ". Describe how it fits within established limits.]"
+                )
+                enhanced_input = f"{constraint_text}\n\n{message}"
+                logger.info("[SDK-%s] Fallback prompting for clarification", trace_id)
+
+            if feasible_flag is True:
+                if record_possibility:
+                    try:
+                        intents = feasibility.get("per_intent", [])
+                        if intents:
+                            cats = intents[0].get("categories", [])
+                            if cats:
+                                await record_possibility(ctx, message, cats)
+                    except Exception:
+                        logger.debug(
+                            "[SDK-%s] record_possibility failed softly", trace_id, exc_info=True
+                        )
+
+                enhanced_input = (
+                    "[REALITY CHECK: Action is feasible within universe laws.]\n\n" f"{message}"
+                )
+                logger.info("[SDK-%s] Fallback proceeding with feasible action", trace_id)
+
         safe_settings = ModelSettings(strict_tools=False, response_format=None)
         run_config = RunConfig(model_settings=safe_settings, workflow_name="Nyx Fallback")
         runner_context = RunContextWrapper(ctx)
 
-        result = await Runner.run(nyx_main_agent, message, context=runner_context, run_config=run_config)
+        try:
+            result = await Runner.run(
+                nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config
+            )
+        except Exception:
+            logger.exception("[SDK-%s] Fallback Runner invocation failed", trace_id)
+            raise
 
         # 1) Extract best-effort text from the run
         def _extract_text(obj: Any) -> str:
@@ -679,8 +839,10 @@ class NyxAgentSDK:
             "path": "fallback",
             "trace_id": trace_id,
         }
+        if feasibility is not None:
+            meta["feasibility"] = feasibility
 
-        return NyxResponse(
+        response = NyxResponse(
             narrative=narrative,
             choices=[],
             metadata=meta,
@@ -689,6 +851,10 @@ class NyxAgentSDK:
             trace_id=trace_id,
             processing_time=(time.time() - t0),
         )
+        logger.info(
+            "[SDK-%s] Fallback response generated (narrative_len=%d)", trace_id, len(narrative)
+        )
+        return response
 
     async def _maybe_log_perf(self, resp: NyxResponse) -> None:
         if not (self.config.enable_telemetry and _log_perf):

@@ -1,8 +1,13 @@
 # logic/action_parser.py
 import json
+import logging
 from typing import List, Dict, Any, Tuple
+
 from pydantic import BaseModel, Field, ValidationError
+
 from agents import Agent, Runner
+
+logger = logging.getLogger(__name__)
 
 class ActionIntent(BaseModel):
     verb: str
@@ -75,7 +80,11 @@ def _loads_maybe_double(s: str) -> Dict[str, Any]:
 
 async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
     # Ask Runner to enforce JSON if it supports response_format; otherwise it’s ignored harmlessly.
-    run = await Runner.run(INTENT_AGENT, user_input)
+    try:
+        run = await Runner.run(INTENT_AGENT, user_input)
+    except Exception:
+        logger.exception("ActionIntent extractor agent run failed")
+        raise
     # Pull the text payload safely (Runner implementations vary)
     text = getattr(run, "final_output", None)
     if not text:
@@ -93,8 +102,10 @@ async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
                 intents.append(ai.model_dump())
             except ValidationError as ve:
                 # skip malformed entries but keep the good ones
+                logger.debug("Skipping malformed intent payload: %s", ve)
                 continue
         return intents
     except Exception as e:
         # Let callers/logs see a real message; do NOT swallow silently.
+        logger.error("Failed to parse ActionIntent JSON: %s", e, exc_info=True)
         raise ValueError(f"Failed to parse ActionIntent JSON: {e}") from e
