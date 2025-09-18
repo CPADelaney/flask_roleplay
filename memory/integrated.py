@@ -8,7 +8,13 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 
-from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
+from .core import (
+    Memory,
+    MemoryType,
+    MemorySignificance,
+    UnifiedMemoryManager,
+    normalize_memory_type,
+)
 from .schemas import MemorySchemaManager
 from .emotional import EmotionalMemoryManager
 from .interference import MemoryInterferenceManager
@@ -239,9 +245,13 @@ class IntegratedMemorySystem:
                     default=50
                 )
                 
+                normalized_type = normalize_memory_type(
+                    memory_kwargs.get("memory_type")
+                )
+
                 memory = Memory(
                     text=memory_text,
-                    memory_type=memory_kwargs.get("memory_type", MemoryType.OBSERVATION),
+                    memory_type=normalized_type,
                     significance=memory_kwargs.get("significance", MemorySignificance.MEDIUM),
                     emotional_intensity=emotional_intensity,
                     tags=memory_kwargs.get("tags", []),

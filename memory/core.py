@@ -46,6 +46,9 @@ class MemoryType(str, Enum):
     EPISODIC = "episodic"
     CONSOLIDATED = "consolidated"
     PROCEDURAL = "procedural"
+    EVENT = "event"
+    RELATIONSHIP = "relationship"
+    LORE = "lore"
 
 class MemoryStatus(str, Enum):
     ACTIVE = "active"
@@ -60,11 +63,30 @@ class MemorySignificance(int, Enum):
     HIGH = 4
     CRITICAL = 5
 
+def normalize_memory_type(value: Optional[Union[str, MemoryType]]) -> Union[MemoryType, str]:
+    """Normalize incoming memory type values to known enums or clean strings."""
+    if value is None:
+        return MemoryType.OBSERVATION
+    if isinstance(value, MemoryType):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return MemoryType.OBSERVATION
+        normalized = cleaned.lower()
+        if normalized.startswith("memorytype."):
+            normalized = normalized.split(".", 1)[1]
+        try:
+            return MemoryType(normalized)
+        except ValueError:
+            return normalized
+    return MemoryType.OBSERVATION
+
 @dataclass
 class Memory:
     id: Optional[int] = None
     text: str = ""
-    memory_type: MemoryType = MemoryType.OBSERVATION
+    memory_type: Union[MemoryType, str] = MemoryType.OBSERVATION
     significance: int = MemorySignificance.MEDIUM
     emotional_intensity: int = 0
     status: MemoryStatus = MemoryStatus.ACTIVE
@@ -77,6 +99,9 @@ class Memory:
     is_consolidated: bool = False
     # Added to simulate "fidelity" or accuracy, which can degrade over time like human memory
     fidelity: float = 1.0
+
+    def __post_init__(self) -> None:
+        self.memory_type = normalize_memory_type(self.memory_type)
 
     @property
     def age_days(self) -> float:
@@ -442,6 +467,13 @@ class UnifiedMemoryManager:
         if not memory.timestamp:
             memory.timestamp = datetime.now()
 
+        normalized_type = normalize_memory_type(memory.memory_type)
+        memory.memory_type = normalized_type
+        memory_type_value = (
+            normalized_type.value if isinstance(normalized_type, MemoryType)
+            else normalized_type
+        )
+
         # Store fidelity in metadata so it can be loaded from DB row
         if "fidelity" not in memory.metadata:
             memory.metadata["fidelity"] = memory.fidelity
@@ -457,8 +489,8 @@ class UnifiedMemoryManager:
             RETURNING id
             """,
             self.entity_type, self.entity_id, self.user_id, self.conversation_id,
-            memory.text, memory.memory_type, memory.significance, memory.emotional_intensity,
-            json.dumps(memory.tags), embedding or memory.embedding, json.dumps(memory.metadata),
+            memory.text, memory_type_value, memory.significance, memory.emotional_intensity,
+            json.dumps(memory.tags or []), embedding or memory.embedding, json.dumps(memory.metadata or {}),
             memory.timestamp, memory.times_recalled,
             memory.status.value if isinstance(memory.status, Enum) else memory.status,
             memory.is_consolidated
