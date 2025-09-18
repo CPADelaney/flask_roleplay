@@ -56,6 +56,10 @@ class ExistenceGate:
             return await self._assess_item_existence(entity_data, caps, infra, scene_context)
         elif entity_type == "event":
             return await self._assess_event_existence(entity_data, caps, infra, scene_context)
+        elif entity_type == "magic":
+            return await self._assess_magic_existence(entity_data, caps, infra, scene_context)
+        elif entity_type == "creature":
+            return await self._assess_creature_existence(entity_data, caps, infra, scene_context)
         else:
             # Default permissive for unknown types
             return (GateDecision.ALLOW, {"reason": "Unknown entity type, defaulting to allow"})
@@ -203,7 +207,8 @@ class ExistenceGate:
                 'plumbing': False,
                 'printing': False,
                 'global_trade': False,
-                'instant_communication': False
+                'instant_communication': False,
+                'metalworking': True  # Bronze/iron age
             },
             'medieval': {
                 'electricity': False,
@@ -213,7 +218,8 @@ class ExistenceGate:
                 'plumbing': False,  # Basic only
                 'printing': False,
                 'global_trade': False,
-                'instant_communication': False
+                'instant_communication': False,
+                'metalworking': True
             },
             'industrial': {
                 'electricity': True,
@@ -223,7 +229,11 @@ class ExistenceGate:
                 'plumbing': True,
                 'printing': True,
                 'global_trade': True,  # Ships
-                'instant_communication': False  # Telegraph only
+                'instant_communication': False,  # Telegraph only
+                'telegraph': True,
+                'steam_power': True,
+                'industrial_machinery': True,
+                'metalworking': True
             },
             'modern': {
                 'electricity': True,
@@ -233,7 +243,11 @@ class ExistenceGate:
                 'plumbing': True,
                 'printing': True,
                 'global_trade': True,
-                'instant_communication': True
+                'instant_communication': True,
+                'aviation': True,
+                'microprocessors': True,
+                'transistors': True,
+                'metalworking': True
             },
             'advanced': {
                 'electricity': True,
@@ -246,7 +260,10 @@ class ExistenceGate:
                 'instant_communication': True,
                 'quantum_computing': True,
                 'ai_systems': True,
-                'nano_fabrication': False
+                'nano_fabrication': False,
+                'advanced_optics': True,
+                'augmented_reality': True,
+                'metalworking': True
             },
             'futuristic': {
                 'electricity': True,
@@ -260,7 +277,11 @@ class ExistenceGate:
                 'quantum_computing': True,
                 'ai_systems': True,
                 'nano_fabrication': True,
-                'matter_replication': True
+                'matter_replication': True,
+                'interstellar_travel': True,
+                'holographic_projection': True,
+                'power_cells': True,
+                'metalworking': True
             }
         }
         
@@ -273,18 +294,16 @@ class ExistenceGate:
             'industrial_communication': 'telegraph',
             'futuristic_tech': 'interstellar_travel',
             'space_travel': 'interstellar_travel',
-            'computers': 'instant_communication',
-            'microprocessors': 'instant_communication',
-            'transistors': 'instant_communication',
-            'advanced_optics': 'ai_systems',
-            'power_cells': 'electricity',
-            'holographic_projection': 'augmented_reality',
+            'holographic_projection': 'holographic_projection',
             'industrial_refrigeration': 'refrigeration',
-            'aviation': 'global_trade',  # Fallback for basic aviation
-            'telegraph': 'printing',  # Telegraph follows printing
-            'metalworking': 'plumbing',  # Basic metalwork with plumbing
-            'writing': 'printing',
+            'advanced_optics': 'advanced_optics',
+            'computers': 'microprocessors',
+            'microprocessors': 'microprocessors',
+            'transistors': 'transistors',
             'social_media': 'instant_communication',
+            'metalworking': 'metalworking',
+            'writing': 'printing',
+            'power_cells': 'power_cells',
         }
         key = synonyms.get(req, req)
         return bool(infra.get(key, False))
@@ -411,19 +430,7 @@ class ExistenceGate:
             return None
         
         # Determine era from infrastructure
-        if not infra.get('electricity'):
-            if not infra.get('printing'):
-                era = 'primitive' if not infra.get('plumbing') else 'medieval'
-            else:
-                era = 'industrial'
-        else:
-            if infra.get('quantum_computing'):
-                era = 'futuristic'
-            elif infra.get('instant_communication'):
-                era = 'modern'
-            else:
-                era = 'industrial'
-        
+        era = self._determine_era_from_infra(infra)
         return analogs[modern_type].get(era)
     
     def _transform_to_analog(self, original_data: Dict[str, Any], analog_type: str) -> Dict[str, Any]:
@@ -501,6 +508,7 @@ class ExistenceGate:
             'entertainment': 'entertainment',
             'residential': 'residential',
             'civic': 'civic',
+            'bank': 'commercial',  # Added bank mapping
             'generic': 'mixed-use'
         }
         return district_map.get(category, 'commercial')
@@ -659,6 +667,18 @@ class ExistenceGate:
                 "analog_data": {**item_data, 'item_name': analog}
             })
         
+        # Check tech band before specific requirements
+        if tech_band:
+            world_band = infra.get('tech_requirement', 'modern')
+            allowed = ['primitive', 'medieval', 'industrial', 'modern', 'advanced', 'futuristic']
+            if allowed.index(tech_band) > allowed.index(world_band):
+                analog = self._suggest_item_analog(item_type, infra) or 'tool'
+                return (GateDecision.ANALOG, {
+                    "reason": f"Tech band '{tech_band}' exceeds world '{world_band}'",
+                    "analog": analog,
+                    "analog_data": {**item_data, 'item_type': analog}
+                })
+        
         # Check technology requirements
         tech_requirements = {
             'smartphone': ['electricity', 'instant_communication', 'microprocessors'],
@@ -731,21 +751,27 @@ class ExistenceGate:
             "missing": missing
         }
     
-    def _check_resource_cost(
-        self,
-        item_data: Dict[str, Any],
-        caps: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _check_resource_cost(self, item_data: Dict[str, Any]) -> Dict[str, Any]:
         """Check if player has resources to create item"""
-        # This would integrate with player inventory/resources
-        # For now, simple check
-        cost = item_data.get('resource_cost', 0)
-        available = caps.get('available_resources', 100)
+        from db.connection import get_db_connection_context
+        
+        player = item_data.get('player_name', 'Player')
+        cost = item_data.get('resource_cost', {'money': 0, 'supplies': 0})
+        
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT money, supplies FROM PlayerResources
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+            """, self.user_id, self.conversation_id, player)
+        
+        available = dict(row or {'money': 0, 'supplies': 0})
+        ok = (available.get('money', 0) >= cost.get('money', 0) and 
+              available.get('supplies', 0) >= cost.get('supplies', 0))
         
         return {
-            "affordable": cost <= available,
-            "required": cost,
-            "available": available
+            'affordable': ok,
+            'required': cost,
+            'available': available
         }
     
     def _suggest_item_analog(self, modern_item: str, infra: Dict[str, Any]) -> Optional[str]:
@@ -824,6 +850,80 @@ class ExistenceGate:
         
         return (GateDecision.ALLOW, {"reason": "Event can occur"})
     
+    async def _assess_magic_existence(
+        self,
+        entity_data: Dict[str, Any],
+        caps: Dict[str, Any],
+        infra: Dict[str, Any],
+        scene_context: Optional[Dict[str, Any]]
+    ) -> Tuple[GateDecision, Dict[str, Any]]:
+        """Assess if magic can exist/occur"""
+        if not caps.get('magic_system'):
+            return (GateDecision.DENY, {"reason": "Magic not part of this reality"})
+        
+        # Check spell level vs magic system
+        spell_level = entity_data.get('spell_level', 'cantrip')
+        magic_level = caps.get('magic_system')
+        
+        if magic_level == 'limited' and spell_level in ['legendary', 'epic']:
+            return (GateDecision.DENY, {
+                "reason": f"Spell level '{spell_level}' exceeds limited magic system"
+            })
+        
+        # Check mana/resource cost
+        if 'resource_cost' in entity_data:
+            cost_check = await self._check_resource_cost(entity_data)
+            if not cost_check['affordable']:
+                return (GateDecision.DENY, {
+                    "reason": "Insufficient magical resources",
+                    "required": cost_check['required'],
+                    "available": cost_check['available']
+                })
+        
+        return (GateDecision.ALLOW, {"reason": "Magic permitted by profile"})
+    
+    async def _assess_creature_existence(
+        self,
+        entity_data: Dict[str, Any],
+        caps: Dict[str, Any],
+        infra: Dict[str, Any],
+        scene_context: Optional[Dict[str, Any]]
+    ) -> Tuple[GateDecision, Dict[str, Any]]:
+        """Assess if creature can exist in setting"""
+        creature_type = entity_data.get('creature_type', 'animal')
+        habitat = entity_data.get('habitat', 'any')
+        
+        # Check if magical creature in non-magical world
+        if creature_type in ['dragon', 'unicorn', 'phoenix', 'griffin']:
+            if not caps.get('magic_system'):
+                return (GateDecision.DENY, {
+                    "reason": f"Magical creature '{creature_type}' cannot exist without magic"
+                })
+        
+        # Check habitat compatibility
+        if scene_context and habitat != 'any':
+            current_biome = scene_context.get('biome', 'temperate')
+            if not self._habitat_compatible(habitat, current_biome):
+                return (GateDecision.DEFER, {
+                    "reason": f"Creature requires {habitat} habitat, not {current_biome}",
+                    "lead": f"Look for this creature in {habitat} regions"
+                })
+        
+        return (GateDecision.ALLOW, {"reason": "Creature plausible for biome/era"})
+    
+    def _habitat_compatible(self, required: str, current: str) -> bool:
+        """Check if habitats are compatible"""
+        compatible = {
+            'arctic': ['arctic', 'tundra'],
+            'desert': ['desert', 'arid'],
+            'forest': ['forest', 'jungle', 'temperate'],
+            'ocean': ['ocean', 'coastal'],
+            'mountain': ['mountain', 'alpine'],
+            'swamp': ['swamp', 'wetland']
+        }
+        
+        return current in compatible.get(required, [required])
+    
     async def _check_timeline_consistency(
         self,
         event_data: Dict[str, Any]
@@ -832,9 +932,9 @@ class ExistenceGate:
         from db.connection import get_db_connection_context
         
         async with get_db_connection_context() as conn:
-            # Check for conflicting events
+            # Check for conflicting events - now uses structured data
             conflicts = await conn.fetch("""
-                SELECT event_id, event_text, timestamp
+                SELECT event_id, event_text, timestamp, affects_entities
                 FROM CanonicalEvents
                 WHERE user_id=$1 AND conversation_id=$2
                 AND timestamp > $3
@@ -844,18 +944,28 @@ class ExistenceGate:
             """, self.user_id, self.conversation_id, event_data['timestamp'])
             
             for conflict in conflicts:
-                # Check if this event would invalidate the future event
-                if self._would_invalidate(event_data, conflict):
-                    return {
-                        "consistent": False,
-                        "violation": "Would invalidate future event",
-                        "conflict": conflict['event_text']
-                    }
+                # Check using structured data if available
+                if conflict.get('affects_entities'):
+                    affected = json.loads(conflict['affects_entities'])
+                    if self._would_invalidate_structured(event_data, affected):
+                        return {
+                            "consistent": False,
+                            "violation": "Would invalidate future event",
+                            "conflict": conflict['event_text']
+                        }
+                else:
+                    # Fallback to text-based checking
+                    if self._would_invalidate(event_data, conflict):
+                        return {
+                            "consistent": False,
+                            "violation": "Would invalidate future event",
+                            "conflict": conflict['event_text']
+                        }
         
         return {"consistent": True}
     
     def _would_invalidate(self, new_event: Dict[str, Any], existing_event: Dict[str, Any]) -> bool:
-        """Check if new event would invalidate an existing one"""
+        """Check if new event would invalidate an existing one (text-based)"""
         # Check for death/destruction that would prevent future events
         if 'destroys' in new_event:
             if new_event['destroys'] in existing_event['event_text']:
@@ -863,6 +973,26 @@ class ExistenceGate:
         
         if 'kills' in new_event:
             if new_event['kills'] in existing_event['event_text']:
+                return True
+        
+        return False
+    
+    def _would_invalidate_structured(
+        self,
+        new_event: Dict[str, Any],
+        affected_entities: Dict[str, Any]
+    ) -> bool:
+        """Check invalidation using structured data"""
+        # Check if destroying something needed
+        if 'destroys' in new_event:
+            destroyed_id = new_event.get('destroys_id')
+            if destroyed_id in affected_entities.get('requires_locations', []):
+                return True
+        
+        # Check if killing someone needed
+        if 'kills' in new_event:
+            killed_id = new_event.get('kills_id')
+            if killed_id in affected_entities.get('requires_npcs', []):
                 return True
         
         return False
@@ -938,10 +1068,16 @@ class ExistenceGate:
 
 
 # Convenience function for integration
-async def assess_location_existence(ctx, name: str, desc: str) -> Tuple[GateDecision, Dict[str, Any]]:
+async def assess_location_existence(
+    ctx,
+    name: str,
+    desc: str,
+    location_type: str = "generic"  # Added location_type parameter with default
+) -> Tuple[GateDecision, Dict[str, Any]]:
     """Quick assessment for location existence"""
     gate = ExistenceGate(ctx)
     return await gate.assess_entity('location', {
         'location_name': name,
-        'description': desc
+        'description': desc,
+        'location_type': location_type
     })
