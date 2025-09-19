@@ -1336,6 +1336,239 @@ class NewGameAgent:
 
             raise
 
+    async def _queue_lore_generation(self, user_id: int, conversation_id: int) -> str:
+        """Schedule background lore generation and record status."""
+
+        placeholder = "Lore generation pending (background task queued)"
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        status_payload = {
+            "status": "queued",
+            "queued_at": timestamp
+        }
+
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    placeholder
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreGenerationStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(status_payload)
+                )
+        except Exception as exc:
+            logging.error(
+                "Failed to record lore generation status for conversation %s: %s",
+                conversation_id,
+                exc,
+                exc_info=True
+            )
+            return "Lore generation skipped - unable to record status"
+
+        try:
+            from celery_config import celery_app
+
+            celery_app.send_task(
+                'tasks.generate_lore_background_task',
+                args=[user_id, conversation_id]
+            )
+        except Exception as exc:
+            logging.error(
+                "Failed to queue lore generation task for conversation %s: %s",
+                conversation_id,
+                exc,
+                exc_info=True
+            )
+
+            failure_message = f"Lore generation failed to queue: {exc}"
+            failure_payload = {
+                **status_payload,
+                "status": "failed",
+                "failed_at": datetime.utcnow().isoformat() + "Z",
+                "error": str(exc)
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    failure_message
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreGenerationStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(failure_payload)
+                )
+
+            return failure_message
+
+        return placeholder
+
+    async def _queue_conflict_generation(self, user_id: int, conversation_id: int) -> str:
+        """Schedule background conflict generation if prerequisites are met."""
+
+        timestamp = datetime.utcnow().isoformat() + "Z"
+
+        async with get_db_connection_context() as conn:
+            npc_count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+                """,
+                user_id,
+                conversation_id
+            )
+
+        npc_count = int(npc_count or 0)
+
+        if npc_count < 3:
+            summary = "No initial conflict - insufficient NPCs"
+            status_payload = {
+                "status": "skipped",
+                "reason": "insufficient_npcs",
+                "npc_count": npc_count,
+                "updated_at": timestamp
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    summary
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(status_payload)
+                )
+
+            return summary
+
+        placeholder = "Initial conflict generation pending (background task queued)"
+        status_payload = {
+            "status": "queued",
+            "queued_at": timestamp,
+            "npc_count": npc_count
+        }
+
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'InitialConflictSummary', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id,
+                conversation_id,
+                placeholder
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'InitialConflictStatus', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id,
+                conversation_id,
+                json.dumps(status_payload)
+            )
+
+        try:
+            from celery_config import celery_app
+
+            celery_app.send_task(
+                'tasks.generate_initial_conflict_task',
+                args=[user_id, conversation_id]
+            )
+        except Exception as exc:
+            logging.error(
+                "Failed to queue conflict generation task for conversation %s: %s",
+                conversation_id,
+                exc,
+                exc_info=True
+            )
+
+            failure_message = f"No initial conflict - failed to queue background task: {exc}"
+            failure_payload = {
+                **status_payload,
+                "status": "failed",
+                "failed_at": datetime.utcnow().isoformat() + "Z",
+                "error": str(exc)
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    failure_message
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(failure_payload)
+                )
+
+            return failure_message
+
+        return placeholder
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="create_opening_narrative",
@@ -1911,162 +2144,28 @@ class NewGameAgent:
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
-        
+
         from lore.core import canon
-        
-        # Get the environment description for lore generation
-        async with get_db_connection_context() as conn:
-            canon_ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
-            
-            row = await conn.fetchrow("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
-            """, user_id, conversation_id)
-            
-            environment_desc = row["value"] if row else "A mysterious environment with hidden layers of complexity."
-            
-            # Get NPC IDs for lore integration
-            rows = await conn.fetch("""
-                SELECT npc_id FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
-            
-            npc_ids = [row["npc_id"] for row in rows] if rows else []
-            
-        # Initialize and generate lore
-        lore_summary = "Failed to generate lore"  # Default value
-        try:
-            # Use LoreSystem which has all the integration methods
-            from lore.core.lore_system import LoreSystem
-            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-            
-            # Generate comprehensive lore based on the environment
-            logging.info(f"Generating lore for new game (user_id={user_id}, conversation_id={conversation_id})")
-            
-            # Create proper context for lore operations
-            lore_ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
-            
-            lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
-            
-            # Integrate lore with NPCs if we have any
-            if npc_ids:
-                logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
-                for npc_id in npc_ids:
-                    # Get NPC's faction affiliation if any
-                    faction_affiliations = []
-                    async with get_db_connection_context() as conn:
-                        npc_row = await conn.fetchrow("""
-                            SELECT affiliations 
-                            FROM NPCStats
-                            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                        """, npc_id, user_id, conversation_id)
-                        
-                        if npc_row and npc_row['affiliations']:
-                            # affiliations is JSONB, so parse it
-                            affiliations_data = npc_row['affiliations']
-                            if isinstance(affiliations_data, str):
-                                try:
-                                    affiliations_data = json.loads(affiliations_data)
-                                except:
-                                    affiliations_data = []
-                            if isinstance(affiliations_data, list):
-                                faction_affiliations = affiliations_data
-                    
-                    # Initialize NPC's lore knowledge
-                    await lore_system.initialize_npc_lore_knowledge(
-                        lore_ctx,
-                        npc_id,
-                        cultural_background="common",  # Default background
-                        faction_affiliations=faction_affiliations
-                    )
-                
-            lore_summary = f"Generated {len(lore_result.get('factions', []))} factions, {len(lore_result.get('cultural_elements', []))} cultural elements, and {len(lore_result.get('locations', []))} locations"
-            
-            # Store lore summary canonically
-            async with get_db_connection_context() as conn:
-                await canon.update_current_roleplay(
-                    canon_ctx, conn,
-                    'LoreSummary', lore_summary
-                )
-                
-            logging.info(f"Lore generation complete: {lore_summary}")
-        except Exception as e:
-            logging.error(f"Error generating lore: {e}", exc_info=True)
-            lore_summary = "Failed to generate lore"
-        
-        # Generate initial conflict
-        conflict_name = "No initial conflict"  # Default value
-        
-        # Check if we have enough NPCs
-        async with get_db_connection_context() as conn:
-            npc_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
-        
-        if npc_count < 3:
-            logging.warning(f"Only {npc_count} NPCs available, skipping conflict generation")
-            conflict_name = "No initial conflict - insufficient NPCs"
-        else:
-            # Try to generate conflict
-            try:
-                from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-                
-                # Create conflict context
-                conflict_ctx = RunContextWrapper(context={
-                    'user_id': user_id,
-                    'conversation_id': conversation_id
-                })
-                
-                # Initialize conflict system
-                conflict_integration = await ConflictSystemIntegration.get_instance(
-                    user_id, conversation_id
-                )
-                await conflict_integration.initialize()
-                
-                # Generate conflict
-                initial_conflict = await conflict_integration.generate_conflict(
-                    conflict_ctx,
-                    {
-                        "conflict_type": "major",
-                        "intensity": "medium",
-                        "player_involvement": "indirect"
-                    }
-                )
-                
-                # REMOVE THE PROBLEMATIC LINE - this is line 1292 that causes the error
-                # conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
-                
-                # Safely extract conflict name with multiple checks
-                if initial_conflict is None:
-                    logging.warning("Conflict generation returned None")
-                    conflict_name = "No initial conflict - generation returned None"
-                elif not isinstance(initial_conflict, dict):
-                    logging.warning(f"Conflict generation returned unexpected type: {type(initial_conflict)}")
-                    conflict_name = "No initial conflict - invalid response type"
-                elif not initial_conflict.get("success", False):
-                    error_msg = initial_conflict.get("message", "Unknown error")
-                    logging.warning(f"Conflict generation failed: {error_msg}")
-                    conflict_name = f"No initial conflict - {error_msg}"
-                else:
-                    # Success case - safely extract the name
-                    conflict_details = initial_conflict.get("conflict_details")
-                    if conflict_details and isinstance(conflict_details, dict):
-                        conflict_name = conflict_details.get("name", "Unnamed Conflict")
-                    else:
-                        logging.warning("Conflict details missing or invalid")
-                        conflict_name = "Unnamed Conflict"
-                        
-            except Exception as e:
-                logging.error(f"Error generating initial conflict: {e}", exc_info=True)
-                conflict_name = "No initial conflict - exception occurred"
-            
+
+        canon_ctx = RunContextWrapper(context={
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })
+
+        logging.info(
+            "Queueing background lore generation for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
+        lore_summary = await self._queue_lore_generation(user_id, conversation_id)
+
+        logging.info(
+            "Queueing background conflict generation for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
+        conflict_name = await self._queue_conflict_generation(user_id, conversation_id)
+
         # Generate currency system canonically
         currency_name = "Standard currency"  # Default value
         try:
