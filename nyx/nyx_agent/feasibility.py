@@ -14,11 +14,404 @@ from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
 import asyncio
 
+from nyx.feas.actions.mundane import evaluate_mundane
+from nyx.feas.archetypes.modern_baseline import ModernBaseline
+from nyx.feas.archetypes.roman_empire import RomanEmpire
+from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
+from nyx.feas.capabilities import merge_caps
+from nyx.feas.context import build_affordance_index
+
 import logging
 logger = logging.getLogger(__name__)
 
 
+IMPOSSIBLE_DEFAULT: Set[str] = {
+    "physics_violation",
+    "unaided_flight",
+    "time_travel",
+    "teleportation",
+    "ex_nihilo_conjuration",
+    "reality_warping",
+    "orbital_travel",
+    "spacewalk",
+    "demon_summoning",
+    "necromancy",
+}
+SAFE_BASELINE: Set[str] = {"mundane_action", "dialogue", "movement", "social", "trade"}
+
+
 SETTING_DETECTION_TIMEOUT_SECONDS = 8
+
+
+ARCHETYPE_REGISTRY = {
+    "modern_baseline": ModernBaseline,
+    "roman_empire": RomanEmpire,
+    "underwater_scifi": UnderwaterSciFi,
+}
+
+
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "0", "false", "none", "null", "no"}:
+            return False
+        return True
+    return bool(value)
+
+
+def _derive_feasibility_caps(
+    infra: Optional[Dict[str, Any]],
+    physics: Optional[Dict[str, Any]],
+    economy: Optional[Dict[str, Any]],
+    setting_era: Optional[str],
+) -> Dict[str, bool]:
+    infra = infra or {}
+    physics = physics or {}
+    economy = economy or {}
+    era = (setting_era or "").strip().lower()
+
+    trade_signals = [
+        _boolish(infra.get("global_trade")),
+        _boolish(infra.get("mass_packaging")),
+        _boolish(infra.get("printing")),
+        _boolish(infra.get("instant_communication")),
+        _boolish(infra.get("markets_common")),
+    ]
+    caps = {
+        "can_trade": any(trade_signals)
+        or era in {"contemporary", "near_future", "far_future"},
+        "has_currency": _boolish(economy.get("currency_enabled", True)),
+        "retail_possible": True,
+        "magic_allowed": _boolish(physics.get("magic_system"))
+        or _boolish(physics.get("magic_allowed")),
+        "teleport_allowed": _boolish(physics.get("teleportation_allowed"))
+        or _boolish(physics.get("teleport_allowed")),
+    }
+    return caps
+
+
+def _normalize_categories(categories: Optional[List[Any]]) -> Set[str]:
+    normalized: Set[str] = set()
+    for cat in categories or []:
+        if cat is None:
+            continue
+        cat_str = str(cat).strip()
+        if cat_str:
+            normalized.add(cat_str.lower())
+    return normalized
+
+
+def _log_caps_snapshot(capabilities: Optional[Dict[str, Any]]) -> None:
+    if not capabilities:
+        return
+    snapshot_keys = [
+        "can_trade",
+        "has_currency",
+        "retail_possible",
+        "magic_allowed",
+        "teleport_allowed",
+    ]
+    parts = [
+        f"{key}={_boolish(capabilities.get(key))}" for key in snapshot_keys
+    ]
+    logger.info("[FEASIBILITY] caps(%s)", ", ".join(parts))
+
+
+def _fail_open_missing_caps(
+    intents: List[Dict[str, Any]], capabilities: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    if capabilities:
+        return None
+
+    if not intents:
+        return {
+            "overall": {"feasible": True, "strategy": "allow"},
+            "per_intent": [],
+        }
+
+    normalized = [_normalize_categories(intent.get("categories")) for intent in intents]
+    originals = [list(intent.get("categories", [])) for intent in intents]
+
+    if all(cats.issubset(SAFE_BASELINE) for cats in normalized):
+        logger.info(
+            "[FEASIBILITY] No capability context; allowing safe-baseline intents."
+        )
+        per_intent = [
+            {"feasible": True, "strategy": "allow", "categories": originals[idx]}
+            for idx in range(len(intents))
+        ]
+        return {"overall": {"feasible": True, "strategy": "allow"}, "per_intent": per_intent}
+
+    hazard_hits = [cats & IMPOSSIBLE_DEFAULT for cats in normalized]
+    if any(hazard_hits):
+        logger.info(
+            "[FEASIBILITY] No capability context; hazardous categories detected: %s",
+            [sorted(h) for h in hazard_hits if h],
+        )
+        per_intent = []
+        for idx, hazard in enumerate(hazard_hits):
+            if hazard:
+                per_intent.append(
+                    {
+                        "feasible": False,
+                        "strategy": "deny",
+                        "violations": [
+                            {
+                                "rule": "established_impossibility",
+                                "reason": "hazard_without_context",
+                            }
+                        ],
+                        "categories": originals[idx],
+                    }
+                )
+            else:
+                per_intent.append(
+                    {
+                        "feasible": True,
+                        "strategy": "allow",
+                        "categories": originals[idx],
+                    }
+                )
+        return {"overall": {"feasible": False, "strategy": "deny"}, "per_intent": per_intent}
+
+    logger.info("[FEASIBILITY] No capability context; defaulting to allow.")
+    per_intent = [
+        {"feasible": True, "strategy": "allow", "categories": originals[idx]}
+        for idx in range(len(intents))
+    ]
+    return {"overall": {"feasible": True, "strategy": "allow"}, "per_intent": per_intent}
+
+
+def load_world_caps(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Compose world capabilities from the active archetypes."""
+
+    archetype_caps = []
+    for key in ctx.get("archetypes", []):
+        archetype = ARCHETYPE_REGISTRY.get(key)
+        if archetype:
+            archetype_caps.append(archetype().caps())
+
+    if not archetype_caps:
+        archetype_caps = [ModernBaseline().caps()]
+
+    return merge_caps(archetype_caps)
+
+
+def _infer_world_archetypes(setting_context: Dict[str, Any]) -> List[str]:
+    """Infer archetype mix from stored context details."""
+
+    candidate_sources = [
+        setting_context.get("world_archetypes"),
+        setting_context.get("archetypes"),
+        setting_context.get("setting_archetypes"),
+    ]
+
+    inferred: List[str] = []
+    for value in candidate_sources:
+        if isinstance(value, list):
+            inferred.extend(str(v) for v in value)
+
+    kind = str(setting_context.get("kind", "")).lower()
+    setting_name = str(setting_context.get("setting_name", "")).lower()
+
+    if "roman" in kind or "roman" in setting_name:
+        inferred.append("roman_empire")
+    if any(term in kind for term in ("underwater", "oceanic", "marine")) or "underwater" in setting_name:
+        inferred.append("underwater_scifi")
+
+    if not inferred:
+        inferred.append("modern_baseline")
+
+    # Preserve order while removing duplicates
+    seen = set()
+    ordered: List[str] = []
+    for name in inferred:
+        if name not in seen and name in ARCHETYPE_REGISTRY:
+            ordered.append(name)
+            seen.add(name)
+
+    if not ordered:
+        ordered.append("modern_baseline")
+
+    return ordered
+
+
+def _build_scene_snapshot(setting_context: Dict[str, Any], current_scene: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate stored scene information into the affordance schema."""
+
+    location = setting_context.get("location") or {}
+    tags = location.get("tags") if isinstance(location, dict) else []
+    if isinstance(tags, str):
+        tags = [tags]
+    tags = tags or []
+
+    location_features = current_scene.get("location_features") or []
+    if isinstance(location_features, str):
+        location_features = [location_features]
+
+    has_vendor = bool(
+        location.get("has_vendor")
+        or current_scene.get("has_vendor")
+        or any("vendor" in str(feature).lower() for feature in location_features)
+        or any("shop" in str(tag).lower() for tag in tags)
+    )
+
+    nearby = current_scene.get("nearby")
+    if not isinstance(nearby, dict):
+        nearby = {}
+
+    open_shop = current_scene.get("open_shop")
+    if open_shop is None:
+        open_shop = location.get("open_shop")
+
+    return {
+        "location_tags": tags,
+        "has_vendor": has_vendor,
+        "nearby": nearby,
+        "open_shop": open_shop,
+    }
+
+
+def _build_player_snapshot(setting_context: Dict[str, Any]) -> Dict[str, Any]:
+    """Collect light-weight player data for mundane checks."""
+
+    state = setting_context.get("character_state") or {}
+    currency: Dict[str, Any] = {}
+
+    if isinstance(state, dict):
+        for key in ("currency", "currency_balances", "balances", "wallet", "money"):
+            value = state.get(key)
+            if isinstance(value, dict):
+                currency = value
+                break
+
+    inventory = setting_context.get("available_items", [])
+    if not isinstance(inventory, list):
+        inventory = []
+
+    age = state.get("age") if isinstance(state, dict) else None
+    legal_age = state.get("legal_age") if isinstance(state, dict) else None
+    if isinstance(age, (int, float)) and isinstance(legal_age, (int, float)):
+        age_ok = age >= legal_age
+    elif isinstance(age, (int, float)):
+        age_ok = age >= 18
+    else:
+        age_ok = True
+
+    reputation = 0
+    for key in ("reputation", "standing", "renown"):
+        value = state.get(key) if isinstance(state, dict) else None
+        if isinstance(value, (int, float)):
+            reputation = value
+            break
+
+    return {
+        "currency": currency,
+        "inventory": inventory,
+        "age_ok": age_ok,
+        "reputation": reputation,
+    }
+
+
+def _mundane_result_to_intent_entry(intent: Dict[str, Any], evaluation: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a mundane evaluation response into the feasibility schema."""
+
+    entry = {
+        "feasible": evaluation.get("feasible", False),
+        "strategy": evaluation.get("strategy", "defer"),
+        "categories": intent.get("categories", []),
+    }
+
+    for key in ("narrator_guidance", "leads", "violations", "modifications"):
+        if key in evaluation and evaluation[key]:
+            entry[key] = evaluation[key]
+
+    return entry
+
+
+def _combine_overall(per_intent: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Derive an overall feasibility verdict from per-intent entries."""
+
+    if not per_intent:
+        return {"feasible": True, "strategy": "allow"}
+
+    lower_strategies = [str(item.get("strategy", "")).lower() for item in per_intent]
+    if any(strategy == "deny" for strategy in lower_strategies):
+        return {"feasible": False, "strategy": "deny"}
+
+    if any(item.get("feasible") and strategy == "allow" for item, strategy in zip(per_intent, lower_strategies)):
+        return {"feasible": True, "strategy": "allow"}
+
+    if "analog" in lower_strategies:
+        return {"feasible": False, "strategy": "analog"}
+
+    if "defer" in lower_strategies:
+        return {"feasible": False, "strategy": "defer"}
+
+    return {"feasible": True, "strategy": lower_strategies[0] if lower_strategies else "allow"}
+
+
+def _apply_mundane_overrides(
+    base_result: Dict[str, Any], intents: List[Dict[str, Any]], overrides: Dict[int, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Merge mundane evaluations with an existing feasibility response."""
+
+    per_intent = base_result.get("per_intent") or []
+    if len(per_intent) != len(intents):
+        per_intent = [
+            {
+                "feasible": True,
+                "strategy": "allow",
+                "categories": intents[i].get("categories", []),
+            }
+            for i in range(len(intents))
+        ]
+
+    for index, override in overrides.items():
+        per_intent[index] = override
+
+    base_result["per_intent"] = per_intent
+    base_result["overall"] = _combine_overall(per_intent)
+    return base_result
+
+
+async def _evaluate_mundane_actions(
+    nyx_ctx: NyxContext, setting_context: Dict[str, Any], intents: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Evaluate mundane intents using the archetype-driven affordance engine."""
+
+    indices: List[int] = []
+    for idx, intent in enumerate(intents):
+        categories = {str(cat).lower() for cat in intent.get("categories", [])}
+        if "mundane_action" in categories or "trade" in categories:
+            indices.append(idx)
+
+    if not indices:
+        return None
+
+    current_scene = await _load_current_scene(nyx_ctx)
+    scene_snapshot = _build_scene_snapshot(setting_context, current_scene)
+    player_snapshot = _build_player_snapshot(setting_context)
+    archetypes = _infer_world_archetypes(setting_context)
+    world_caps = load_world_caps({"archetypes": archetypes})
+    affordance_index = build_affordance_index(world_caps, scene_snapshot, player_snapshot)
+
+    overrides: Dict[int, Dict[str, Any]] = {}
+    for idx in indices:
+        evaluation = evaluate_mundane(intents[idx], world_caps, affordance_index, scene_snapshot, player_snapshot)
+        overrides[idx] = _mundane_result_to_intent_entry(intents[idx], evaluation)
+
+    return {
+        "overrides": overrides,
+        "overall": _combine_overall(list(overrides.values())),
+        "all_handled": len(indices) == len(intents),
+    }
 
 # Dynamic rejection narrator for unique, contextual rejections
 REJECTION_NARRATOR_AGENT = Agent(
@@ -199,10 +592,83 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     
     # Load comprehensive setting context
     setting_context = await _load_comprehensive_context(nyx_ctx)
-    
+    _log_caps_snapshot(setting_context.get("capabilities"))
+
+    caps_loaded = bool(setting_context.get("caps_loaded"))
+    fail_open = _fail_open_missing_caps(
+        intents,
+        setting_context.get("capabilities") if caps_loaded else {},
+    )
+    if fail_open:
+        return fail_open
+
+    impossible_logged: Set[str] = set()
+    for imp in setting_context.get("established_impossibilities", []):
+        try:
+            categories = set((imp or {}).get("categories", []) or [])
+        except Exception:
+            categories = set()
+        impossible_logged |= {str(cat) for cat in categories if cat}
+    if impossible_logged:
+        logger.info(
+            "[FEASIBILITY] impossible_categories=%s",
+            sorted(impossible_logged),
+        )
+
     # Quick check against hard rules
     quick_check = await _quick_feasibility_check(setting_context, intents)
-    
+
+    violations = quick_check.get("violations", [])
+    missing_only_indices: List[int] = []
+    for idx, violation_list in enumerate(violations):
+        if not violation_list:
+            continue
+        has_missing = any(v.get("rule") == "missing_prereq" for v in violation_list)
+        if not has_missing:
+            continue
+        if all(v.get("rule") == "missing_prereq" for v in violation_list):
+            missing_only_indices.append(idx)
+        else:
+            missing_only_indices = []
+            break
+
+    if missing_only_indices:
+        logger.info(
+            "[FEASIBILITY] Deferring due to missing prerequisites for intents %s",
+            missing_only_indices,
+        )
+        per_intent = []
+        for idx, intent in enumerate(intents):
+            cats = intent.get("categories", [])
+            if idx in missing_only_indices:
+                violation_entry = violations[idx] if idx < len(violations) else []
+                categories_norm = _normalize_categories(cats)
+                guidance = "No vendor here. Try heading to the market or corner shop nearby."
+                if not ({"trade", "mundane_action"} & categories_norm):
+                    fallback_reason = "Required elements are not present right now."
+                    if violation_entry:
+                        fallback_reason = violation_entry[0].get("reason", fallback_reason)
+                    guidance = fallback_reason
+                per_intent.append(
+                    {
+                        "feasible": False,
+                        "strategy": "defer",
+                        "narrator_guidance": guidance,
+                        "violations": violation_entry,
+                        "categories": cats,
+                    }
+                )
+            else:
+                per_intent.append(
+                    {
+                        "feasible": True,
+                        "strategy": "allow",
+                        "categories": cats,
+                    }
+                )
+
+        return {"overall": {"feasible": False, "strategy": "defer"}, "per_intent": per_intent}
+
     if quick_check.get("hard_blocked"):
         # Generate dynamic, unique rejections for blocked actions
         per_intent = []
@@ -236,9 +702,31 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             "overall": {"feasible": False, "strategy": "deny"},
             "per_intent": per_intent
         }
-    
+
+    mundane_eval = await _evaluate_mundane_actions(nyx_ctx, setting_context, intents)
+
+    if mundane_eval and mundane_eval.get("all_handled"):
+        per_intent = [
+            mundane_eval["overrides"].get(i, {
+                "feasible": True,
+                "strategy": "allow",
+                "categories": intents[i].get("categories", []),
+            })
+            for i in range(len(intents))
+        ]
+
+        return {
+            "overall": mundane_eval.get("overall", _combine_overall(per_intent)),
+            "per_intent": per_intent,
+        }
+
     # Full AI-powered assessment for nuanced cases
-    return await _full_dynamic_assessment(nyx_ctx, user_input, intents, setting_context)
+    full_result = await _full_dynamic_assessment(nyx_ctx, user_input, intents, setting_context)
+
+    if mundane_eval and mundane_eval.get("overrides"):
+        full_result = _apply_mundane_overrides(full_result, intents, mundane_eval["overrides"])
+
+    return full_result
 
 async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
     """Load all relevant context about what's possible in this setting"""
@@ -258,6 +746,11 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         "physics_model": "realistic",
         "magic_system": None,
         "technology_level": "contemporary",
+        "setting_era": "contemporary",
+        "caps_loaded": False,
+        "infrastructure_flags": {},
+        "economy_flags": {},
+        "physics_caps": {},
         "location": {},
         "established_impossibilities": [],
         "established_possibilities": [],
@@ -270,10 +763,11 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
     async with get_db_connection_context() as conn:
         # Get comprehensive setting information from new_game_agent storage
         setting_keys = [
-            'SettingType', 'SettingKind', 'SettingCapabilities', 
-            'RealityContext', 'PhysicsModel', 'EnvironmentDesc', 
+            'WorldType', 'SettingType', 'SettingKind', 'SettingCapabilities',
+            'RealityContext', 'PhysicsModel', 'PhysicsCaps', 'EnvironmentDesc',
             'CurrentSetting', 'SettingStatModifiers', 'EnvironmentHistory',
-            'ScenarioName', 'CurrentLocation', 'CurrentTime'
+            'ScenarioName', 'CurrentLocation', 'CurrentTime', 'InfrastructureFlags',
+            'EconomyFlags', 'TechnologyLevel', 'SettingEra',
         ]
         
         setting_data = await conn.fetch("""
@@ -282,11 +776,20 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             AND key = ANY($3)
         """, nyx_ctx.user_id, nyx_ctx.conversation_id, setting_keys)
         
+        infra_flags: Dict[str, Any] = {}
+        economy_flags: Dict[str, Any] = {}
+        physics_caps_local: Dict[str, Any] = {}
+        world_type_value: Optional[str] = None
+        technology_level = context.get("technology_level")
+        setting_era = context.get("setting_era")
+
         for row in setting_data:
             key = row['key']
             value = row['value']
-            
-            if key == 'SettingType':
+
+            if key == 'WorldType':
+                world_type_value = value
+            elif key == 'SettingType':
                 context["type"] = value
             elif key == 'SettingKind':
                 context["kind"] = value
@@ -304,6 +807,11 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                 context["reality_context"] = value
             elif key == 'PhysicsModel':
                 context["physics_model"] = value
+            elif key == 'PhysicsCaps':
+                try:
+                    physics_caps_local = json.loads(value)
+                except Exception:
+                    physics_caps_local = {}
             elif key == 'EnvironmentDesc':
                 context["environment_desc"] = value
             elif key == 'CurrentSetting':
@@ -319,13 +827,67 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                 context["location"]["name"] = value
             elif key == 'CurrentTime':
                 context["current_time"] = value
-        
+            elif key == 'InfrastructureFlags':
+                try:
+                    infra_flags = json.loads(value)
+                except Exception:
+                    infra_flags = {}
+            elif key == 'EconomyFlags':
+                try:
+                    economy_flags = json.loads(value)
+                except Exception:
+                    economy_flags = {}
+            elif key == 'TechnologyLevel':
+                technology_level = value
+            elif key == 'SettingEra':
+                setting_era = value
+
+        if world_type_value:
+            context["type"] = world_type_value
+        context["technology_level"] = technology_level or context.get("technology_level")
+        context["setting_era"] = setting_era or context.get("setting_era")
+        context["infrastructure_flags"] = infra_flags
+        context["economy_flags"] = economy_flags
+        context["physics_caps"] = physics_caps_local
+
+        caps_loaded_flag = any(
+            [
+                bool(context["capabilities"]),
+                bool(infra_flags),
+                bool(physics_caps_local),
+                bool(economy_flags),
+                bool(technology_level),
+                bool(setting_era),
+            ]
+        )
+        context["capabilities"].update(
+            _derive_feasibility_caps(
+                infra_flags,
+                physics_caps_local,
+                economy_flags,
+                context.get("setting_era"),
+            )
+        )
+        context["caps_loaded"] = caps_loaded_flag
+
         # Auto-detect if not set
         if context["type"] == "unknown":
             detected = await detect_setting_type(nyx_ctx)
             context["type"] = detected["setting_type"]
             context["kind"] = detected.get("setting_kind", "modern_realistic")
             context["capabilities"] = detected.get("capabilities", {})
+
+        if not context["type"] or context["type"] == "unknown":
+            context["type"] = "modern_realistic"
+
+        context["capabilities"].update(
+            _derive_feasibility_caps(
+                context.get("infrastructure_flags"),
+                context.get("physics_caps"),
+                context.get("economy_flags"),
+                context.get("setting_era"),
+            )
+        )
             
         # Get established impossibilities
         impossibilities = await conn.fetchval("""
@@ -563,13 +1125,16 @@ async def _generate_scene_based_alternatives(current_scene: Dict, setting_contex
 async def _quick_feasibility_check(setting_context: Dict, intents: List[Dict]) -> Dict:
     """Quick check against hard rules without repetitive responses"""
     blocked = False
-    intent_feasible = []
-    violations = []
-    
+    intent_feasible: List[bool] = []
+    violations: List[List[Dict[str, Any]]] = []
+    missing_prereq_flags: List[bool] = []
+
     for intent in intents:
         intent_violations = []
         feasible = True
-        
+        prereq_missing = False
+        categories = {str(cat).lower() for cat in intent.get("categories", [])}
+
         # Check hard rules dynamically
         for rule in setting_context.get("hard_rules", []):
             if await _rule_applies_to_intent(rule, intent, setting_context):
@@ -591,20 +1156,31 @@ async def _quick_feasibility_check(setting_context: Dict, intents: List[Dict]) -
         # Check prerequisites
         if not await _check_prerequisites(intent, setting_context):
             feasible = False
+            prereq_missing = True
+            reason = "No vendor/point-of-sale in current scene"
+            if not ({"trade", "mundane_action"} & categories):
+                reason = "Required elements are not present"
             intent_violations.append({
-                "rule": "missing_prerequisites",
-                "reason": "Required elements are not present"
+                "rule": "missing_prereq",
+                "reason": reason
             })
-        
+            logger.info(
+                "[FEASIBILITY] Missing prerequisites detected for cats=%s -> %s",
+                sorted(categories),
+                reason,
+            )
+
         intent_feasible.append(feasible)
         violations.append(intent_violations)
-        if not feasible:
+        missing_prereq_flags.append(prereq_missing)
+        if not feasible and not prereq_missing:
             blocked = True
-    
+
     return {
         "hard_blocked": blocked,
         "intent_feasible": intent_feasible,
-        "violations": violations
+        "violations": violations,
+        "missing_prereq": missing_prereq_flags,
     }
 
 async def _rule_applies_to_intent(rule: Dict, intent: Dict, context: Dict) -> bool:
@@ -664,18 +1240,21 @@ def _matches_impossibility_dynamic(intent: Dict, impossibility: Dict) -> bool:
 
 async def _check_prerequisites(intent: Dict, context: Dict) -> bool:
     """Check if required elements for the action are present"""
-    
+
+    categories = {str(cat).lower() for cat in intent.get("categories", [])}
+    is_mundane = "mundane_action" in categories or "trade" in categories
+
     # Check required items
-    if "instruments" in intent:
+    if "instruments" in intent and not is_mundane:
         for item in intent["instruments"]:
             if item and item not in context.get("available_items", []):
                 return False
-    
+
     # Check target presence
-    if "direct_object" in intent:
+    if "direct_object" in intent and not is_mundane:
         all_present_entities = set(context.get("present_entities", []))
         all_present_entities.add(context.get("location", {}).get("name", ""))
-        
+
         for target in intent["direct_object"]:
             if target and target not in all_present_entities:
                 # Check if it's an item
@@ -683,12 +1262,11 @@ async def _check_prerequisites(intent: Dict, context: Dict) -> bool:
                     return False
     
     # Check ability requirements based on categories
-    categories = intent.get("categories", [])
     if "spellcasting" in categories and context.get("magic_system") == "none":
         return False
     if "hacking" in categories and context.get("technology_level") in ["primitive", "medieval"]:
         return False
-    
+
     return True
 
 async def _full_dynamic_assessment(
@@ -1232,7 +1810,7 @@ def _default_feasibility_response(intents: List[Dict]) -> Dict[str, Any]:
     """Default response when feasibility check fails"""
     
     # Allow only clearly mundane actions by default
-    mundane_categories = {"movement", "dialogue", "observation", "mundane_action", "interaction"}
+    mundane_categories = {"movement", "dialogue", "observation", "mundane_action", "interaction", "trade"}
     
     per_intent = []
     all_feasible = True
@@ -1301,7 +1879,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
     # ---- 2) Load dynamic context ------------------------------------------------
     setting_kind = "modern_realistic"
-    setting_type = "realistic_modern"
+    setting_type = "modern_realistic"
     reality_context = "normal"
     physics_model = "realistic"
 
@@ -1310,6 +1888,13 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     location_name: Optional[str] = None
     established_impossibilities: List[Dict[str, Any]] = []
     rules: List[Dict[str, Any]] = []
+    caps_loaded_flag = False
+    world_type: Optional[str] = None
+    infra_flags: Dict[str, Any] = {}
+    economy_flags: Dict[str, Any] = {}
+    physics_caps_local: Dict[str, Any] = {}
+    technology_level: Optional[str] = None
+    setting_era: Optional[str] = None
 
     try:
         async with get_db_connection_context() as conn:
@@ -1322,24 +1907,57 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 user_id,
                 conversation_id,
                 [
+                    "WorldType",
                     "SettingType",
                     "SettingKind",
                     "RealityContext",
                     "PhysicsModel",
+                    "PhysicsCaps",
                     "SettingCapabilities",
                     "CurrentScene",
                     "CurrentLocation",
                     "EstablishedImpossibilities",
+                    "InfrastructureFlags",
+                    "EconomyFlags",
+                    "TechnologyLevel",
+                    "SettingEra",
                 ],
             )
             kv = {r["key"]: r["value"] for r in rows}
 
-            setting_type = kv.get("SettingType") or setting_type
+            world_type = kv.get("WorldType") or world_type
+            setting_type = world_type or kv.get("SettingType") or setting_type
             setting_kind = kv.get("SettingKind") or setting_kind
             reality_context = kv.get("RealityContext") or reality_context
             physics_model = kv.get("PhysicsModel") or physics_model
 
-            capabilities = _safe_json_loads(kv.get("SettingCapabilities"), {}) or {}
+            raw_capabilities = _safe_json_loads(kv.get("SettingCapabilities"), {}) or {}
+            capabilities = dict(raw_capabilities)
+            physics_caps_local = _safe_json_loads(kv.get("PhysicsCaps"), {}) or {}
+            infra_flags = _safe_json_loads(kv.get("InfrastructureFlags"), {}) or {}
+            economy_flags = _safe_json_loads(kv.get("EconomyFlags"), {}) or {}
+            technology_level = (
+                kv.get("TechnologyLevel")
+                or raw_capabilities.get("technology")
+                or technology_level
+            )
+            setting_era = kv.get("SettingEra") or raw_capabilities.get("era") or setting_era
+
+            if technology_level and "technology" not in capabilities:
+                capabilities["technology"] = technology_level
+            if setting_era and "era" not in capabilities:
+                capabilities.setdefault("era", setting_era)
+
+            capabilities.update(
+                _derive_feasibility_caps(
+                    infra_flags,
+                    physics_caps_local,
+                    economy_flags,
+                    setting_era,
+                )
+            )
+
+            caps_loaded_flag = bool(raw_capabilities) or bool(infra_flags) or bool(physics_caps_local) or bool(economy_flags) or bool(technology_level) or bool(setting_era)
             scene = _safe_json_loads(kv.get("CurrentScene"), {}) or {}
             location_name = kv.get("CurrentLocation") or (scene.get("location") if isinstance(scene, dict) else None)
             established_impossibilities = _safe_json_loads(kv.get("EstablishedImpossibilities"), []) or []
@@ -1357,10 +1975,16 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         logger.error(f"[FEASIBILITY] DB read failed (soft): {e}", exc_info=True)
         # Keep defaults; remain permissive
 
+    setting_type = setting_type or "modern_realistic"
     logger.info("[FEASIBILITY] Setting "
                 f"type={setting_type} kind={setting_kind} reality={reality_context} physics={physics_model}")
+    _log_caps_snapshot(capabilities)
     logger.debug(f"[FEASIBILITY] Capabilities: {capabilities}")
     logger.debug(f"[FEASIBILITY] Scene keys: {list(scene.keys()) if isinstance(scene, dict) else 'n/a'}")
+
+    fail_open = _fail_open_missing_caps(intents, capabilities if caps_loaded_flag else {})
+    if fail_open:
+        return fail_open
 
     # ---- 3) Build dynamic allow/deny sets from conversation rules/scene --------
     hard_deny_cats: Set[str] = set()
@@ -1449,6 +2073,18 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
     # Use only the last few impossibilities (most recent canon)
     last_imps = (established_impossibilities or [])[-12:]
+
+    impossible_categories = set(hard_deny_cats) | scene_banned
+    for imp in last_imps:
+        try:
+            imp_cats = set((imp or {}).get("categories", []) or [])
+        except Exception:
+            imp_cats = set()
+        impossible_categories |= {str(cat) for cat in imp_cats if cat}
+    logger.info(
+        "[FEASIBILITY] impossible_categories=%s",
+        sorted(impossible_categories),
+    )
 
     def reasons_for(category_hits: Set[str]) -> List[Dict[str, str]]:
         reasons: List[Dict[str, str]] = []

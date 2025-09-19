@@ -238,6 +238,16 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
     }
     
     profile_data = profiles.get(setting_profile, profiles['realistic'])
+    world_type_map = {
+        'realistic': 'modern_realistic',
+        'fantasy_medieval': 'fantasy_medieval',
+        'high_fantasy': 'high_fantasy',
+        'cyberpunk': 'cyberpunk',
+        'industrial': 'industrial',
+        'space_opera': 'space_opera',
+        'primitive': 'primitive',
+    }
+    world_type_value = world_type_map.get(setting_profile, 'modern_realistic')
     
     async with get_db_connection_context() as conn:
         # Store physics profile
@@ -277,9 +287,17 @@ async def setup_world_rules(user_id: int, conversation_id: int, setting_profile:
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, 'SettingEra', $3)
-            ON CONFLICT (user_id, conversation_id, key) 
+            ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value = EXCLUDED.value
         """, user_id, conversation_id, profile_data['era'])
+
+        # Store world type for feasibility alignment
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'WorldType', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value = EXCLUDED.value
+        """, user_id, conversation_id, world_type_value)
         
         logger.info(f"Initialized world rules for conversation {conversation_id} with profile: {setting_profile}")
 
