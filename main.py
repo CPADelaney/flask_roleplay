@@ -609,20 +609,86 @@ def create_quart_app():
     app.config['SESSION_TYPE'] = 'filesystem'
     # Optionally set session lifetime - 7 days here
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
-    
+
+    def parse_cors_origins(origins_str: str):
+        """Parse comma-separated or JSON-like origins string into a list or wildcard."""
+        if not origins_str or origins_str == "*":
+            return "*"
+
+        cleaned = origins_str.strip('" ')
+
+        if '","' in cleaned:
+            return [url.strip('" ') for url in cleaned.split('","')]
+
+        return [url.strip() for url in cleaned.split(',')]
+
+    cors_origins = parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS", ""))
+
+    if not cors_origins or cors_origins == [""]:
+        cors_origins = ["http://localhost:3000", "https://nyx-m85p.onrender.com"]
+        logger.warning(
+            "No valid CORS origins found in environment. Using defaults: %s",
+            cors_origins,
+        )
+
+    engineio_cors_allowed = "*" if cors_origins == "*" else cors_origins
+
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
-    sio = socketio.AsyncServer(
-        async_mode="asgi", 
-        cors_allowed_origins="*",
-        ping_timeout=20, # Reduce to more standard value
-        ping_interval=10,
-        max_http_buffer_size=1024*1024, # Reduce slightly to 1MB
-        logger=True,
-        engineio_logger=True,
-        async_handlers=True, # Enable async event handlers
-        always_connect=True, # Be more permissive in connections
-        http_compression=True # Enable HTTP compression
+
+    def _get_socket_timing(env_var: str, default: float) -> float:
+        """Return a positive float from the environment or a default."""
+
+        raw_value = os.getenv(env_var)
+        if raw_value in (None, ""):
+            return default
+
+        try:
+            value = float(raw_value)
+            if value <= 0:
+                raise ValueError
+            return value
+        except ValueError:
+            logger.warning(
+                "Invalid %s value %r provided. Falling back to default %.2f seconds.",
+                env_var,
+                raw_value,
+                default,
+            )
+            return default
+
+    socket_ping_interval = _get_socket_timing("SOCKET_PING_INTERVAL", 25.0)
+    socket_ping_timeout = _get_socket_timing("SOCKET_PING_TIMEOUT", 70.0)
+
+    if socket_ping_timeout <= socket_ping_interval:
+        adjusted_timeout = socket_ping_interval + 10.0
+        logger.warning(
+            "Socket ping timeout %.2fs must exceed interval %.2fs. Using %.2fs instead.",
+            socket_ping_timeout,
+            socket_ping_interval,
+            adjusted_timeout,
+        )
+        socket_ping_timeout = adjusted_timeout
+
+    logger.info(
+        "Configuring Socket.IO heartbeat: interval=%.2fs timeout=%.2fs",
+        socket_ping_interval,
+        socket_ping_timeout,
     )
+
+    socket_server_kwargs: Dict[str, Any] = {
+        "async_mode": "asgi",
+        "cors_allowed_origins": engineio_cors_allowed,
+        "ping_timeout": socket_ping_timeout,
+        "ping_interval": socket_ping_interval,
+        "max_http_buffer_size": 1024 * 1024,  # Reduce slightly to 1MB
+        "logger": True,
+        "engineio_logger": True,
+        "async_handlers": True,  # Enable async event handlers
+        "always_connect": True,  # Be more permissive in connections
+        "http_compression": True,  # Enable HTTP compression
+    }
+
+    sio = socketio.AsyncServer(**socket_server_kwargs)
 
 
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
@@ -645,33 +711,9 @@ def create_quart_app():
     # 4) CORS
     # make sure you have `pip install quart-cors`
     from quart_cors import cors
-    
-    def parse_cors_origins(origins_str):
-        """Parse comma-separated or JSON-like origins string into a list."""
-        if not origins_str or origins_str == "*":
-            return "*"
-        
-        # Remove any quotes and spaces from the beginning and end
-        cleaned = origins_str.strip('" ')
-        
-        # Try to handle the format "url1","url2","url3"
-        if '","' in cleaned:
-            return [url.strip('" ') for url in cleaned.split('","')]
-        
-        # Handle normal comma-separated format
-        return [url.strip() for url in cleaned.split(',')]
-    
-    origins = parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS", ""))
-    
-    # If origins is still empty after parsing, use a default
-    if not origins or origins == [""]:
-        # For development, you might want to use localhost
-        origins = ["http://localhost:3000", "https://nyx-m85p.onrender.com"]
-        # Log a warning
-        logger.warning(f"No valid CORS origins found in environment. Using defaults: {origins}")
-    
+
     # Configure CORS - if using specific origins, don't use wildcard
-    if origins == "*":
+    if cors_origins == "*":
         # When using wildcard, cannot use credentials
         cors(app,
              allow_origin="*",
@@ -682,11 +724,11 @@ def create_quart_app():
     else:
         # When using specific origins, can use credentials
         cors(app,
-             allow_origin=origins,
+             allow_origin=cors_origins,
              allow_credentials=True,
              allow_methods="*",
              allow_headers="*")
-        logger.info(f"CORS configured with specific origins: {origins}")
+        logger.info(f"CORS configured with specific origins: {cors_origins}")
 
 
     
