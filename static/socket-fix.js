@@ -7,6 +7,16 @@
   let isConnecting = false;
   let healthCheckInterval = null;
   let heartbeatInterval = null;
+
+  function getNumericWindowConfig(key, fallback) {
+    if (typeof window !== 'undefined') {
+      const value = window[key];
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return value;
+      }
+    }
+    return fallback;
+  }
   
   // Debug logging function
   function debugLog(...args) {
@@ -41,16 +51,16 @@
           user_id: userId
         },
         // Still include auth for compatibility
-        auth: { 
-          user_id: userId 
+        auth: {
+          user_id: userId
         },
         reconnection: true,
         reconnectionAttempts: 10,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         timeout: 60000,
-        pingTimeout: 60000,
-        pingInterval: 25000,
+        pingTimeout: getNumericWindowConfig('SOCKET_PING_TIMEOUT', 70000),
+        pingInterval: getNumericWindowConfig('SOCKET_PING_INTERVAL', 25000),
         forceNew: false,
         ...options
       };

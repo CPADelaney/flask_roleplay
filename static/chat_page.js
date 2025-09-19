@@ -183,16 +183,29 @@ window.forceReconnect = function() {
   }
 };
 
+function getNumericWindowConfig(key, fallback) {
+  if (typeof window !== 'undefined') {
+    const value = window[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
 // ===== Configuration =====
 const CONFIG = {
   MESSAGES_PER_LOAD: 20,
   NYX_SPACE_CONV_ID: "__nyx_space__",
-  HEARTBEAT_INTERVAL: 20000,
+  HEARTBEAT_INTERVAL: getNumericWindowConfig('SOCKET_CLIENT_HEARTBEAT_INTERVAL', 20000),
   JOIN_TIMEOUT: 8000,
   SEND_TIMEOUT: 15000,
   GAME_POLL_INTERVAL: 3000,
   GAME_POLL_MAX_ATTEMPTS: 60,
-  SCROLL_THRESHOLD: 200 // px from bottom to auto-scroll
+  SCROLL_THRESHOLD: 200, // px from bottom to auto-scroll
+  SOCKET_CONNECTION_TIMEOUT_MS: getNumericWindowConfig('SOCKET_CONNECTION_TIMEOUT', 60000),
+  SOCKET_PING_TIMEOUT_MS: getNumericWindowConfig('SOCKET_PING_TIMEOUT', 70000),
+  SOCKET_PING_INTERVAL_MS: getNumericWindowConfig('SOCKET_PING_INTERVAL', 25000)
 };
 
 // ===== State Management =====
@@ -284,8 +297,10 @@ function createRobustSocketConnection(handlers = {}) {
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 10,
-    timeout: 20000,
+    timeout: CONFIG.SOCKET_CONNECTION_TIMEOUT_MS,
     autoConnect: true,
+    pingTimeout: CONFIG.SOCKET_PING_TIMEOUT_MS,
+    pingInterval: CONFIG.SOCKET_PING_INTERVAL_MS,
     // Pass user_id as query parameter instead of auth
     query: {
       user_id: userId
