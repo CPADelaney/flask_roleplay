@@ -13,7 +13,7 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from celery_config import celery_app
-from agents import trace, custom_span
+from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
 
 # --- DB utils (async loop + connection mgmt) ---
@@ -759,6 +759,425 @@ def ensure_npc_pool_task(user_id: int, conversation_id: int, target_count: int =
             logger.exception("Failed to record NPC pool failure state for conversation %s", conversation_id)
 
         return {"status": "failed", "error": str(exc)}
+
+
+@celery_app.task
+def generate_lore_background_task(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """Generate lore asynchronously so the new-game flow can finish quickly."""
+
+    logger.info(
+        "Starting background lore generation for user=%s conversation=%s",
+        user_id,
+        conversation_id,
+    )
+
+    async def run_lore_generation():
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+        status_payload = {
+            "status": "in_progress",
+            "updated_at": timestamp,
+        }
+
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreGenerationStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(status_payload),
+                )
+        except Exception:
+            logger.exception(
+                "Failed to mark lore generation in progress for conversation %s",
+                conversation_id,
+            )
+
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+                environment_desc = row["value"] if row else "A mysterious environment with hidden layers of complexity."
+
+                npc_rows = await conn.fetch(
+                    """
+                    SELECT npc_id FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+                npc_ids = [r["npc_id"] for r in npc_rows] if npc_rows else []
+
+            from lore.core.lore_system import LoreSystem
+
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+            lore_ctx = RunContextWrapper(context={
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+            })
+
+            lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
+
+            if npc_ids:
+                logger.info(
+                    "Integrating generated lore with %s NPCs for conversation %s",
+                    len(npc_ids),
+                    conversation_id,
+                )
+                for npc_id in npc_ids:
+                    faction_affiliations: List[str] = []
+                    async with get_db_connection_context() as conn:
+                        npc_row = await conn.fetchrow(
+                            """
+                            SELECT affiliations
+                            FROM NPCStats
+                            WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                            """,
+                            npc_id,
+                            user_id,
+                            conversation_id,
+                        )
+                        if npc_row and npc_row["affiliations"]:
+                            affiliations_data = npc_row["affiliations"]
+                            if isinstance(affiliations_data, str):
+                                try:
+                                    affiliations_data = json.loads(affiliations_data)
+                                except json.JSONDecodeError:
+                                    affiliations_data = []
+                            if isinstance(affiliations_data, list):
+                                faction_affiliations = affiliations_data
+
+                    await lore_system.initialize_npc_lore_knowledge(
+                        lore_ctx,
+                        npc_id,
+                        cultural_background="common",
+                        faction_affiliations=faction_affiliations,
+                    )
+
+            factions = len(lore_result.get("factions", []))
+            cultural = len(lore_result.get("cultural_elements", []))
+            locations = len(lore_result.get("locations", []))
+            summary = (
+                f"Generated {factions} factions, {cultural} cultural elements, and {locations} locations"
+            )
+
+            completion_payload = {
+                "status": "completed",
+                "completed_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "factions": factions,
+                "cultural_elements": cultural,
+                "locations": locations,
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    summary,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreGenerationStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(completion_payload),
+                )
+
+            logger.info(
+                "Background lore generation completed for conversation %s",
+                conversation_id,
+            )
+
+            return {
+                "status": "completed",
+                "lore_summary": summary,
+                "factions": factions,
+                "cultural_elements": cultural,
+                "locations": locations,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            logger.exception(
+                "Background lore generation failed for conversation %s", conversation_id
+            )
+
+            failure_summary = f"Failed to generate lore: {exc}"
+            failure_payload = {
+                "status": "failed",
+                "failed_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "error": str(exc),
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    failure_summary,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LoreGenerationStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(failure_payload),
+                )
+
+            return {
+                "status": "failed",
+                "error": str(exc),
+            }
+
+    return run_async_in_worker_loop(run_lore_generation())
+
+
+@celery_app.task
+def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """Generate the initial conflict outside the critical path."""
+
+    logger.info(
+        "Starting background conflict generation for user=%s conversation=%s",
+        user_id,
+        conversation_id,
+    )
+
+    async def run_conflict_generation():
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+        status_payload = {
+            "status": "in_progress",
+            "updated_at": timestamp,
+        }
+
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(status_payload),
+                )
+        except Exception:
+            logger.exception(
+                "Failed to mark conflict generation in progress for conversation %s",
+                conversation_id,
+            )
+
+        try:
+            async with get_db_connection_context() as conn:
+                npc_count = await conn.fetchval(
+                    """
+                    SELECT COUNT(*) FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+
+            npc_count = int(npc_count or 0)
+
+            if npc_count < 3:
+                summary = "No initial conflict - insufficient NPCs"
+                skip_payload = {
+                    "status": "skipped",
+                    "npc_count": npc_count,
+                    "reason": "insufficient_npcs",
+                    "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                }
+
+                async with get_db_connection_context() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                        VALUES ($1, $2, 'InitialConflictSummary', $3)
+                        ON CONFLICT (user_id, conversation_id, key)
+                        DO UPDATE SET value = EXCLUDED.value
+                        """,
+                        user_id,
+                        conversation_id,
+                        summary,
+                    )
+
+                    await conn.execute(
+                        """
+                        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                        VALUES ($1, $2, 'InitialConflictStatus', $3)
+                        ON CONFLICT (user_id, conversation_id, key)
+                        DO UPDATE SET value = EXCLUDED.value
+                        """,
+                        user_id,
+                        conversation_id,
+                        json.dumps(skip_payload),
+                    )
+
+                logger.info(
+                    "Skipping conflict generation for conversation %s due to insufficient NPCs",
+                    conversation_id,
+                )
+
+                return {
+                    "status": "skipped",
+                    "reason": "insufficient_npcs",
+                    "npc_count": npc_count,
+                }
+
+            from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+
+            conflict_ctx = RunContextWrapper(context={
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+            })
+
+            conflict_integration = await ConflictSystemIntegration.get_instance(
+                user_id,
+                conversation_id,
+            )
+            await conflict_integration.initialize()
+
+            initial_conflict = await conflict_integration.generate_conflict(
+                conflict_ctx,
+                {
+                    "conflict_type": "major",
+                    "intensity": "medium",
+                    "player_involvement": "indirect",
+                },
+            )
+
+            if initial_conflict is None:
+                summary = "No initial conflict - generation returned None"
+            elif not isinstance(initial_conflict, dict):
+                summary = "No initial conflict - invalid response type"
+            elif not initial_conflict.get("success", False):
+                summary = f"No initial conflict - {initial_conflict.get('message', 'Unknown error')}"
+            else:
+                conflict_details = initial_conflict.get("conflict_details")
+                if conflict_details and isinstance(conflict_details, dict):
+                    summary = conflict_details.get("name", "Unnamed Conflict")
+                else:
+                    summary = "Unnamed Conflict"
+
+            success = not summary.startswith("No initial conflict -")
+            completion_payload = {
+                "status": "completed" if success else "completed_no_conflict",
+                "completed_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "npc_count": npc_count,
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    summary,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(completion_payload),
+                )
+
+            logger.info(
+                "Background conflict generation completed for conversation %s",
+                conversation_id,
+            )
+
+            return {
+                "status": completion_payload["status"],
+                "initial_conflict": summary,
+            }
+
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            logger.exception(
+                "Background conflict generation failed for conversation %s",
+                conversation_id,
+            )
+
+            failure_summary = f"No initial conflict - exception occurred ({exc})"
+            failure_payload = {
+                "status": "failed",
+                "failed_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "error": str(exc),
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    failure_summary,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'InitialConflictStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(failure_payload),
+                )
+
+            return {
+                "status": "failed",
+                "error": str(exc),
+            }
+
+    return run_async_in_worker_loop(run_conflict_generation())
 
 
 # === GPT opening line ===========================================================
