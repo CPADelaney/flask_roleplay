@@ -214,7 +214,7 @@ class NPCScheduleData(BaseModel):
 
 class CreateOpeningNarrativeParams(BaseModel):
     environment_data: EnvironmentInfo
-    npc_schedule_data: NPCScheduleData
+    npc_schedule_data: Optional[NPCScheduleData] = None
     model_config = ConfigDict(extra="forbid")
 
 class FinalizeGameSetupParams(BaseModel):
@@ -1223,8 +1223,118 @@ class NewGameAgent:
             npc_ids=npc_ids,
             chase_schedule_json=chase_schedule_json
         )
-        
+
         return result
+
+    async def _create_player_schedule_data(
+        self,
+        ctx: RunContextWrapper[GameContext],
+        environment_desc: str
+    ) -> NPCScheduleData:
+        """Create Chase's default schedule and persist it canonically."""
+
+        if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+            user_id = ctx.context["user_id"]
+            conversation_id = ctx.context["conversation_id"]
+        elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
+            user_id = ctx.user_id
+            conversation_id = ctx.conversation_id
+        else:
+            raise ValueError("Invalid context object - missing user_id/conversation_id")
+
+        day_names = await self._require_day_names(user_id, conversation_id)
+
+        chase_params = CreateChaseScheduleParams(
+            environment_desc=environment_desc,
+            day_names=day_names
+        )
+
+        chase_schedule_json = await self.create_chase_schedule(ctx, chase_params)
+        chase_schedule = json.loads(chase_schedule_json)
+
+        async with get_db_connection_context() as conn:
+            canon_ctx = type('obj', (object,), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })
+
+            await canon.store_player_schedule(
+                canon_ctx, conn,
+                "Chase",
+                chase_schedule
+            )
+
+        return NPCScheduleData(
+            npc_ids=[],
+            chase_schedule_json=chase_schedule_json
+        )
+
+    async def _queue_npc_pool_fill(
+        self,
+        user_id: int,
+        conversation_id: int,
+        target_count: int = 5
+    ) -> None:
+        """Queue a background task to ensure the NPC pool reaches the target size."""
+
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        status_payload = {
+            "status": "queued",
+            "target": target_count,
+            "queued_at": timestamp,
+            "source": "new_game_bootstrap"
+        }
+
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'NPCPoolStatus', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id,
+                conversation_id,
+                json.dumps(status_payload)
+            )
+
+        try:
+            from celery_config import celery_app
+
+            celery_app.send_task(
+                'tasks.ensure_npc_pool_task',
+                args=[user_id, conversation_id, target_count],
+                kwargs={'source': 'new_game_bootstrap'}
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Failed to queue NPC pool fill for conversation %s: %s",
+                conversation_id,
+                exc,
+                exc_info=True
+            )
+
+            failure_payload = {
+                **status_payload,
+                "status": "failed",
+                "error": str(exc),
+                "updated_at": datetime.utcnow().isoformat() + "Z"
+            }
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'NPCPoolStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(failure_payload)
+                )
+
+            raise
 
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
@@ -1313,33 +1423,59 @@ class NewGameAgent:
         async with get_db_connection_context() as conn:
             # Check NPCs
             npc_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM NPCStats 
+                SELECT COUNT(*) FROM NPCStats
                 WHERE user_id = $1 AND conversation_id = $2
             """, user_id, conversation_id)
-            
+
+            pool_row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'NPCPoolStatus'
+            """, user_id, conversation_id)
+
+            pool_status = {}
+            if pool_row and pool_row["value"]:
+                try:
+                    pool_status = json.loads(pool_row["value"])
+                except json.JSONDecodeError:
+                    logger.warning("Invalid NPCPoolStatus JSON for conversation %s", conversation_id)
+
             # Check locations
             location_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM Locations 
+                SELECT COUNT(*) FROM Locations
                 WHERE user_id = $1 AND conversation_id = $2
             """, user_id, conversation_id)
-            
+
             # Check key roleplay data - loop through keys to avoid array type issues
-            roleplay_keys = ['CurrentSetting', 'EnvironmentDesc', 'ChaseSchedule', 'LoreSummary']
+            roleplay_keys = ['CurrentSetting', 'EnvironmentDesc', 'ChaseSchedule', 'LoreSummary', 'NPCPoolStatus']
             roleplay_count = 0
             for key in roleplay_keys:
                 exists = await conn.fetchval("""
                     SELECT EXISTS(
-                        SELECT 1 FROM CurrentRoleplay 
+                        SELECT 1 FROM CurrentRoleplay
                         WHERE user_id = $1 AND conversation_id = $2 AND key = $3
                     )
                 """, user_id, conversation_id, key)  # Parameters: $1=user_id, $2=conversation_id, $3=key
                 if exists:
                     roleplay_count += 1
             
-            logger.info(f"Setup check - NPCs: {npc_count}, Locations: {location_count}, Roleplay keys: {roleplay_count}/{len(roleplay_keys)}")
-            
-            # Require at least 5 NPCs, 10 locations, and all key roleplay data
-            return npc_count >= 5 and location_count >= 10 and roleplay_count >= len(roleplay_keys)
+            npc_ready = npc_count >= 5
+            if not npc_ready:
+                status = str(pool_status.get("status", "")).lower()
+                target = int(pool_status.get("target", 0) or 0)
+                if status in {"queued", "in_progress", "ready"} and target >= 5:
+                    npc_ready = True
+
+            logger.info(
+                "Setup check - NPCs: %s (ready=%s), Locations: %s, Roleplay keys: %s/%s",
+                npc_count,
+                npc_ready,
+                location_count,
+                roleplay_count,
+                len(roleplay_keys)
+            )
+
+            # Require populated NPC pool plan, 10 locations, and all key roleplay data
+            return npc_ready and location_count >= 10 and roleplay_count >= len(roleplay_keys)
 
     async def process_preset_game_direct(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str) -> ProcessNewGameResult:
         """
@@ -2293,28 +2429,22 @@ class NewGameAgent:
             # Update status
             async with get_db_connection_context() as conn:
                 await conn.execute("""
-                    UPDATE conversations 
+                    UPDATE conversations
                     SET conversation_name='New Game - Creating NPCs'
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
-            
-            # 2. Create NPCs & schedules
-            logger.info("Step 2: Creating NPCs and schedules...")
-            npc_params = CreateNPCsAndSchedulesParams(
-                environment_data=EnvironmentInfo(
-                    setting_name=env.setting_name,
-                    environment_desc=env.environment_desc,
-                    environment_history=env.environment_history,
-                    scenario_name=env.scenario_name
-                )
-            )
-            npc_sched = await self.create_npcs_and_schedules(ctx_wrap, npc_params)
-            logger.info(f"Created {len(npc_sched.npc_ids)} NPCs")
-            
+
+            # 2. Prepare player schedule and queue NPC creation
+            logger.info("Step 2: Preparing player schedule and queueing NPC generation in the background...")
+            schedule_context_desc = env.environment_desc + "\n\n" + env.environment_history
+            npc_sched = await self._create_player_schedule_data(ctx_wrap, schedule_context_desc)
+            await self._queue_npc_pool_fill(user_id, conversation_id, target_count=5)
+            logger.info("Background NPC generation task dispatched")
+
             # Update status
             async with get_db_connection_context() as conn:
                 await conn.execute("""
-                    UPDATE conversations 
+                    UPDATE conversations
                     SET conversation_name='New Game - Writing Narrative'
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)

@@ -93,6 +93,7 @@ task_routes = {
     # High priority tasks
     'tasks.process_new_game_task': {'queue': 'high'},
     'tasks.create_npcs_task': {'queue': 'high'},
+    'tasks.ensure_npc_pool_task': {'queue': 'high'},
     'tasks.background_chat_task_with_memory': {'queue': 'high'},
     
     # Default priority tasks

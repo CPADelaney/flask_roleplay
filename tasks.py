@@ -610,6 +610,157 @@ def create_npcs_task(user_id: int, conversation_id: int, count: int = 10):
         return {"status": "failed", "error": str(e)}
 
 
+@celery_app.task
+def ensure_npc_pool_task(user_id: int, conversation_id: int, target_count: int = 5, source: Optional[str] = None):
+    """Ensure at least ``target_count`` unintroduced NPCs exist for the conversation."""
+
+    logger.info(
+        "Ensuring NPC pool for user=%s, conversation=%s, target=%s", user_id, conversation_id, target_count
+    )
+
+    async def ensure_pool_async():
+        async with get_db_connection_context() as conn:
+            existing = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                  FROM NPCStats
+                 WHERE user_id=$1
+                   AND conversation_id=$2
+                   AND COALESCE(introduced, FALSE) = FALSE
+                """,
+                user_id,
+                conversation_id,
+            )
+
+            payload = {
+                "status": "in_progress",
+                "target": target_count,
+                "existing": existing,
+                "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            if source:
+                payload["source"] = source
+
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'NPCPoolStatus', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id,
+                conversation_id,
+                json.dumps(payload),
+            )
+
+        needed = max(int(target_count) - int(existing), 0)
+        npc_ids: List[int] = []
+
+        if needed > 0:
+            logger.info(
+                "NPC pool short by %s characters for conversation %s. Spawning via handler...",
+                needed,
+                conversation_id,
+            )
+
+            from npcs.new_npc_creation import NPCCreationHandler
+
+            handler = NPCCreationHandler()
+            ctx = type("NPCContext", (), {
+                "context": {
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                }
+            })()
+            npc_ids = await handler.spawn_multiple_npcs(ctx, count=needed)
+
+        async with get_db_connection_context() as conn:
+            final_count = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                  FROM NPCStats
+                 WHERE user_id=$1
+                   AND conversation_id=$2
+                   AND COALESCE(introduced, FALSE) = FALSE
+                """,
+                user_id,
+                conversation_id,
+            )
+
+            payload = {
+                "status": "ready" if final_count >= target_count else "partial",
+                "target": target_count,
+                "created": len(npc_ids),
+                "final_count": final_count,
+                "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            if source:
+                payload["source"] = source
+
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'NPCPoolStatus', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id,
+                conversation_id,
+                json.dumps(payload),
+            )
+
+        return {
+            "status": payload["status"],
+            "created": len(npc_ids),
+            "final_count": final_count,
+            "npc_ids": npc_ids,
+        }
+
+    try:
+        result = run_async_in_worker_loop(ensure_pool_async())
+        logger.info(
+            "NPC pool ensure task complete for conversation %s. Status=%s, final_count=%s",
+            conversation_id,
+            result.get("status"),
+            result.get("final_count"),
+        )
+        return result
+    except Exception as exc:
+        logger.exception(
+            "Error ensuring NPC pool for user=%s conversation=%s", user_id, conversation_id
+        )
+
+        async def mark_failure():
+            failure_payload = {
+                "status": "failed",
+                "target": target_count,
+                "error": str(exc),
+                "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            if source:
+                failure_payload["source"] = source
+
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'NPCPoolStatus', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    user_id,
+                    conversation_id,
+                    json.dumps(failure_payload),
+                )
+
+        try:
+            run_async_in_worker_loop(mark_failure())
+        except Exception:
+            logger.exception("Failed to record NPC pool failure state for conversation %s", conversation_id)
+
+        return {"status": "failed", "error": str(exc)}
+
+
 # === GPT opening line ===========================================================
 
 @celery_app.task
