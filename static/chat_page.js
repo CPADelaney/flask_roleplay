@@ -553,7 +553,7 @@ window.startNewGame = async function() {
   chatWindow.scrollTop = chatWindow.scrollHeight;
 
   try {
-    const data = await fetchJson("/start_new_game", {
+    const data = await fetchJson("/new_game/start_new_game", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({})
