@@ -1731,14 +1731,61 @@ class NewGameAgent:
                 
                 preset_story_data = json.loads(story_row['story_data'])
             
-            # Create conversation
+            # Create or reuse conversation
+            provided_convo_id = conversation_data.get("conversation_id")
             async with get_db_connection_context() as conn:
-                row = await conn.fetchrow("""
-                    INSERT INTO conversations (user_id, conversation_name, status)
-                    VALUES ($1, $2, 'processing')
-                    RETURNING id
-                """, user_id, f"{preset_story_data['name']}")
-                conversation_id = row["id"]
+                if provided_convo_id:
+                    row = await conn.fetchrow(
+                        "SELECT id FROM conversations WHERE id=$1 AND user_id=$2",
+                        provided_convo_id,
+                        user_id,
+                    )
+                    if not row:
+                        raise ValueError(
+                            f"Conversation {provided_convo_id} not found or unauthorized"
+                        )
+
+                    conversation_id = row["id"]
+                    await conn.execute(
+                        """
+                        UPDATE conversations
+                           SET status='processing', conversation_name=$3
+                         WHERE id=$1 AND user_id=$2
+                        """,
+                        conversation_id,
+                        user_id,
+                        preset_story_data['name'],
+                    )
+
+                    tables = [
+                        "Events",
+                        "PlannedEvents",
+                        "PlayerInventory",
+                        "Quests",
+                        "NPCStats",
+                        "Locations",
+                        "SocialLinks",
+                        "CurrentRoleplay",
+                    ]
+                    for t in tables:
+                        await conn.execute(
+                            f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
+                            user_id,
+                            conversation_id,
+                        )
+                else:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO conversations (user_id, conversation_name, status)
+                        VALUES ($1, $2, 'processing')
+                        RETURNING id
+                        """,
+                        user_id,
+                        f"{preset_story_data['name']}",
+                    )
+                    conversation_id = row["id"]
+
+            conversation_data["conversation_id"] = conversation_id
             
             # Initialize player stats
             await insert_default_player_stats_chase(user_id, conversation_id)
