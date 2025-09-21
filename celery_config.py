@@ -95,7 +95,9 @@ task_routes = {
     'tasks.create_npcs_task': {'queue': 'background'},
     'tasks.ensure_npc_pool_task': {'queue': 'background'},
     'tasks.background_chat_task_with_memory': {'queue': 'background'},
-    
+    'tasks.generate_lore_background_task': {'queue': 'background'},
+    'tasks.generate_initial_conflict_task': {'queue': 'background'},
+
     # Default priority tasks
     'tasks.run_npc_learning_cycle_task': {'queue': 'default'},
     'tasks.nyx_memory_maintenance_task': {'queue': 'default'},
