@@ -178,8 +178,9 @@ if USE_RABBITMQ:
     }
     celery_app.conf.update({**base_config, **rabbitmq_config})
 else:
-    # Simpler configuration for Redis
-    celery_app.conf.update(base_config)
+    # Simpler configuration for Redis while ensuring task routes are configured
+    redis_config = {**base_config, 'task_routes': task_routes}
+    celery_app.conf.update(redis_config)
 
 
 def _merge_task_queues():
