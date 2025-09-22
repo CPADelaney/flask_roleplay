@@ -1491,7 +1491,7 @@ class LoreDirectiveHandler:
         self.directive_handler.register_handler(DirectiveType.PROHIBITION, self._handle_prohibition_directive)
         
         # Start background processing of directives
-        self.directive_task = await self.directive_handler.start_background_processing(interval=60.0)
+        self.directive_task = self.directive_handler.start_background_processing(interval=60.0)
     
     async def _handle_action_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
         """

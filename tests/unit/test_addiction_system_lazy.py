@@ -86,7 +86,7 @@ async def test_addiction_context_lazy_generation(monkeypatch):
         def register_handler(self, *args, **kwargs):
             self.handlers.append((args, kwargs))
 
-        async def start_background_processing(self, interval=60.0):
+        def start_background_processing(self, interval=60.0):
             return None
 
     monkeypatch.setattr(sdk, "DirectiveHandler", DummyDirectiveHandler)

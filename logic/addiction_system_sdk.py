@@ -423,9 +423,7 @@ class AddictionContext:
         
         # Only start background task for long-lived contexts to avoid task leak
         if start_background and not self.directive_task:
-            self.directive_task = asyncio.create_task(
-                self.directive_handler.start_background_processing(interval=60.0)
-            )
+            self.directive_task = self.directive_handler.start_background_processing(interval=60.0)
 
     async def get_thematic_messages(
         self,
