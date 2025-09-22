@@ -8,7 +8,7 @@ import os
 import functools
 import random
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from logic.setting_rules import synthesize_setting_rules
 
@@ -1651,64 +1651,252 @@ class NewGameAgent:
         
         return opening_narrative
 
-    async def _is_setup_complete(self, user_id: int, conversation_id: int) -> bool:
-        """Check if the game setup is complete before marking as ready"""
+    async def _determine_location_target(
+        self,
+        conn,
+        user_id: int,
+        conversation_id: int
+    ) -> int:
+        """Infer how many locations should exist for this conversation."""
+
+        def _parse_target(value: Any) -> Optional[int]:
+            if value is None:
+                return None
+
+            data = value
+            if isinstance(data, str):
+                stripped = data.strip()
+                if not stripped:
+                    return None
+                try:
+                    data = json.loads(stripped)
+                except json.JSONDecodeError:
+                    try:
+                        return max(0, int(stripped))
+                    except ValueError:
+                        return None
+
+            if isinstance(data, (int, float)):
+                return int(data)
+
+            if isinstance(data, list):
+                return len([item for item in data if item is not None])
+
+            if isinstance(data, dict):
+                if isinstance(data.get('required_locations'), list):
+                    return len([loc for loc in data['required_locations'] if loc])
+                if isinstance(data.get('locations'), list):
+                    return len([loc for loc in data['locations'] if loc])
+
+                for key in ('target', 'count', 'required_count', 'expected', 'required'):
+                    maybe = data.get(key)
+                    if isinstance(maybe, (int, float)):
+                        return int(maybe)
+                    if isinstance(maybe, str):
+                        try:
+                            return int(maybe)
+                        except ValueError:
+                            continue
+
+            return None
+
+        candidate_keys = [
+            'RequiredLocations',
+            'PresetRequiredLocations',
+            'LocationGenerationPlan',
+            'LocationBootstrapPlan',
+            'LocationTargets'
+        ]
+
+        for key in candidate_keys:
+            raw_value = await conn.fetchval(
+                """
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = $3
+                """,
+                user_id,
+                conversation_id,
+                key
+            )
+
+            target = _parse_target(raw_value)
+            if target:
+                return max(1, target)
+
+        preset_story_id = await conn.fetchval(
+            """
+            SELECT story_id FROM PresetStoryProgress
+            WHERE user_id = $1 AND conversation_id = $2
+            """,
+            user_id,
+            conversation_id
+        )
+
+        if preset_story_id:
+            story_row = await conn.fetchrow(
+                "SELECT story_data FROM PresetStories WHERE story_id = $1",
+                preset_story_id
+            )
+
+            if story_row and story_row.get('story_data') is not None:
+                target = _parse_target(story_row['story_data'])
+                if target:
+                    return max(1, target)
+
+        return 1
+
+    async def _is_setup_complete(
+        self,
+        user_id: int,
+        conversation_id: int
+    ) -> Tuple[bool, List[str], List[str]]:
+        """Check whether core setup data exists before marking the game ready."""
+
+        missing: List[str] = []
+        pending: List[str] = []
+
         async with get_db_connection_context() as conn:
-            # Check NPCs
-            npc_count = await conn.fetchval("""
+            npc_count = await conn.fetchval(
+                """
                 SELECT COUNT(*) FROM NPCStats
                 WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
+                """,
+                user_id,
+                conversation_id
+            )
 
-            pool_row = await conn.fetchrow("""
+            pool_row = await conn.fetchrow(
+                """
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id = $1 AND conversation_id = $2 AND key = 'NPCPoolStatus'
-            """, user_id, conversation_id)
+                """,
+                user_id,
+                conversation_id
+            )
 
-            pool_status = {}
-            if pool_row and pool_row["value"]:
-                try:
-                    pool_status = json.loads(pool_row["value"])
-                except json.JSONDecodeError:
-                    logger.warning("Invalid NPCPoolStatus JSON for conversation %s", conversation_id)
+            pool_raw = pool_row['value'] if pool_row else None
+            pool_status: Dict[str, Any] = {}
 
-            # Check locations
-            location_count = await conn.fetchval("""
+            if pool_raw:
+                if isinstance(pool_raw, dict):
+                    pool_status = pool_raw
+                else:
+                    try:
+                        pool_status = json.loads(pool_raw)
+                    except (TypeError, json.JSONDecodeError):
+                        logger.warning(
+                            "Invalid NPCPoolStatus data for conversation %s", conversation_id
+                        )
+
+            target_required = pool_status.get('target', 5)
+            try:
+                target_required = int(target_required)
+            except (TypeError, ValueError):
+                target_required = 5
+
+            if target_required <= 0:
+                target_required = 5
+
+            status = str(pool_status.get('status', '')).lower()
+            ready_statuses = {'queued', 'in_progress', 'ready', 'complete', 'completed', 'done'}
+
+            npc_ready = npc_count >= target_required
+            if not npc_ready:
+                if status in ready_statuses:
+                    npc_ready = True
+                    pending.append(f"NPC pool {npc_count}/{target_required} ({status or 'pending'})")
+                else:
+                    missing.append(f"NPC pool {npc_count}/{target_required}")
+
+            location_count = await conn.fetchval(
+                """
                 SELECT COUNT(*) FROM Locations
                 WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
+                """,
+                user_id,
+                conversation_id
+            )
 
-            # Check key roleplay data - loop through keys to avoid array type issues
+            location_target = await self._determine_location_target(conn, user_id, conversation_id)
+            if location_count < location_target:
+                missing.append(f"locations {location_count}/{location_target}")
+
             roleplay_keys = ['CurrentSetting', 'EnvironmentDesc', 'ChaseSchedule', 'LoreSummary', 'NPCPoolStatus']
-            roleplay_count = 0
+            present_roleplay = set()
+
             for key in roleplay_keys:
-                exists = await conn.fetchval("""
-                    SELECT EXISTS(
-                        SELECT 1 FROM CurrentRoleplay
+                if key == 'NPCPoolStatus':
+                    value = pool_raw
+                else:
+                    value = await conn.fetchval(
+                        """
+                        SELECT value FROM CurrentRoleplay
                         WHERE user_id = $1 AND conversation_id = $2 AND key = $3
+                        """,
+                        user_id,
+                        conversation_id,
+                        key
                     )
-                """, user_id, conversation_id, key)  # Parameters: $1=user_id, $2=conversation_id, $3=key
-                if exists:
-                    roleplay_count += 1
-            
-            npc_ready = npc_count >= 5
-            if not npc_ready:
-                status = str(pool_status.get("status", "")).lower()
-                target = int(pool_status.get("target", 0) or 0)
-                if status in {"queued", "in_progress", "ready"} and target >= 5:
-                    npc_ready = True
+
+                if value is None:
+                    missing.append(f"roleplay[{key}]")
+                    continue
+
+                if isinstance(value, str) and not value.strip():
+                    missing.append(f"roleplay[{key}]")
+                    continue
+
+                present_roleplay.add(key)
+
+                if key == 'LoreSummary':
+                    if isinstance(value, str):
+                        summary_text = value
+                    else:
+                        summary_text = json.dumps(value)
+
+                    summary_lower = summary_text.lower()
+                    if any(token in summary_lower for token in ('pending', 'queued', 'generating')):
+                        pending.append('Lore summary generation pending')
+
+            lore_status_raw = await conn.fetchval(
+                """
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'LoreGenerationStatus'
+                """,
+                user_id,
+                conversation_id
+            )
+
+            if lore_status_raw:
+                if isinstance(lore_status_raw, dict):
+                    lore_status = lore_status_raw
+                else:
+                    try:
+                        lore_status = json.loads(lore_status_raw)
+                    except (TypeError, json.JSONDecodeError):
+                        lore_status = {}
+
+                lore_state = str(lore_status.get('status', '')).lower()
+                if lore_state in {'queued', 'in_progress'}:
+                    pending.append(f"Lore generation {lore_state}")
 
             logger.info(
-                "Setup check - NPCs: %s (ready=%s), Locations: %s, Roleplay keys: %s/%s",
+                "Setup check - NPCs: %s/%s (status=%s ready=%s), Locations: %s/%s, Roleplay keys: %s/%s",
                 npc_count,
+                target_required,
+                status or 'none',
                 npc_ready,
                 location_count,
-                roleplay_count,
+                location_target,
+                len(present_roleplay),
                 len(roleplay_keys)
             )
 
-            # Require populated NPC pool plan, 10 locations, and all key roleplay data
-            return npc_ready and location_count >= 10 and roleplay_count >= len(roleplay_keys)
+        # Deduplicate while preserving order
+        missing = list(dict.fromkeys(missing))
+        pending = list(dict.fromkeys(pending))
+
+        return len(missing) == 0, missing, pending
 
     async def process_preset_game_direct(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str) -> ProcessNewGameResult:
         """
@@ -2627,8 +2815,21 @@ class NewGameAgent:
             
             # 5. Verify setup is complete before marking ready
             logger.info("Step 5: Verifying game setup completeness...")
-            if not await self._is_setup_complete(user_id, conversation_id):
-                raise Exception("Game setup incomplete - missing required components")
+            complete, missing_components, pending_components = await self._is_setup_complete(user_id, conversation_id)
+
+            if not complete:
+                logger.warning(
+                    "Game setup incomplete for conversation %s: %s",
+                    conversation_id,
+                    "; ".join(missing_components) or "unknown issues"
+                )
+
+            if pending_components:
+                logger.info(
+                    "Background generation still pending for conversation %s: %s",
+                    conversation_id,
+                    "; ".join(pending_components)
+                )
             
             async with get_db_connection_context() as conn:
                 # First verify the opening narrative exists

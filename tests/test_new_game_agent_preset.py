@@ -188,3 +188,107 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
 
     # The preset flow should not have inserted a new conversation row
     assert not any("INSERT INTO conversations" in query for query, _ in stub_conn.fetchrow_calls)
+
+
+class SetupCheckStubConnection:
+    def __init__(
+        self,
+        npc_count,
+        location_count,
+        roleplay_values,
+        pool_status,
+        lore_status,
+        preset_story_id,
+        preset_story_data,
+    ):
+        self.npc_count = npc_count
+        self.location_count = location_count
+        self.roleplay_values = roleplay_values
+        self.pool_status = pool_status
+        self.lore_status = lore_status
+        self.preset_story_id = preset_story_id
+        self.preset_story_data = preset_story_data
+        self.fetchval_calls = []
+        self.fetchrow_calls = []
+
+    async def fetchval(self, query, *args):
+        normalized = " ".join(query.split())
+        self.fetchval_calls.append((normalized, args))
+
+        if "SELECT COUNT(*) FROM NPCStats" in normalized:
+            return self.npc_count
+
+        if "SELECT COUNT(*) FROM Locations" in normalized:
+            return self.location_count
+
+        if "SELECT story_id FROM PresetStoryProgress" in normalized:
+            return self.preset_story_id
+
+        if "SELECT value FROM CurrentRoleplay" in normalized:
+            key = args[2] if len(args) > 2 else None
+            if key == 'LoreGenerationStatus':
+                return self.lore_status
+            if key == 'NPCPoolStatus':
+                return self.pool_status
+            if key is not None:
+                return self.roleplay_values.get(key)
+            return None
+
+        return None
+
+    async def fetchrow(self, query, *args):
+        normalized = " ".join(query.split())
+        self.fetchrow_calls.append((normalized, args))
+
+        if "SELECT value FROM CurrentRoleplay" in normalized and "NPCPoolStatus" in normalized:
+            if self.pool_status is None:
+                return None
+            return {"value": self.pool_status}
+
+        if "SELECT story_data FROM PresetStories" in normalized:
+            return {"story_data": self.preset_story_data}
+
+        return None
+
+    async def execute(self, query, *args):
+        return None
+
+    async def fetch(self, query, *args):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_setup_check_allows_queued_lore_and_npcs(monkeypatch):
+    agent = new_game_agent.NewGameAgent()
+
+    pool_status = json.dumps({"status": "queued", "target": 5})
+    roleplay_values = {
+        'CurrentSetting': 'Queen of Thorns',
+        'EnvironmentDesc': 'A hidden network of power in the Bay Area.',
+        'ChaseSchedule': json.dumps({'status': 'pending'}),
+        'LoreSummary': 'Lore generation pending (background task queued)',
+        'NPCPoolStatus': pool_status,
+    }
+
+    stub_conn = SetupCheckStubConnection(
+        npc_count=1,
+        location_count=2,
+        roleplay_values=roleplay_values,
+        pool_status=pool_status,
+        lore_status=json.dumps({"status": "queued"}),
+        preset_story_id="queen_of_thorns",
+        preset_story_data={'required_locations': [{'name': 'Velvet Sanctum'}, {'name': 'Thorn Garden'}]},
+    )
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield stub_conn
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    complete, missing, pending = await agent._is_setup_complete(user_id=42, conversation_id=77)
+
+    assert complete is True
+    assert missing == []
+    assert any('NPC pool' in entry for entry in pending)
+    assert any('Lore' in entry for entry in pending)
