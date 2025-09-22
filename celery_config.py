@@ -82,11 +82,13 @@ celery_app = Celery(
 
 # Define queue priorities (only used with RabbitMQ)
 QUEUE_PRIORITIES = {
-    'high': 10,
-    'default': 5,
-    'low': 1,
-    'low_priority': 1  # Alias for compatibility
+    'realtime': 10,
+    'background': 5,
+    'heavy': 1,
 }
+
+LIVE_QUEUE_NAMES = tuple(QUEUE_PRIORITIES.keys())
+CELERY_QUEUE_EXCHANGE = os.getenv("CELERY_QUEUE_EXCHANGE", "nyx")
 
 # Task routing based on priority
 task_routes = {
@@ -99,22 +101,22 @@ task_routes = {
     'tasks.generate_initial_conflict_task': {'queue': 'background'},
 
     # Default priority tasks
-    'tasks.run_npc_learning_cycle_task': {'queue': 'default'},
-    'tasks.nyx_memory_maintenance_task': {'queue': 'default'},
-    'tasks.sweep_and_merge_nyx_split_brains': {'queue': 'default'},
-    'tasks.monitor_nyx_performance_task': {'queue': 'default'},
-    'tasks.aggregate_learning_metrics_task': {'queue': 'default'},
-    'tasks.run_llm_periodic_checkpoint_task': {'queue': 'default'},
-    'tasks.process_memory_embedding_task': {'queue': 'default'},
-    'tasks.retrieve_memories_task': {'queue': 'default'},
-    'tasks.analyze_with_memory_task': {'queue': 'default'},
-    
-    # Low priority tasks
-    'tasks.memory_maintenance_task': {'queue': 'low_priority'},
-    'tasks.memory_embedding_consolidation_task': {'queue': 'low_priority'},
-    'tasks.cleanup_old_performance_data_task': {'queue': 'low_priority'},
-    'tasks.cleanup_*': {'queue': 'low'},
-    'tasks.analytics_*': {'queue': 'low'}
+    'tasks.run_npc_learning_cycle_task': {'queue': 'background'},
+    'tasks.nyx_memory_maintenance_task': {'queue': 'heavy'},
+    'tasks.sweep_and_merge_nyx_split_brains': {'queue': 'heavy'},
+    'tasks.monitor_nyx_performance_task': {'queue': 'background'},
+    'tasks.aggregate_learning_metrics_task': {'queue': 'background'},
+    'tasks.run_llm_periodic_checkpoint_task': {'queue': 'heavy'},
+    'tasks.process_memory_embedding_task': {'queue': 'heavy'},
+    'tasks.retrieve_memories_task': {'queue': 'background'},
+    'tasks.analyze_with_memory_task': {'queue': 'heavy'},
+
+    # Low priority tasks routed to background/heavy queues
+    'tasks.memory_maintenance_task': {'queue': 'heavy'},
+    'tasks.memory_embedding_consolidation_task': {'queue': 'heavy'},
+    'tasks.cleanup_old_performance_data_task': {'queue': 'background'},
+    'tasks.cleanup_*': {'queue': 'background'},
+    'tasks.analytics_*': {'queue': 'background'}
 }
 
 # Base configuration
@@ -139,30 +141,18 @@ base_config = {
 
 # Enhanced configuration for RabbitMQ
 if USE_RABBITMQ:
+    rabbitmq_task_queues = {
+        queue_name: {
+            'exchange': CELERY_QUEUE_EXCHANGE,
+            'routing_key': queue_name,
+            'queue_arguments': {'x-max-priority': priority},
+        }
+        for queue_name, priority in QUEUE_PRIORITIES.items()
+    }
+
     rabbitmq_config = {
         # Queue settings
-        'task_queues': {
-            'high': {
-                'exchange': 'high',
-                'routing_key': 'high',
-                'queue_arguments': {'x-max-priority': QUEUE_PRIORITIES['high']}
-            },
-            'default': {
-                'exchange': 'default',
-                'routing_key': 'default',
-                'queue_arguments': {'x-max-priority': QUEUE_PRIORITIES['default']}
-            },
-            'low': {
-                'exchange': 'low',
-                'routing_key': 'low',
-                'queue_arguments': {'x-max-priority': QUEUE_PRIORITIES['low']}
-            },
-            'low_priority': {  # Alias for compatibility
-                'exchange': 'low',
-                'routing_key': 'low',
-                'queue_arguments': {'x-max-priority': QUEUE_PRIORITIES['low']}
-            }
-        },
+        'task_queues': rabbitmq_task_queues,
         
         # Task routing
         'task_routes': task_routes,
@@ -189,10 +179,10 @@ def _merge_task_queues():
     existing = celery_app.conf.get('task_queues')
     if isinstance(existing, dict):
         for queue in NYX_TASK_QUEUES:
-            existing[queue.name] = {
+            existing.setdefault(queue.name, {
                 'exchange': queue.exchange.name if queue.exchange else None,
                 'routing_key': queue.routing_key,
-            }
+            })
         celery_app.conf.task_queues = existing
     else:
         queue_list = list(existing or [])
@@ -228,7 +218,7 @@ celery_app.conf.beat_schedule = {
     'nyx-memory-maintenance-daily': {
         'task': 'tasks.nyx_memory_maintenance_task',
         'schedule': crontab(hour=3, minute=0),  # Daily at 3:00 AM UTC
-        'options': {'queue': 'default'}
+        'options': {'queue': 'heavy'}
     },
     "sweep-and-merge-nyx-split-brains-every-5min": {
         "task": "tasks.sweep_and_merge_nyx_split_brains",
@@ -244,7 +234,7 @@ celery_app.conf.beat_schedule = {
     'memory-system-maintenance-daily': {
         'task': 'tasks.memory_maintenance_task',
         'schedule': crontab(hour=4, minute=30),  # Daily at 4:30 AM UTC
-        'options': {'queue': 'low_priority'}
+        'options': {'queue': 'heavy'}
     },
     
     # --- Performance Monitoring Tasks ---
@@ -261,7 +251,7 @@ celery_app.conf.beat_schedule = {
     'cleanup-old-performance-data-daily': {
         'task': 'tasks.cleanup_old_performance_data_task',
         'schedule': crontab(hour=2, minute=0),  # Daily at 2:00 AM
-        'options': {'queue': 'low_priority'}
+        'options': {'queue': 'background'}
     },
 }
 
@@ -323,19 +313,20 @@ def setup_dead_letter_queues():
         
         # Create dead letter queues for each priority queue
         dead_letter_queues = {}
-        for priority in ['high', 'default', 'low']:
-            dead_letter_queues[priority] = Queue(
-                f'dead-letter-{priority}',
+        for queue_name in LIVE_QUEUE_NAMES:
+            dead_letter_queues[queue_name] = Queue(
+                f'dead-letter-{queue_name}',
                 exchange=dead_letter_exchange,
-                routing_key=f'dead-letter-{priority}'
+                routing_key=f'dead-letter-{queue_name}'
             )
-        
+
         # Update queue settings to use dead letter queues
-        for priority, queue in celery_app.conf.task_queues.items():
-            if priority in ['high', 'default', 'low']:
+        for queue_name, queue in celery_app.conf.task_queues.items():
+            if queue_name in LIVE_QUEUE_NAMES:
+                queue.setdefault('queue_arguments', {})
                 queue['queue_arguments'].update({
                     'x-dead-letter-exchange': 'dead-letter',
-                    'x-dead-letter-routing-key': f'dead-letter-{priority}'
+                    'x-dead-letter-routing-key': f'dead-letter-{queue_name}'
                 })
         
         return dead_letter_queues
@@ -352,7 +343,7 @@ def get_queue_stats():
         stats = {}
         connection = celery_app.connection()
         
-        queue_names = ['high', 'default', 'low'] if USE_RABBITMQ else ['celery']
+        queue_names = list(LIVE_QUEUE_NAMES) if USE_RABBITMQ else ['celery']
         
         for queue_name in queue_names:
             try:
@@ -370,7 +361,7 @@ def get_queue_stats():
         
         # Get dead letter queue stats (RabbitMQ only)
         if USE_RABBITMQ and dead_letter_queues:
-            for queue_name in ['high', 'default', 'low']:
+            for queue_name in LIVE_QUEUE_NAMES:
                 try:
                     dead_queue = connection.SimpleQueue(f'dead-letter-{queue_name}')
                     stats[f'dead-letter-{queue_name}'] = {
