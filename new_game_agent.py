@@ -3,6 +3,7 @@
 import logging
 import json
 import asyncio
+import contextlib
 import uuid
 import os
 import functools
@@ -449,6 +450,7 @@ class NewGameAgent:
         
         # Directive handler for processing Nyx directives
         self.directive_handler = None
+        self._directive_task: Optional[asyncio.Task] = None
 
     async def initialize_directive_handler(self, user_id: int, conversation_id: int):
         """Initialize the directive handler for this agent"""
@@ -471,8 +473,34 @@ class NewGameAgent:
             DirectiveType.OVERRIDE,
             self.handle_override_directive
         )
-        
+
         # Don't start background processing here - do it after game setup is complete
+
+    async def shutdown(self) -> None:
+        """Clean up any background directive processing."""
+        await self._stop_directive_processing()
+
+    async def on_conversation_shutdown(self, *_, **__):
+        """Hook for conversation shutdown events to clean resources."""
+        await self._stop_directive_processing()
+
+    async def _stop_directive_processing(self) -> None:
+        """Cancel directive background processing if it is running."""
+        if self.directive_handler:
+            with contextlib.suppress(Exception):
+                await self.directive_handler.stop_background_processing()
+
+        task = self._directive_task
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._directive_task = None
+
+    def __del__(self):
+        task = getattr(self, "_directive_task", None)
+        if task and not task.done():
+            task.cancel()
 
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
@@ -2871,7 +2899,7 @@ class NewGameAgent:
             
             # NOW start background directive processing after everything is set up
             if self.directive_handler:
-                await self.directive_handler.start_background_processing()
+                self._directive_task = self.directive_handler.start_background_processing()
                 logger.info("Started background directive processing")
             
             logger.info(f"New game creation completed for conversation {conversation_id}")

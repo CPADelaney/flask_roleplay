@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+from contextlib import suppress
 from typing import Dict, List, Any, Optional, Union, Callable
 from datetime import datetime
 
@@ -48,6 +49,7 @@ class DirectiveHandler:
         self.check_interval = 60  # seconds
 
         self.governance = governance  # store the governance reference if provided
+        self._background_task: Optional[asyncio.Task] = None
 
     def register_handler(self, directive_type: str, handler: Callable):
         """
@@ -137,26 +139,50 @@ class DirectiveHandler:
             "results": results
         }
 
-    async def start_background_processing(self, interval: float = 60.0):
-        """
-        Start a background task to periodically process directives.
-
-        Args:
-            interval: Time between checks in seconds
-        """
+    def start_background_processing(self, interval: float = 60.0) -> asyncio.Task:
+        """Start a background task to periodically process directives."""
         self.check_interval = interval
 
+        if self._background_task and not self._background_task.done():
+            return self._background_task
+
         async def background_task():
-            while True:
-                try:
-                    await self.process_directives()
-                except Exception as e:
-                    logger.error(f"Error in background directive processing: {e}", exc_info=True)
+            try:
+                while True:
+                    try:
+                        await self.process_directives()
+                    except Exception as e:
+                        logger.error(
+                            "Error in background directive processing: %s",
+                            e,
+                            exc_info=True,
+                        )
 
-                await asyncio.sleep(interval)
+                    await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.debug("Directive background processing cancelled")
+                raise
 
-        task = asyncio.create_task(background_task())
-        return task
+        self._background_task = asyncio.create_task(background_task())
+        return self._background_task
+
+    async def stop_background_processing(self) -> None:
+        """Stop and clean up the background directive processing task."""
+        task = self._background_task
+        if not task:
+            return
+
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        self._background_task = None
+
+    def __del__(self):
+        task = getattr(self, "_background_task", None)
+        if task and not task.done():
+            task.cancel()
 
     def _should_check_directives(self) -> bool:
         """Determine if enough time has passed to check directives again"""
