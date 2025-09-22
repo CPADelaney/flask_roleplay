@@ -394,7 +394,14 @@ async def enqueue_task(
     }
     
     celery_task = task_map.get(task_name, task_name)
-    queue = {'high': 'high', 'low': 'low_priority'}.get(priority, 'default')
+    queue = {
+        'high': 'realtime',
+        'realtime': 'realtime',
+        'heavy': 'heavy',
+        'low': 'background',
+        'background': 'background',
+        'default': 'background',
+    }.get(priority, 'background')
     
     # Handle tasks with/without params differently
     if task_name == 'npc.learning_cycle':
