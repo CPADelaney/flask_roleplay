@@ -52,18 +52,21 @@ from lore.core.context import CanonicalContext
 
 
 class StubConnection:
-    def __init__(self, story_payload, expected_conversation_id, expected_user_id):
+    def __init__(self, story_payload, expected_conversation_id, expected_user_id, *, return_raw_story_data=False):
         self.story_payload = story_payload
         self.expected_conversation_id = expected_conversation_id
         self.expected_user_id = expected_user_id
         self.fetchrow_calls = []
         self.execute_calls = []
+        self.return_raw_story_data = return_raw_story_data
 
     async def fetchrow(self, query, *args):
         normalized_query = " ".join(query.split())
         self.fetchrow_calls.append((normalized_query, args))
 
         if "SELECT story_data FROM PresetStories" in normalized_query:
+            if self.return_raw_story_data:
+                return {"story_data": self.story_payload}
             return {"story_data": json.dumps(self.story_payload)}
 
         if "SELECT id FROM conversations" in normalized_query:
@@ -79,40 +82,7 @@ class StubConnection:
         return None
 
 
-@pytest.mark.asyncio
-async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
-    agent = new_game_agent.NewGameAgent()
-
-    user_id = 77
-    existing_conversation_id = 4242
-    preset_story_id = "test_story"
-    conversation_data = {"conversation_id": existing_conversation_id, "preset_story_id": preset_story_id}
-
-    story_payload = {
-        "name": "Test Preset",
-        "synopsis": "A quiet town hides many secrets.",
-        "theme": "mystery",
-        "locations": [],
-        "npcs": [],
-    }
-
-    stub_conn = StubConnection(story_payload, existing_conversation_id, user_id)
-
-    @asynccontextmanager
-    async def fake_db_context():
-        yield stub_conn
-
-    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
-
-    calls = {
-        "environment": [],
-        "calendar": [],
-        "locations": [],
-        "npcs": [],
-        "opening": [],
-        "stats": [],
-    }
-
+def _install_common_preset_patches(monkeypatch, calls):
     async def fake_insert_default_player_stats_chase(uid, cid):
         calls["stats"].append((uid, cid))
 
@@ -156,6 +126,43 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     monkeypatch.setattr(new_game_agent, "synthesize_setting_rules", fake_rules)
     monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", fake_canon_update)
 
+
+@pytest.mark.asyncio
+async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
+    agent = new_game_agent.NewGameAgent()
+
+    user_id = 77
+    existing_conversation_id = 4242
+    preset_story_id = "test_story"
+    conversation_data = {"conversation_id": existing_conversation_id, "preset_story_id": preset_story_id}
+
+    story_payload = {
+        "name": "Test Preset",
+        "synopsis": "A quiet town hides many secrets.",
+        "theme": "mystery",
+        "locations": [],
+        "npcs": [],
+    }
+
+    stub_conn = StubConnection(story_payload, existing_conversation_id, user_id)
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield stub_conn
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    calls = {
+        "environment": [],
+        "calendar": [],
+        "locations": [],
+        "npcs": [],
+        "opening": [],
+        "stats": [],
+    }
+
+    _install_common_preset_patches(monkeypatch, calls)
+
     ctx = CanonicalContext(user_id, existing_conversation_id)
 
     result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
@@ -189,6 +196,59 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     # The preset flow should not have inserted a new conversation row
     assert not any("INSERT INTO conversations" in query for query, _ in stub_conn.fetchrow_calls)
 
+
+@pytest.mark.asyncio
+async def test_process_preset_game_handles_dict_story_data(monkeypatch):
+    agent = new_game_agent.NewGameAgent()
+
+    user_id = 88
+    existing_conversation_id = 5150
+    preset_story_id = "dict_story"
+    conversation_data = {"conversation_id": existing_conversation_id, "preset_story_id": preset_story_id}
+
+    story_payload = {
+        "name": "Dict Preset",
+        "synopsis": "An adventure stored as a dict.",
+        "theme": "exploration",
+        "locations": [],
+        "npcs": [],
+    }
+
+    stub_conn = StubConnection(
+        story_payload,
+        existing_conversation_id,
+        user_id,
+        return_raw_story_data=True,
+    )
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield stub_conn
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    calls = {
+        "environment": [],
+        "calendar": [],
+        "locations": [],
+        "npcs": [],
+        "opening": [],
+        "stats": [],
+    }
+
+    _install_common_preset_patches(monkeypatch, calls)
+
+    ctx = CanonicalContext(user_id, existing_conversation_id)
+
+    result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
+
+    assert result.conversation_id == existing_conversation_id
+    assert result.scenario_name == "Dict Preset"
+    assert result.status == "ready"
+    assert any(
+        "SET status='ready'" in query and args == (existing_conversation_id, user_id, "Dict Preset")
+        for query, args in stub_conn.execute_calls
+    )
 
 class SetupCheckStubConnection:
     def __init__(

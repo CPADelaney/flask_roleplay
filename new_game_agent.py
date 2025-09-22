@@ -45,6 +45,44 @@ logger = logging.getLogger(__name__)
 NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER
 NEW_GAME_AGENT_NYX_ID = "new_game_director_agent"  # Use consistent ID throughout
 
+
+def _coerce_story_data(raw_story_data: Any, preset_story_id: str) -> Any:
+    """Normalize the preset story payload to a Python object."""
+
+    if raw_story_data is None:
+        logger.error(
+            "Preset story %s is missing story_data in the database", preset_story_id
+        )
+        raise ValueError(f"Preset story {preset_story_id} is missing data")
+
+    if isinstance(raw_story_data, (dict, list)):
+        return raw_story_data
+
+    if isinstance(raw_story_data, (bytes, bytearray)):
+        raw_story_data = raw_story_data.decode("utf-8")
+
+    if isinstance(raw_story_data, str):
+        try:
+            return json.loads(raw_story_data)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Preset story %s has invalid JSON in story_data: %s",
+                preset_story_id,
+                exc,
+            )
+            raise ValueError(
+                f"Preset story {preset_story_id} contains invalid JSON data"
+            ) from exc
+
+    logger.error(
+        "Preset story %s has unsupported story_data type %s",
+        preset_story_id,
+        type(raw_story_data).__name__,
+    )
+    raise ValueError(
+        f"Preset story {preset_story_id} has unsupported data type"
+    )
+
 # Concrete models to replace generic dicts
 class QuestData(BaseModel):
     quest_name: str = ""
@@ -819,8 +857,9 @@ class NewGameAgent:
                     preset_story_id
                 )
             if not story_row:
+                logger.error("Preset story %s not found in the database", preset_story_id)
                 raise ValueError(f"Preset story {preset_story_id} not found")
-            preset_story_data = json.loads(story_row['story_data'])
+            preset_story_data = _coerce_story_data(story_row['story_data'], preset_story_id)
             
             # Create conversation
             async with get_db_connection_context() as conn:
@@ -1943,9 +1982,12 @@ class NewGameAgent:
                 )
                 
                 if not story_row:
+                    logger.error("Preset story %s not found in the database", preset_story_id)
                     raise ValueError(f"Preset story {preset_story_id} not found")
-                
-                preset_story_data = json.loads(story_row['story_data'])
+
+                preset_story_data = _coerce_story_data(
+                    story_row['story_data'], preset_story_id
+                )
             
             # Create or reuse conversation
             provided_convo_id = conversation_data.get("conversation_id")
