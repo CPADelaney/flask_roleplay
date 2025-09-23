@@ -11,7 +11,14 @@ import asyncio
 import os
 import math
 import statistics
-import yaml
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - environment-specific dependency
+    yaml = None
+    logging.getLogger(__name__).warning(
+        "PyYAML is not installed; skipping relationship config YAML loading."
+    )
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple, Set, Union
 from dataclasses import dataclass, field, asdict
@@ -163,8 +170,11 @@ class RelationshipConfig:
             }
         }
         
-        # Load from file if exists
-        if config_file.exists():
+        if yaml is None:
+            logger.warning(
+                "PyYAML is not installed; using default relationship configuration values."
+            )
+        elif config_file.exists():
             try:
                 with open(config_file, 'r') as f:
                     loaded_config = yaml.safe_load(f)
