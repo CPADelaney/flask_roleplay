@@ -28,12 +28,9 @@ class PresetNPCHandler:
         from db.connection import get_db_connection_context
         from lore.core import canon
         from lore.core.lore_system import LoreSystem
-        from npcs.new_npc_creation import NPCCreationHandler
-        from memory.wrapper import MemorySystem
         
         # Initialize systems
         lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-        npc_handler = NPCCreationHandler()
         relationship_manager = OptimizedRelationshipManager(user_id, conversation_id)
         
         # Step 1: Check if NPC already exists using canonical function
@@ -394,7 +391,7 @@ class PresetNPCHandler:
     def _create_initial_memories(npc_data: Dict[str, Any]) -> List[str]:
         """Create initial memory entries for NPC"""
         memories = []
-        
+
         # Add any preset memories
         if 'memories' in npc_data:
             for memory in npc_data['memories']:
@@ -440,8 +437,179 @@ class PresetNPCHandler:
                 memories.append("I learned early that mercy is a luxury few can afford.")
             else:
                 memories.append("Every interaction shapes us. I am who I am because of those I've known.")
-        
+
         return memories[:8]  # Limit to 8 initial memories
+
+    @staticmethod
+    def _normalize_preset_memories(npc_data: Dict[str, Any]) -> List[str]:
+        """Extract explicit memories from preset data."""
+
+        memories: List[str] = []
+        raw_memories = npc_data.get("memories") or npc_data.get("initial_memories")
+
+        if isinstance(raw_memories, list):
+            for entry in raw_memories:
+                if isinstance(entry, str) and entry.strip():
+                    memories.append(entry.strip())
+                elif isinstance(entry, dict):
+                    text = entry.get("text") or entry.get("memory") or entry.get("content")
+                    if isinstance(text, str) and text.strip():
+                        memories.append(text.strip())
+
+        return memories
+
+    @staticmethod
+    async def _store_preset_memories(memory_system, npc_id: int, memories: List[str]) -> None:
+        """Persist preset memories through the memory system."""
+
+        if not memories:
+            return
+
+        for idx, memory_text in enumerate(memories):
+            if not isinstance(memory_text, str):
+                continue
+
+            text = memory_text.strip()
+            if not text:
+                continue
+
+            importance = "high" if idx < 2 else "medium"
+            tags = ["preset_seed", "npc_creation"]
+
+            try:
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=text,
+                    importance=importance,
+                    emotional=True,
+                    tags=tags,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to store preset memory for NPC %s: %s", npc_id, exc
+                )
+
+    @staticmethod
+    async def _seed_emotional_state(memory_system, npc_id: int,
+                                    npc_data: Dict[str, Any],
+                                    memories: List[str]) -> None:
+        """Derive a baseline emotional state from preset data."""
+
+        stats = npc_data.get("stats", {})
+        provided_state = npc_data.get("emotional_state") or {}
+
+        if isinstance(provided_state, dict):
+            emotion = provided_state.get("primary_emotion", "neutral")
+            intensity = provided_state.get("intensity", 0.5)
+        else:
+            dominance = stats.get("dominance", 50)
+            cruelty = stats.get("cruelty", 30)
+
+            if dominance > 70 and cruelty < 60:
+                emotion = "confidence"
+            elif cruelty > 70:
+                emotion = "contempt"
+            elif dominance > 60:
+                emotion = "pride"
+            else:
+                emotion = "neutral"
+
+            intensity = min(max((dominance + cruelty) / 200.0, 0.2), 0.95)
+
+        try:
+            await memory_system.update_npc_emotion(
+                npc_id=npc_id,
+                emotion=emotion,
+                intensity=float(intensity),
+            )
+        except Exception as exc:
+            logger.warning("Failed to initialize emotional state for NPC %s: %s", npc_id, exc)
+
+    @staticmethod
+    async def _seed_beliefs(memory_system, npc_id: int, raw_beliefs: Any) -> None:
+        """Store preset beliefs when provided."""
+
+        if not raw_beliefs:
+            return
+
+        beliefs: List[Dict[str, Any]] = []
+
+        if isinstance(raw_beliefs, list):
+            for entry in raw_beliefs:
+                if isinstance(entry, str) and entry.strip():
+                    beliefs.append({"text": entry.strip(), "confidence": 0.75})
+                elif isinstance(entry, dict):
+                    text = entry.get("text") or entry.get("belief")
+                    if isinstance(text, str) and text.strip():
+                        beliefs.append({
+                            "text": text.strip(),
+                            "confidence": float(entry.get("confidence", 0.75)),
+                        })
+
+        for belief in beliefs:
+            try:
+                await memory_system.create_belief(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    belief_text=belief["text"],
+                    confidence=belief["confidence"],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to seed belief '%s' for NPC %s: %s",
+                    belief.get("text", ""),
+                    npc_id,
+                    exc,
+                )
+
+    @staticmethod
+    async def _apply_memory_metadata(
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+    ) -> None:
+        """Persist optional preset metadata directly onto the NPC row."""
+
+        from db.connection import get_db_connection_context
+        from lore.core import canon
+
+        updates: Dict[str, Any] = {}
+
+        if "trauma_triggers" in npc_data:
+            updates["trauma_triggers"] = json.dumps(npc_data["trauma_triggers"])
+
+        if "flashback_triggers" in npc_data:
+            updates["flashback_triggers"] = json.dumps(
+                npc_data["flashback_triggers"]
+            )
+
+        if "revelation_plan" in npc_data:
+            updates["revelation_plan"] = json.dumps(npc_data["revelation_plan"])
+
+        if "personality_patterns" in npc_data:
+            updates["personality_patterns"] = json.dumps(
+                npc_data["personality_patterns"]
+            )
+
+        if not updates:
+            return
+
+        canon_ctx = type("CanonicalContext", (), {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+        })()
+
+        async with get_db_connection_context() as conn:
+            await canon.update_entity_canonically(
+                canon_ctx,
+                conn,
+                "NPCStats",
+                npc_id,
+                updates,
+                "Applying preset memory metadata",
+            )
     
     @staticmethod
     async def _add_preset_specific_features(
@@ -511,144 +679,98 @@ class PresetNPCHandler:
         
     @staticmethod
     async def _initialize_complete_memory_system(
-        ctx, user_id: int, conversation_id: int, 
+        ctx, user_id: int, conversation_id: int,
         npc_id: int, npc_data: Dict[str, Any]
     ):
-        """Initialize ALL memory subsystems matching regular NPC creation"""
-        
-        from npcs.new_npc_creation import NPCCreationHandler
-        from db.connection import get_db_connection_context
+        """Initialize memory subsystems using preset data without heavy generation."""
+
         from memory.wrapper import MemorySystem
-        
-        handler = NPCCreationHandler()
-        
-        # Prepare NPC data for memory initialization
-        npc_info = {
-            "npc_name": npc_data["name"],
-            "dominance": npc_data.get("stats", {}).get("dominance", 50),
-            "cruelty": npc_data.get("stats", {}).get("cruelty", 30),
-            "archetype_summary": npc_data.get("archetype", ""),
-            "personality_traits": npc_data.get("traits", []),
-            "environment_desc": npc_data.get("environment_desc", "")
-        }
-        
-        # Get initial memories
-        memories = npc_data.get("memories", [])
-        if isinstance(memories, list) and all(isinstance(m, str) for m in memories):
-            # Already in correct format
-            pass
-        else:
-            # Need to generate memories
-            memories = await handler.generate_memories(ctx, npc_data["name"])
-        
-        # 1. Store memories with governance
-        await handler.store_npc_memories(user_id, conversation_id, npc_id, memories)
-        
-        # 2. Initialize emotional state
-        await handler.initialize_npc_emotional_state(
-            user_id, conversation_id, npc_id, npc_info, memories
+
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+
+        # Seed memories directly from preset definitions
+        memories = PresetNPCHandler._normalize_preset_memories(npc_data)
+        if not memories:
+            memories = PresetNPCHandler._create_initial_memories(npc_data)
+
+        await PresetNPCHandler._store_preset_memories(memory_system, npc_id, memories)
+
+        # Establish an initial emotional state derived from stats or preset overrides
+        await PresetNPCHandler._seed_emotional_state(
+            memory_system, npc_id, npc_data, memories
         )
-        
-        # 3. Generate beliefs
-        await handler.generate_npc_beliefs(
-            user_id, conversation_id, npc_id, npc_info
+
+        # Persist explicit beliefs if the preset provides them
+        await PresetNPCHandler._seed_beliefs(
+            memory_system, npc_id, npc_data.get("beliefs")
         )
-        
-        # 4. Initialize memory schemas (including preset-specific ones)
+
+        # Initialize schema data with lightweight heuristics
         await PresetNPCHandler._initialize_enhanced_memory_schemas(
             user_id, conversation_id, npc_id, npc_data
         )
-        
-        # 5. Setup trauma model if applicable
-        await handler.setup_npc_trauma_model(
-            user_id, conversation_id, npc_id, npc_info, memories
+
+        # Apply optional metadata (trauma triggers, flashbacks, etc.) only when present
+        await PresetNPCHandler._apply_memory_metadata(
+            user_id, conversation_id, npc_id, npc_data
         )
-        
-        # 6. Setup flashback triggers
-        await handler.setup_npc_flashback_triggers(
-            user_id, conversation_id, npc_id, npc_info
-        )
-        
-        # 7. Generate counterfactual memories
-        await handler.generate_counterfactual_memories(
-            user_id, conversation_id, npc_id, npc_info
-        )
-        
-        # 8. Plan mask revelations if applicable
-        if npc_data.get("has_masks", True):  # Most NPCs have psychological masks
-            await handler.plan_mask_revelations(
-                user_id, conversation_id, npc_id, npc_info
-            )
-        
-        # 9. Setup relationship evolution tracking
-        relationships = []
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow(
-                "SELECT relationships FROM NPCStats WHERE npc_id = $1",
-                npc_id
-            )
-            if row and row['relationships']:
-                try:
-                    relationships = json.loads(row['relationships'])
-                except:
-                    relationships = []
-        
-        await handler.setup_relationship_evolution_tracking(
-            user_id, conversation_id, npc_id, relationships
-        )
-        
-        # 10. Build semantic networks
-        await handler.build_initial_semantic_network(
-            user_id, conversation_id, npc_id, npc_info
-        )
-        
-        # 11. Detect initial patterns
-        await handler.detect_memory_patterns(
-            user_id, conversation_id, npc_id
-        )
-        
-        # 12. Schedule maintenance
-        await handler.schedule_npc_memory_maintenance(
-            user_id, conversation_id, npc_id
-        )
-        
-        # 13. Check for mask slippage conditions (if applicable)
-        if npc_data.get("stats", {}).get("dominance", 50) > 60:
-            await handler.check_for_mask_slippage(
-                user_id, conversation_id, npc_id
-            )
     
     @staticmethod
     async def _initialize_enhanced_memory_schemas(
-        user_id: int, conversation_id: int, 
+        user_id: int, conversation_id: int,
         npc_id: int, npc_data: Dict[str, Any]
     ):
         """Initialize memory schemas including preset-specific ones"""
-        
-        from memory.wrapper import MemorySystem
-        from memory.schemas import MemorySchemaManager  # Add this import
-        from npcs.new_npc_creation import NPCCreationHandler
-        
-        handler = NPCCreationHandler()
-        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-        
-        # Create a MemorySchemaManager instance directly
+
+        from memory.schemas import MemorySchemaManager
+
         schema_manager = MemorySchemaManager(user_id, conversation_id)
-        
-        # First, create standard schemas
-        await handler.initialize_npc_memory_schemas(
-            user_id, conversation_id, npc_id, {
-                "archetype_summary": npc_data.get("archetype", ""),
-                "dominance": npc_data.get("stats", {}).get("dominance", 50)
-            }
-        )
-        
-        # Add preset-specific schemas based on character type
-        preset_schemas = []
-        
+
+        created_custom_schema = False
+
+        # Honor any explicit schemas provided by the preset
+        preset_defined = npc_data.get("memory_schemas")
+        if isinstance(preset_defined, list):
+            for schema in preset_defined:
+                name = schema.get("name") if isinstance(schema, dict) else None
+                if not name:
+                    continue
+
+                description = schema.get("description", "")
+                category = schema.get("category", "general")
+                attributes = schema.get("attributes", {})
+
+                await schema_manager.create_schema(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    schema_name=name,
+                    description=description,
+                    category=category,
+                    attributes=attributes,
+                )
+                created_custom_schema = True
+
+        # Always ensure at least a baseline interaction schema exists
+        if not created_custom_schema:
+            await schema_manager.create_schema(
+                entity_type="npc",
+                entity_id=npc_id,
+                schema_name="Player Interactions",
+                description="Patterns in how the player behaves toward the NPC",
+                category="social",
+                attributes={
+                    "compliance_level": "unknown",
+                    "respect_shown": "moderate",
+                    "vulnerability_signs": "to be observed",
+                },
+            )
+
+        # Add heuristic schemas based on preset content
+        preset_schemas: List[Dict[str, Any]] = []
+
         # Analyze character data to determine appropriate schemas
         character_text = json.dumps(npc_data).lower()
-        
+
         # Trauma/Survivor schemas
         if any(word in character_text for word in ["trafficking", "victim", "survivor", "trauma", "rescued"]):
             preset_schemas.append({
@@ -751,50 +873,43 @@ class PresetNPCHandler:
         relationship_manager: OptimizedRelationshipManager
     ):
         """Setup relationships using the new dynamic relationships system"""
-        
-        from npcs.new_npc_creation import NPCCreationHandler
-        from lore.core import canon
+
         from db.connection import get_db_connection_context
         from agents import RunContextWrapper
-        
-        handler = NPCCreationHandler()
-        
+
         # Check for predefined relationships in the preset data
         preset_relationships = npc_data.get("relationships", [])
-        
-        if preset_relationships:
-            # Create specific preset relationships
-            canon_ctx = type('CanonicalContext', (), {
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })()
-            
-            async with get_db_connection_context() as conn:
+
+        canon_ctx = type('CanonicalContext', (), {
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })()
+
+        async with get_db_connection_context() as conn:
+            if preset_relationships:
                 for rel in preset_relationships:
-                    # Determine target
                     target_type = rel.get("target_type", "player")
-                    target_id = rel.get("target_id", user_id if target_type == "player" else 0)
-                    
-                    # Get or create relationship state using new system
+                    target_id = rel.get(
+                        "target_id", user_id if target_type == "player" else 0
+                    )
+
                     state = await relationship_manager.get_relationship_state(
                         entity1_type="npc",
                         entity1_id=npc_id,
                         entity2_type=target_type,
                         entity2_id=target_id
                     )
-                    
-                    # Set initial dimensions based on relationship type
+
                     rel_type = rel.get("type", "neutral")
                     initial_strength = rel.get("strength", 50)
-                    
-                    # Map old relationship types to new dimensions
+
                     if rel_type == "ally":
                         state.dimensions.trust = initial_strength
                         state.dimensions.respect = initial_strength
                         state.dimensions.affection = initial_strength * 0.8
                     elif rel_type == "enemy":
                         state.dimensions.trust = -initial_strength
-                        state.dimensions.respect = initial_strength * 0.5  # Respect can exist even with enemies
+                        state.dimensions.respect = initial_strength * 0.5
                         state.dimensions.affection = -initial_strength
                     elif rel_type == "lover":
                         state.dimensions.trust = initial_strength * 0.9
@@ -804,7 +919,7 @@ class PresetNPCHandler:
                     elif rel_type == "mentor":
                         state.dimensions.trust = initial_strength * 0.8
                         state.dimensions.respect = initial_strength
-                        state.dimensions.influence = -30  # Mentor has influence over student
+                        state.dimensions.influence = -30
                     elif rel_type == "rival":
                         state.dimensions.respect = initial_strength * 0.7
                         state.dimensions.affection = 0
@@ -812,28 +927,23 @@ class PresetNPCHandler:
                     elif rel_type == "victim":
                         state.dimensions.trust = -initial_strength * 0.5
                         state.dimensions.respect = -initial_strength * 0.3
-                        state.dimensions.influence = initial_strength * 0.7  # NPC has influence over victim
+                        state.dimensions.influence = initial_strength * 0.7
                         state.dimensions.unresolved_conflict = initial_strength * 0.8
-                    
-                    # Apply additional relationship-specific modifiers from preset data
+
                     if "dimensions" in rel:
                         for dim, value in rel["dimensions"].items():
                             if hasattr(state.dimensions, dim):
                                 setattr(state.dimensions, dim, value)
-                    
-                    # Clamp all values
+
                     state.dimensions.clamp()
-                    
-                    # Queue update to save the relationship
                     await relationship_manager._queue_update(state)
-                    
-                    # If there are specific contexts defined
+
                     if "contexts" in rel:
                         ctx_wrapper = RunContextWrapper(context={
                             'user_id': user_id,
                             'conversation_id': conversation_id
                         })
-                        
+
                         for context_name, deltas in rel["contexts"].items():
                             await update_relationship_context_tool(
                                 ctx=ctx_wrapper,
@@ -844,39 +954,30 @@ class PresetNPCHandler:
                                 situation=context_name,
                                 dimension_deltas=deltas
                             )
-                    
-                    # Add to NPC's relationship list for compatibility
-                    rel_query = """
-                        SELECT relationships FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """
-                    
-                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
-                    current_relationships = []
-                    if row and row['relationships']:
-                        try:
-                            current_relationships = json.loads(row['relationships'])
-                        except:
-                            current_relationships = []
-                    
-                    current_relationships.append({
-                        "relationship_label": rel_type,
-                        "entity_type": target_type,
-                        "entity_id": target_id
-                    })
-                    
-                    await canon.update_entity_canonically(
-                        canon_ctx, conn, "NPCStats", npc_id,
-                        {"relationships": json.dumps(current_relationships)},
-                        f"Adding preset relationship: {rel_type}"
+
+                    await PresetNPCHandler._append_relationship_entry(
+                        conn,
+                        canon_ctx,
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "relationship_label": rel_type,
+                            "entity_type": target_type,
+                            "entity_id": target_id,
+                        },
+                        f"Adding preset relationship: {rel_type}",
                     )
-        else:
-            # Use the standard random relationship assignment
-            await handler.assign_random_relationships_canonical(
-                user_id, conversation_id, npc_id, 
-                npc_data["name"], 
-                [{"name": npc_data.get("archetype", "Default")}]
-            )
+            else:
+                await PresetNPCHandler._create_default_player_relationship(
+                    conn,
+                    canon_ctx,
+                    relationship_manager,
+                    user_id,
+                    conversation_id,
+                    npc_id,
+                    npc_data,
+                )
         
         # Add relationship-specific memories if provided
         if "relationship_memories" in npc_data:
@@ -894,7 +995,88 @@ class PresetNPCHandler:
         
         # Flush any pending relationship updates
         await relationship_manager._flush_updates()
-    
+
+    @staticmethod
+    async def _append_relationship_entry(
+        conn,
+        canon_ctx,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        entry: Dict[str, Any],
+        reason: str,
+    ) -> None:
+        """Append a relationship record to the NPCStats row."""
+
+        from lore.core import canon
+
+        rel_query = """
+            SELECT relationships FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+        """
+
+        row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
+        current_relationships: List[Dict[str, Any]] = []
+
+        if row and row['relationships']:
+            try:
+                current_relationships = json.loads(row['relationships'])
+            except Exception:
+                current_relationships = []
+
+        current_relationships.append(entry)
+
+        await canon.update_entity_canonically(
+            canon_ctx,
+            conn,
+            "NPCStats",
+            npc_id,
+            {"relationships": json.dumps(current_relationships)},
+            reason,
+        )
+
+    @staticmethod
+    async def _create_default_player_relationship(
+        conn,
+        canon_ctx,
+        relationship_manager: OptimizedRelationshipManager,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+    ) -> None:
+        """Create a neutral starting relationship with the player when none is provided."""
+
+        state = await relationship_manager.get_relationship_state(
+            entity1_type="npc",
+            entity1_id=npc_id,
+            entity2_type="player",
+            entity2_id=user_id,
+        )
+
+        stats = npc_data.get("stats", {})
+        state.dimensions.trust = stats.get("trust", 0)
+        state.dimensions.respect = stats.get("respect", 0)
+        state.dimensions.affection = stats.get("affection", 0)
+        state.dimensions.intimacy = stats.get("intimacy", 0)
+        state.dimensions.clamp()
+
+        await relationship_manager._queue_update(state)
+
+        await PresetNPCHandler._append_relationship_entry(
+            conn,
+            canon_ctx,
+            user_id,
+            conversation_id,
+            npc_id,
+            {
+                "relationship_label": "associate",
+                "entity_type": "player",
+                "entity_id": user_id,
+            },
+            "Initializing default player relationship",
+        )
+
     @staticmethod
     async def _initialize_special_mechanics(
         ctx, user_id: int, conversation_id: int,

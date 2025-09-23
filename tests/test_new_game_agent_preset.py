@@ -352,3 +352,278 @@ async def test_setup_check_allows_queued_lore_and_npcs(monkeypatch):
     assert missing == []
     assert any('NPC pool' in entry for entry in pending)
     assert any('Lore' in entry for entry in pending)
+
+
+class QueenPipelineStubConnection:
+    def __init__(self, story_payload, user_id, conversation_id):
+        self.story_payload = story_payload
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.fetchrow_calls = []
+        self.fetchval_calls = []
+        self.execute_calls = []
+        self.fetch_calls = []
+
+    async def fetchrow(self, query, *args):
+        normalized = " ".join(query.split())
+        self.fetchrow_calls.append((normalized, args))
+
+        if "SELECT story_data FROM PresetStories" in normalized:
+            return {"story_data": json.dumps(self.story_payload)}
+
+        if "SELECT id FROM conversations" in normalized:
+            if args == (self.conversation_id, self.user_id):
+                return {"id": self.conversation_id}
+            return None
+
+        if "SELECT npc_id FROM NPCStats" in normalized:
+            return None
+
+        if "SELECT age, birthdate" in normalized:
+            return None
+
+        if "SELECT relationships FROM NPCStats" in normalized:
+            return {"relationships": json.dumps([])}
+
+        if "SELECT special_mechanics FROM NPCStats" in normalized:
+            return {"special_mechanics": None}
+
+        return None
+
+    async def fetchval(self, query, *args):
+        normalized = " ".join(query.split())
+        self.fetchval_calls.append((normalized, args))
+
+        if "SELECT COUNT(*) FROM NPCMemories" in normalized:
+            return 0
+
+        if "SELECT value FROM CurrentRoleplay" in normalized:
+            return None
+
+        return None
+
+    async def execute(self, query, *args):
+        normalized = " ".join(query.split())
+        self.execute_calls.append((normalized, args))
+        return None
+
+    async def fetch(self, query, *args):
+        normalized = " ".join(query.split())
+        self.fetch_calls.append((normalized, args))
+        return []
+
+
+@pytest.mark.asyncio
+async def test_queen_of_thorns_preset_skips_memory_generation(monkeypatch):
+    agent = new_game_agent.NewGameAgent()
+
+    user_id = 55
+    conversation_id = 9901
+    conversation_data = {"conversation_id": conversation_id, "preset_story_id": "queen_of_thorns"}
+
+    from story_templates.preset_story_loader import PresetStoryLoader
+    from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
+    import lore.core.lore_system as lore_system_module
+    import memory.wrapper as memory_wrapper_module
+    import memory.schemas as memory_schemas_module
+    import npcs.preset_npc_handler as preset_module
+    import db.connection as db_connection_module
+    from lore.core import canon as canon_module
+    from logic import dynamic_relationships as dynamic_relationships_module
+
+    story_payload = PresetStoryLoader._serialize_story(QUEEN_OF_THORNS_STORY)
+
+    stub_conn = QueenPipelineStubConnection(story_payload, user_id, conversation_id)
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield stub_conn
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(db_connection_module, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(preset_module, "get_db_connection_context", fake_db_context)
+
+    async def fake_insert_stats(uid, cid):
+        return None
+
+    async def fake_rules(env_desc, setting_name):
+        return {
+            "capabilities": {},
+            "setting_kind": "preset",
+            "_reality_context": "normal",
+            "hard_rules": [],
+            "soft_rules": [],
+        }
+
+    async def fake_opening(self, ctx_wrap, preset_data):
+        return "Opening narrative"
+
+    async def fake_locations(self, ctx_wrap, preset_data):
+        return [101]
+
+    monkeypatch.setattr(new_game_agent, "insert_default_player_stats_chase", fake_insert_stats)
+    monkeypatch.setattr(new_game_agent, "synthesize_setting_rules", fake_rules)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_opening", fake_opening)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_locations", fake_locations)
+
+    npc_counter = iter(range(3000, 3010))
+    location_counter = iter(range(4000, 4010))
+
+    async def fake_find_or_create_npc(ctx_obj, conn, npc_name: str, **kwargs):
+        return next(npc_counter)
+
+    async def fake_find_or_create_location(ctx_wrap, conn, name: str, **kwargs):
+        return next(location_counter)
+
+    async def fake_update_current_roleplay(ctx_wrap, conn, key, value):
+        return None
+
+    async def fake_update_entity(canon_ctx, conn, entity_name, entity_id, updates, reason):
+        return None
+
+    monkeypatch.setattr(canon_module, "find_or_create_npc", fake_find_or_create_npc)
+    monkeypatch.setattr(canon_module, "find_or_create_location", fake_find_or_create_location)
+    monkeypatch.setattr(canon_module, "update_current_roleplay", fake_update_current_roleplay)
+    monkeypatch.setattr(canon_module, "update_entity_canonically", fake_update_entity)
+
+    class DummyLoreSystem:
+        async def propose_and_enact_change(self, **kwargs):
+            return {"status": "ok"}
+
+    async def fake_lore_instance(uid, cid):
+        return DummyLoreSystem()
+
+    monkeypatch.setattr(lore_system_module.LoreSystem, "get_instance", fake_lore_instance)
+
+    memory_instances = {}
+
+    class DummyMemorySystem:
+        def __init__(self, uid, cid):
+            self.user_id = uid
+            self.conversation_id = cid
+            self.memories = []
+            self.beliefs = []
+            self.emotions = {}
+
+        async def remember(self, entity_type, entity_id, memory_text, importance="medium", emotional=True, tags=None):
+            self.memories.append(memory_text)
+            return {"memory_id": len(self.memories)}
+
+        async def update_npc_emotion(self, npc_id, emotion, intensity=0.5):
+            self.emotions[npc_id] = {"emotion": emotion, "intensity": intensity}
+            return {"status": "ok"}
+
+        async def create_belief(self, entity_type, entity_id, belief_text, confidence=0.7):
+            self.beliefs.append(belief_text)
+            return {"belief_id": len(self.beliefs)}
+
+    async def fake_memory_instance(uid, cid):
+        key = (uid, cid)
+        if key not in memory_instances:
+            memory_instances[key] = DummyMemorySystem(uid, cid)
+        return memory_instances[key]
+
+    monkeypatch.setattr(memory_wrapper_module.MemorySystem, "get_instance", fake_memory_instance)
+
+    class DummyMemorySchemaManager:
+        def __init__(self, uid, cid):
+            self.user_id = uid
+            self.conversation_id = cid
+            self.created = []
+
+        async def create_schema(self, **kwargs):
+            self.created.append(kwargs.get("schema_name"))
+
+    monkeypatch.setattr(memory_schemas_module, "MemorySchemaManager", DummyMemorySchemaManager)
+
+    class DummyDimensions:
+        def __init__(self):
+            self.trust = 0
+            self.respect = 0
+            self.affection = 0
+            self.intimacy = 0
+            self.fascination = 0
+            self.influence = 0
+            self.volatility = 0
+            self.unresolved_conflict = 0
+
+        def clamp(self):
+            for field in (
+                "trust",
+                "respect",
+                "affection",
+                "intimacy",
+                "fascination",
+                "influence",
+                "volatility",
+                "unresolved_conflict",
+            ):
+                value = getattr(self, field)
+                if value > 100:
+                    setattr(self, field, 100)
+                elif value < -100:
+                    setattr(self, field, -100)
+
+    class DummyRelationshipState:
+        def __init__(self):
+            self.dimensions = DummyDimensions()
+
+    class DummyRelationshipManager:
+        def __init__(self, uid, cid):
+            self.user_id = uid
+            self.conversation_id = cid
+            self.states = []
+
+        async def get_relationship_state(self, **kwargs):
+            state = DummyRelationshipState()
+            self.states.append(state)
+            return state
+
+        async def _queue_update(self, state):
+            return None
+
+        async def _flush_updates(self):
+            return None
+
+    monkeypatch.setattr(dynamic_relationships_module, "OptimizedRelationshipManager", DummyRelationshipManager)
+    monkeypatch.setattr(preset_module, "OptimizedRelationshipManager", DummyRelationshipManager)
+
+    async def fake_update_context(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(preset_module, "update_relationship_context_tool", fake_update_context)
+
+    async def fake_special_mechanics(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        preset_module.PresetNPCHandler,
+        "_initialize_special_mechanics",
+        staticmethod(fake_special_mechanics),
+    )
+
+    calls = {"generate": 0}
+
+    async def fake_generate_memories(self, ctx_wrap, npc_name):
+        calls["generate"] += 1
+        return []
+
+    monkeypatch.setattr(new_game_agent.NPCCreationHandler, "generate_memories", fake_generate_memories)
+
+    ctx = CanonicalContext(user_id, conversation_id)
+    result = await agent.process_preset_game_direct(ctx, conversation_data, "queen_of_thorns")
+
+    assert result.status == "ready"
+    assert conversation_data["conversation_id"] == conversation_id
+    assert calls["generate"] == 0
+
+    ready_updates = [
+        (query, args)
+        for query, args in stub_conn.execute_calls
+        if "UPDATE conversations" in query and "SET status='ready'" in query
+    ]
+    assert ready_updates
+
+    memory_key = (user_id, conversation_id)
+    assert memory_key in memory_instances
+    assert memory_instances[memory_key].memories  # preset memories seeded
