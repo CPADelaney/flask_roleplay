@@ -98,12 +98,14 @@ class StubConnection:
         self.expected_user_id = expected_user_id
         self.return_raw_story_data = return_raw_story_data
         self.fetchrow_calls = []
+        self.fetch_calls = []
         self.execute_calls = []
         self.npc_stat_inserts = []
         self.npc_memory_inserts = []
         self.unified_memory_inserts = []
         self.social_link_inserts = []
         self._next_npc_id = 1000
+        self.start_location_name = "Preset Hub"
 
     async def fetchrow(self, query, *args):
         normalized_query = " ".join(query.split())
@@ -127,6 +129,17 @@ class StubConnection:
             return {"npc_id": record["npc_id"]}
 
         raise AssertionError(f"Unexpected fetchrow: {normalized_query} {args}")
+
+    async def fetch(self, query, *args):
+        normalized_query = " ".join(query.split())
+        self.fetch_calls.append((normalized_query, args))
+
+        if "SELECT location_name FROM Locations" in normalized_query:
+            if args == (self.expected_user_id, self.expected_conversation_id):
+                return [{"location_name": self.start_location_name}]
+            return []
+
+        raise AssertionError(f"Unexpected fetch: {normalized_query} {args}")
 
     async def execute(self, query, *args):
         normalized_query = " ".join(query.split())
@@ -169,12 +182,28 @@ def _install_common_preset_patches(monkeypatch, calls):
             "soft_rules": [],
         }
 
+    async def fake_load_calendar_names(uid, cid):
+        calls.setdefault("calendar_names", []).append((uid, cid))
+        return {"months": ["Dawn"], "days": ["Sol"]}
+
+    async def fake_set_current_time(uid, cid, year, month_idx, day_num, phase):
+        calls.setdefault("set_current_time", []).append((uid, cid, year, month_idx, day_num, phase))
+
     async def fake_canon_update(ctx_wrap, conn, key, value):
         # Simulate canonical update without touching the database
+        calls.setdefault("canon_updates", []).append((key, value))
         return None
 
     async def fail_preset_handler(*args, **kwargs):
         raise AssertionError("PresetNPCHandler.create_detailed_npc should not be called in fast path")
+
+    def fake_randint(a, b):
+        return a
+
+    def fake_choice(seq):
+        if not seq:
+            raise IndexError("Cannot choose from an empty sequence")
+        return seq[0]
 
     monkeypatch.setattr(new_game_agent, "insert_default_player_stats_chase", fake_insert_default_player_stats_chase)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_setup_preset_environment", fake_setup_environment)
@@ -182,12 +211,16 @@ def _install_common_preset_patches(monkeypatch, calls):
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_locations", fake_create_locations)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_opening", fake_create_opening)
     monkeypatch.setattr(new_game_agent, "synthesize_setting_rules", fake_rules)
+    monkeypatch.setattr(new_game_agent, "load_calendar_names", fake_load_calendar_names)
+    monkeypatch.setattr(new_game_agent, "set_current_time", fake_set_current_time)
     monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", fake_canon_update)
     monkeypatch.setattr(
         preset_module.PresetNPCHandler,
         "create_detailed_npc",
         staticmethod(fail_preset_handler),
     )
+    monkeypatch.setattr(new_game_agent.random, "randint", fake_randint)
+    monkeypatch.setattr(new_game_agent.random, "choice", fake_choice)
 
 
 def test_process_preset_game_reuses_existing_conversation(monkeypatch):
@@ -246,6 +279,9 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
         "locations": [],
         "opening": [],
         "stats": [],
+        "canon_updates": [],
+        "set_current_time": [],
+        "calendar_names": [],
     }
 
     _install_common_preset_patches(monkeypatch, calls)
@@ -278,6 +314,7 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     assert calls["calendar"] == [existing_conversation_id]
     assert calls["locations"] == [existing_conversation_id]
     assert calls["opening"] == [existing_conversation_id]
+    assert calls["calendar_names"] == [(user_id, existing_conversation_id)]
 
     assert stub_conn.npc_stat_inserts
     npc_record = stub_conn.npc_stat_inserts[0]
@@ -293,6 +330,19 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
 
     # The preset flow should not have inserted a new conversation row
     assert not any("INSERT INTO conversations" in query for query, _ in stub_conn.fetchrow_calls)
+
+    expected_time = f"Year 1 Dawn Sol {new_game_agent.TIME_PHASES[0]}"
+    assert any(
+        key == "CurrentLocation" and value == stub_conn.start_location_name
+        for key, value in calls["canon_updates"]
+    )
+    assert any(
+        key == "CurrentTime" and value == expected_time
+        for key, value in calls["canon_updates"]
+    )
+    assert calls["set_current_time"] == [
+        (user_id, existing_conversation_id, 1, 1, 1, new_game_agent.TIME_PHASES[0])
+    ]
 
 
 def test_process_preset_game_handles_dict_story_data(monkeypatch):
@@ -343,6 +393,9 @@ def test_process_preset_game_handles_dict_story_data(monkeypatch):
         "locations": [],
         "opening": [],
         "stats": [],
+        "canon_updates": [],
+        "set_current_time": [],
+        "calendar_names": [],
     }
 
     _install_common_preset_patches(monkeypatch, calls)

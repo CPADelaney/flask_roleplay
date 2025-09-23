@@ -2249,8 +2249,11 @@ class NewGameAgent:
             # 3. Create all required locations directly
             location_ids = await self._create_preset_locations(ctx_wrap, preset_story_data)
             
-            # 4. Create all required NPCs directly  
+            # 4. Create all required NPCs directly
             npc_ids = await self._create_preset_npcs(ctx_wrap, preset_story_data)
+
+            # 4a. Seed initial player context (location & time)
+            await self._initialize_player_context(ctx_wrap, user_id, conversation_id)
             
             # 5. Initialize story-specific mechanics
             if preset_story_id == "the_moth_and_flame":
@@ -3147,6 +3150,39 @@ class NewGameAgent:
             logging.info("Continuing without welcome image")
 
         # Establish initial player context (location and time)
+        await self._initialize_player_context(canon_ctx, user_id, conversation_id)
+
+        # Return structured result - but DON'T mark as ready yet
+        return FinalizeResult(
+            status="finalized",  # Not "ready" yet
+            welcome_image_url=welcome_image_url,
+            lore_summary=lore_summary,
+            initial_conflict=conflict_name,
+            currency_system=currency_name
+        )
+
+    async def _get_setting_name(self, ctx: RunContextWrapper[GameContext]) -> str:
+        """Helper method to get the setting name from the database"""
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentSetting'
+                LIMIT 1
+            """, user_id, conversation_id)
+
+            return row["value"] if row else "Unknown Setting"
+
+    async def _initialize_player_context(
+        self,
+        ctx_wrap: RunContextWrapper["GameContext"],
+        user_id: int,
+        conversation_id: int,
+    ) -> None:
+        """Seed the player's starting location and time snapshot."""
+
         try:
             async with get_db_connection_context() as conn:
                 rows = await conn.fetch(
@@ -3162,51 +3198,32 @@ class NewGameAgent:
                 else:
                     start_location = "Unknown"
                 await canon.update_current_roleplay(
-                    canon_ctx, conn, "CurrentLocation", start_location
+                    ctx_wrap, conn, "CurrentLocation", start_location
                 )
 
             calendar_names = await load_calendar_names(user_id, conversation_id)
-            year = random.randint(1, 100)
-            month_idx = random.randint(1, len(calendar_names.get("months", [])) or 1)
+            months = calendar_names.get("months", [])
+            days = calendar_names.get("days", [])
+            month_idx = random.randint(1, len(months) or 1)
             day_num = random.randint(1, 30)
             phase = random.choice(TIME_PHASES)
-            month_name = calendar_names.get("months", ["Month"])[month_idx - 1]
-            day_name = calendar_names.get("days", ["Day"])[(day_num - 1) % len(calendar_names.get("days", ["Day"]))]
+            month_source = months or ["Month"]
+            day_source = days or ["Day"]
+            month_name = month_source[month_idx - 1]
+            day_name = day_source[(day_num - 1) % len(day_source)]
+            year = random.randint(1, 100)
 
             await set_current_time(user_id, conversation_id, year, month_idx, day_num, phase)
 
             async with get_db_connection_context() as conn:
                 await canon.update_current_roleplay(
-                    canon_ctx,
+                    ctx_wrap,
                     conn,
                     "CurrentTime",
                     f"Year {year} {month_name} {day_name} {phase}",
                 )
         except Exception as e:
             logging.warning(f"Failed to initialize player context: {e}")
-
-        # Return structured result - but DON'T mark as ready yet
-        return FinalizeResult(
-            status="finalized",  # Not "ready" yet
-            welcome_image_url=welcome_image_url,
-            lore_summary=lore_summary,
-            initial_conflict=conflict_name,
-            currency_system=currency_name
-        )
-
-    async def _get_setting_name(self, ctx: RunContextWrapper[GameContext]) -> str:
-        """Helper method to get the setting name from the database"""
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
-        
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentSetting'
-                LIMIT 1
-            """, user_id, conversation_id)
-            
-            return row["value"] if row else "Unknown Setting"
 
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
