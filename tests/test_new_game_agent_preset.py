@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -48,17 +49,61 @@ sys.modules.setdefault("sentence_transformers", dummy_sentence_transformers)
 sys.modules.setdefault("sentence_transformers.models", dummy_models)
 
 import new_game_agent
+import npcs.preset_npc_handler as preset_module
 from lore.core.context import CanonicalContext
 
 
 class StubConnection:
-    def __init__(self, story_payload, expected_conversation_id, expected_user_id, *, return_raw_story_data=False):
+    NPC_STATS_COLUMNS = [
+        "user_id",
+        "conversation_id",
+        "npc_name",
+        "sex",
+        "age",
+        "physical_description",
+        "role",
+        "introduced",
+        "current_location",
+        "dominance",
+        "cruelty",
+        "closeness",
+        "trust",
+        "respect",
+        "affection",
+        "intensity",
+        "personality_traits",
+        "likes",
+        "dislikes",
+        "hobbies",
+        "relationships",
+        "affiliations",
+        "schedule",
+        "archetypes",
+        "archetype_summary",
+        "archetype_extras_summary",
+        "memory",
+        "special_mechanics",
+    ]
+
+    def __init__(
+        self,
+        story_payload,
+        expected_conversation_id,
+        expected_user_id,
+        *,
+        return_raw_story_data=False,
+    ):
         self.story_payload = story_payload
         self.expected_conversation_id = expected_conversation_id
         self.expected_user_id = expected_user_id
+        self.return_raw_story_data = return_raw_story_data
         self.fetchrow_calls = []
         self.execute_calls = []
-        self.return_raw_story_data = return_raw_story_data
+        self.npc_stat_inserts = []
+        self.npc_memory_inserts = []
+        self.unified_memory_inserts = []
+        self.social_link_inserts = []
+        self._next_npc_id = 1000
 
     async def fetchrow(self, query, *args):
         normalized_query = " ".join(query.split())
@@ -74,11 +119,26 @@ class StubConnection:
                 return {"id": self.expected_conversation_id}
             return None
 
+        if normalized_query.startswith("INSERT INTO NPCStats"):
+            record = dict(zip(self.NPC_STATS_COLUMNS, args))
+            record["npc_id"] = self._next_npc_id
+            self._next_npc_id += 1
+            self.npc_stat_inserts.append(record)
+            return {"npc_id": record["npc_id"]}
+
         raise AssertionError(f"Unexpected fetchrow: {normalized_query} {args}")
 
     async def execute(self, query, *args):
         normalized_query = " ".join(query.split())
         self.execute_calls.append((normalized_query, args))
+
+        if normalized_query.startswith("INSERT INTO NPCMemories"):
+            self.npc_memory_inserts.append(args)
+        elif normalized_query.startswith("INSERT INTO unified_memories"):
+            self.unified_memory_inserts.append(args)
+        elif normalized_query.startswith("INSERT INTO SocialLinks"):
+            self.social_link_inserts.append(args)
+
         return None
 
 
@@ -95,10 +155,6 @@ def _install_common_preset_patches(monkeypatch, calls):
     async def fake_create_locations(self, ctx_wrap, preset_data):
         calls["locations"].append(ctx_wrap.context["conversation_id"])
         return [101]
-
-    async def fake_create_npcs(self, ctx_wrap, preset_data):
-        calls["npcs"].append(ctx_wrap.context["conversation_id"])
-        return [201]
 
     async def fake_create_opening(self, ctx_wrap, preset_data):
         calls["opening"].append(ctx_wrap.context["conversation_id"])
@@ -117,18 +173,24 @@ def _install_common_preset_patches(monkeypatch, calls):
         # Simulate canonical update without touching the database
         return None
 
+    async def fail_preset_handler(*args, **kwargs):
+        raise AssertionError("PresetNPCHandler.create_detailed_npc should not be called in fast path")
+
     monkeypatch.setattr(new_game_agent, "insert_default_player_stats_chase", fake_insert_default_player_stats_chase)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_setup_preset_environment", fake_setup_environment)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_setup_standard_calendar", fake_setup_calendar)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_locations", fake_create_locations)
-    monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_npcs", fake_create_npcs)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_opening", fake_create_opening)
     monkeypatch.setattr(new_game_agent, "synthesize_setting_rules", fake_rules)
     monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", fake_canon_update)
+    monkeypatch.setattr(
+        preset_module.PresetNPCHandler,
+        "create_detailed_npc",
+        staticmethod(fail_preset_handler),
+    )
 
 
-@pytest.mark.asyncio
-async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
+def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     agent = new_game_agent.NewGameAgent()
 
     user_id = 77
@@ -137,11 +199,37 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     conversation_data = {"conversation_id": existing_conversation_id, "preset_story_id": preset_story_id}
 
     story_payload = {
+        "id": preset_story_id,
         "name": "Test Preset",
         "synopsis": "A quiet town hides many secrets.",
         "theme": "mystery",
         "locations": [],
         "npcs": [],
+        "required_locations": [],
+        "required_npcs": [
+            {
+                "id": "npc_alpha",
+                "name": "Alex Storm",
+                "traits": ["observant"],
+                "stats": {"dominance": 55, "trust": 20, "affection": 15},
+                "personality": {
+                    "likes": ["coffee"],
+                    "dislikes": ["lies"],
+                    "hobbies": ["painting"],
+                },
+                "memories": [
+                    {
+                        "memory_text": "Alex met the player at the station.",
+                        "tags": ["meeting"],
+                        "significance": 4,
+                    }
+                ],
+                "relationships": [
+                    {"type": "ally", "strength": 70}
+                ],
+                "special_mechanics": {"ritual": "sunrise briefing"},
+            }
+        ],
     }
 
     stub_conn = StubConnection(story_payload, existing_conversation_id, user_id)
@@ -156,7 +244,6 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
         "environment": [],
         "calendar": [],
         "locations": [],
-        "npcs": [],
         "opening": [],
         "stats": [],
     }
@@ -165,7 +252,7 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
 
     ctx = CanonicalContext(user_id, existing_conversation_id)
 
-    result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
+    result = asyncio.run(agent.process_preset_game_direct(ctx, conversation_data, preset_story_id))
 
     assert result.conversation_id == existing_conversation_id
     assert conversation_data["conversation_id"] == existing_conversation_id
@@ -190,15 +277,25 @@ async def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     assert calls["environment"] == [(existing_conversation_id, "Test Preset")]
     assert calls["calendar"] == [existing_conversation_id]
     assert calls["locations"] == [existing_conversation_id]
-    assert calls["npcs"] == [existing_conversation_id]
     assert calls["opening"] == [existing_conversation_id]
+
+    assert stub_conn.npc_stat_inserts
+    npc_record = stub_conn.npc_stat_inserts[0]
+    assert npc_record["user_id"] == user_id
+    assert npc_record["conversation_id"] == existing_conversation_id
+
+    relationships = json.loads(npc_record["relationships"])
+    assert relationships[0]["relationship_label"] == "ally"
+
+    assert len(stub_conn.npc_memory_inserts) == 1
+    assert len(stub_conn.unified_memory_inserts) == 1
+    assert len(stub_conn.social_link_inserts) == 1
 
     # The preset flow should not have inserted a new conversation row
     assert not any("INSERT INTO conversations" in query for query, _ in stub_conn.fetchrow_calls)
 
 
-@pytest.mark.asyncio
-async def test_process_preset_game_handles_dict_story_data(monkeypatch):
+def test_process_preset_game_handles_dict_story_data(monkeypatch):
     agent = new_game_agent.NewGameAgent()
 
     user_id = 88
@@ -207,11 +304,24 @@ async def test_process_preset_game_handles_dict_story_data(monkeypatch):
     conversation_data = {"conversation_id": existing_conversation_id, "preset_story_id": preset_story_id}
 
     story_payload = {
+        "id": preset_story_id,
         "name": "Dict Preset",
         "synopsis": "An adventure stored as a dict.",
         "theme": "exploration",
         "locations": [],
         "npcs": [],
+        "required_locations": [],
+        "required_npcs": [
+            {
+                "id": "npc_beta",
+                "name": "Blair Rowan",
+                "traits": ["curious"],
+                "stats": {"dominance": 30, "trust": 25},
+                "relationships": [
+                    {"type": "mentor", "strength": 60}
+                ],
+            }
+        ],
     }
 
     stub_conn = StubConnection(
@@ -231,7 +341,6 @@ async def test_process_preset_game_handles_dict_story_data(monkeypatch):
         "environment": [],
         "calendar": [],
         "locations": [],
-        "npcs": [],
         "opening": [],
         "stats": [],
     }
@@ -240,7 +349,7 @@ async def test_process_preset_game_handles_dict_story_data(monkeypatch):
 
     ctx = CanonicalContext(user_id, existing_conversation_id)
 
-    result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
+    result = asyncio.run(agent.process_preset_game_direct(ctx, conversation_data, preset_story_id))
 
     assert result.conversation_id == existing_conversation_id
     assert result.scenario_name == "Dict Preset"
@@ -249,6 +358,8 @@ async def test_process_preset_game_handles_dict_story_data(monkeypatch):
         "SET status='ready'" in query and args == (existing_conversation_id, user_id, "Dict Preset")
         for query, args in stub_conn.execute_calls
     )
+
+    assert stub_conn.npc_stat_inserts
 
 class SetupCheckStubConnection:
     def __init__(
@@ -317,8 +428,7 @@ class SetupCheckStubConnection:
         return []
 
 
-@pytest.mark.asyncio
-async def test_setup_check_allows_queued_lore_and_npcs(monkeypatch):
+def test_setup_check_allows_queued_lore_and_npcs(monkeypatch):
     agent = new_game_agent.NewGameAgent()
 
     pool_status = json.dumps({"status": "queued", "target": 5})
@@ -346,7 +456,7 @@ async def test_setup_check_allows_queued_lore_and_npcs(monkeypatch):
 
     monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
 
-    complete, missing, pending = await agent._is_setup_complete(user_id=42, conversation_id=77)
+    complete, missing, pending = asyncio.run(agent._is_setup_complete(user_id=42, conversation_id=77))
 
     assert complete is True
     assert missing == []
@@ -354,67 +464,8 @@ async def test_setup_check_allows_queued_lore_and_npcs(monkeypatch):
     assert any('Lore' in entry for entry in pending)
 
 
-class QueenPipelineStubConnection:
-    def __init__(self, story_payload, user_id, conversation_id):
-        self.story_payload = story_payload
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.fetchrow_calls = []
-        self.fetchval_calls = []
-        self.execute_calls = []
-        self.fetch_calls = []
 
-    async def fetchrow(self, query, *args):
-        normalized = " ".join(query.split())
-        self.fetchrow_calls.append((normalized, args))
-
-        if "SELECT story_data FROM PresetStories" in normalized:
-            return {"story_data": json.dumps(self.story_payload)}
-
-        if "SELECT id FROM conversations" in normalized:
-            if args == (self.conversation_id, self.user_id):
-                return {"id": self.conversation_id}
-            return None
-
-        if "SELECT npc_id FROM NPCStats" in normalized:
-            return None
-
-        if "SELECT age, birthdate" in normalized:
-            return None
-
-        if "SELECT relationships FROM NPCStats" in normalized:
-            return {"relationships": json.dumps([])}
-
-        if "SELECT special_mechanics FROM NPCStats" in normalized:
-            return {"special_mechanics": None}
-
-        return None
-
-    async def fetchval(self, query, *args):
-        normalized = " ".join(query.split())
-        self.fetchval_calls.append((normalized, args))
-
-        if "SELECT COUNT(*) FROM NPCMemories" in normalized:
-            return 0
-
-        if "SELECT value FROM CurrentRoleplay" in normalized:
-            return None
-
-        return None
-
-    async def execute(self, query, *args):
-        normalized = " ".join(query.split())
-        self.execute_calls.append((normalized, args))
-        return None
-
-    async def fetch(self, query, *args):
-        normalized = " ".join(query.split())
-        self.fetch_calls.append((normalized, args))
-        return []
-
-
-@pytest.mark.asyncio
-async def test_queen_of_thorns_preset_skips_memory_generation(monkeypatch):
+def test_queen_of_thorns_preset_uses_fast_path(monkeypatch):
     agent = new_game_agent.NewGameAgent()
 
     user_id = 55
@@ -423,199 +474,37 @@ async def test_queen_of_thorns_preset_skips_memory_generation(monkeypatch):
 
     from story_templates.preset_story_loader import PresetStoryLoader
     from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
-    import lore.core.lore_system as lore_system_module
-    import memory.wrapper as memory_wrapper_module
-    import memory.schemas as memory_schemas_module
-    import npcs.preset_npc_handler as preset_module
-    import db.connection as db_connection_module
-    from lore.core import canon as canon_module
-    from logic import dynamic_relationships as dynamic_relationships_module
 
     story_payload = PresetStoryLoader._serialize_story(QUEEN_OF_THORNS_STORY)
 
-    stub_conn = QueenPipelineStubConnection(story_payload, user_id, conversation_id)
+    stub_conn = StubConnection(story_payload, conversation_id, user_id)
 
     @asynccontextmanager
     async def fake_db_context():
         yield stub_conn
 
     monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
-    monkeypatch.setattr(db_connection_module, "get_db_connection_context", fake_db_context)
-    monkeypatch.setattr(preset_module, "get_db_connection_context", fake_db_context)
 
-    async def fake_insert_stats(uid, cid):
-        return None
+    calls = {
+        "environment": [],
+        "calendar": [],
+        "locations": [],
+        "opening": [],
+        "stats": [],
+    }
 
-    async def fake_rules(env_desc, setting_name):
-        return {
-            "capabilities": {},
-            "setting_kind": "preset",
-            "_reality_context": "normal",
-            "hard_rules": [],
-            "soft_rules": [],
-        }
+    _install_common_preset_patches(monkeypatch, calls)
 
-    async def fake_opening(self, ctx_wrap, preset_data):
-        return "Opening narrative"
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("generate_memories should not be called for preset NPC fast path")
 
-    async def fake_locations(self, ctx_wrap, preset_data):
-        return [101]
-
-    monkeypatch.setattr(new_game_agent, "insert_default_player_stats_chase", fake_insert_stats)
-    monkeypatch.setattr(new_game_agent, "synthesize_setting_rules", fake_rules)
-    monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_opening", fake_opening)
-    monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_locations", fake_locations)
-
-    npc_counter = iter(range(3000, 3010))
-    location_counter = iter(range(4000, 4010))
-
-    async def fake_find_or_create_npc(ctx_obj, conn, npc_name: str, **kwargs):
-        return next(npc_counter)
-
-    async def fake_find_or_create_location(ctx_wrap, conn, name: str, **kwargs):
-        return next(location_counter)
-
-    async def fake_update_current_roleplay(ctx_wrap, conn, key, value):
-        return None
-
-    async def fake_update_entity(canon_ctx, conn, entity_name, entity_id, updates, reason):
-        return None
-
-    monkeypatch.setattr(canon_module, "find_or_create_npc", fake_find_or_create_npc)
-    monkeypatch.setattr(canon_module, "find_or_create_location", fake_find_or_create_location)
-    monkeypatch.setattr(canon_module, "update_current_roleplay", fake_update_current_roleplay)
-    monkeypatch.setattr(canon_module, "update_entity_canonically", fake_update_entity)
-
-    class DummyLoreSystem:
-        async def propose_and_enact_change(self, **kwargs):
-            return {"status": "ok"}
-
-    async def fake_lore_instance(uid, cid):
-        return DummyLoreSystem()
-
-    monkeypatch.setattr(lore_system_module.LoreSystem, "get_instance", fake_lore_instance)
-
-    memory_instances = {}
-
-    class DummyMemorySystem:
-        def __init__(self, uid, cid):
-            self.user_id = uid
-            self.conversation_id = cid
-            self.memories = []
-            self.beliefs = []
-            self.emotions = {}
-
-        async def remember(self, entity_type, entity_id, memory_text, importance="medium", emotional=True, tags=None):
-            self.memories.append(memory_text)
-            return {"memory_id": len(self.memories)}
-
-        async def update_npc_emotion(self, npc_id, emotion, intensity=0.5):
-            self.emotions[npc_id] = {"emotion": emotion, "intensity": intensity}
-            return {"status": "ok"}
-
-        async def create_belief(self, entity_type, entity_id, belief_text, confidence=0.7):
-            self.beliefs.append(belief_text)
-            return {"belief_id": len(self.beliefs)}
-
-    async def fake_memory_instance(uid, cid):
-        key = (uid, cid)
-        if key not in memory_instances:
-            memory_instances[key] = DummyMemorySystem(uid, cid)
-        return memory_instances[key]
-
-    monkeypatch.setattr(memory_wrapper_module.MemorySystem, "get_instance", fake_memory_instance)
-
-    class DummyMemorySchemaManager:
-        def __init__(self, uid, cid):
-            self.user_id = uid
-            self.conversation_id = cid
-            self.created = []
-
-        async def create_schema(self, **kwargs):
-            self.created.append(kwargs.get("schema_name"))
-
-    monkeypatch.setattr(memory_schemas_module, "MemorySchemaManager", DummyMemorySchemaManager)
-
-    class DummyDimensions:
-        def __init__(self):
-            self.trust = 0
-            self.respect = 0
-            self.affection = 0
-            self.intimacy = 0
-            self.fascination = 0
-            self.influence = 0
-            self.volatility = 0
-            self.unresolved_conflict = 0
-
-        def clamp(self):
-            for field in (
-                "trust",
-                "respect",
-                "affection",
-                "intimacy",
-                "fascination",
-                "influence",
-                "volatility",
-                "unresolved_conflict",
-            ):
-                value = getattr(self, field)
-                if value > 100:
-                    setattr(self, field, 100)
-                elif value < -100:
-                    setattr(self, field, -100)
-
-    class DummyRelationshipState:
-        def __init__(self):
-            self.dimensions = DummyDimensions()
-
-    class DummyRelationshipManager:
-        def __init__(self, uid, cid):
-            self.user_id = uid
-            self.conversation_id = cid
-            self.states = []
-
-        async def get_relationship_state(self, **kwargs):
-            state = DummyRelationshipState()
-            self.states.append(state)
-            return state
-
-        async def _queue_update(self, state):
-            return None
-
-        async def _flush_updates(self):
-            return None
-
-    monkeypatch.setattr(dynamic_relationships_module, "OptimizedRelationshipManager", DummyRelationshipManager)
-    monkeypatch.setattr(preset_module, "OptimizedRelationshipManager", DummyRelationshipManager)
-
-    async def fake_update_context(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(preset_module, "update_relationship_context_tool", fake_update_context)
-
-    async def fake_special_mechanics(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(
-        preset_module.PresetNPCHandler,
-        "_initialize_special_mechanics",
-        staticmethod(fake_special_mechanics),
-    )
-
-    calls = {"generate": 0}
-
-    async def fake_generate_memories(self, ctx_wrap, npc_name):
-        calls["generate"] += 1
-        return []
-
-    monkeypatch.setattr(new_game_agent.NPCCreationHandler, "generate_memories", fake_generate_memories)
+    monkeypatch.setattr(new_game_agent.NPCCreationHandler, "generate_memories", fail_generate)
 
     ctx = CanonicalContext(user_id, conversation_id)
-    result = await agent.process_preset_game_direct(ctx, conversation_data, "queen_of_thorns")
+    result = asyncio.run(agent.process_preset_game_direct(ctx, conversation_data, "queen_of_thorns"))
 
     assert result.status == "ready"
     assert conversation_data["conversation_id"] == conversation_id
-    assert calls["generate"] == 0
 
     ready_updates = [
         (query, args)
@@ -624,6 +513,5 @@ async def test_queen_of_thorns_preset_skips_memory_generation(monkeypatch):
     ]
     assert ready_updates
 
-    memory_key = (user_id, conversation_id)
-    assert memory_key in memory_instances
-    assert memory_instances[memory_key].memories  # preset memories seeded
+    assert len(stub_conn.npc_stat_inserts) == len(story_payload["required_npcs"])
+    assert len(stub_conn.social_link_inserts) >= len(story_payload["required_npcs"])
