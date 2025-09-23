@@ -2408,32 +2408,482 @@ class NewGameAgent:
         return location_ids
     
     async def _create_preset_npcs(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[int]:
-        """Create NPCs directly from preset data using PresetNPCHandler"""
-        from npcs.preset_npc_handler import PresetNPCHandler
-        
-        npc_ids = []
+        """Create NPCs directly from preset data without invoking heavy managers."""
+
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+
         story_context = {
-            'story_name': preset_data['name'],
-            'story_id': preset_data['id'],
-            'theme': preset_data['theme']
+            "story_id": preset_data.get("id"),
+            "story_name": preset_data.get("name"),
+            "theme": preset_data.get("theme"),
         }
-        
-        for npc_data in preset_data.get('required_npcs', []):
-            try:
-                # Use PresetNPCHandler for ALL NPCs including Lilith
-                npc_id = await PresetNPCHandler.create_detailed_npc(
-                    ctx=ctx,
-                    npc_data=npc_data,
-                    story_context=story_context
-                )
-                npc_ids.append(npc_id)
-                        
-            except Exception as e:
-                logger.error(f"Error creating preset NPC {npc_data.get('name', 'Unknown')}: {e}", exc_info=True)
-                # Continue with other NPCs even if one fails
-        
-        logger.info(f"Created {len(npc_ids)} preset NPCs")
+
+        npc_ids: List[int] = []
+
+        async with get_db_connection_context() as conn:
+            for npc_data in preset_data.get("required_npcs", []):
+                if not isinstance(npc_data, dict):
+                    logger.warning("Skipping preset NPC entry that is not a mapping: %s", npc_data)
+                    continue
+
+                try:
+                    npc_id = await self._hydrate_preset_npc_records(
+                        conn,
+                        user_id,
+                        conversation_id,
+                        npc_data,
+                        story_context,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Error hydrating preset NPC %s", npc_data.get("name", "Unknown")
+                    )
+                    continue
+
+                if npc_id is not None:
+                    npc_ids.append(npc_id)
+
+        logger.info("Created %s preset NPCs via fast hydration", len(npc_ids))
         return npc_ids
+
+    async def _hydrate_preset_npc_records(
+        self,
+        conn,
+        user_id: int,
+        conversation_id: int,
+        npc_data: Dict[str, Any],
+        story_context: Dict[str, Any],
+    ) -> Optional[int]:
+        """Persist a preset NPC directly into the NPC tables."""
+
+        npc_name = npc_data.get("name") or npc_data.get("npc_name")
+        if not npc_name:
+            logger.warning("Preset NPC missing name; skipping entry: %s", npc_data)
+            return None
+
+        stats_payload = npc_data.get("stats", {}) or {}
+        normalized_memories = self._normalize_preset_memories(npc_data)
+        relationships = self._normalize_preset_relationships(npc_data, user_id)
+
+        if not relationships:
+            relationships = [
+                {
+                    "label": "neutral",
+                    "target_type": "player",
+                    "target_id": user_id,
+                    "strength": 0,
+                }
+            ]
+
+        personality_traits = npc_data.get("traits") or []
+        personality = npc_data.get("personality") or {}
+        schedule = npc_data.get("schedule") or {}
+        affiliations = npc_data.get("affiliations") or []
+
+        archetypes_payload = self._build_preset_archetype_payload(npc_data)
+        special_mechanics_payload = self._build_special_mechanics_payload(npc_data, story_context)
+
+        memory_snapshot = None
+        if normalized_memories:
+            snapshot = [m.get("memory_text") for m in normalized_memories if m.get("memory_text")]
+            memory_snapshot = json.dumps({"preset_memories": snapshot}) if snapshot else None
+
+        insert_query = """
+            INSERT INTO NPCStats (
+                user_id, conversation_id, npc_name, sex, age, physical_description, role,
+                introduced, current_location, dominance, cruelty, closeness, trust, respect,
+                affection, intensity, personality_traits, likes, dislikes, hobbies,
+                relationships, affiliations, schedule, archetypes, archetype_summary,
+                archetype_extras_summary, memory, special_mechanics
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14,
+                $15, $16, $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb,
+                $21::jsonb, $22::jsonb, $23::jsonb, $24::jsonb, $25,
+                $26, $27::jsonb, $28::jsonb
+            )
+            RETURNING npc_id
+        """
+
+        row = await conn.fetchrow(
+            insert_query,
+            user_id,
+            conversation_id,
+            npc_name,
+            npc_data.get("sex"),
+            self._coerce_int(npc_data.get("age")),
+            self._coalesce_physical_description(npc_data),
+            npc_data.get("role"),
+            bool(npc_data.get("introduced", False)),
+            npc_data.get("current_location") or self._pick_schedule_location(schedule),
+            self._extract_numeric_stat(stats_payload, "dominance"),
+            self._extract_numeric_stat(stats_payload, "cruelty"),
+            self._extract_numeric_stat(stats_payload, "closeness"),
+            self._extract_numeric_stat(stats_payload, "trust"),
+            self._extract_numeric_stat(stats_payload, "respect"),
+            self._extract_numeric_stat(stats_payload, "affection"),
+            self._extract_numeric_stat(stats_payload, "intensity"),
+            json.dumps(personality_traits) if personality_traits else None,
+            json.dumps(personality.get("likes", [])) if personality.get("likes") else None,
+            json.dumps(personality.get("dislikes", [])) if personality.get("dislikes") else None,
+            json.dumps(personality.get("hobbies", [])) if personality.get("hobbies") else None,
+            json.dumps(self._relationships_for_storage(relationships)),
+            json.dumps(affiliations) if affiliations else None,
+            json.dumps(schedule) if schedule else None,
+            json.dumps(archetypes_payload) if archetypes_payload else None,
+            npc_data.get("role"),
+            npc_data.get("archetype_extras_summary"),
+            memory_snapshot,
+            json.dumps(special_mechanics_payload) if special_mechanics_payload else None,
+        )
+
+        npc_id = None
+        if row:
+            npc_id = row.get("npc_id") if isinstance(row, dict) else row[0]
+
+        if npc_id is None:
+            logger.warning("Failed to obtain NPC id for preset NPC %s", npc_name)
+            return None
+
+        if normalized_memories:
+            await self._store_preset_memories_fast(
+                conn,
+                user_id,
+                conversation_id,
+                npc_id,
+                npc_data,
+                normalized_memories,
+            )
+
+        await self._store_relationship_links_fast(
+            conn,
+            user_id,
+            conversation_id,
+            npc_id,
+            relationships,
+        )
+
+        return npc_id
+
+    def _relationships_for_storage(self, relationships: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        stored: List[Dict[str, Any]] = []
+        for rel in relationships:
+            entry = {
+                "relationship_label": rel.get("label", "neutral"),
+                "entity_type": rel.get("target_type", "player"),
+                "entity_id": rel.get("target_id"),
+            }
+
+            if rel.get("strength") is not None:
+                entry["strength"] = rel["strength"]
+            if rel.get("notes"):
+                entry["notes"] = rel["notes"]
+
+            stored.append(entry)
+
+        return stored
+
+    async def _store_relationship_links_fast(
+        self,
+        conn,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        relationships: List[Dict[str, Any]],
+    ) -> None:
+        for rel in relationships:
+            target_id = rel.get("target_id")
+            target_type = rel.get("target_type", "player")
+
+            if target_id is None:
+                continue
+
+            canonical_key = self._canonical_social_link_key(
+                "npc",
+                npc_id,
+                target_type,
+                target_id,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO SocialLinks (
+                    user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id,
+                    link_type, link_level, link_history, dynamics, relationship_stage, canonical_key, contexts
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb
+                )
+                ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+                DO UPDATE SET
+                    link_type = EXCLUDED.link_type,
+                    link_level = EXCLUDED.link_level,
+                    link_history = EXCLUDED.link_history,
+                    dynamics = EXCLUDED.dynamics,
+                    relationship_stage = EXCLUDED.relationship_stage,
+                    canonical_key = EXCLUDED.canonical_key,
+                    contexts = EXCLUDED.contexts
+                """,
+                user_id,
+                conversation_id,
+                "npc",
+                npc_id,
+                target_type,
+                target_id,
+                rel.get("label", "neutral"),
+                rel.get("strength", 0),
+                json.dumps(rel.get("history", [])) if rel.get("history") is not None else json.dumps([]),
+                json.dumps(rel.get("dynamics", {})) if rel.get("dynamics") is not None else json.dumps({}),
+                rel.get("relationship_stage"),
+                canonical_key,
+                json.dumps(rel.get("contexts", {})) if rel.get("contexts") is not None else json.dumps({}),
+            )
+
+    def _canonical_social_link_key(
+        self,
+        entity1_type: str,
+        entity1_id: int,
+        entity2_type: str,
+        entity2_id: int,
+    ) -> str:
+        left = (entity1_type, entity1_id)
+        right = (entity2_type, entity2_id)
+
+        if left <= right:
+            return f"{entity1_type}_{entity1_id}_{entity2_type}_{entity2_id}"
+        return f"{entity2_type}_{entity2_id}_{entity1_type}_{entity1_id}"
+
+    async def _store_preset_memories_fast(
+        self,
+        conn,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+        memories: List[Dict[str, Any]],
+    ) -> None:
+        preset_id = npc_data.get("id")
+
+        for memory in memories:
+            text = memory.get("memory_text")
+            if not text:
+                continue
+
+            tags = memory.get("tags") or []
+            associated_entities = memory.get("associated_entities") or {}
+
+            await conn.execute(
+                """
+                INSERT INTO NPCMemories (
+                    npc_id, memory_text, tags, emotional_intensity, memory_type,
+                    significance, status, associated_entities
+                )
+                VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8::jsonb)
+                """,
+                npc_id,
+                text,
+                json.dumps(tags),
+                memory.get("emotional_intensity", 0),
+                memory.get("memory_type", "observation"),
+                memory.get("significance", 3),
+                memory.get("status", "active"),
+                json.dumps(associated_entities),
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO unified_memories (
+                    entity_type, entity_id, user_id, conversation_id, memory_text,
+                    memory_type, significance, emotional_intensity, tags, metadata, status
+                )
+                VALUES (
+                    'npc', $1, $2, $3, $4,
+                    $5, $6, $7, $8::jsonb, $9::jsonb, $10
+                )
+                """,
+                npc_id,
+                user_id,
+                conversation_id,
+                text,
+                memory.get("memory_type", "observation"),
+                memory.get("significance", 3),
+                memory.get("emotional_intensity", 0),
+                json.dumps(tags),
+                json.dumps({"preset": True, "preset_id": preset_id} if preset_id else {"preset": True}),
+                memory.get("status", "active"),
+            )
+
+    def _normalize_preset_memories(self, npc_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        memories = npc_data.get("memories")
+        normalized: List[Dict[str, Any]] = []
+
+        def _append(entry: Any) -> None:
+            if not entry:
+                return
+            if isinstance(entry, str):
+                normalized.append({"memory_text": entry})
+                return
+            if isinstance(entry, dict):
+                text = entry.get("memory_text") or entry.get("text")
+                if not text:
+                    return
+                normalized.append(
+                    {
+                        "memory_text": text,
+                        "tags": entry.get("tags", []),
+                        "emotional_intensity": entry.get("emotional_intensity", entry.get("intensity", 0)),
+                        "memory_type": entry.get("memory_type", entry.get("type", "observation")),
+                        "significance": entry.get("significance", entry.get("importance", 3)),
+                        "status": entry.get("status", "active"),
+                        "associated_entities": entry.get("associated_entities") or entry.get("entities") or {},
+                    }
+                )
+
+        if isinstance(memories, list):
+            for item in memories:
+                _append(item)
+        elif isinstance(memories, dict):
+            for value in memories.values():
+                if isinstance(value, list):
+                    for item in value:
+                        _append(item)
+                else:
+                    _append(value)
+        else:
+            _append(memories)
+
+        return normalized
+
+    def _normalize_preset_relationships(
+        self, npc_data: Dict[str, Any], user_id: int
+    ) -> List[Dict[str, Any]]:
+        relationships = npc_data.get("relationships") or []
+        normalized: List[Dict[str, Any]] = []
+
+        for rel in relationships:
+            if isinstance(rel, str):
+                normalized.append(
+                    {
+                        "label": rel,
+                        "target_type": "player",
+                        "target_id": user_id,
+                        "strength": 0,
+                    }
+                )
+                continue
+
+            if not isinstance(rel, dict):
+                continue
+
+            target_type = rel.get("target_type", "player")
+            target_id = rel.get("target_id")
+            if target_type == "player" and target_id is None:
+                target_id = user_id
+
+            normalized.append(
+                {
+                    "label": rel.get("type") or rel.get("relationship_label") or "neutral",
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "strength": rel.get("strength"),
+                    "history": rel.get("history"),
+                    "dynamics": rel.get("dynamics"),
+                    "relationship_stage": rel.get("relationship_stage"),
+                    "contexts": rel.get("contexts"),
+                    "notes": rel.get("notes"),
+                }
+            )
+
+        return normalized
+
+    def _extract_numeric_stat(self, stats: Dict[str, Any], key: str) -> Optional[int]:
+        value = stats.get(key)
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+        except (TypeError, ValueError):
+            return None
+
+        return max(-100, min(100, int_value))
+
+    def _coerce_int(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _coalesce_physical_description(self, npc_data: Dict[str, Any]) -> Optional[str]:
+        description = npc_data.get("physical_description")
+        if not description:
+            return None
+
+        if isinstance(description, str):
+            return description
+
+        if isinstance(description, dict):
+            parts = [str(v) for v in description.values() if v]
+            return " \n".join(parts) if parts else None
+
+        return str(description)
+
+    def _pick_schedule_location(self, schedule: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(schedule, dict):
+            return None
+
+        for day in schedule.values():
+            if isinstance(day, dict):
+                for location in day.values():
+                    if isinstance(location, str) and location:
+                        return location
+        return None
+
+    def _build_preset_archetype_payload(self, npc_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        names: List[str] = []
+        if npc_data.get("archetype"):
+            names.append(npc_data["archetype"])
+
+        extra_names = npc_data.get("archetypes")
+        if isinstance(extra_names, list):
+            names.extend([n for n in extra_names if isinstance(n, str)])
+
+        if not names:
+            return None
+
+        payload: Dict[str, Any] = {
+            "archetype_names": names,
+            "traits": npc_data.get("traits", []),
+            "source": "preset_story",
+        }
+
+        details = npc_data.get("archetype_details") or npc_data.get("archetype_extras")
+        if details:
+            payload["details"] = details
+
+        return payload
+
+    def _build_special_mechanics_payload(
+        self,
+        npc_data: Dict[str, Any],
+        story_context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        mechanics = npc_data.get("special_mechanics")
+        if not mechanics:
+            return {
+                "preset_id": npc_data.get("id"),
+                "story": story_context,
+            }
+
+        return {
+            "preset_id": npc_data.get("id"),
+            "story": story_context,
+            "mechanics": mechanics,
+        }
         
     
     async def _create_preset_opening(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> str:
