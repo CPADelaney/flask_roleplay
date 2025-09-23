@@ -261,6 +261,7 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
                     {"type": "ally", "strength": 70}
                 ],
                 "special_mechanics": {"ritual": "sunrise briefing"},
+                "archetype_summary": "Shadowy informant",
             }
         ],
     }
@@ -320,6 +321,7 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     npc_record = stub_conn.npc_stat_inserts[0]
     assert npc_record["user_id"] == user_id
     assert npc_record["conversation_id"] == existing_conversation_id
+    assert npc_record["archetype_summary"] == "Shadowy informant"
 
     relationships = json.loads(npc_record["relationships"])
     assert relationships[0]["relationship_label"] == "ally"

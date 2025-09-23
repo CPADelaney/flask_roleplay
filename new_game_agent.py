@@ -2544,7 +2544,7 @@ class NewGameAgent:
             json.dumps(affiliations) if affiliations else None,
             json.dumps(schedule) if schedule else None,
             json.dumps(archetypes_payload) if archetypes_payload else None,
-            npc_data.get("role"),
+            npc_data.get("archetype_summary"),
             npc_data.get("archetype_extras_summary"),
             memory_snapshot,
             json.dumps(special_mechanics_payload) if special_mechanics_payload else None,
