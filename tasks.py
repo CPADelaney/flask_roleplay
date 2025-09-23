@@ -924,6 +924,8 @@ def generate_lore_background_task(user_id: int, conversation_id: int) -> Dict[st
                 "user_id": user_id,
                 "conversation_id": conversation_id,
             })
+            lore_ctx.user_id = user_id
+            lore_ctx.conversation_id = conversation_id
 
             lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
 
@@ -1161,6 +1163,8 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
                 "user_id": user_id,
                 "conversation_id": conversation_id,
             })
+            conflict_ctx.user_id = user_id
+            conflict_ctx.conversation_id = conversation_id
 
             conflict_integration = await ConflictSystemIntegration.get_instance(
                 user_id,

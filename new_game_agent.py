@@ -182,6 +182,23 @@ def _build_fallback_environment_payload() -> Dict[str, Any]:
     return deepcopy(FALLBACK_ENVIRONMENT_PAYLOAD)
 
 
+def _build_run_context_wrapper(
+    user_id: int,
+    conversation_id: int,
+    **extra: Any,
+) -> RunContextWrapper["GameContext"]:
+    """Create a ``RunContextWrapper`` with direct attribute access for common IDs."""
+
+    context: Dict[str, Any] = {"user_id": user_id, "conversation_id": conversation_id}
+    context.update(extra)
+    wrapper: RunContextWrapper[GameContext] = RunContextWrapper(context=context)
+    wrapper.user_id = user_id
+    wrapper.conversation_id = conversation_id
+    for key, value in extra.items():
+        setattr(wrapper, key, value)
+    return wrapper
+
+
 def _coerce_story_data(raw_story_data: Any, preset_story_id: str) -> Any:
     """Normalize the preset story payload to a Python object."""
 
@@ -909,10 +926,7 @@ class NewGameAgent:
         
         # Store everything in database (single connection and transaction)
         async with get_db_connection_context() as conn, conn.transaction():
-            cctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            cctx = _build_run_context_wrapper(user_id, conversation_id)
             
             await canon.create_game_setting(
                 cctx, conn,
@@ -1017,12 +1031,12 @@ class NewGameAgent:
             await insert_default_player_stats_chase(user_id, conversation_id)
             
             # Build context wrapper
-            ctx_wrap = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id,
-                'db_dsn': DB_DSN,
-                'agent_instance': self
-            })
+            ctx_wrap = _build_run_context_wrapper(
+                user_id,
+                conversation_id,
+                db_dsn=DB_DSN,
+                agent_instance=self,
+            )
             
             # Generate environment based on preset story
             env_params = GenerateEnvironmentParams(
@@ -1177,10 +1191,7 @@ class NewGameAgent:
             return
 
         # --- store a canonical copy for later systems ----------------------
-        canon_ctx = RunContextWrapper(context={
-            'user_id': user_id,
-            'conversation_id': conversation_id
-        })
+        canon_ctx = _build_run_context_wrapper(user_id, conversation_id)
 
 
         async with get_db_connection_context() as conn:
@@ -1230,11 +1241,11 @@ class NewGameAgent:
         npc_handler = NPCCreationHandler()
         
         # Create a proper context for the handler
-        handler_ctx = RunContextWrapper(context={
-            "user_id": user_id,
-            "conversation_id": conversation_id,
-            "agent_instance": self
-        })
+        handler_ctx = _build_run_context_wrapper(
+            user_id,
+            conversation_id,
+            agent_instance=self,
+        )
         
         # Use the class method directly with proper context
         npc_ids = await npc_handler.spawn_multiple_npcs(
@@ -1841,10 +1852,7 @@ class NewGameAgent:
         opening_narrative = result.final_output
         
         async with get_db_connection_context() as conn:
-            canon_ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            canon_ctx = _build_run_context_wrapper(user_id, conversation_id)
     
             await canon.create_opening_message(
                 canon_ctx, conn,
@@ -2192,12 +2200,12 @@ class NewGameAgent:
             await insert_default_player_stats_chase(user_id, conversation_id)
             
             # Create context wrapper
-            ctx_wrap = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id,
-                'db_dsn': DB_DSN,
-                'agent_instance': self
-            })
+            ctx_wrap = _build_run_context_wrapper(
+                user_id,
+                conversation_id,
+                db_dsn=DB_DSN,
+                agent_instance=self,
+            )
             
             # 1. Set up environment directly (NO LLM)
             await self._setup_preset_environment(ctx_wrap, preset_story_data)
@@ -3045,10 +3053,7 @@ class NewGameAgent:
 
         from lore.core import canon
 
-        canon_ctx = RunContextWrapper(context={
-            'user_id': user_id,
-            'conversation_id': conversation_id
-        })
+        canon_ctx = _build_run_context_wrapper(user_id, conversation_id)
 
         logging.info(
             "Queueing background lore generation for user_id=%s conversation_id=%s",
@@ -3393,12 +3398,12 @@ class NewGameAgent:
             mega_desc = mega_data.get("mega_description", "No environment generated")
             
             # Set up context wrapper for the agent methods
-            ctx_wrap = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id,
-                'db_dsn': DB_DSN,
-                'agent_instance': self
-            })
+            ctx_wrap = _build_run_context_wrapper(
+                user_id,
+                conversation_id,
+                db_dsn=DB_DSN,
+                agent_instance=self,
+            )
             
             # Update status - running agent
             async with get_db_connection_context() as conn:
