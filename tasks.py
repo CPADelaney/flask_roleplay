@@ -13,6 +13,7 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from celery_config import celery_app
+from celery.signals import task_revoked
 from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
 
@@ -426,7 +427,7 @@ def run_npc_learning_cycle_task():
 
 # === New game creation =========================================================
 
-@celery_app.task(expires=3600)
+@celery_app.task
 def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
     """Process new (or preset) game creation asynchronously."""
     logger.info("CELERY – process_new_game_task called")
@@ -541,6 +542,103 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
                 }
 
     return run_async_in_worker_loop(run_new_game())
+
+
+# Signal handling for revoked new game tasks to avoid leaving conversations stuck
+def _handle_process_new_game_task_revoked(
+    sender=None,
+    request=None,
+    terminated=None,
+    signum=None,
+    expired=None,
+    **kwargs,
+):
+    """Mark conversations as failed if the new game task is revoked."""
+    try:
+        expected_name = getattr(
+            process_new_game_task, "name", "tasks.process_new_game_task"
+        )
+        task_name = (
+            getattr(request, "name", None)
+            or getattr(request, "task", None)
+            or getattr(sender, "name", None)
+            or sender
+        )
+
+        if task_name != expected_name:
+            return
+
+        args = list(getattr(request, "args", ()) or ())
+        kwargs_data = dict(getattr(request, "kwargs", {}) or {})
+
+        user_id = args[0] if len(args) >= 1 else kwargs_data.get("user_id")
+        conversation_payload = args[1] if len(args) >= 2 else kwargs_data.get(
+            "conversation_data"
+        )
+
+        conversation_id = None
+        if isinstance(conversation_payload, dict):
+            conversation_id = conversation_payload.get("conversation_id")
+
+        if conversation_id is None:
+            conversation_id = kwargs_data.get("conversation_id")
+
+        if conversation_id is None:
+            logger.warning(
+                "task_revoked received for process_new_game_task without conversation_id"
+            )
+            return
+
+        try:
+            conversation_id = int(conversation_id)
+        except (TypeError, ValueError):
+            logger.warning(
+                "task_revoked received invalid conversation_id: %s", conversation_id
+            )
+            return
+
+        if user_id is not None:
+            try:
+                user_id = int(user_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "task_revoked received invalid user_id: %s", user_id
+                )
+                user_id = None
+
+        async def _mark_failed():
+            async with get_db_connection_context() as conn:
+                if user_id is not None:
+                    await conn.execute(
+                        """
+                        UPDATE conversations
+                           SET status='failed',
+                               conversation_name='New Game - Task Failed'
+                         WHERE id=$1 AND user_id=$2
+                        """,
+                        conversation_id,
+                        user_id,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE conversations
+                           SET status='failed',
+                               conversation_name='New Game - Task Failed'
+                         WHERE id=$1
+                        """,
+                        conversation_id,
+                    )
+
+        run_async_in_worker_loop(_mark_failed())
+    except Exception:
+        logger.exception(
+            "Failed to update conversation after process_new_game_task revoke"
+        )
+
+
+# Register signal handler eagerly so workers always apply failure state
+task_revoked.connect(_handle_process_new_game_task_revoked, weak=False)
 
 
 # === NPC creation ===============================================================
