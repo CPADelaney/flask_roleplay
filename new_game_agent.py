@@ -2254,6 +2254,25 @@ class NewGameAgent:
 
             # 4a. Seed initial player context (location & time)
             await self._initialize_player_context(ctx_wrap, user_id, conversation_id)
+
+            # 4b. Track preset story progress for this conversation
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                        INSERT INTO PresetStoryProgress (
+                            user_id, conversation_id, story_id,
+                            current_act, completed_beats, story_variables
+                        ) VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (user_id, conversation_id)
+                        DO UPDATE SET story_id = $3
+                    """,
+                    user_id,
+                    conversation_id,
+                    preset_story_id,
+                    1,
+                    json.dumps([]),
+                    json.dumps({}),
+                )
             
             # 5. Initialize story-specific mechanics
             if preset_story_id == "the_moth_and_flame":
@@ -2267,6 +2286,11 @@ class NewGameAgent:
             
             # 6. Create opening narrative (can still use story-specific generators)
             opening = await self._create_preset_opening(ctx_wrap, preset_story_data)
+
+            await self.finalize_game_setup(
+                ctx_wrap,
+                FinalizeGameSetupParams(opening_narrative=opening),
+            )
             
             # 7. Store opening message
 #            async with get_db_connection_context() as conn:

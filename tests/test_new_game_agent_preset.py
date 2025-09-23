@@ -173,6 +173,18 @@ def _install_common_preset_patches(monkeypatch, calls):
         calls["opening"].append(ctx_wrap.context["conversation_id"])
         return "Opening narrative"
 
+    async def fake_finalize(self, ctx_wrap, params):
+        calls.setdefault("finalize", []).append(
+            (ctx_wrap.context["conversation_id"], params.opening_narrative)
+        )
+        return new_game_agent.FinalizeResult(
+            status="ok",
+            welcome_image_url=None,
+            lore_summary="lore",
+            initial_conflict="conflict",
+            currency_system="currency",
+        )
+
     async def fake_rules(env_desc, setting_name):
         return {
             "capabilities": {"travel": True},
@@ -210,6 +222,7 @@ def _install_common_preset_patches(monkeypatch, calls):
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_setup_standard_calendar", fake_setup_calendar)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_locations", fake_create_locations)
     monkeypatch.setattr(new_game_agent.NewGameAgent, "_create_preset_opening", fake_create_opening)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "finalize_game_setup", fake_finalize)
     monkeypatch.setattr(new_game_agent, "synthesize_setting_rules", fake_rules)
     monkeypatch.setattr(new_game_agent, "load_calendar_names", fake_load_calendar_names)
     monkeypatch.setattr(new_game_agent, "set_current_time", fake_set_current_time)
@@ -283,6 +296,7 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
         "canon_updates": [],
         "set_current_time": [],
         "calendar_names": [],
+        "finalize": [],
     }
 
     _install_common_preset_patches(monkeypatch, calls)
@@ -316,6 +330,7 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     assert calls["locations"] == [existing_conversation_id]
     assert calls["opening"] == [existing_conversation_id]
     assert calls["calendar_names"] == [(user_id, existing_conversation_id)]
+    assert calls["finalize"] == [(existing_conversation_id, "Opening narrative")]
 
     assert stub_conn.npc_stat_inserts
     npc_record = stub_conn.npc_stat_inserts[0]
@@ -345,6 +360,18 @@ def test_process_preset_game_reuses_existing_conversation(monkeypatch):
     assert calls["set_current_time"] == [
         (user_id, existing_conversation_id, 1, 1, 1, new_game_agent.TIME_PHASES[0])
     ]
+
+    preset_progress_writes = [
+        (query, args)
+        for query, args in stub_conn.execute_calls
+        if "INSERT INTO PresetStoryProgress" in query
+    ]
+    assert preset_progress_writes
+    assert preset_progress_writes[-1][1][:3] == (
+        user_id,
+        existing_conversation_id,
+        preset_story_id,
+    )
 
 
 def test_process_preset_game_handles_dict_story_data(monkeypatch):
@@ -398,6 +425,7 @@ def test_process_preset_game_handles_dict_story_data(monkeypatch):
         "canon_updates": [],
         "set_current_time": [],
         "calendar_names": [],
+        "finalize": [],
     }
 
     _install_common_preset_patches(monkeypatch, calls)
@@ -415,6 +443,20 @@ def test_process_preset_game_handles_dict_story_data(monkeypatch):
     )
 
     assert stub_conn.npc_stat_inserts
+
+    assert calls["finalize"] == [(existing_conversation_id, "Opening narrative")]
+
+    preset_progress_writes = [
+        (query, args)
+        for query, args in stub_conn.execute_calls
+        if "INSERT INTO PresetStoryProgress" in query
+    ]
+    assert preset_progress_writes
+    assert preset_progress_writes[-1][1][:3] == (
+        user_id,
+        existing_conversation_id,
+        preset_story_id,
+    )
 
 class SetupCheckStubConnection:
     def __init__(
