@@ -8,6 +8,7 @@ import uuid
 import os
 import functools
 import random
+from copy import deepcopy
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -44,6 +45,141 @@ logger = logging.getLogger(__name__)
 
 NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER
 NEW_GAME_AGENT_NYX_ID = "new_game_director_agent"  # Use consistent ID throughout
+
+
+FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
+    "setting_name": "Evergreen Commons",
+    "environment_desc": (
+        "Evergreen Commons is a thoughtfully planned residential enclave where "
+        "quiet pedestrian paths knot together sunlit courtyards, a slow-moving "
+        "canal, and tidy storefronts. Neighbors greet one another on their "
+        "morning routines while community stewards gently guide the daily ebb "
+        "and flow to keep everything serene."
+    ),
+    "environment_history": (
+        "The district was developed as a cooperative project decades ago, and "
+        "resident caretakers have meticulously maintained the balance between "
+        "comfort, discretion, and subtle oversight ever since."
+    ),
+    "events": [
+        {
+            "name": "Morning Welcome Walk",
+            "description": (
+                "Caretakers invite newcomers on a looping stroll through the "
+                "Commons, pointing out daily expectations and friendly faces."
+            ),
+            "start_time": "08:00",
+            "end_time": "09:00",
+            "location": "Town Square",
+            "year": 1,
+            "month": 1,
+            "day": 1,
+            "time_of_day": "Morning",
+        },
+        {
+            "name": "Evening Reflection Hour",
+            "description": (
+                "Residents gather for warm drinks along the canal to share their "
+                "accomplishments while coordinators quietly set plans for the "
+                "next day."
+            ),
+            "start_time": "19:00",
+            "end_time": "20:00",
+            "location": "Riverside Cafe",
+            "year": 1,
+            "month": 1,
+            "day": 1,
+            "time_of_day": "Evening",
+        },
+    ],
+    "locations": [
+        {
+            "location_name": "Town Square",
+            "description": "An open plaza with curated seating and soft lantern light maintained by resident coordinators.",
+            "type": "public",
+            "features": ["community board", "gathering space"],
+            "open_hours_json": json.dumps({"Mon-Sun": "Always open"}),
+        },
+        {
+            "location_name": "Riverside Cafe",
+            "description": "A canal-side cafe offering gentle music and discreet observation from the staff.",
+            "type": "business",
+            "features": ["canal view", "soft seating"],
+            "open_hours_json": json.dumps({"Mon-Sun": "06:00-22:00"}),
+        },
+        {
+            "location_name": "Community Library",
+            "description": "A two-story library curated with guided reading lists and private study nooks.",
+            "type": "public",
+            "features": ["study rooms", "archival wing"],
+            "open_hours_json": json.dumps({"Mon-Sat": "08:00-20:00", "Sun": "10:00-16:00"}),
+        },
+        {
+            "location_name": "Observation Park",
+            "description": "Terraced gardens overlooking the Commons where caretakers chart daily routines.",
+            "type": "park",
+            "features": ["observation decks", "walking paths"],
+            "open_hours_json": json.dumps({"Mon-Sun": "05:00-23:00"}),
+        },
+        {
+            "location_name": "Market Row",
+            "description": "A line of tidy boutiques offering necessities selected by the residents' council.",
+            "type": "market",
+            "features": ["artisan stalls", "curated goods"],
+            "open_hours_json": json.dumps({"Mon-Sat": "09:00-19:00", "Sun": "10:00-17:00"}),
+        },
+        {
+            "location_name": "Workshop Alley",
+            "description": "Shared studios where mentors guide crafts and quiet personal projects.",
+            "type": "creative",
+            "features": ["artisan studios", "mentorship tables"],
+            "open_hours_json": json.dumps({"Mon-Fri": "08:00-18:00", "Sat": "10:00-16:00"}),
+        },
+        {
+            "location_name": "Harbor Walk",
+            "description": "A boardwalk following the canal with benches for supervised evening strolls.",
+            "type": "recreation",
+            "features": ["canal overlooks", "guided tours"],
+            "open_hours_json": json.dumps({"Mon-Sun": "06:00-22:00"}),
+        },
+        {
+            "location_name": "City Hall Annex",
+            "description": "Administrative offices where schedules are confirmed and personal requests reviewed.",
+            "type": "administrative",
+            "features": ["records office", "planning chamber"],
+            "open_hours_json": json.dumps({"Mon-Fri": "08:30-17:30"}),
+        },
+        {
+            "location_name": "Wellness Studio",
+            "description": "A serene studio offering guided stretches, breathing sessions, and discrete check-ins.",
+            "type": "wellness",
+            "features": ["meditation room", "stretch classes"],
+            "open_hours_json": json.dumps({"Mon-Sat": "07:00-21:00"}),
+        },
+        {
+            "location_name": "Transit Hub",
+            "description": "A compact tram station that links Evergreen Commons to the surrounding districts on a curated schedule.",
+            "type": "infrastructure",
+            "features": ["tram service", "information desk"],
+            "open_hours_json": json.dumps({"Mon-Sun": "05:00-23:30"}),
+        },
+    ],
+    "scenario_name": "A Gentle Orientation",
+    "quest_data": {
+        "quest_name": "Settle into Evergreen Commons",
+        "quest_description": (
+            "Learn the rhythms of the neighborhood, meet your coordinators, and "
+            "demonstrate your readiness to become part of the Commons' careful "
+            "routine."
+        ),
+    },
+}
+
+
+def _build_fallback_environment_payload() -> Dict[str, Any]:
+    """Return a deep copy of the static fallback environment payload."""
+
+    return deepcopy(FALLBACK_ENVIRONMENT_PAYLOAD)
 
 
 def _coerce_story_data(raw_story_data: Any, preset_story_id: str) -> Any:
@@ -699,7 +835,7 @@ class NewGameAgent:
             try:
                 logger.info(f"Generating environment (attempt {retry_count + 1}/{max_retries})")
                 raw_run = await Runner.run(env_agent_isolated, prompt, context=ctx.context)
-                
+
                 if not raw_run.final_output:
                     raise ValueError("Empty response from GPT")
                 
@@ -730,7 +866,14 @@ class NewGameAgent:
                     logger.error("Borked")
                 else:
                     await asyncio.sleep(1)
-        
+
+        if raw_data is None:
+            logger.error(
+                "Environment generation failed after %s attempts; using fallback payload.",
+                max_retries,
+            )
+            raw_data = _build_fallback_environment_payload()
+
         # Fix open_hours_json format
         for loc in raw_data.get("locations", []):
             oh = loc.get("open_hours_json")
