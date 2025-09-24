@@ -2576,7 +2576,16 @@ class NewGameAgent:
 
         npc_id = None
         if row:
-            npc_id = row.get("npc_id") if isinstance(row, dict) else row[0]
+            if isinstance(row, dict):
+                npc_id = row.get("npc_id")
+            else:
+                try:
+                    npc_id = row["npc_id"]
+                except (TypeError, KeyError):
+                    try:
+                        npc_id = row[0]
+                    except (TypeError, IndexError):
+                        npc_id = None
 
         if npc_id is None:
             logger.warning("Failed to obtain NPC id for preset NPC %s", npc_name)

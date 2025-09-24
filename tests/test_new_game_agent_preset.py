@@ -53,6 +53,24 @@ import npcs.preset_npc_handler as preset_module
 from lore.core.context import CanonicalContext
 
 
+class _RecordLike:
+    """Minimal asyncpg.Record facsimile without ``get`` support."""
+
+    __slots__ = ("_data", "_items")
+
+    def __init__(self, data):
+        self._data = dict(data)
+        self._items = list(self._data.items())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._items[key][1]
+        return self._data[key]
+
+    def __len__(self):
+        return len(self._items)
+
+
 class StubConnection:
     NPC_STATS_COLUMNS = [
         "user_id",
@@ -92,12 +110,15 @@ class StubConnection:
         expected_user_id,
         *,
         return_raw_story_data=False,
+        return_record_for_npc_stats=False,
     ):
         self.story_payload = story_payload
         self.expected_conversation_id = expected_conversation_id
         self.expected_user_id = expected_user_id
         self.return_raw_story_data = return_raw_story_data
+        self.return_record_for_npc_stats = return_record_for_npc_stats
         self.fetchrow_calls = []
+        self.fetchrow_results = []
         self.fetch_calls = []
         self.execute_calls = []
         self.npc_stat_inserts = []
@@ -112,13 +133,20 @@ class StubConnection:
         self.fetchrow_calls.append((normalized_query, args))
 
         if "SELECT story_data FROM PresetStories" in normalized_query:
-            if self.return_raw_story_data:
-                return {"story_data": self.story_payload}
-            return {"story_data": json.dumps(self.story_payload)}
+            result = (
+                {"story_data": self.story_payload}
+                if self.return_raw_story_data
+                else {"story_data": json.dumps(self.story_payload)}
+            )
+            self.fetchrow_results.append(result)
+            return result
 
         if "SELECT id FROM conversations" in normalized_query:
             if args == (self.expected_conversation_id, self.expected_user_id):
-                return {"id": self.expected_conversation_id}
+                result = {"id": self.expected_conversation_id}
+                self.fetchrow_results.append(result)
+                return result
+            self.fetchrow_results.append(None)
             return None
 
         if normalized_query.startswith("INSERT INTO NPCStats"):
@@ -126,7 +154,13 @@ class StubConnection:
             record["npc_id"] = self._next_npc_id
             self._next_npc_id += 1
             self.npc_stat_inserts.append(record)
-            return {"npc_id": record["npc_id"]}
+            result = {"npc_id": record["npc_id"]}
+            if self.return_record_for_npc_stats:
+                record_like = _RecordLike(result)
+                self.fetchrow_results.append(record_like)
+                return record_like
+            self.fetchrow_results.append(result)
+            return result
 
         raise AssertionError(f"Unexpected fetchrow: {normalized_query} {args}")
 
@@ -574,7 +608,12 @@ def test_queen_of_thorns_preset_uses_fast_path(monkeypatch):
 
     story_payload = PresetStoryLoader._serialize_story(QUEEN_OF_THORNS_STORY)
 
-    stub_conn = StubConnection(story_payload, conversation_id, user_id)
+    stub_conn = StubConnection(
+        story_payload,
+        conversation_id,
+        user_id,
+        return_record_for_npc_stats=True,
+    )
 
     @asynccontextmanager
     async def fake_db_context():
@@ -609,6 +648,14 @@ def test_queen_of_thorns_preset_uses_fast_path(monkeypatch):
         if "UPDATE conversations" in query and "SET status='ready'" in query
     ]
     assert ready_updates
+
+    npc_insert_results = [
+        result
+        for (query, _), result in zip(stub_conn.fetchrow_calls, stub_conn.fetchrow_results)
+        if query.startswith("INSERT INTO NPCStats")
+    ]
+    assert npc_insert_results
+    assert not hasattr(npc_insert_results[0], "get")
 
     assert len(stub_conn.npc_stat_inserts) == len(story_payload["required_npcs"])
     assert len(stub_conn.social_link_inserts) >= len(story_payload["required_npcs"])
