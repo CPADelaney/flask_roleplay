@@ -9,12 +9,29 @@ import logging
 import asyncio
 import numpy as np
 from typing import List, Dict, Any, Optional, Union
+
+from utils.embedding_dimensions import (
+    adjust_embedding_vector,
+    build_zero_vector,
+    get_target_embedding_dimension,
+)
+
+try:
+    from memory.memory_config import get_memory_config
+except Exception:  # pragma: no cover - optional dependency during tests
+    get_memory_config = None  # type: ignore
 import json
 
 logger = logging.getLogger(__name__)
 
-# Mock embedding dimensions to match what typical embedding models would produce
-EMBEDDING_DIMENSIONS = 1536  # Common for many embedding models
+try:
+    _MEMORY_CONFIG: Dict[str, Any] = get_memory_config() if get_memory_config else {}
+except Exception:  # pragma: no cover - configuration failures should not block tests
+    _MEMORY_CONFIG = {}
+
+# Embeddings produced by this helper should align with the configured target
+# dimension for the application so downstream pgvector writes do not fail.
+EMBEDDING_DIMENSIONS = get_target_embedding_dimension(config=_MEMORY_CONFIG)
 
 async def generate_embedding(text: str) -> List[float]:
     """
@@ -45,12 +62,12 @@ async def generate_embedding(text: str) -> List[float]:
         embedding = np.random.normal(0, 1, EMBEDDING_DIMENSIONS)
         normalized_embedding = embedding / np.linalg.norm(embedding)
         
-        # Convert to list for JSON serialization
-        return normalized_embedding.tolist()
+        # Convert to list for JSON serialization and normalise length
+        return adjust_embedding_vector(normalized_embedding.tolist(), EMBEDDING_DIMENSIONS)
     except Exception as e:
         logger.error(f"Error generating embedding: {e}")
         # Return a zero vector as fallback
-        return [0.0] * EMBEDDING_DIMENSIONS
+        return build_zero_vector(EMBEDDING_DIMENSIONS)
 
 async def compute_similarity(embedding1: List[float], embedding2: List[float]) -> float:
     """

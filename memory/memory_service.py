@@ -32,6 +32,13 @@ from langchain.output_parsers import PydanticOutputParser
 from memory.chroma_vector_store import ChromaVectorDatabase
 from memory.faiss_vector_store import FAISSVectorDatabase
 from context.optimized_db import QdrantDatabase, create_vector_database
+from utils.embedding_dimensions import (
+    DEFAULT_EMBEDDING_DIMENSION,
+    adjust_embedding_vector,
+    build_zero_vector,
+    get_target_embedding_dimension,
+    measure_embedding_dimension,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -78,6 +85,8 @@ class MemoryEmbeddingService:
         # Initialize variables to be set up later
         self.vector_db = None
         self.embeddings = None
+        self.embedding_source_dimension: Optional[int] = None
+        self.target_embedding_dimension: Optional[int] = None
         self.collection_mapping = {
             "memory": "memory_embeddings",
             "npc": "npc_embeddings",
@@ -126,7 +135,7 @@ class MemoryEmbeddingService:
         else:
             # Default to local HuggingFace embeddings
             model_name = self.config.get("hf_embedding_model", "all-MiniLM-L6-v2")
-            
+
             self.embeddings = await loop.run_in_executor(
                 None,
                 lambda: HuggingFaceEmbeddings(
@@ -135,7 +144,47 @@ class MemoryEmbeddingService:
                     encode_kwargs={"normalize_embeddings": True}
                 )
             )
-    
+
+        def _probe_dimension() -> Optional[int]:
+            try:
+                return measure_embedding_dimension(self.embeddings)
+            except Exception as exc:
+                logger.warning(
+                    "Unable to probe embedding dimension directly; falling back. Error: %s",
+                    exc,
+                )
+                return None
+
+        self.embedding_source_dimension = await loop.run_in_executor(
+            None, _probe_dimension
+        )
+
+        if self.target_embedding_dimension is None:
+            self.target_embedding_dimension = get_target_embedding_dimension(
+                self.config, self.embedding_model
+            )
+
+        if (
+            self.target_embedding_dimension is None
+            and self.embedding_source_dimension is not None
+        ):
+            self.target_embedding_dimension = self.embedding_source_dimension
+
+        if self.target_embedding_dimension is None:
+            self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
+
+        if (
+            self.embedding_source_dimension is not None
+            and self.embedding_source_dimension != self.target_embedding_dimension
+        ):
+            logger.info(
+                "Embedding model produced %d-dim vectors; storing as %d-dim after adjustment.",
+                self.embedding_source_dimension,
+                self.target_embedding_dimension,
+            )
+
+        self.embedding_dimension = self.target_embedding_dimension
+
     async def _setup_vector_store(self) -> None:
         """Set up the vector store."""
         if self.vector_store_type == "chroma":
@@ -158,18 +207,15 @@ class MemoryEmbeddingService:
             self.vector_db = create_vector_database(vector_db_config)
         else:
             raise ValueError(f"Unsupported vector store type: {self.vector_store_type}")
-        
+
         # Initialize the vector database
         await self.vector_db.initialize()
-        
+
         # Ensure collections exist
         for collection_name in self.collection_mapping.values():
-            # Get embedding dimension based on model
-            dimension = 1536  # Default for all-MiniLM-L6-v2
-            if self.embedding_model == "openai":
-                dimension = 1536  # Default for text-embedding-3-small
-            
-            await self.vector_db.create_collection(collection_name, dimension)
+            await self.vector_db.create_collection(
+                collection_name, self._get_target_dimension()
+            )
     
     async def generate_embedding(self, text: str) -> List[float]:
         """
@@ -193,19 +239,18 @@ class MemoryEmbeddingService:
                 None,
                 lambda: self.embeddings.embed_query(text)
             )
-            
-            return embedding
+
+            return adjust_embedding_vector(
+                embedding, self._get_target_dimension()
+            )
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
             # Return an empty vector as fallback
             return self._get_empty_embedding()
-    
+
     def _get_empty_embedding(self) -> List[float]:
         """Get an empty embedding vector with the correct dimension."""
-        if self.embedding_model == "openai":
-            return [0.0] * 1536  # OpenAI dimension
-        else:
-            return [0.0] * 1536  # Default for most HuggingFace models
+        return build_zero_vector(self._get_target_dimension())
     
     async def add_memory(
         self,
@@ -248,6 +293,10 @@ class MemoryEmbeddingService:
         # Generate embedding if not provided
         if embedding is None:
             embedding = await self.generate_embedding(text)
+        else:
+            embedding = adjust_embedding_vector(
+                embedding, self._get_target_dimension()
+            )
         
         # Add to vector store
         success = await self.vector_db.insert_vectors(
@@ -384,5 +433,21 @@ class MemoryEmbeddingService:
         """Close the memory embedding service."""
         if self.vector_db:
             await self.vector_db.close()
-        
+
         self.initialized = False
+
+    def _get_target_dimension(self) -> int:
+        if self.target_embedding_dimension is None:
+            self.target_embedding_dimension = get_target_embedding_dimension(
+                self.config, self.embedding_model
+            )
+            if (
+                self.target_embedding_dimension is None
+                and self.embedding_source_dimension is not None
+            ):
+                self.target_embedding_dimension = self.embedding_source_dimension
+
+        if self.target_embedding_dimension is None:
+            self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
+
+        return self.target_embedding_dimension
