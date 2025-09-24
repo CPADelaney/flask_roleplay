@@ -794,8 +794,25 @@ async def find_or_create_entity(
     return entity_id
 
 
-async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None, significance: int = 5):
-    """Log a canonical event with causality tracking."""
+async def log_canonical_event(
+    ctx,
+    conn,
+    event_text: str,
+    tags: List[str] = None,
+    significance: int = 5,
+    *,
+    persist_memory: bool = True,
+):
+    """Log a canonical event with causality tracking.
+
+    Args:
+        ctx: Canonical context carrying user/conversation identifiers.
+        conn: Database connection used for persistence.
+        event_text: Description of the canonical event.
+        tags: Optional tags to associate with the event.
+        significance: Integer significance score (1-10).
+        persist_memory: When ``True`` the event is forwarded to the memory system.
+    """
     tags = tags or []
     tags_json = json.dumps(tags)
     
@@ -824,26 +841,29 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
     if significance >= 8:
         await _propagate_event_consequences(ctx, conn, event_id, event_text, tags, significance)
     
-    # Store in memory system
-    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
-    from memory.memory_orchestrator import EntityType
-    
-    significance_float = min(1.0, max(0.1, significance / 10.0))
-    
-    await memory_orchestrator.store_memory(
-        entity_type=EntityType.LORE,
-        entity_id=0,
-        memory_text=event_text,
-        significance=significance_float,
-        tags=tags + ["canonical_event"],
-        metadata={
-            "event_id": event_id,
-            "significance": significance,
-            "parent_events": parent_ids,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-    
+    if persist_memory:
+        # Store in memory system
+        memory_orchestrator = await get_canon_memory_orchestrator(
+            ctx.user_id, ctx.conversation_id
+        )
+        from memory.memory_orchestrator import EntityType
+
+        significance_float = min(1.0, max(0.1, significance / 10.0))
+
+        await memory_orchestrator.store_memory(
+            entity_type=EntityType.LORE,
+            entity_id=0,
+            memory_text=event_text,
+            significance=significance_float,
+            tags=tags + ["canonical_event"],
+            metadata={
+                "event_id": event_id,
+                "significance": significance,
+                "parent_events": parent_ids,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
+
     return event_id
 
 async def _propagate_event_consequences(
