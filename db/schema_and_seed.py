@@ -5,6 +5,7 @@ import logging
 import re
 from typing import List
 # Import connection and pool management functions
+# Import connection and pool management functions
 from db.connection import (
     get_db_connection_context,
     initialize_connection_pool,
@@ -25,6 +26,16 @@ import asyncpg
 import asyncio
 from typing import Dict, Any
 
+from utils.embedding_dimensions import (
+    apply_embedding_dimension,
+    get_target_embedding_dimension,
+)
+
+try:
+    from memory.memory_config import get_memory_config
+except Exception:  # pragma: no cover - optional dependency during migrations
+    get_memory_config = None  # type: ignore
+
 from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY, THORNS_POEMS, STORY_TONE_PROMPT
 
 # Import system prompts for Nyx
@@ -32,6 +43,17 @@ from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
+
+try:
+    _MEMORY_CONFIG: Dict[str, Any] = get_memory_config() if get_memory_config else {}
+except Exception as exc:  # pragma: no cover - defensive logging for init scripts
+    logger.warning(
+        "Unable to load memory configuration for embedding dimensions: %s",
+        exc,
+    )
+    _MEMORY_CONFIG = {}
+
+EMBEDDING_VECTOR_DIMENSION = get_target_embedding_dimension(config=_MEMORY_CONFIG)
 
 def parse_system_prompt_to_memories(prompt: str, private_instructions: str = None) -> List[Dict[str, Any]]:
     """
@@ -3950,6 +3972,11 @@ async def create_all_tables():
                 END $$;
                 '''
             ]  # End of sql_commands list
+
+            sql_commands = [
+                apply_embedding_dimension(cmd, EMBEDDING_VECTOR_DIMENSION)
+                for cmd in sql_commands
+            ]
 
             # Execute commands sequentially
             logger.info(f"Found {len(sql_commands)} SQL commands for schema creation.")
