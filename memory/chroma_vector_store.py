@@ -147,6 +147,41 @@ class ChromaVectorDatabase(VectorDatabase):
                 )
                 await asyncio.sleep(sleep_for)
 
+    @staticmethod
+    def _normalize_where_filter(filter_dict: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Ensure filters conform to Chroma's operator syntax."""
+
+        if not filter_dict:
+            return None
+
+        if not isinstance(filter_dict, dict):
+            return filter_dict
+
+        def _has_operator(d: Dict[str, Any]) -> bool:
+            return any(isinstance(key, str) and key.startswith("$") for key in d.keys())
+
+        if _has_operator(filter_dict):
+            return filter_dict
+
+        simple_clauses: List[Dict[str, Any]] = []
+        passthrough_clauses: List[Dict[str, Any]] = []
+
+        for key, value in filter_dict.items():
+            if isinstance(value, dict):
+                passthrough_clauses.append({key: value})
+            else:
+                simple_clauses.append({key: {"$eq": value}})
+
+        if not simple_clauses:
+            return filter_dict
+
+        combined = passthrough_clauses + simple_clauses
+
+        if len(combined) == 1:
+            return combined[0]
+
+        return {"$and": combined}
+
     async def _get_collection(self, collection_name: str):
         """Get or create a collection (cached)."""
         await self._ensure_client()
@@ -246,7 +281,7 @@ class ChromaVectorDatabase(VectorDatabase):
 
         try:
             collection = await self._get_collection(collection_name)
-            where = dict(filter_dict or {})
+            where = self._normalize_where_filter(filter_dict)
 
             results = await self._retry_sync(
                 collection.query,
