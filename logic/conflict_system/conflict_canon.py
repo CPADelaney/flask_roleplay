@@ -730,7 +730,8 @@ Return JSON:
                     self.ctx, conn,
                     f"{name}: {description}",
                     tags=['founding_myth', 'precedent', 'historical', 'conflict'],
-                    significance=significance
+                    significance=significance,
+                    persist_memory=False,
                 )
     
     async def _assess_conflict_significance(self, conflict_id: int) -> float:
