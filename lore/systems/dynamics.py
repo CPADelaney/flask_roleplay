@@ -1,5 +1,6 @@
 # lore/systems/dynamics.py
 from __future__ import annotations
+from logic.chatgpt_integration import sanitize_model_settings
 
 import logging
 import json
@@ -491,7 +492,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "narrative elements that can drive lore evolution."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()),
             output_type=EventValidation
         )
         
@@ -1050,7 +1051,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Output valid JSON with these keys."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9)),
             output_type=SocietalImpact
         )
         
@@ -1404,7 +1405,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Return JSON with a single field: {'event_type': 'the chosen type'}"
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8)),
             output_type=EventType
         )
         
@@ -1504,7 +1505,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Otherwise, hand off to 'transfer_to_cultural_agent'."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8)),
             handoffs=[
                 handoff(
                     self._get_agent("political_event"),
@@ -2128,7 +2129,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Return only the new, updated description in a cohesive style."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
             )
             
             # Potential change types
@@ -2284,7 +2285,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "territory, or governance. Keep the matriarchal theme strong."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
             )
             
             # Do 1 or 2 shifts randomly
@@ -2535,7 +2536,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Given a change_type, rewrite their description to reflect that new condition."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
             )
             
             # Potential changes
@@ -2712,7 +2713,7 @@ class MultiStepPlanner:
             Maintain matriarchal themes throughout the planning process.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8)),
             output_type=NarrativePlan
         )
     
@@ -3122,7 +3123,7 @@ class NarrativeEvaluator:
             Consider themes, character motivations, plot development, and matriarchal elements.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7)),
             output_type=NarrativeEvaluation
         )
         self.feedback_history = []
@@ -3328,7 +3329,7 @@ class NarrativeEvolutionSystem:
             Select elements that enhance the overall narrative, maintain consistency, and advance matriarchal themes.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7)),
             output_type=EventSelection
         )
         self.mutation_agent = Agent(
@@ -3338,7 +3339,7 @@ class NarrativeEvolutionSystem:
             Enhance matriarchal themes and ensure coherent integration with the world.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9)),
             output_type=MutationDirectives
         )
     
@@ -3589,7 +3590,7 @@ class WorldStateStreamer:
             and emerging patterns. Focus on matriarchal power dynamics.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
         )
     
     async def stream_world_changes(self, event_data: Dict[str, Any], affected_elements: List[Dict[str, Any]]) -> AsyncGenerator[Dict[str, Any], None]:

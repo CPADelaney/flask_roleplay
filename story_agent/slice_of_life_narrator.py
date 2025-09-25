@@ -1640,7 +1640,7 @@ async def narrate_player_action(
 # ===============================================================================
 
 # Import GPT integration
-from logic.chatgpt_integration import generate_text_completion
+from logic.chatgpt_integration import generate_text_completion, sanitize_model_settings
 
 async def _generate_scene_description(context, scene, world_state, relationship_contexts):
     npc_names = []
@@ -2300,7 +2300,7 @@ class SliceOfLifeNarrator:
             Respect Nyx governance directives.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()),
             tools=[narrate_slice_of_life_scene, generate_ambient_narration]
         )
         
@@ -2315,7 +2315,7 @@ class SliceOfLifeNarrator:
             Follow Nyx governance guidelines for appropriate content.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()),
             tools=[generate_npc_dialogue]
         )
         
@@ -2329,7 +2329,7 @@ class SliceOfLifeNarrator:
             Store significant moments in memory.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()),
             tools=[narrate_power_exchange]
         )
         
@@ -2342,7 +2342,7 @@ class SliceOfLifeNarrator:
             Make routine activities feel meaningful within the power structure.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()),
             tools=[narrate_daily_routine]
         )
 

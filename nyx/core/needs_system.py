@@ -7,6 +7,7 @@ import asyncio
 import json
 from typing import TypedDict, Optional, Dict, List, Any, Union, Set, Tuple
 from pydantic import BaseModel, Field, ConfigDict
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
 
@@ -605,10 +606,10 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
                 reset_need_to_default_tool_impl
             ],
             output_type=AgentOutput,  
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.0,
                 tool_choice="required",
-            ),
+            )),
             tool_use_behavior="stop_on_first_tool",
             model="gpt-5-nano"
         )

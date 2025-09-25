@@ -6,6 +6,7 @@ import asyncio
 import uuid
 from typing import Dict, List, Any, Optional, Set, Tuple, Union
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContextWrapper
 from agents import InputGuardrail, GuardrailFunctionOutput, Handoff, handoff
@@ -180,9 +181,9 @@ Be firm but fair in your enforcement. Give clear explanations for violations det
 Your enforcement should be psychologically effective and maintain the dominance dynamic.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3,
-            ),
+            )),
             tools=[
                 function_tool(self.get_user_protocols),
                 function_tool(self.get_protocol_compliance_stats),
@@ -214,9 +215,9 @@ Provide detailed feedback on ritual performance and maintain consistent standard
 Your evaluations should be fair and reinforce the psychological aspects of the dominance dynamic.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.4,
-            ),
+            )),
             tools=[
                 function_tool(self.get_user_rituals),
                 function_tool(self.get_ritual_completion_stats),
@@ -248,9 +249,9 @@ Your designs should:
 Create protocols that are practical to implement while maintaining their psychological impact.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7,
-            ),
+            )),
             tools=[
                 function_tool(self.get_available_protocols),
                 function_tool(self.get_available_rituals)
@@ -281,9 +282,9 @@ Provide insightful analysis and specific recommendations to deepen the power dyn
 Your evaluations should be data-driven while considering psychological aspects.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.5,
-            ),
+            )),
             tools=[
                 function_tool(self.get_protocol_compliance_stats),
                 function_tool(self.get_ritual_completion_stats),

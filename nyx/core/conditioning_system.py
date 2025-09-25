@@ -5,6 +5,7 @@ import logging
 import random
 import time
 from typing import Dict, List, Any, Optional
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, trace, ModelSettings, handoff
 from nyx.core.conditioning_models import *
@@ -67,7 +68,7 @@ class ConditioningSystem:
             ],
             output_type=ClassicalConditioningOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
         
         # Operant Conditioning Agent
@@ -89,7 +90,7 @@ class ConditioningSystem:
             ],
             output_type=OperantConditioningOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
         
         # Behavior Evaluation Agent
@@ -112,7 +113,7 @@ class ConditioningSystem:
             ],
             output_type=BehaviorEvaluationOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
         
         # Personality Development Agent
@@ -135,7 +136,7 @@ class ConditioningSystem:
             ],
             output_type=TraitConditioningOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
         
         # Conditioning Orchestrator
@@ -165,7 +166,7 @@ class ConditioningSystem:
                 apply_association_effects
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
     
     # ==================== Public API Methods ====================

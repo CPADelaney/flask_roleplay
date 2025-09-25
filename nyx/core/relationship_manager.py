@@ -7,6 +7,7 @@ import asyncio
 import json
 from typing import Dict, List, Any, Optional, Union, Set
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from openai import AsyncOpenAI
 from agents import Agent, Runner, ModelSettings, trace, function_tool, GuardrailFunctionOutput, InputGuardrail
@@ -109,9 +110,9 @@ class RelationshipManager:
                 Focus on evidence-based inference rather than stereotyping.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                     temperature=0.3,
-                ),
+                )),
                 output_type=Dict[str, Any]
             )
         except Exception as e:

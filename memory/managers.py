@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import asyncio
 import random
 import re
+from logic.chatgpt_integration import sanitize_model_settings
 
 from .core import (
     UnifiedMemoryManager, 
@@ -36,7 +37,7 @@ plot_hook_generator = Agent(
     Keep text intriguing. Do not wrap the JSON in markdown fences.
     """,
     model="gpt-5-nano",
-    model_settings=ModelSettings())
+    model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()))
 
 class NPCMemoryManager(UnifiedMemoryManager):
     """

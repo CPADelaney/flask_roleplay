@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 import random
 from datetime import datetime
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
 
@@ -471,7 +472,7 @@ class BlendedInputProcessor:
             Do not overinterpret ambiguous text.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             tools=[
                 self._detect_patterns
             ],
@@ -495,7 +496,7 @@ class BlendedInputProcessor:
             reinforce desired patterns while discouraging undesired ones.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             tools=[
                 self._evaluate_behavior,
                 self._process_operant_conditioning
@@ -519,7 +520,7 @@ class BlendedInputProcessor:
             while adjusting tone, phrasing, and emphasis.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             output_type=str
         )
     
@@ -540,7 +541,7 @@ class BlendedInputProcessor:
             with higher-weighted modes having more influence on the final result.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             tools=[
                 self._get_mode_preferences,
                 self._calculate_style_elements,

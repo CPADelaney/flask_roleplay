@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from pydantic import BaseModel, Field, model_validator
+from logic.chatgpt_integration import sanitize_model_settings
 
 import logging
 import asyncio
@@ -1493,7 +1494,7 @@ class ReflectionEngine:
                        tool_description_override="Generate reflection on communication patterns")
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4))
         )
     
     

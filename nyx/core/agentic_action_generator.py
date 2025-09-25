@@ -11,6 +11,7 @@ from collections import defaultdict
 from pydantic import BaseModel, Field
 from enum import Enum
 from functools import partial 
+from logic.chatgpt_integration import sanitize_model_settings
 
 from nyx.core.context import NyxSystemContext
 
@@ -507,7 +508,7 @@ class EnhancedAgenticActionGenerator:
                          f"Title: {title}\nPrompt: {prompt}\n\n"
                          f"Output only the generated {content_type}.",
             model="gpt-5-nano", # Or your preferred model
-            model_settings=ModelSettings(temperature=0.8, max_tokens=1000)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8, max_tokens=1000))
         )
         try:
             # Use the Agent Runner to execute the generation

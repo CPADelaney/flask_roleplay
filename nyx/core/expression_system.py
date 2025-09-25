@@ -6,6 +6,7 @@ import datetime
 import random
 import json
 from typing import Dict, List, Any, Optional, Tuple, Callable, Union, AsyncIterator
+from logic.chatgpt_integration import sanitize_model_settings
 
 from pydantic import BaseModel, Field
 
@@ -1189,7 +1190,7 @@ def create_expression_orchestrator_agent(emotional_core=None, mood_manager=None)
             get_pattern_history
         ],
         model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.3)
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
     )
 
 def create_text_expression_agent() -> Agent:
@@ -1208,7 +1209,7 @@ def create_text_expression_agent() -> Agent:
         ],
         output_type=TextExpressionRequest,
         model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.4)
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4))
     )
 
 def create_behavioral_expression_agent() -> Agent:
@@ -1226,7 +1227,7 @@ def create_behavioral_expression_agent() -> Agent:
             get_behavioral_expressions
         ],
         model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.4)
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4))
     )
 
 def create_action_bias_agent() -> Agent:
@@ -1245,7 +1246,7 @@ def create_action_bias_agent() -> Agent:
         ],
         output_type=ActionBiasRequest,
         model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.3)
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
     )
 
 class ExpressionSystem:

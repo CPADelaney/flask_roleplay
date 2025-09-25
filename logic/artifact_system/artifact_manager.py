@@ -15,6 +15,7 @@ import asyncio
 from datetime import datetime
 import random
 import hashlib
+from logic.chatgpt_integration import sanitize_model_settings
 
 from pydantic import BaseModel, Field
 
@@ -239,7 +240,7 @@ class ArtifactManager:
                     model="gpt-5-nano",
                     openai_client=get_async_openai_client()
                 ),
-                model_settings=ModelSettings(temperature=0.8),
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8)),
                 output_type=GeneratedArtifact
             )
             
@@ -257,7 +258,7 @@ class ArtifactManager:
                     model="gpt-5-nano",
                     openai_client=get_async_openai_client()
                 ),
-                model_settings=ModelSettings(temperature=0.6),
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.6)),
                 output_type=ArtifactAnalysisResult
             )
             
@@ -274,7 +275,7 @@ class ArtifactManager:
                     model="gpt-5-nano",
                     openai_client=get_async_openai_client()
                 ),
-                model_settings=ModelSettings(temperature=0.7),
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7)),
                 output_type=ArtifactIntegrationPlan
             )
             
@@ -971,6 +972,4 @@ async def ensure_artifacts_table(conn):
 # =====================================================
 
 __all__ = ['ArtifactManager', 'ensure_artifacts_table']
-
-
 

@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional, Set, Union, Tuple, Callable
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import json
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
 
@@ -758,7 +759,7 @@ class InteractionModeManager:
             Create distributions that blend modes naturally and coherently.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             tools=[
                 function_tool(self._get_current_context, strict_mode=False),
                 function_tool(self._generate_mode_distribution, strict_mode=False),
@@ -785,7 +786,7 @@ class InteractionModeManager:
             while maintaining coherence and naturalness.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             tools=[
                 function_tool(self._get_mode_parameters, strict_mode=False),
                 function_tool(self._calculate_weighted_blend, strict_mode=False)
@@ -810,7 +811,7 @@ class InteractionModeManager:
             incorporates elements proportionally based on the mode distribution.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             tools=[
                 function_tool(self._get_conversation_style, strict_mode=False),
                 function_tool(self._get_vocalization_patterns, strict_mode=False),
@@ -836,7 +837,7 @@ class InteractionModeManager:
             the new mode distribution is properly expressed.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             tools=[
                 function_tool(self._apply_emotional_effects, strict_mode=False),
                 function_tool(self._adjust_reward_parameters, strict_mode=False),

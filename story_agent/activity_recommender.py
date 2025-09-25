@@ -11,6 +11,7 @@ import random
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, function_tool
 from pydantic import BaseModel, Field
@@ -364,7 +365,7 @@ activity_recommender_agent = Agent(
         analyze_player_needs,
         get_established_routines
     ],
-    model_settings=ModelSettings(temperature=0.6)
+    model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.6))
 )
 
 # ===============================================================================
@@ -548,5 +549,4 @@ async def get_npc_initiated_activity(
     )
     
     return activity
-
 

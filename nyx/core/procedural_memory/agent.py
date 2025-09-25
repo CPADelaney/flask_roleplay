@@ -6,6 +6,7 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple, Set, Union
 import traceback
 import uuid
+from logic.chatgpt_integration import sanitize_model_settings
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -312,9 +313,9 @@ class ProceduralMemoryAgents:
             When explaining procedures, be concise but precise. Focus on key details rather than unnecessary explanations.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2,  # Lower temperature for more consistent results
-            ),
+            )),
             tools=[
                 add_procedure,
                 list_procedures,
@@ -353,9 +354,9 @@ class ProceduralMemoryAgents:
             Be precise and focus on facts rather than unnecessary explanations.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3,
-            ),
+            )),
             tools=[
                 execute_procedure,
                 get_procedure_proficiency,
@@ -394,9 +395,9 @@ class ProceduralMemoryAgents:
             Be concise and focus on key information.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3,
-            ),
+            )),
             tools=[
                 transfer_procedure,
                 find_similar_procedures,
@@ -437,9 +438,9 @@ class ProceduralMemoryAgents:
             Be concise and practical in your responses.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2,
-            ),
+            )),
             tools=[
                 identify_chunking_opportunities,
                 apply_chunking,
@@ -478,9 +479,9 @@ class ProceduralMemoryAgents:
             Be concise and provide practical advice.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.4,
-            ),
+            )),
             tools=[
                 get_procedure_proficiency,
                 refine_step,
@@ -518,9 +519,9 @@ class ProceduralMemoryAgents:
             Keep your responses concise and focused on helping the user accomplish their task.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2,
-            ),
+            )),
             handoffs=[
                 self.procedure_manager_agent,
                 self.execution_agent,

@@ -8,6 +8,7 @@ import json
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 from collections import defaultdict
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, function_tool, RunContextWrapper, trace, ModelSettings, handoff, InputGuardrail, GuardrailFunctionOutput
 
@@ -178,9 +179,9 @@ class AttentionalController:
                 self.input_validation  # This is already an InputGuardrail object
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3,
-            )
+            ))
         )
     
     def _create_saliency_agent(self) -> Agent[AttentionContext]:

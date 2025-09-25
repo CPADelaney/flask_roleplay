@@ -8,6 +8,7 @@ import re
 from typing import List, Any, Optional, Tuple, Set, Dict
 from collections import Counter, defaultdict
 from pydantic import BaseModel, Field, ConfigDict
+from logic.chatgpt_integration import sanitize_model_settings
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -351,7 +352,7 @@ class CreativeMemoryIntegration:
                       tool_description_override="Blend recognized memory with novel idea generation")
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
     
     def _create_wit_generation_agent(self) -> Agent:
@@ -384,7 +385,7 @@ class CreativeMemoryIntegration:
             ],
             output_type=ContextualWit,
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
     
     def _create_insight_generation_agent(self) -> Agent:
@@ -417,7 +418,7 @@ class CreativeMemoryIntegration:
             ],
             output_type=CreativeInsight,
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
     
     def _create_memory_novelty_agent(self) -> Agent:
@@ -451,7 +452,7 @@ class CreativeMemoryIntegration:
                 function_tool(self._transform_memory)
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
     
     # Enhanced tool functions for production use

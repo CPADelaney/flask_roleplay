@@ -30,13 +30,16 @@ import functools
 import asyncio
 import threading
 import warnings
+from dataclasses import replace
 import openai
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, TYPE_CHECKING
 import numpy as np
 from openai._exceptions import APIStatusError
 from db.connection import get_db_connection_context
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
+if TYPE_CHECKING:
+    from agents import ModelSettings as AgentsModelSettings
 
 
 # Configure module logger
@@ -97,6 +100,41 @@ MODEL_TOKEN_LIMITS = {
     "gpt-4-turbo": 8192,
     "default": 4096
 }
+
+# ---------------------------------------------------------------------------
+# Model settings helpers
+# ---------------------------------------------------------------------------
+
+def sanitize_model_settings(
+    model_name: str,
+    settings: "AgentsModelSettings | None",
+) -> "AgentsModelSettings | None":
+    """Ensure model settings are compatible with the selected model."""
+
+    if settings is None:
+        return None
+
+    if model_name in ALLOWS_TEMPERATURE:
+        return settings
+
+    temperature = getattr(settings, "temperature", None)
+    if temperature is None:
+        return settings
+
+    current_top_p = getattr(settings, "top_p", None)
+    new_top_p = current_top_p
+
+    try:
+        temp_value = float(temperature)
+    except (TypeError, ValueError):
+        temp_value = None
+
+    if current_top_p is None and temp_value is not None:
+        new_top_p = max(0.01, min(1.0, temp_value))
+
+    sanitized = replace(settings, temperature=None, top_p=new_top_p)
+
+    return sanitized
 
 # Updated schema with arrays instead of object maps
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {

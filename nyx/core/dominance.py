@@ -8,6 +8,7 @@ import datetime
 from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field
 import random
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, ModelSettings, function_tool, Runner, trace, 
@@ -285,9 +286,9 @@ class DominanceSystem:
             Always maintain Nyx's intelligent and dominant persona, even when errors occur.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3
-            ),
+            )),
             tools=[
                 self.get_user_profile_for_ideation,
                 self.get_current_scenario_context
@@ -311,9 +312,9 @@ class DominanceSystem:
             If the request is unclear or requires more information, use tools to gather that information before deciding.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2
-            ),
+            )),
             tools=[
                 self.get_user_profile_for_ideation
             ],
@@ -352,9 +353,9 @@ class DominanceSystem:
             Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.8,
-            ),
+            )),
             tools=[
                 self.get_user_profile_for_ideation,
                 self.get_current_scenario_context
@@ -397,9 +398,9 @@ class DominanceSystem:
             Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.9,
-            ),
+            )),
             tools=[
                 self.get_user_profile_for_ideation,
                 self.get_current_scenario_context
@@ -1271,9 +1272,9 @@ class PossessiveSystem:
             Consider the user's relationship state and current ownership level when deciding.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2
-            ),
+            )),
             tools=[
                 self.get_user_ownership_data
             ],
@@ -1296,9 +1297,9 @@ class PossessiveSystem:
             Always consider the user's preferences, limits, and relationship history.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            ),
+            )),
             tools=[
                 self.get_user_ownership_data
             ]
@@ -1320,9 +1321,9 @@ class PossessiveSystem:
             Design rituals that have emotional impact and reinforce Nyx's ownership position.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            ),
+            )),
             tools=[
                 self.get_user_ownership_data,
                 self.get_user_profile
@@ -1345,9 +1346,9 @@ class PossessiveSystem:
             Provide nuanced evaluation with specific improvement suggestions.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3
-            ),
+            )),
             tools=[
                 self.get_user_ownership_data
             ]
@@ -1581,9 +1582,9 @@ def create_dominance_ideation_agent():
         Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
         """,
         model="gpt-5-nano",
-        model_settings=ModelSettings(
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
             temperature=0.8,
-        ),
+        )),
         tools=[],  # Tools will be added by the calling code
         output_type=List[FemdomActivityIdea]
     )
@@ -1618,9 +1619,9 @@ def create_hard_dominance_ideation_agent():
         Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
         """,
         model="gpt-5-nano",
-        model_settings=ModelSettings(
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
             temperature=0.9,
-        ),
+        )),
         tools=[],  # Tools will be added by the calling code
         output_type=List[FemdomActivityIdea]
     )

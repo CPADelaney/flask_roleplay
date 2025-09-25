@@ -7,6 +7,7 @@ import random
 from typing import Dict, List, Any, Optional, Set, Tuple, Union
 from pydantic import BaseModel, Field
 from enum import Enum
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContextWrapper
 from agents import InputGuardrail, GuardrailFunctionOutput, Handoff, handoff
@@ -319,9 +320,9 @@ Your recommendations should be specific, well-justified, and ranked by suitabili
 Explain the strengths and potential challenges of each recommended persona.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.4
-            ),
+            )),
             tools=[
                 function_tool(self.get_available_personas),
                 function_tool(self.get_user_traits),
@@ -354,9 +355,9 @@ Ensure activations are appropriate and calibrated to the user's current state.
 Manage deactivations carefully to maintain psychological continuity.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3
-            ),
+            )),
             tools=[
                 function_tool(self.get_persona_details),
                 function_tool(self.get_active_persona),
@@ -387,9 +388,9 @@ Guidelines should be:
 Focus on creating a cohesive behavioral profile that authentically expresses the persona.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.5
-            ),
+            )),
             tools=[
                 function_tool(self.get_persona_details),
                 function_tool(self.get_active_persona)
@@ -419,9 +420,9 @@ Consider:
 Generate original, varied, and authentic patterns that a dominatrix with this persona would actually use.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            ),
+            )),
             tools=[
                 function_tool(self.get_persona_details),
                 function_tool(self.get_active_persona),

@@ -27,6 +27,7 @@ from datetime import datetime
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Union, Iterable, Set, Tuple
+from logic.chatgpt_integration import sanitize_model_settings
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -1070,7 +1071,7 @@ def get_thematic_message_agent():
             "- Return ONLY JSON.\n"
         ),
         model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
-        model_settings=ModelSettings(),
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings()),
         output_type=ThematicMessagesBundle,
     )
 

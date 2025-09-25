@@ -4,6 +4,7 @@ import logging
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper
 
@@ -94,9 +95,9 @@ class SpatialNavigatorAgent:
                 self.describe_surroundings,
                 self.find_path_to_landmark
             ],
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2  # Lower temperature for more predictable navigation
-            ),
+            )),
             model="gpt-5-nano"
         )
     
@@ -129,9 +130,9 @@ class SpatialNavigatorAgent:
                 self.spatial_mapper.reconcile_observations,
                 self.process_spatial_description
             ],
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3
-            ),
+            )),
             model="gpt-5-nano"
         )
     

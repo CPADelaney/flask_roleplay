@@ -16,6 +16,7 @@ import json
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
+from logic.chatgpt_integration import sanitize_model_settings
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -1314,9 +1315,9 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
-    model_settings=ModelSettings(
+    model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
         response_format="json_object",
-    ),
+    )),
     model='gpt-5-nano'
 )
 

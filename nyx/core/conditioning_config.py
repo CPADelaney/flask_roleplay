@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, FunctionTool, RunContextWrapper, handoff
 from nyx.core.conditioning_models import *
@@ -480,7 +481,7 @@ class ConditioningConfiguration:
                 validate_parameters,
                 reset_to_defaults
             ],
-            model_settings=ModelSettings(temperature=0.1),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.1)),
             model="gpt-5-nano"
         )
         
@@ -499,7 +500,7 @@ class ConditioningConfiguration:
                 save_personality_profile,
                 check_trait_balance
             ],
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             model="gpt-5-nano"
         )
     

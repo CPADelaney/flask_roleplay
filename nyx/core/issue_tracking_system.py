@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass, field, asdict
 import uuid
 import re
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent,
@@ -398,11 +399,11 @@ class IssueTrackingSystem:
             Be thorough in your analysis, but focus on extracting practical, implementable insights.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2,  # Keep it focused on accurate analysis
                 top_p=0.9,
                 max_tokens=1024
-            )
+            ))
         )
     
     def _create_issue_manager_agent(self) -> Agent:
@@ -429,11 +430,11 @@ class IssueTrackingSystem:
             that the development team can use to enhance the AI bot.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.1,  # Keep it very factual and organized
                 top_p=0.9,
                 max_tokens=1024
-            ),
+            )),
             tools=[
                 self.add_issue_tool,
                 self.update_issue_tool,

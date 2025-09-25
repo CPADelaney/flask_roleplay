@@ -8,6 +8,7 @@ import math
 from typing import Dict, List, Any, Optional, Set, Union, Tuple
 from enum import Enum
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, 
@@ -611,9 +612,9 @@ class ContextAwarenessSystem:
             ],
             output_type=BlendedContextDetectionOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3
-            )
+            ))
         )
     
     def _create_signal_analysis_agent(self) -> Agent[CASystemContext]:
@@ -643,7 +644,7 @@ class ContextAwarenessSystem:
             ],
             output_type=SignalAnalysisOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2))
         )
     
     def _create_emotional_baseline_agent(self) -> Agent[CASystemContext]:
@@ -672,7 +673,7 @@ class ContextAwarenessSystem:
             ],
             output_type=EmotionalBaselineOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2))
         )
     
     def _create_context_validation_agent(self) -> Agent[CASystemContext]:
@@ -702,7 +703,7 @@ class ContextAwarenessSystem:
             ],
             output_type=ContextValidationOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.1)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.1))
         )
 
     @staticmethod

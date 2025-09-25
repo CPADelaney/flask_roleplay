@@ -7,6 +7,7 @@ import uuid
 import random
 from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContextWrapper, GuardrailFunctionOutput, InputGuardrail
 
@@ -434,9 +435,9 @@ Ensure tasks respect user limits while providing an appropriate challenge. Focus
 Output a JSON object with all the required task details.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            ),
+            )),
             tools=[
                 function_tool(self.get_user_profile_for_task_design),
                 function_tool(self.get_task_completion_history),
@@ -468,9 +469,9 @@ Provide detailed feedback explaining your assessment and decision. Be thorough b
 Output a JSON object with your verification result, rating, and feedback.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.3,
-            ),
+            )),
             tools=[
                 function_tool(self.get_task_details)
             ],
@@ -501,9 +502,9 @@ Be considerate of user limits while maintaining firm expectations.
 Output your recommendations and task management decisions as a JSON object.
 """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.5,
-            ),
+            )),
             tools=[
                 function_tool(self.get_user_profile_for_task_design),
                 function_tool(self.get_task_completion_history),
