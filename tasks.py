@@ -920,14 +920,17 @@ def generate_lore_background_task(user_id: int, conversation_id: int) -> Dict[st
             from lore.core.lore_system import LoreSystem
 
             lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-            lore_ctx = RunContextWrapper(context={
+            base_context = {
                 "user_id": user_id,
                 "conversation_id": conversation_id,
-            })
+            }
+            lore_ctx = RunContextWrapper(context=base_context)
             lore_ctx.user_id = user_id
             lore_ctx.conversation_id = conversation_id
 
-            lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
+            lore_result = await lore_system.generate_complete_lore(
+                lore_ctx, environment_desc
+            )
 
             if npc_ids:
                 logger.info(
@@ -958,8 +961,15 @@ def generate_lore_background_task(user_id: int, conversation_id: int) -> Dict[st
                             if isinstance(affiliations_data, list):
                                 faction_affiliations = affiliations_data
 
+                    npc_context = dict(base_context)
+                    npc_context["npc_id"] = npc_id
+                    npc_ctx = RunContextWrapper(context=npc_context)
+                    npc_ctx.user_id = user_id
+                    npc_ctx.conversation_id = conversation_id
+                    npc_ctx.npc_id = npc_id
+
                     await lore_system.initialize_npc_lore_knowledge(
-                        lore_ctx,
+                        npc_ctx,
                         npc_id,
                         cultural_background="common",
                         faction_affiliations=faction_affiliations,

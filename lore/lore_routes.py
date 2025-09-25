@@ -10,6 +10,8 @@ import logging
 from quart import Blueprint, request, jsonify, session
 from typing import Dict, Any
 
+from agents import RunContextWrapper
+
 # Import core lore system
 from lore.core.lore_system import LoreSystem
 
@@ -190,10 +192,19 @@ async def integrate_lore_with_npcs_route(user_id):
             # Get NPC details (name, background, etc.)
             # This would use your NPC data access layer
             npc_details = {"cultural_background": "default", "faction_affiliations": []}
-            
+
             # Initialize NPC knowledge
+            npc_context = RunContextWrapper(context={
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "npc_id": npc_id,
+            })
+            npc_context.user_id = user_id
+            npc_context.conversation_id = conversation_id
+            npc_context.npc_id = npc_id
+
             result = await lore_system.initialize_npc_lore_knowledge(
-                None,
+                npc_context,
                 npc_id,
                 npc_details.get("cultural_background", "unknown"),
                 npc_details.get("faction_affiliations", [])
