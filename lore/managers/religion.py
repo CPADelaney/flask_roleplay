@@ -611,13 +611,13 @@ class ReligionManager(BaseLoreManager):
     # Core CRUD Operations with Structured Types
     # ===========================
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_deity",
         action_description="Adding deity to the pantheon",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_deity(self, ctx, params: DeityParams) -> int:
         """Prepares deity data and uses the Canon to create the entity."""
         from lore.core import canon  # <- ensure canon is imported here
@@ -653,13 +653,13 @@ class ReligionManager(BaseLoreManager):
         self.invalidate_cache_pattern("deity")
         return deity_id
             
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_pantheon",
         action_description="Adding pantheon to the world",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_pantheon(self, ctx, params: PantheonParams) -> int:
         """Prepares pantheon data and uses the Canon to create it."""
         await self.ensure_initialized()
@@ -677,13 +677,13 @@ class ReligionManager(BaseLoreManager):
         return pantheon_id
 
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_practice",
         action_description="Adding religious practice",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_religious_practice(self, ctx, params: ReligiousPracticeParams) -> int:
         """Add a religious practice using canon establishment."""
         await self.ensure_initialized()
@@ -714,13 +714,13 @@ class ReligionManager(BaseLoreManager):
         GLOBAL_LORE_CACHE.invalidate_pattern("practice")
         return practice_id
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_holy_site",
         action_description="Adding holy site",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_holy_site(self, ctx, params: HolySiteParams) -> int:
         """Add a holy site using canon establishment."""
         await self.ensure_initialized()
@@ -754,13 +754,13 @@ class ReligionManager(BaseLoreManager):
         GLOBAL_LORE_CACHE.invalidate_pattern("site")
         return site_id
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_text",
         action_description="Adding religious text",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_religious_text(self, ctx, params: ReligiousTextParams) -> int:
         """Add a religious text using canon establishment."""
         await self.ensure_initialized()
@@ -791,13 +791,13 @@ class ReligionManager(BaseLoreManager):
         GLOBAL_LORE_CACHE.invalidate_pattern("text")
         return text_id
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_order",
         action_description="Adding religious order",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_religious_order(self, ctx, params: ReligiousOrderParams) -> int:
         """Add a religious order using canon establishment."""
         await self.ensure_initialized()
@@ -832,13 +832,13 @@ class ReligionManager(BaseLoreManager):
         return order_id
 
     
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_conflict",
         action_description="Adding religious conflict",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def add_religious_conflict(self, ctx, params: ReligiousConflictParams) -> int:
         """Add a religious conflict using canon establishment."""
         await self.ensure_initialized()
@@ -873,13 +873,13 @@ class ReligionManager(BaseLoreManager):
     # Generation Methods Using Agents
     # ===========================
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_pantheon",
         action_description="Generating complete pantheon",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def generate_pantheon(self, ctx) -> Dict[str, Any]:
         """Generate a complete pantheon using specialized agents."""
         await self.ensure_initialized()
@@ -967,13 +967,13 @@ class ReligionManager(BaseLoreManager):
             "deities": created_deities
         }
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_religious_practices",
         action_description="Generating religious practices",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def generate_religious_practices(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
         """Generate religious practices for a pantheon."""
         await self.ensure_initialized()
@@ -1037,13 +1037,13 @@ class ReligionManager(BaseLoreManager):
         
         return created_practices
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_complete_faith_system",
         action_description="Generating complete faith system",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def generate_complete_faith_system(self, ctx) -> Dict[str, Any]:
         """Generate a complete faith system with all components."""
         # Generate pantheon first
@@ -1526,13 +1526,13 @@ class ReligionManager(BaseLoreManager):
     # Distribution and Evolution Methods
     # ===========================
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="distribute_religions",
         action_description="Distributing religions across nations",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
         """Distribute religions across nations with canon checks."""
         from lore.core import canon  # ensure canon is imported
@@ -1617,13 +1617,13 @@ class ReligionManager(BaseLoreManager):
     
         return distributions
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_ritual",
         action_description="Generating detailed religious ritual",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def generate_ritual(
         self, 
         ctx, 
@@ -1698,13 +1698,13 @@ class ReligionManager(BaseLoreManager):
             "ritual": ritual.dict()
         }
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="simulate_theological_dispute",
         action_description="Simulating theological dispute",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def simulate_theological_dispute(
         self, 
         ctx, 
@@ -1783,13 +1783,13 @@ class ReligionManager(BaseLoreManager):
             "religious_implications": dispute_results["implications"]
         }
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_religion_from_culture",
         action_description="Evolving religion through cultural interaction",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def evolve_religion_from_culture(
         self, 
         ctx, 
@@ -1859,13 +1859,13 @@ class ReligionManager(BaseLoreManager):
             "evolution_results": evolution_data.dict()
         }
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_sectarian_development",
         action_description="Creating sectarian split",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def generate_sectarian_development(
         self, 
         ctx, 
@@ -1971,13 +1971,13 @@ class ReligionManager(BaseLoreManager):
             "sects": sects
         }
 
+    @function_tool(strict_mode=True)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_nation_religion",
         action_description="Getting nation religious info",
         id_from_context=lambda ctx: "religion_manager"
     )
-    @function_tool(strict_mode=True)
     async def get_nation_religion(self, ctx, nation_id: int) -> Dict[str, Any]:
         """Get comprehensive religious information about a nation."""
         cache_key = f"nation_religion_{nation_id}_{self.user_id}_{self.conversation_id}"
