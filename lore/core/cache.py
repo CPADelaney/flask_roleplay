@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List, Set, Tuple
 from dataclasses import dataclass
 import json
 import logging
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, function_tool, Runner, trace, ModelSettings
 from agents.run import RunConfig
@@ -89,7 +90,7 @@ class LoreCache:
                 "which items should be pre-warmed."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.0)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.0))
         )
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):

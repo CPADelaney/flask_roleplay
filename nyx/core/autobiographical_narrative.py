@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, 
@@ -241,9 +242,9 @@ class AutobiographicalNarrative:
                     InputGuardrail(guardrail_function=self._memory_validation_guardrail)
                 ],
                 model="gpt-5-nano",
-                model_settings=ModelSettings(
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                     temperature=0.6
-                ),
+                )),
                 output_type=Dict[str, Any]
             )
         except Exception as e:
@@ -271,7 +272,7 @@ class AutobiographicalNarrative:
                 self._calculate_memory_significance
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             output_type=MemoryAnalysisOutput
         )
 
@@ -296,7 +297,7 @@ class AutobiographicalNarrative:
                 self._calculate_identity_stability
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             output_type=IdentityAnalysisOutput
         )
 
@@ -321,7 +322,7 @@ class AutobiographicalNarrative:
                 self._validate_emotional_authenticity
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             output_type=NarrativeValidationOutput
         )
         

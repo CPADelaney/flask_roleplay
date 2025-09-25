@@ -7,6 +7,7 @@ import asyncio
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper, handoff, GuardrailFunctionOutput, InputGuardrail
 
@@ -90,9 +91,9 @@ class TheoryOfMind:
                 Respond ONLY with a JSON object matching the UserMentalState structure (excluding user_id and last_updated).
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                     temperature=0.4
-                ),
+                )),
                 tools=[
                     self.get_emotional_markers,
                     self.get_linguistic_patterns,

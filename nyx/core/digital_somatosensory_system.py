@@ -8,6 +8,7 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal
 from dataclasses import dataclass, field
 import numpy as np
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, Runner, trace, function_tool, 
@@ -712,7 +713,7 @@ class DigitalSomatosensorySystem:
             tools=[get_valid_body_regions],
             output_type=StimulusValidationOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.1),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.1)),
             hooks=self.agent_hooks
         )
     
@@ -741,7 +742,7 @@ class DigitalSomatosensorySystem:
             ],
             output_type=SensoryExpression,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7)),
             hooks=self.agent_hooks
         )
     
@@ -770,7 +771,7 @@ class DigitalSomatosensorySystem:
             ],
             output_type=BodyStateOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             hooks=self.agent_hooks
         )
     
@@ -797,7 +798,7 @@ class DigitalSomatosensorySystem:
             ],
             output_type=TemperatureEffect,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             hooks=self.agent_hooks
         )
     
@@ -859,7 +860,7 @@ class DigitalSomatosensorySystem:
                 InputGuardrail(guardrail_function=self._validate_input)
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             hooks=self.agent_hooks
         )
     

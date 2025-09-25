@@ -22,6 +22,7 @@ import copy
 import random
 from functools import lru_cache
 import weakref
+from logic.chatgpt_integration import sanitize_model_settings
 
 # Import agent framework components
 from agents import (
@@ -1107,7 +1108,7 @@ class GoalManager:
                 When the goal is associated with a specific need, ensure your plan includes steps that specifically address that need.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.1),
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.1)),
                 tools=[
                     self._get_available_actions,
                     self._get_action_description,

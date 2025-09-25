@@ -18,6 +18,7 @@ from datetime import datetime
 import psutil
 import time
 import functools
+from logic.chatgpt_integration import sanitize_model_settings
 
 # Agents SDK imports
 from agents import Agent, ModelSettings, function_tool, Runner, trace
@@ -543,7 +544,7 @@ def create_lore_agent(
         name=name,
         instructions=base_instructions,
         model=OpenAIResponsesModel(model="gpt-5-nano"),
-        model_settings=ModelSettings(temperature=temperature),
+        model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=temperature)),
         output_type=output_type,
     )
 

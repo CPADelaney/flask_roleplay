@@ -11,6 +11,7 @@ import random
 from datetime import datetime
 from enum import Enum
 from agents import Agent, ModelSettings, Runner
+from logic.chatgpt_integration import sanitize_model_settings
 
 # Assuming db.connection provides this context manager
 from db.connection import get_db_connection_context
@@ -39,7 +40,7 @@ Return JSON **only** with:
                      in her trademark sophisticated-dark style (PG-13).
 """,
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.8)
+    model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
 )
 
 # --- Enums and Constants ---

@@ -7,6 +7,7 @@ import random
 import math
 import datetime
 from typing import Dict, List, Any, Optional, Tuple, Callable
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, trace, function_tool, custom_span, RunContextWrapper, ModelSettings, RunConfig, handoff
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
@@ -879,7 +880,7 @@ class ReflexiveSystem:
                 generate_similar_stimulus,
                 generate_gaming_stimulus
             ],
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             model="gpt-5-nano"
         )
         
@@ -893,7 +894,7 @@ class ReflexiveSystem:
                 optimize_pattern,
                 simplify_pattern
             ],
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             model="gpt-5-nano"
         )
         
@@ -907,7 +908,7 @@ class ReflexiveSystem:
                 generate_gaming_stimulus,
                 fast_match
             ],
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             model="gpt-5-nano"
         )
         
@@ -917,7 +918,7 @@ class ReflexiveSystem:
             instructions="""You are a specialized agent for the reflex decision system.
             Your job is to decide when to use reflexes vs. deliberate thinking based on context.
             Focus on analyzing stimuli and contexts to make appropriate reflex usage decisions.""",
-            model_settings=ModelSettings(temperature=0.5),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.5)),
             model="gpt-5-nano"
         )
         
@@ -941,7 +942,7 @@ class ReflexiveSystem:
                        tool_name_override="make_reflex_decision",
                        tool_description_override="Decide whether to use reflexes or deliberate thinking")
             ],
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             model="gpt-5-nano"
         )
 

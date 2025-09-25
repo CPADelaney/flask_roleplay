@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import logging
 from typing import Dict, List, Any, Optional, Literal
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, trace, handoff
 from nyx.core.conditioning_models import *
@@ -320,7 +321,7 @@ class ConditioningMaintenanceSystem:
             ],
             output_type=BalanceAnalysisOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2))
         )
         
         # Association Maintenance Agent
@@ -338,7 +339,7 @@ class ConditioningMaintenanceSystem:
                 apply_extinction_to_association
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
         
         # Trait Maintenance Agent
@@ -352,7 +353,7 @@ class ConditioningMaintenanceSystem:
                 reinforce_core_trait
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
         
         # Maintenance Orchestrator
@@ -386,7 +387,7 @@ class ConditioningMaintenanceSystem:
             ],
             output_type=MaintenanceSummaryOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
     
     async def start_maintenance_scheduler(self, run_immediately=False):

@@ -8,6 +8,7 @@ import uuid
 import json
 from typing import List, Any, Optional, Set, Union, Tuple, TypedDict, Dict
 from pydantic import BaseModel, Field, ConfigDict
+from logic.chatgpt_integration import sanitize_model_settings
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -604,7 +605,7 @@ class RecognitionMemorySystem:
             ],
             output_type=List[RecognitionResult],
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
     
     def _create_salience_detector_agent(self) -> Agent:
@@ -642,7 +643,7 @@ class RecognitionMemorySystem:
             ],
             output_type=SalienceAnalysisOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
         
     def _create_memory_query_agent(self) -> Agent:
@@ -678,7 +679,7 @@ class RecognitionMemorySystem:
                 _track_query_performance
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
         
     def _create_trigger_extraction_agent(self) -> Agent:
@@ -712,7 +713,7 @@ class RecognitionMemorySystem:
             ],
             output_type=TriggerExtractionOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
         
     def _create_relevance_filter_agent(self) -> Agent:
@@ -750,7 +751,7 @@ class RecognitionMemorySystem:
             ],
             output_type=RecognitionFilterOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
     
     # Main public methods

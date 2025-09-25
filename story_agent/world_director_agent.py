@@ -5,6 +5,7 @@ REFACTORED: Fixed all async/await issues, error handling, and type safety.
 """
 
 from __future__ import annotations
+from logic.chatgpt_integration import sanitize_model_settings
 
 import asyncio
 import logging
@@ -2693,7 +2694,7 @@ def create_complete_world_director():
             instructions=agent_instructions,
             tools=all_tools,
             model="gpt-5-nano",
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
         return agent
     except Exception as e:

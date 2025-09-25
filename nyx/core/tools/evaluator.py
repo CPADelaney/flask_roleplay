@@ -8,6 +8,7 @@ import datetime
 from typing import Dict, Any, List, Optional, Union, TypeVar, Generic
 from dataclasses import dataclass, field
 from pydantic import BaseModel
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, function_tool, trace
 
@@ -103,9 +104,9 @@ Always return your evaluation as a JSON object with:
 Focus ONLY on the requested dimension in each evaluation.
 """,
             model="gpt-5-nano",  # Using a smaller model for cost efficiency
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.2,  # Low temperature for consistent evaluations
-            ),
+            )),
             tools=[
                 self._get_evaluation_criteria
             ]

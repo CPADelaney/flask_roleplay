@@ -9,6 +9,7 @@ import json
 from typing import Dict, List, Any, Optional, Tuple, Set, Union, TypedDict
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from logic.chatgpt_integration import sanitize_model_settings
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -522,7 +523,7 @@ class NoveltyEngine:
             ],
             output_type=NoveltyIdea,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_bisociation_agent(self) -> Agent:
@@ -548,7 +549,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_conceptual_blending_agent(self) -> Agent:
@@ -574,7 +575,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_constraint_relaxation_agent(self) -> Agent:
@@ -601,7 +602,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
         )
     
     def _create_random_stimulus_agent(self) -> Agent:
@@ -627,7 +628,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
     
     def _create_perspective_shifting_agent(self) -> Agent:
@@ -654,7 +655,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_analogical_reasoning_agent(self) -> Agent:
@@ -680,7 +681,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_evaluation_agent(self) -> Agent:
@@ -707,7 +708,7 @@ class NoveltyEngine:
             ],
             output_type=IdeaEvaluationOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3))
         )
     
     def _create_conceptual_reasoning_agent(self) -> Agent:
@@ -733,7 +734,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_causal_reasoning_agent(self) -> Agent:
@@ -760,7 +761,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7))
         )
     
     def _create_simulation_agent(self) -> Agent:
@@ -788,7 +789,7 @@ class NoveltyEngine:
             ],
             output_type=CreativeTechniqueOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.8))
         )
     
     # Main public methods for using the novelty engine

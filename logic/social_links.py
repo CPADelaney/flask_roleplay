@@ -16,6 +16,7 @@ import logging
 import random
 import asyncio
 from datetime import datetime, timedelta
+from logic.chatgpt_integration import sanitize_model_settings
 
 from logic.stats_logic import calculate_social_insight, get_all_player_stats
 from logic.relationship_integration import RelationshipIntegration
@@ -2711,7 +2712,7 @@ SocialLinksAgent = Agent(
         "Return helpful final text or JSON summarizing your result."
     ),
     model = "gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.5),
+    model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.5)),
     tools=[
         get_social_link_tool,
         create_social_link_tool,

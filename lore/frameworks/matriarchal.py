@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Dict, List, Any, Optional, Union, AsyncGenerator
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 # Agents SDK imports
 from agents import (
@@ -111,7 +112,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "women hold most or all power, and men occupy subordinate or service-based roles."
             ),
             model="gpt-5-nano",  # Using valid model name
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         # Initialize specialized narrative transformation agents
@@ -125,7 +126,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "consistency, and engagement. Provide constructive feedback for improvements."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.5),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.5)),
             output_type=NarrativeEvaluation
         )
 
@@ -140,7 +141,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "or supportive roles only."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         # Religious narrative specialist
@@ -152,7 +153,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "priestesses as the dominant religious authorities."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         # Social/cultural narrative specialist
@@ -164,7 +165,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "and masculine deference."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         # Configure agent handoffs
@@ -570,7 +571,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "conflicts, or revelations."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         character_agent = Agent(
@@ -581,7 +582,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "while maintaining matriarchal power dynamics."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         setting_agent = Agent(
@@ -592,7 +593,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "and environmental features that reinforce matriarchal themes."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.9))
         )
         
         # Dialogue-based development (alternating between agents)

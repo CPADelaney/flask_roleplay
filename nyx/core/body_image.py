@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, 
@@ -266,7 +267,7 @@ class BodyImage:
                 self._get_body_image_state_tool,   # read-only helper
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.1),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.1)),
         )
 
 
@@ -354,7 +355,7 @@ class BodyImage:
                 self._extract_body_part_states,
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.20),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.20)),
         )
 
     
@@ -378,7 +379,7 @@ class BodyImage:
                 self._calculate_somatic_confidence
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.1)
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.1))
         )
     
     def _create_body_integration_agent(self) -> Agent[BodyImageContext]:

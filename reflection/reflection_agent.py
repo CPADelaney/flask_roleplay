@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import re
 from agents import Agent, Runner, RunConfig, ModelSettings
+from logic.chatgpt_integration import sanitize_model_settings
 
 class ReflectionAgent(Agent):
     """Simple agent producing reflective insights from event logs."""
@@ -17,7 +18,7 @@ class ReflectionAgent(Agent):
             
             Keep insights under 100 words and focus on actionable observations.""",
             model="gpt-5-nano",  # or whatever model you prefer
-            model_settings=ModelSettings()
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings())
         )
 
 async def run_reflection(events: list) -> str:

@@ -9,6 +9,7 @@ import json
 from typing import Dict, List, Any, Optional, Tuple, Union, AsyncGenerator, Set, TypedDict
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
 
@@ -1154,7 +1155,7 @@ multimodal_agent = Agent(
         register_feature_extractor
     ],
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.2)
+    model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2))
 )
 
 class MultimodalIntegrator:

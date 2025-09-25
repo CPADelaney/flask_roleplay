@@ -11,6 +11,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 from nyx.core.types.kv import KVPair          
 from nyx.core.brain.base import EmotionalContext
+from logic.chatgpt_integration import sanitize_model_settings
 
 # Update imports to use OpenAI Agents SDK
 from agents import (
@@ -332,9 +333,9 @@ class ExperienceInterface:
                 InputGuardrail(guardrail_function=self._experience_request_guardrail)
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            )
+            ))
         )
     
     def _create_reflection_agent(self) -> Agent:
@@ -353,9 +354,9 @@ class ExperienceInterface:
             ],
             output_type=ReflectionOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            )
+            ))
         )
     
     def _create_narrative_agent(self) -> Agent:
@@ -374,9 +375,9 @@ class ExperienceInterface:
             ],
             output_type=NarrativeOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.8
-            )
+            ))
         )
     
     def _create_recall_agent(self) -> Agent:
@@ -396,9 +397,9 @@ class ExperienceInterface:
             ],
             output_type=ExperienceOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7
-            )
+            ))
         )
         
     def _create_cross_user_agent(self) -> Agent:
@@ -418,9 +419,9 @@ class ExperienceInterface:
             ],
             output_type=ExperienceOutput,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.6
-            )
+            ))
         )
     
     def _create_identity_evolution_agent(self) -> Agent:
@@ -439,9 +440,9 @@ class ExperienceInterface:
                 self._generate_identity_reflection
             ],
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.5
-            )
+            ))
         )
     
     # Guardrail functions

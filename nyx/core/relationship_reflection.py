@@ -7,6 +7,7 @@ import random
 import uuid
 from typing import Dict, List, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
@@ -616,11 +617,11 @@ class RelationshipReflectionSystem:
             Make each reflection unique and tailored to the specific relationship context.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7,
                 top_p=0.95,
                 max_tokens=1000
-            ),
+            )),
             tools=[
                 format_relationship_history,
                 analyze_relationship_patterns,
@@ -648,11 +649,11 @@ class RelationshipReflectionSystem:
             a relationship with someone they care about.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7,
                 top_p=0.95,
                 max_tokens=1000
-            ),
+            )),
             tools=[
                 format_relationship_history,
                 identify_relationship_identity_impacts
@@ -677,11 +678,11 @@ class RelationshipReflectionSystem:
             the dynamics and trends within this relationship.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.4,
                 top_p=0.9,
                 max_tokens=800
-            ),
+            )),
             tools=[
                 analyze_relationship_patterns
             ]
@@ -1137,11 +1138,11 @@ class RelationshipReflectionSystem:
             might internally consider their feelings about a relationship.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.6,
                 top_p=0.9,
                 max_tokens=800
-            ),
+            )),
             tools=[
                 format_relationship_history
             ],

@@ -12,6 +12,7 @@ import logging
 import math
 import random  # Added import for random module
 from typing import Dict, Any, Optional, List, Tuple, Union, cast
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     function_tool, RunContextWrapper, function_span, custom_span,
@@ -213,7 +214,7 @@ class HormoneSystem:
             name="Hormone System Agent",
             instructions=hormone_instructions,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),  # Lower temperature for stability
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),  # Lower temperature for stability
             tools=[
                 self._wrap_method_as_tool(self.update_hormone),
                 self._wrap_method_as_tool(self.update_hormone_cycles),

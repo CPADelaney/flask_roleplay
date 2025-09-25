@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple, Callable, Set, Union
 from enum import Enum
 import re
 from pydantic import BaseModel, Field
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, 
@@ -330,11 +331,11 @@ class InternalThoughtsManager:
             not overly formal analysis.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.7,
                 top_p=0.95,
                 max_tokens=300  # Keep thoughts reasonably brief
-            ),
+            )),
             output_type=ThoughtGenerationOutput
         )
     
@@ -358,10 +359,10 @@ class InternalThoughtsManager:
             that challenges, refines, or extends the original thought.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(
                 temperature=0.4,
                 max_tokens=150  # Keep critiques brief
-            ),
+            )),
             output_type=str
         )
     

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from collections import defaultdict
 from enum import Enum
 from nyx.core.emotions.context import EmotionalContext
+from logic.chatgpt_integration import sanitize_model_settings
 
 from agents import (
     Agent, 
@@ -425,7 +426,7 @@ class RewardSignalProcessor:
                 Focus on data-driven insights and concrete, implementable suggestions.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.3),
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
                 output_type=RewardAnalysisOutput,
                 tools=[
                     # Pass the FunctionTool OBJECTS here
@@ -456,7 +457,7 @@ class RewardSignalProcessor:
                 while maintaining psychological realism in the reward mechanisms.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.2),
+                model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
                 # Add relevant tools if this agent needs to call them
                 tools=[
                     categorize_reward_tool,

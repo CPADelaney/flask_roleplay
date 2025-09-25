@@ -1,5 +1,6 @@
 # nyx/core/emotions/emotional_core.py
 from __future__ import annotations
+from logic.chatgpt_integration import sanitize_model_settings
 
 import asyncio
 import datetime
@@ -1421,7 +1422,7 @@ class EmotionalCore:
                 EmotionalGuardrails.validate_emotional_input
             ],
             output_type=NeurochemicalResponseDTO,
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             model="gpt-5-nano"
         )
         
@@ -1434,7 +1435,7 @@ class EmotionalCore:
                 self.emotion_tools.get_emotional_state_matrix
             ],
             output_type=EmotionalStateMatrixDTO,
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             model="gpt-5-nano"
         )
         
@@ -1448,7 +1449,7 @@ class EmotionalCore:
                 # Use the standalone function with partial application to pass self reference
                 self.analyze_patterns_wrapper
             ],
-            model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.7)),  # Higher temperature for creative reflection
             output_type=InternalThoughtDTO,
             model="gpt-5-nano"
         )
@@ -1461,7 +1462,7 @@ class EmotionalCore:
                 self.learning_tools.update_learning_rules,
                 self.learning_tools.apply_learned_adaptations
             ],
-            model_settings=ModelSettings(temperature=0.4),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.4)),
             model="gpt-5-nano"
         )
         

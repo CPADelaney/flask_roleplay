@@ -13,6 +13,7 @@ import json
 from typing import Dict, List, Any, Optional, Tuple, Union
 from enum import Enum
 from datetime import datetime
+from logic.chatgpt_integration import sanitize_model_settings
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
@@ -935,7 +936,7 @@ class GoalSelector:
             rather than just selecting goals from the primary mode.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             tools=[
                 function_tool(self._get_current_mode_distribution, strict_mode=False),
                 function_tool(self._get_goals_for_mode, strict_mode=False)
@@ -960,7 +961,7 @@ class GoalSelector:
             rather than simply listing goals from each mode separately.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.3),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.3)),
             tools=[
                 function_tool(self._analyze_goal_compatibility, strict_mode=False),
                 function_tool(self._blend_goal_steps, strict_mode=False)
@@ -985,7 +986,7 @@ class GoalSelector:
             while maintaining a coherent goal structure.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
+            model_settings=sanitize_model_settings("gpt-5-nano", ModelSettings(temperature=0.2)),
             tools=[
                 function_tool(self._evaluate_goal_mode_alignment, strict_mode=False),
                 function_tool(self._calculate_goal_priority, strict_mode=False)
