@@ -1341,6 +1341,12 @@ class FactionGenerator(BaseGenerator):
                 elif not isinstance(strategic_value, int):
                     strategic_value = 5
                 
+                # Serialize JSONB fields
+                notable_features_json = json.dumps(location_data.get('notable_features', []))
+                hidden_aspects_json = json.dumps(location_data.get('hidden_secrets', []))
+                access_restrictions_json = json.dumps(location_data.get('access_restrictions', []))
+                local_customs_json = json.dumps(location_data.get('local_customs', []))
+
                 # Insert location
                 location_id = await conn.fetchval("""
                     INSERT INTO Locations (
@@ -1361,10 +1367,10 @@ class FactionGenerator(BaseGenerator):
                     location_data.get('economic_importance', 'moderate'),
                     strategic_value,  # Now guaranteed to be an integer
                     location_data.get('population_density', 'moderate'),
-                    location_data.get('notable_features', []),
-                    location_data.get('hidden_secrets', []),  # mapped to hidden_aspects
-                    location_data.get('access_restrictions', []),
-                    location_data.get('local_customs', []),
+                    notable_features_json,
+                    hidden_aspects_json,  # mapped from hidden_secrets
+                    access_restrictions_json,
+                    local_customs_json,
                     embedding
                 )
                     
