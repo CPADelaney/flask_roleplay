@@ -706,10 +706,58 @@ def with_governance(
     Combined decorator for both permission checks and action reporting.
     """
     def decorator(func):
+        cached_signature = inspect.signature(func)
+
+        def _build_format_mapping(self_arg, ctx, remaining_args, call_kwargs, sig):
+            """Bind arguments to parameter names and merge them for formatting."""
+            # Work with a shallow copy so we don't mutate caller-provided kwargs
+            merged_kwargs = dict(call_kwargs)
+
+            binding_args = []
+            binding_kwargs = dict(call_kwargs)
+
+            if self_arg is not None:
+                binding_args.append(self_arg)
+
+            # Always pass ctx positionally to mirror the eventual invocation
+            binding_args.append(ctx)
+            binding_args.extend(remaining_args)
+
+            try:
+                bound = sig.bind_partial(*binding_args, **binding_kwargs)
+            except TypeError as bind_error:
+                logger.debug(
+                    "Failed to bind arguments for governance description formatting %s: %s",
+                    func.__name__,
+                    bind_error,
+                )
+                return merged_kwargs
+
+            for name, value in bound.arguments.items():
+                if name in {"self", "ctx", "context"}:
+                    continue
+                merged_kwargs.setdefault(name, value)
+
+            return merged_kwargs
+
+        def _safe_format_description(template, mapping):
+            if not template:
+                return template
+
+            try:
+                return template.format(**mapping)
+            except KeyError as missing_key:
+                logger.debug(
+                    "Missing key %s while formatting governance description '%s'",
+                    missing_key,
+                    template,
+                )
+                return template
+
         @wraps(func)
         async def wrapper(*args, **kwargs):
             # Get function signature to properly handle arguments
-            sig = inspect.signature(func)
+            sig = cached_signature
             params = list(sig.parameters.keys())
             
             # Determine if this is a method or function by checking first param name
@@ -799,13 +847,27 @@ def with_governance(
             else:
                 agent_id = f"{agent_type}_{conversation_id}"
             
+            # Ensure we work with a mutable kwargs copy for downstream updates
+            kwargs = dict(kwargs)
+
             # ===== PERMISSION CHECK =====
             # Create action details from args and kwargs
+            merged_for_description = _build_format_mapping(
+                self_arg if is_method else None,
+                ctx,
+                remaining_args,
+                kwargs,
+                sig,
+            )
+            formatted_description = _safe_format_description(
+                action_description,
+                merged_for_description,
+            )
             action_details = {
                 "function": func.__name__,
                 "args": [str(arg)[:100] for arg in remaining_args],  # Truncate for logging
                 "kwargs": {k: str(v)[:100] for k, v in kwargs.items()},  # Truncate for logging
-                "description": action_description.format(**kwargs) if kwargs else action_description
+                "description": formatted_description
             }
             
             # Check permission
@@ -831,10 +893,13 @@ def with_governance(
                 override = permission["override_action"]
                 # Update args and kwargs based on override
                 if "args" in override and len(override["args"]) == len(remaining_args):
-                    remaining_args = override["args"]
+                    remaining_args = tuple(override["args"])
                 if "kwargs" in override:
                     kwargs.update(override["kwargs"])
-            
+
+            # Ensure remaining args are tupled for downstream use
+            remaining_args = tuple(remaining_args)
+
             # ===== EXECUTE FUNCTION =====
             start_time = datetime.now()
             error_occurred = None
@@ -852,16 +917,27 @@ def with_governance(
                     "success": False,
                     "exception_type": type(e).__name__
                 }
-            
+
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            
+
             # ===== ACTION REPORTING =====
             # Build the action dictionary for reporting
             truncated_kwargs = {k: str(v)[:100] for k, v in kwargs.items()}
+            merged_for_reporting = _build_format_mapping(
+                self_arg if is_method else None,
+                ctx,
+                remaining_args,
+                kwargs,
+                sig,
+            )
+            formatted_reporting_description = _safe_format_description(
+                action_description,
+                merged_for_reporting,
+            )
             action = {
                 "type": action_type,
-                "description": action_description.format(**kwargs) if kwargs else action_description,
+                "description": formatted_reporting_description,
                 "function": func.__name__,
                 "duration_seconds": duration,
                 "permission_tracking_id": permission.get("tracking_id", -1),
