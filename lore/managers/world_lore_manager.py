@@ -19,7 +19,7 @@ import random
 import re
 
 # Agents SDK (import what you need)
-from agents import Agent, function_tool, Runner, trace, ModelSettings, handoff
+from agents import Agent, function_tool, Runner, trace, handoff
 from agents.run import RunConfig
 from agents.run_context import RunContextWrapper
 

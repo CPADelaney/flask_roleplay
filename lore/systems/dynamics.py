@@ -17,7 +17,6 @@ import lore.core.canon as canon
 # ------------------ AGENTS SDK IMPORTS ------------------
 from agents import (
     Agent,
-    ModelSettings,
     Runner,
     function_tool,
     handoff,
@@ -337,8 +336,6 @@ class LoreDynamicsSystem(BaseLoreManager):
             "Male elements should be presented in supportive or subservient positions."
         )
         
-        model_settings = ModelSettings(temperature=0.9)
-        
         agent_configs = {
             "lore_update": {
                 "name": "LoreUpdateAgent",
@@ -362,7 +359,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Never use types like 'character_trait', 'Legal Reform', etc."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "event_generation": {
                 "name": "EventGenerationAgent",
@@ -373,7 +369,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "and plot advancement. Focus on how events impact or reinforce matriarchal power dynamics."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "lore_creation": {
                 "name": "LoreCreationAgent",
@@ -384,7 +379,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Ensure all new lore reinforces matriarchal power dynamics."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "political_event": {
                 "name": "PoliticalEventAgent",
@@ -395,7 +389,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Events should highlight feminine leadership and authority."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "military_event": {
                 "name": "MilitaryEventAgent",
@@ -406,7 +399,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Events should highlight feminine military command structures."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "cultural_event": {
                 "name": "CulturalEventAgent",
@@ -417,17 +409,15 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Events should highlight feminine cultural influence and values."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             }
         }
-        
+
         # Create agents
         for key, config in agent_configs.items():
             self._agents[key] = Agent(
                 name=config["name"],
                 instructions=config["instructions"],
                 model=config["model"],
-                model_settings=config["settings"]
             )
     
     async def ensure_initialized(self):
@@ -491,7 +481,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "narrative elements that can drive lore evolution."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(),
             output_type=EventValidation
         )
         
@@ -1050,7 +1039,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Output valid JSON with these keys."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=SocietalImpact
         )
         
@@ -1404,7 +1392,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Return JSON with a single field: {'event_type': 'the chosen type'}"
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=EventType
         )
         
@@ -1504,7 +1491,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Otherwise, hand off to 'transfer_to_cultural_agent'."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             handoffs=[
                 handoff(
                     self._get_agent("political_event"),
@@ -2128,7 +2114,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Return only the new, updated description in a cohesive style."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
             
             # Potential change types
@@ -2284,7 +2269,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "territory, or governance. Keep the matriarchal theme strong."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
             
             # Do 1 or 2 shifts randomly
@@ -2535,7 +2519,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Given a change_type, rewrite their description to reflect that new condition."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
             
             # Potential changes
@@ -2712,7 +2695,6 @@ class MultiStepPlanner:
             Maintain matriarchal themes throughout the planning process.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=NarrativePlan
         )
     
@@ -3122,7 +3104,6 @@ class NarrativeEvaluator:
             Consider themes, character motivations, plot development, and matriarchal elements.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=NarrativeEvaluation
         )
         self.feedback_history = []
@@ -3328,7 +3309,6 @@ class NarrativeEvolutionSystem:
             Select elements that enhance the overall narrative, maintain consistency, and advance matriarchal themes.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=EventSelection
         )
         self.mutation_agent = Agent(
@@ -3338,7 +3318,6 @@ class NarrativeEvolutionSystem:
             Enhance matriarchal themes and ensure coherent integration with the world.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=MutationDirectives
         )
     
@@ -3589,7 +3568,6 @@ class WorldStateStreamer:
             and emerging patterns. Focus on matriarchal power dynamics.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
         )
     
     async def stream_world_changes(self, event_data: Dict[str, Any], affected_elements: List[Dict[str, Any]]) -> AsyncGenerator[Dict[str, Any], None]:

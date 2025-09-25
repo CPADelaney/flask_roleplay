@@ -9,10 +9,9 @@ from enum import Enum
 
 # Agents SDK imports
 from agents import (
-    Agent, 
-    function_tool, 
-    Runner, 
-    ModelSettings,
+    Agent,
+    function_tool,
+    Runner,
     RunConfig,
     handoff,
     InputGuardrail,

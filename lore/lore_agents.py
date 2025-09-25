@@ -20,7 +20,7 @@ import time
 import functools
 
 # Agents SDK imports
-from agents import Agent, ModelSettings, function_tool, Runner, trace
+from agents import Agent, function_tool, Runner, trace
 from agents.models.openai_responses import OpenAIResponsesModel
 
 # Nyx governance integration
@@ -519,7 +519,6 @@ def create_lore_agent(
     name: str,
     instructions: str,
     output_type: Optional[Type] = None,
-    temperature: float = 0.5
 ) -> Agent:
     """
     Factory function to create lore agents with consistent settings.
@@ -528,7 +527,6 @@ def create_lore_agent(
         name: Agent name
         instructions: Agent instructions
         output_type: Expected output type
-        temperature: Model temperature
         
     Returns:
         Configured Agent instance
@@ -543,7 +541,6 @@ def create_lore_agent(
         name=name,
         instructions=base_instructions,
         model=OpenAIResponsesModel(model="gpt-5-nano"),
-        model_settings=ModelSettings(temperature=temperature),
         output_type=output_type,
     )
 
@@ -556,8 +553,7 @@ foundation_lore_agent = create_lore_agent(
         "[cosmology, magic_system, world_history, calendar_system, social_structure]. "
         "Do NOT include any extra text outside the JSON."
     ),
-    output_type=FoundationLoreOutput,
-    temperature=0.4
+    output_type=FoundationLoreOutput
 )
 
 factions_agent = create_lore_agent(
@@ -570,8 +566,7 @@ factions_agent = create_lore_agent(
         "Do NOT return just an array. Always wrap in an object with a 'factions' key. "
         "No extra text outside the JSON."
     ),
-    output_type=FactionsOutput,
-    temperature=0.7
+    output_type=FactionsOutput
 )
 
 cultural_agent = create_lore_agent(
@@ -583,8 +578,7 @@ cultural_agent = create_lore_agent(
         "historical_origin. Do NOT return just an array. Always wrap in an object with an 'elements' key. "
         "No extra text outside the JSON."
     ),
-    output_type=CulturalElementsOutput,
-    temperature=0.5
+    output_type=CulturalElementsOutput
 )
 
 history_agent = create_lore_agent(
@@ -596,8 +590,7 @@ history_agent = create_lore_agent(
         "consequences, significance. Do NOT return just an array. Always wrap in an object with an 'events' key. "
         "No extra text outside the JSON."
     ),
-    output_type=HistoricalEventsOutput,
-    temperature=0.6
+    output_type=HistoricalEventsOutput
 )
 
 locations_agent = create_lore_agent(
@@ -609,8 +602,7 @@ locations_agent = create_lore_agent(
         "hidden_secrets, strategic_importance. Do NOT return just an array. Always wrap in an object with a 'locations' key. "
         "No extra text outside the JSON."
     ),
-    output_type=LocationsOutput,
-    temperature=0.7
+    output_type=LocationsOutput
 )
 
 quests_agent = create_lore_agent(
@@ -623,8 +615,7 @@ quests_agent = create_lore_agent(
         "Do NOT return just an array. Always wrap in an object with a 'quests' key. "
         "No extra text outside the JSON."
     ),
-    output_type=QuestsOutput,
-    temperature=0.7
+    output_type=QuestsOutput
 )
 
 setting_analysis_agent = create_lore_agent(
@@ -636,8 +627,7 @@ setting_analysis_agent = create_lore_agent(
         "Each category is an array of objects with fields like name, type, "
         "description, membership_basis, hierarchy, gathering_location, etc. "
         "No extra text outside the JSON."
-    ),
-    temperature=0.7
+    )
 )
 
 integration_agent = create_lore_agent(
@@ -648,8 +638,7 @@ integration_agent = create_lore_agent(
         "inconsistencies, resolutions, and integrated data. "
         "No extra text outside the JSON."
     ),
-    output_type=IntegrationOutput,
-    temperature=0.5
+    output_type=IntegrationOutput
 )
 
 conflict_resolution_agent = create_lore_agent(
@@ -660,8 +649,7 @@ conflict_resolution_agent = create_lore_agent(
         "conflict description, resolution approach, and updated data. "
         "No extra text outside the JSON."
     ),
-    output_type=ConflictResolutionOutput,
-    temperature=0.6
+    output_type=ConflictResolutionOutput
 )
 
 validation_agent = create_lore_agent(
@@ -672,8 +660,7 @@ validation_agent = create_lore_agent(
         "is_valid (boolean), issues (array), and suggestions (array). "
         "No extra text outside the JSON."
     ),
-    output_type=ValidationOutput,
-    temperature=0.4
+    output_type=ValidationOutput
 )
 
 fix_agent = create_lore_agent(
@@ -684,8 +671,7 @@ fix_agent = create_lore_agent(
         "fix_description, updated_data, and affected_components. "
         "No extra text outside the JSON."
     ),
-    output_type=FixOutput,
-    temperature=0.5
+    output_type=FixOutput
 )
 
 relationship_validation_agent = create_lore_agent(
@@ -697,8 +683,7 @@ relationship_validation_agent = create_lore_agent(
         "relationship_suggestions (array). "
         "No extra text outside the JSON."
     ),
-    output_type=ValidationOutput, 
-    temperature=0.4
+    output_type=ValidationOutput
 )
 
 # -------------------------------------------------------------------------------

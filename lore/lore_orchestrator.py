@@ -36,7 +36,7 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance, with_governance_permission
 
 # Agents SDK imports for new managers
-from agents import Agent, function_tool, Runner, ModelSettings, trace, handoff
+from agents import Agent, function_tool, Runner, trace, handoff
 from agents.run import RunConfig
 from agents.run_context import RunContextWrapper
 from pydantic import BaseModel, Field

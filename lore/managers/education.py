@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from agents import (
     Agent, function_tool, Runner, trace,
     GuardrailFunctionOutput, InputGuardrail, handoff,
-    RunContextWrapper, RunConfig, ModelSettings
+    RunContextWrapper, RunConfig
 )
 
 # Governance & others

@@ -9,7 +9,7 @@ import datetime
 from typing import Dict, List, Any, Optional, Set, Tuple
 
 # Agents SDK imports
-from agents import Agent, ModelSettings, function_tool, Runner
+from agents import Agent, function_tool, Runner
 from agents.run_context import RunContextWrapper
 
 # Nyx governance integration
@@ -3209,7 +3209,6 @@ class LoreUpdateSystem:
                 Consider how changes cascade through relationship networks.
                 """,
                 model=model_name,
-                temperature=0.7
             )
             
             # Get the response with enhanced error handling
