@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from db.connection import get_db_connection_context
 
 # Agents SDK imports
-from agents import Agent, ModelSettings, function_tool, Runner
+from agents import Agent, function_tool, Runner
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.run_context import RunContextWrapper
 
@@ -2093,7 +2093,6 @@ def get_foundation_lore_agent():
             model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
-        model_settings=ModelSettings(temperature=0.4),
         output_type=FoundationLoreOutput,
     )
 
@@ -2135,7 +2134,6 @@ def get_factions_agent():
             model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
-        model_settings=ModelSettings(temperature=0.7),
         output_type=FactionsOutput,
     )
 
@@ -2156,7 +2154,6 @@ def get_cultural_agent():
             model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
-        model_settings=ModelSettings(temperature=0.5),
         output_type=CulturalElementsOutput,
     )
 
@@ -2177,7 +2174,6 @@ def get_history_agent():
             model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
-        model_settings=ModelSettings(temperature=0.6),
         output_type=HistoricalEventsOutput,
     )
 
@@ -2200,7 +2196,6 @@ def get_locations_agent():
             model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
-        model_settings=ModelSettings(temperature=0.7),
         output_type=LocationsOutput,
     )
 
@@ -2222,6 +2217,5 @@ def get_quests_agent():
             model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
-        model_settings=ModelSettings(temperature=0.7),
         output_type=QuestsOutput,
     )

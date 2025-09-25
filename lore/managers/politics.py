@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, AsyncGenerator
 from datetime import datetime
 
 # Agents SDK imports
-from agents import Agent, function_tool, Runner, ModelSettings, RunContextWrapper, RunConfig, trace
+from agents import Agent, function_tool, Runner, RunContextWrapper, RunConfig, trace
 
 from pydantic import BaseModel, Field
 
