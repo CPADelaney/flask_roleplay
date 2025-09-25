@@ -574,13 +574,13 @@ class WorldPoliticsManager(BaseLoreManager):
                     await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
                     return nation_id
     
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_nation",
         action_description="Adding nation: {name}",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def add_nation(
         self,
         ctx,
@@ -697,13 +697,13 @@ class WorldPoliticsManager(BaseLoreManager):
                     )
                     return relation_id
     
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_international_relation",
         action_description="Adding relation between nations",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def add_international_relation(
         self,
         ctx,
@@ -739,13 +739,13 @@ class WorldPoliticsManager(BaseLoreManager):
             description, notable_conflicts, notable_alliances, trade_relations, cultural_exchanges
         )
 
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_all_nations",
         action_description="Getting all nations in the world",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
         """
         Get all nations in the world.
@@ -776,13 +776,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #   CONFLICT HANDLING
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_initial_conflicts",
         action_description="Generating initial national conflicts",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
         """Generate initial conflicts between nations with canon checks."""
         from lore.core import canon
@@ -1021,13 +1021,13 @@ class WorldPoliticsManager(BaseLoreManager):
         
         return result
 
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="stream_crisis_events",
         action_description="Streaming crisis events in real-time",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def stream_crisis_events(self, ctx, conflict_id: int) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream real-time updates about an evolving crisis, yielding events as they occur.
@@ -1089,13 +1089,13 @@ class WorldPoliticsManager(BaseLoreManager):
                     except json.JSONDecodeError:
                         pass
 
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="simulate_diplomatic_negotiation",
         action_description="Simulating diplomatic negotiations between nations",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def simulate_diplomatic_negotiation(self, ctx, nation1_id: int, nation2_id: int, issue: str) -> Dict[str, Any]:
         """
         Simulate diplomatic negotiations between two nations over a specific issue.
@@ -1173,13 +1173,13 @@ class WorldPoliticsManager(BaseLoreManager):
             
             return results
 
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="simulate_media_coverage",
         action_description="Simulating media coverage of political events",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def simulate_media_coverage(self, ctx, event_id: int) -> Dict[str, Any]:
         """
         Simulate media coverage of a political event from different perspectives.
@@ -1261,13 +1261,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  DOMESTIC ISSUES
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_domestic_issues",
         action_description="Generating domestic issues for nation {nation_id}",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def generate_domestic_issues(self, ctx, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
         """Generate domestic issues for a specific nation using canon system."""
         with trace(
@@ -1464,13 +1464,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  GET ACTIVE CONFLICTS
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_active_conflicts",
         action_description="Getting active national conflicts",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def get_active_conflicts(self, ctx) -> List[Dict[str, Any]]:
         """
         Get all active conflicts from the DB.
@@ -1507,13 +1507,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  GET NATION POLITICS (comprehensive)
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_nation_politics",
         action_description="Getting complete political info for nation {nation_id}",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def get_nation_politics(self, ctx, nation_id: int) -> Dict[str, Any]:
         """
         Get comprehensive political information about a nation:
@@ -1614,13 +1614,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  EVOLVE ALL CONFLICTS
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_all_conflicts",
         action_description="Evolving all conflicts by time passage",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def evolve_all_conflicts(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
         """Evolve all active conflicts using canon system for updates."""
         with trace(
@@ -1930,13 +1930,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  POLITICAL REFORM ENGINE
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="simulate_political_reforms",
         action_description="Model how governments evolve in response to internal and external pressures",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def simulate_political_reforms(self, ctx, nation_id: int) -> Dict[str, Any]:
         """Model how a nation's political system might evolve under pressure using canon system."""
         with trace(
@@ -2014,13 +2014,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  DYNASTY TRACKING SYSTEM
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="track_dynasty_lineage",
         action_description="Follow a political family's lineage across generations",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def track_dynasty_lineage(
         self,
         ctx,
@@ -2123,13 +2123,13 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  FACTION PROXIES INITIALIZATION
     # ------------------------------------------------------------------------
+    @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="initialize_faction_proxies",
         action_description="Creating faction agent proxies with competing goals",
         id_from_context=lambda ctx: "world_politics_manager"
     )
-    @function_tool
     async def initialize_faction_proxies(self, ctx) -> Dict[str, Any]:
         """
         Initialize agent proxies for all factions in the world.
