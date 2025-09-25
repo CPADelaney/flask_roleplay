@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import json
 import logging
 
-from agents import Agent, function_tool, Runner, trace, ModelSettings
+from agents import Agent, function_tool, Runner, trace
 from agents.run import RunConfig
 
 @dataclass
@@ -88,8 +88,7 @@ class LoreCache:
                 "cache misses, suggesting priority adjustments, and predicting "
                 "which items should be pre-warmed."
             ),
-            model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.0)
+            model="gpt-5-nano"
         )
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):
