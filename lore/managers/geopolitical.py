@@ -14,8 +14,8 @@ from db.connection import get_db_connection_context
 logger = logging.getLogger(__name__)
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, RunConfig, ModelSettings, RunResultStreaming,
-    GuardrailFunctionOutput, InputGuardrail, handoff, ModelSettings
+    Agent, function_tool, Runner, trace, RunConfig, RunResultStreaming,
+    GuardrailFunctionOutput, InputGuardrail, handoff
 )
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig

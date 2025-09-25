@@ -30,7 +30,7 @@ from datetime import datetime
 
 # Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, RunResultStreaming, ModelSettings,
+    Agent, function_tool, Runner, trace, RunResultStreaming,
     GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff, RunContextWrapper, RunConfig
 )
 

@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 # ------------------ AGENTS SDK IMPORTS ------------------
 from agents import (
     Agent,
-    ModelSettings,
     Runner,
     function_tool,
     trace,
@@ -188,8 +187,6 @@ class RegionalCultureSystem(BaseLoreManager):
             "Male elements are typically supportive or subordinate. Provide detail and realism."
         )
         
-        model_settings = ModelSettings(temperature=0.9)
-        
         agent_configs = {
             "language": {
                 "name": "LanguageGenerationAgent",
@@ -199,7 +196,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Reflect how language encodes status, formality, and gender hierarchy."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "norm": {
                 "name": "CulturalNormAgent",
@@ -209,7 +205,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Consider differences by gender, status, and context. Provide taboos, consequences, variations."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "etiquette": {
                 "name": "EtiquetteAgent",
@@ -220,7 +215,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Be explicit about how men must defer to female authority."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "distribution": {
                 "name": "LanguageDistributionAgent",
@@ -231,7 +225,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Some languages might be major (used by multiple large nations), others minor."
                 ),
                 "model": "gpt-5-nano",
-                "settings": ModelSettings(temperature=0.8)
             },
             "category": {
                 "name": "NormCategoryAgent",
@@ -241,7 +234,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "and how many norms total. Consider the nation's specific characteristics."
                 ),
                 "model": "gpt-5-nano",
-                "settings": ModelSettings(temperature=0.8)
             },
             "context": {
                 "name": "EtiquetteContextAgent",
@@ -251,7 +243,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Consider the nation's government type and cultural traits."
                 ),
                 "model": "gpt-5-nano",
-                "settings": ModelSettings(temperature=0.8)
             },
             "summary": {
                 "name": "CultureSummaryAgent",
@@ -261,7 +252,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "and any notable linguistic or etiquette features."
                 ),
                 "model": "gpt-5-nano",
-                "settings": ModelSettings(temperature=0.8)
             },
             "conflict": {
                 "name": "CulturalConflictAnalyst",
@@ -271,7 +261,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Provide specific conflicts, severity assessment, and diplomatic recommendations."
                 ),
                 "model": "gpt-5-nano",
-                "settings": ModelSettings(temperature=0.8)
             },
             "diffusion": {
                 "name": "CulturalDiffusionAgent",
@@ -282,7 +271,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Maintain matriarchal power structures as the dominant framework."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             },
             "dialect": {
                 "name": "DialectEvolutionAgent",
@@ -293,7 +281,6 @@ class RegionalCultureSystem(BaseLoreManager):
                     "matriarchal power structures and feminine-dominated society."
                 ),
                 "model": "gpt-5-nano",
-                "settings": model_settings
             }
         }
         
@@ -303,7 +290,6 @@ class RegionalCultureSystem(BaseLoreManager):
                 name=config["name"],
                 instructions=config["instructions"],
                 model=config["model"],
-                model_settings=config["settings"]
             )
     
     async def ensure_initialized(self):

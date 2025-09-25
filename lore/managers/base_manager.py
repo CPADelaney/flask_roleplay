@@ -10,12 +10,11 @@ from typing import Dict, List, Any, Optional, Type, Set, Callable, Protocol, run
 
 # Agents SDK imports - v0.0.17 best practices
 from agents import (
-    Agent, 
-    Runner, 
-    function_tool, 
-    trace, 
-    RunContextWrapper, 
-    ModelSettings,
+    Agent,
+    Runner,
+    function_tool,
+    trace,
+    RunContextWrapper,
     GuardrailFunctionOutput
 )
 from agents.run import RunConfig
