@@ -1198,11 +1198,22 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
             elif not initial_conflict.get("success", False):
                 summary = f"No initial conflict - {initial_conflict.get('message', 'Unknown error')}"
             else:
-                conflict_details = initial_conflict.get("conflict_details")
-                if conflict_details and isinstance(conflict_details, dict):
-                    summary = conflict_details.get("name", "Unnamed Conflict")
-                else:
-                    summary = "Unnamed Conflict"
+                raw_result = initial_conflict.get("raw_result", {})
+                resolved_name: Optional[str] = None
+
+                if isinstance(raw_result, dict):
+                    conflict_name = raw_result.get("conflict_name")
+                    if isinstance(conflict_name, str) and conflict_name.strip():
+                        resolved_name = conflict_name.strip()
+
+                if not resolved_name:
+                    conflict_details = initial_conflict.get("conflict_details")
+                    if conflict_details and isinstance(conflict_details, dict):
+                        conflict_name = conflict_details.get("name")
+                        if isinstance(conflict_name, str) and conflict_name.strip():
+                            resolved_name = conflict_name.strip()
+
+                summary = resolved_name or "Unnamed Conflict"
 
             success = not summary.startswith("No initial conflict -")
             completion_payload = {
