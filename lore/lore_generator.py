@@ -866,11 +866,11 @@ class WorldBuilder(BaseGenerator):
                 INSERT INTO WorldLore (
                     user_id, conversation_id, name, category,
                     description, significance, tags, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())
                 RETURNING id
             """
 
-            # tags should be passed as a list directly for TEXT[] column
+            # tags column is JSONB, serialize the Python list before sending to Postgres
             async with get_db_connection_context() as conn:
                 lore_id = await conn.fetchval(
                     query,
@@ -880,7 +880,7 @@ class WorldBuilder(BaseGenerator):
                     category,
                     description,
                     significance,
-                    tags,  # Pass as list, not JSON string
+                    json.dumps(tags),
                 )
 
                 return lore_id
