@@ -146,9 +146,22 @@ class GPTService:
         return cls._instance
     
     @staticmethod
-    def _get_cache_key(model: str, system_prompt: str, user_prompt: str) -> str:
+    def _get_cache_key(
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Generate cache key from inputs"""
-        content = f"{model}:{system_prompt}:{user_prompt}"
+        options_repr = ""
+        if options:
+            try:
+                options_repr = json.dumps(options, sort_keys=True, default=str)
+            except TypeError:
+                # Fallback to deterministic repr if JSON serialization fails
+                options_repr = repr(sorted(options.items()))
+
+        content = f"{model}:{system_prompt}:{user_prompt}:{options_repr}"
         return hashlib.md5(content.encode()).hexdigest()
     
     @staticmethod
@@ -168,18 +181,24 @@ class GPTService:
         user_prompt: str,
         response_model: type[BaseModel],
         max_retries: int = 3,
-        use_cache: bool = True
+        use_cache: bool = True,
+        temperature: float | None = None,
+        **call_options: Any,
     ) -> BaseModel:
         """Make GPT call with automatic validation and retries"""
-        
+
         user_prompt = self._sanitize_input(user_prompt)
-        
+
         total_prompt_len = len(system_prompt) + len(user_prompt)
         if total_prompt_len > MAX_TOKEN_SAFETY:
             logger.warning(f"Prompt too long ({total_prompt_len} chars), truncating user prompt")
             user_prompt = textwrap.shorten(user_prompt, width=MAX_TOKEN_SAFETY - len(system_prompt) - 100)
         
-        cache_key = self._get_cache_key(model, system_prompt, user_prompt)
+        options = {k: v for k, v in call_options.items() if v is not None}
+        if temperature is not None:
+            options["temperature"] = temperature
+
+        cache_key = self._get_cache_key(model, system_prompt, user_prompt, options)
         if use_cache and ENABLE_GPT_CACHE and cache_key in self._cache:
             logger.debug(f"Cache hit for {response_model.__name__}")
             return self._cache[cache_key]
@@ -194,6 +213,7 @@ class GPTService:
                         model=model,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
+                        **options,
                     )
                     
                     data = self._parse_json_response(raw_response)
@@ -221,15 +241,20 @@ class GPTService:
             raise last_error
     
     async def _make_gpt_call(
-        self, model: str, system_prompt: str, user_prompt: str
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        **call_options: Any,
     ) -> str:
         """Make actual GPT call - isolated for mocking in tests"""
         from npcs.new_npc_creation import _responses_json_call
-        
+
         return await _responses_json_call(
             model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            **call_options,
         )
     
     def _parse_json_response(self, response: str) -> dict:
