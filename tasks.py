@@ -1213,6 +1213,24 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
                         if isinstance(conflict_name, str) and conflict_name.strip():
                             resolved_name = conflict_name.strip()
 
+                if not resolved_name:
+                    conflict_id = initial_conflict.get("conflict_id")
+                    if conflict_id:
+                        fetched_name: Optional[str] = None
+                        try:
+                            async with get_db_connection_context() as conn:
+                                fetched_name = await conn.fetchval(
+                                    "SELECT conflict_name FROM Conflicts WHERE id=$1",
+                                    conflict_id,
+                                )
+                        except Exception:  # pragma: no cover - defensive safeguard
+                            logger.exception(
+                                "Failed to fetch conflict name for conflict_id=%s", conflict_id
+                            )
+
+                        if isinstance(fetched_name, str) and fetched_name.strip():
+                            resolved_name = fetched_name.strip()
+
                 summary = resolved_name or "Unnamed Conflict"
 
             success = not summary.startswith("No initial conflict -")
