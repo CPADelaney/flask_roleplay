@@ -264,6 +264,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     async def _handle_conflict_created(self, event: "SystemEvent") -> "SubsystemResponse":
         """Initialize flow for new conflict, deferring if id is not present."""
+        _, EventType, SystemEvent, SubsystemResponse = _orch_types()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
         conflict_type = payload.get('conflict_type') or 'unknown'
@@ -316,6 +317,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     async def _handle_state_sync(self, event: "SystemEvent") -> "SubsystemResponse":
         """Finalize deferred initialization when we receive conflict_id via STATE_SYNC."""
+        _, _, _, SubsystemResponse = _orch_types()
         payload = event.payload or {}
         op_id = payload.get('operation_id')
         conflict_id = payload.get('conflict_id')
@@ -350,9 +352,10 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     async def _handle_conflict_updated(self, event: "SystemEvent") -> "SubsystemResponse":
         """Update flow based on conflict changes"""
+        _, EventType, SystemEvent, SubsystemResponse = _orch_types()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
-        
+
         if not conflict_id:
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
@@ -401,6 +404,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     async def _handle_tension_changed(self, event: "SystemEvent") -> "SubsystemResponse":
         """Handle tension changes affecting flow"""
+        _, EventType, SystemEvent, SubsystemResponse = _orch_types()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
         new_tension = float(payload.get('new_tension', 0.5) or 0.5)
@@ -437,6 +441,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     async def _handle_player_choice(self, event: "SystemEvent") -> "SubsystemResponse":
         """Handle player choices affecting flow"""
+        _, EventType, SystemEvent, SubsystemResponse = _orch_types()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
         choice_impact = payload.get('impact', {}) or {}
@@ -481,6 +486,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
     
     async def _handle_stakeholder_action(self, event: "SystemEvent") -> "SubsystemResponse":
         """Handle stakeholder actions affecting flow."""
+        _, _, _, SubsystemResponse = _orch_types()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
         action_type = (payload.get('action_type') or '').lower()
