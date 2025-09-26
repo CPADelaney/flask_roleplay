@@ -29,7 +29,12 @@ from memory.semantic import SemanticMemoryManager
 from memory.masks import ProgressiveRevealManager, RevealType, RevealSeverity
 from memory.reconsolidation import ReconsolidationManager
 
-from logic.chatgpt_integration import get_openai_client, get_chatgpt_response, get_async_openai_client
+from logic.chatgpt_integration import (
+    get_openai_client,
+    get_chatgpt_response,
+    get_async_openai_client,
+    ALLOWS_TEMPERATURE,
+)
 from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
 from logic.calendar import load_calendar_names
@@ -80,6 +85,7 @@ async def _responses_json_call(
     user_prompt: str,
     max_output_tokens: int | None = None,
     previous_response_id: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """
     Wrapper around `client.responses.create()`.
@@ -97,6 +103,9 @@ async def _responses_json_call(
     }
     if previous_response_id:
         params["previous_response_id"] = previous_response_id
+
+    if temperature is not None and model in ALLOWS_TEMPERATURE:
+        params["temperature"] = temperature
 
     # --- call the endpoint ----------------------------------------------
     try:
