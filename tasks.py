@@ -1220,7 +1220,11 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
                         try:
                             async with get_db_connection_context() as conn:
                                 fetched_name = await conn.fetchval(
-                                    "SELECT conflict_name FROM Conflicts WHERE id=$1",
+                                    """
+                                    SELECT conflict_name
+                                    FROM Conflicts
+                                    WHERE id=$1
+                                    """,
                                     conflict_id,
                                 )
                         except Exception:  # pragma: no cover - defensive safeguard
@@ -1228,8 +1232,10 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
                                 "Failed to fetch conflict name for conflict_id=%s", conflict_id
                             )
 
-                        if isinstance(fetched_name, str) and fetched_name.strip():
-                            resolved_name = fetched_name.strip()
+                        if isinstance(fetched_name, str):
+                            normalized_name = " ".join(fetched_name.split())
+                            if normalized_name:
+                                resolved_name = normalized_name
 
                 summary = resolved_name or "Unnamed Conflict"
 

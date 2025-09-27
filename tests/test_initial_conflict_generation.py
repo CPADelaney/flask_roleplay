@@ -267,7 +267,7 @@ def test_generate_initial_conflict_falls_back_to_db_title(tasks_module, monkeypa
             return cls(fallback_response)
 
     monkeypatch.setattr(
-        tasks_module,
+        sys.modules["logic.conflict_system.conflict_integration"],
         "ConflictSystemIntegration",
         _FallbackConflictIntegration,
     )
@@ -295,5 +295,75 @@ def test_generate_initial_conflict_falls_back_to_db_title(tasks_module, monkeypa
     assert summary_calls, "Expected InitialConflictSummary write"
     _, args = summary_calls[0]
     assert args[-1] == "Database Canonical Title"
+
+    assert not connections
+
+
+def test_generate_initial_conflict_uses_db_name_when_conflict_names_missing(
+    tasks_module, monkeypatch
+):
+    monkeypatch.setattr(tasks_module, "RunContextWrapper", DummyRunContext)
+
+    def _run(coro):
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    monkeypatch.setattr(tasks_module, "run_async_in_worker_loop", _run)
+
+    fallback_response = {
+        "success": True,
+        "raw_result": {},
+        "conflict_details": {},
+        "conflict_id": 123,
+    }
+
+    class _FallbackConflictIntegration:
+        def __init__(self, response):
+            self._response = response
+
+        async def initialize(self):
+            return None
+
+        async def generate_conflict(self, *args, **kwargs):
+            return self._response
+
+        @classmethod
+        async def get_instance(cls, *args, **kwargs):
+            return cls(fallback_response)
+
+    monkeypatch.setattr(
+        sys.modules["logic.conflict_system.conflict_integration"],
+        "ConflictSystemIntegration",
+        _FallbackConflictIntegration,
+    )
+
+    first_conn = DummyConnection()
+    second_conn = DummyConnection(fetchval_result=3)
+    third_conn = DummyConnection(fetchval_result="   Stored   Conflict   Name   ")
+    fourth_conn = DummyConnection()
+    connections = [first_conn, second_conn, third_conn, fourth_conn]
+
+    def fake_get_db_connection_context():
+        if not connections:
+            raise AssertionError("No more connections available")
+        return DummyContextManager(connections.pop(0))
+
+    monkeypatch.setattr(
+        tasks_module, "get_db_connection_context", fake_get_db_connection_context
+    )
+
+    result = tasks_module.generate_initial_conflict_task(user_id=1, conversation_id=77)
+
+    assert result["initial_conflict"] == "Stored Conflict Name"
+
+    summary_calls = [
+        call for call in fourth_conn.execute_calls if "InitialConflictSummary" in call[0]
+    ]
+    assert summary_calls, "Expected InitialConflictSummary write"
+    _, args = summary_calls[0]
+    assert args[-1] == "Stored Conflict Name"
 
     assert not connections
