@@ -624,7 +624,17 @@ class DynamicConflictTemplateSubsystem:
                             template_id,
                             event.payload.get('context', {})
                         )
-                        
+
+                        # Determine a human-readable conflict name for downstream systems
+                        conflict_name = (generated.variation_seed or '').strip()
+                        if not conflict_name:
+                            for hook in generated.narrative_hooks:
+                                if isinstance(hook, str) and hook.strip():
+                                    conflict_name = hook.strip()
+                                    break
+                        if not conflict_name:
+                            conflict_name = f"Conflict {generated.conflict_id}"
+
                         # Emit template generated event
                         side_effects = [SystemEvent(
                             event_id=f"template_gen_{event.event_id}",
@@ -633,11 +643,12 @@ class DynamicConflictTemplateSubsystem:
                             payload={
                                 'template_id': template_id,
                                 'conflict_id': generated.conflict_id,
+                                'conflict_name': conflict_name,
                                 'hooks': generated.narrative_hooks
                             },
                             priority=7
                         )]
-                        
+
                         return SubsystemResponse(
                             subsystem=self.subsystem_type,
                             event_id=event.event_id,
@@ -645,6 +656,8 @@ class DynamicConflictTemplateSubsystem:
                             data={
                                 'template_used': template_id,
                                 'generated_conflict': generated.conflict_id,
+                                'conflict_id': generated.conflict_id,
+                                'conflict_name': conflict_name,
                                 'narrative_hooks': generated.narrative_hooks
                             },
                             side_effects=side_effects
@@ -1398,7 +1411,12 @@ class DynamicConflictTemplateSubsystem:
                             'complexity': complexity
                         }
                     )
-                    return result.get('conflict_id', 0)
+                    conflict_id = result.get('conflict_id') if isinstance(result, dict) else None
+                    if conflict_id:
+                        return conflict_id
+                    logger.warning(
+                        "Synthesizer create_conflict returned without conflict_id; falling back to direct insert"
+                    )
                 except Exception as e:
                     logger.error(f"Error creating conflict through synthesizer: {e}")
         
