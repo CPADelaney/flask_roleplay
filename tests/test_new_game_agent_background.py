@@ -279,3 +279,99 @@ async def test_process_new_game_does_not_block_on_background(monkeypatch):
     # Shutdown should cancel the background task
     assert handler.background_task is None or handler.background_task.cancelled()
     assert agent._directive_task is None
+
+
+def test_process_new_game_task_uses_environment_name(monkeypatch):
+    import importlib
+    import sys
+
+    user_id = 11
+    conversation_id = 57
+    captured_names: list[str] = []
+
+    fake_brain_base = types.ModuleType("nyx.core.brain.base")
+    fake_brain_base.NyxBrain = object
+    fake_checkpoint = types.ModuleType("nyx.core.brain.checkpointing_agent")
+    fake_checkpoint.CheckpointingPlannerAgent = object
+    fake_nyx_agent_sdk = types.ModuleType("nyx.nyx_agent_sdk")
+
+    class _StubSDK:
+        async def initialize_agent(self):
+            return None
+
+    fake_nyx_agent_sdk.NyxAgentSDK = _StubSDK
+    fake_nyx_agent_sdk.NyxSDKConfig = object
+
+    fake_nyx = types.ModuleType("nyx")
+    fake_nyx_core = types.ModuleType("nyx.core")
+    fake_nyx_core_brain = types.ModuleType("nyx.core.brain")
+    fake_nyx.core = fake_nyx_core
+    fake_nyx_core.brain = fake_nyx_core_brain
+    fake_nyx_core_brain.base = fake_brain_base
+    fake_nyx_core_brain.checkpointing_agent = fake_checkpoint
+
+    monkeypatch.setitem(sys.modules, "nyx", fake_nyx)
+    monkeypatch.setitem(sys.modules, "nyx.core", fake_nyx_core)
+    monkeypatch.setitem(sys.modules, "nyx.core.brain", fake_nyx_core_brain)
+    monkeypatch.setitem(sys.modules, "nyx.core.brain.base", fake_brain_base)
+    monkeypatch.setitem(sys.modules, "nyx.core.brain.checkpointing_agent", fake_checkpoint)
+    fake_nyx.nyx_agent_sdk = fake_nyx_agent_sdk
+
+    sys.modules.pop("tasks", None)
+    monkeypatch.setitem(sys.modules, "nyx.nyx_agent_sdk", fake_nyx_agent_sdk)
+
+    tasks = importlib.import_module("tasks")
+
+    @contextlib.contextmanager
+    def noop_trace(**kwargs):
+        yield
+
+    monkeypatch.setattr(tasks, "trace", noop_trace)
+
+    def immediate_run(coro):
+        return asyncio.run(coro)
+
+    monkeypatch.setattr(tasks, "run_async_in_worker_loop", immediate_run)
+
+    class DummyConnection:
+        async def execute(self, query, *args):
+            if "UPDATE conversations" in query:
+                captured_names.append(args[2])
+            return None
+
+        async def fetchval(self, query, *args):
+            if "SELECT conversation_name" in query:
+                return "Existing Name"
+            if "SELECT 1 FROM messages" in query:
+                return 0
+            return None
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield DummyConnection()
+
+    monkeypatch.setattr(tasks, "get_db_connection_context", fake_db_context)
+
+    class DummyAgent:
+        async def process_new_game(self, ctx, payload):
+            return types.SimpleNamespace(
+                message="ok",
+                scenario_name="Scenario",
+                environment_name="Forest of Tests",
+                environment_desc="",
+                lore_summary="",
+                conversation_id=conversation_id,
+                welcome_image_url=None,
+                status="ready",
+                opening_narrative="Intro",
+            )
+
+        async def process_preset_game_direct(self, ctx, payload, preset_story_id):
+            return await self.process_new_game(ctx, payload)
+
+    monkeypatch.setattr(tasks, "NewGameAgent", lambda: DummyAgent())
+
+    result = tasks.process_new_game_task(user_id, {"conversation_id": conversation_id})
+
+    assert result["status"] == "ready"
+    assert captured_names == ["Forest of Tests"]

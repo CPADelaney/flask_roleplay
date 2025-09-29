@@ -474,12 +474,28 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
                 conv_id_final = conversation_data.get("conversation_id") or _get("conversation_id")
                 if conv_id_final is None:
                     logger.warning("No conversation_id found after pipeline; cannot mark ready.")
-                conv_name = _get("conversation_name", "New Game")
+                conv_name = (
+                    _get("conversation_name")
+                    or _get("environment_name")
+                    or conversation_data.get("conversation_name")
+                )
                 opening_text = _get("opening_narrative") or _get("opening_message") or "[World initialized]"
 
                 try:
                     async with get_db_connection_context() as conn:
                         if conv_id_final is not None:
+                            name_to_persist = conv_name
+                            if not name_to_persist:
+                                existing_name = await conn.fetchval(
+                                    """
+                                    SELECT conversation_name
+                                      FROM conversations
+                                     WHERE id=$1 AND user_id=$2
+                                """,
+                                    conv_id_final,
+                                    user_id_int,
+                                )
+                                name_to_persist = existing_name
                             await conn.execute(
                                 """
                                 UPDATE conversations
@@ -489,7 +505,7 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
                                 """,
                                 conv_id_final,
                                 user_id_int,
-                                conv_name,
+                                name_to_persist or "New Game",
                             )
                             exists = await conn.fetchval(
                                 """
