@@ -3081,11 +3081,12 @@ class NewGameAgent:
         action_description="Finalized game setup including lore, conflict, currency and image"
     )
     async def finalize_game_setup(self, ctx: RunContextWrapper[GameContext], params: FinalizeGameSetupParams) -> FinalizeResult:
-        """
-        Finalize game setup including lore generation, conflict generation and image generation.
-        """
+        """Finalize game setup including lore generation, conflict generation and image generation."""
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
+        
+        logging.info(f"[FINALIZE START] Beginning finalization for conv={conversation_id}")
+    
 
         from lore.core import canon
 
@@ -3106,7 +3107,8 @@ class NewGameAgent:
         conflict_name = await self._queue_conflict_generation(user_id, conversation_id)
 
         # Generate currency system canonically
-        currency_name = "Standard currency"  # Default value
+        logging.info(f"[FINALIZE] Starting currency generation for conv={conversation_id}")
+        currency_name = "Standard currency"
         try:
             from logic.currency_generator import CurrencyGenerator
             currency_gen = CurrencyGenerator(user_id, conversation_id)
@@ -3127,14 +3129,18 @@ class NewGameAgent:
                 )
                 
             currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
+            logging.info(f"[FINALIZE] Currency generation complete for conv={conversation_id}")
         except Exception as e:
-            logging.error(f"Error generating currency system: {e}")
+            logging.error(f"[FINALIZE] Currency generation failed: {e}")
             currency_name = "Standard currency"
             
-        # Try to generate welcome image, but don't fail if it's not available
+        # Try to generate welcome image
+        logging.info(f"[FINALIZE] Starting image generation for conv={conversation_id}")
         welcome_image_url = None
         try:
             if self._image_gen_available():
+                # Add timeout wrapper
+                logging.info(f"[FINALIZE] Calling image generation API")
                 scene_data_json = json.dumps({
                     "scene_data": {
                         "npc_names": [],
@@ -3167,7 +3173,7 @@ class NewGameAgent:
                     scene_data,
                     user_id,
                     conversation_id,
-                    timeout=5.0,
+                    timeout=10.0,
                 )
 
                 if image_result is None:
@@ -3183,19 +3189,31 @@ class NewGameAgent:
                         )
                     logging.info("Welcome image generated successfully")
             else:
-                logging.info("Image generation skipped - no API key configured")
-                
+                logging.info(f"[FINALIZE] Image generation skipped - not available")
+        except asyncio.TimeoutError:
+            logging.warning(f"[FINALIZE] Image generation timed out after 10s")
         except Exception as e:
-            # Log the error but don't fail the entire setup
-            logging.warning(f"Failed to generate welcome image: {e}")
-            logging.info("Continuing without welcome image")
-
-        # Establish initial player context (location and time)
-        await self._initialize_player_context(canon_ctx, user_id, conversation_id)
-
-        # Return structured result - but DON'T mark as ready yet
+            logging.warning(f"[FINALIZE] Image generation failed: {e}")
+        
+        # Establish initial player context
+        logging.info(f"[FINALIZE] Starting player context initialization for conv={conversation_id}")
+        try:
+            await asyncio.wait_for(
+                self._initialize_player_context(canon_ctx, user_id, conversation_id),
+                timeout=30.0  # Add 30s timeout
+            )
+            logging.info(f"[FINALIZE] Player context initialized for conv={conversation_id}")
+        except asyncio.TimeoutError:
+            logging.error(f"[FINALIZE] Player context initialization timed out after 30s")
+            # Continue anyway - not critical
+        except Exception as e:
+            logging.error(f"[FINALIZE] Player context initialization failed: {e}", exc_info=True)
+            # Continue anyway
+        
+        logging.info(f"[FINALIZE COMPLETE] Returning result for conv={conversation_id}")
+        
         return FinalizeResult(
-            status="finalized",  # Not "ready" yet
+            status="finalized",
             welcome_image_url=welcome_image_url,
             lore_summary=lore_summary,
             initial_conflict=conflict_name,
@@ -3223,48 +3241,93 @@ class NewGameAgent:
         conversation_id: int,
     ) -> None:
         """Seed the player's starting location and time snapshot."""
-
+        
+        logging.info(f"[PLAYER_CTX] Starting initialization for conv={conversation_id}")
+        
         try:
+            # Step 1: Set starting location
+            logging.info(f"[PLAYER_CTX] Fetching locations")
             async with get_db_connection_context() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT location_name FROM Locations
-                    WHERE user_id=$1 AND conversation_id=$2
-                    """,
-                    user_id,
-                    conversation_id,
+                rows = await asyncio.wait_for(
+                    conn.fetch(
+                        """
+                        SELECT location_name FROM Locations
+                        WHERE user_id=$1 AND conversation_id=$2
+                        LIMIT 10
+                        """,
+                        user_id,
+                        conversation_id,
+                    ),
+                    timeout=5.0
                 )
+                
                 if rows:
                     start_location = random.choice([row["location_name"] for row in rows])
+                    logging.info(f"[PLAYER_CTX] Selected start location: {start_location}")
                 else:
                     start_location = "Unknown"
-                await canon.update_current_roleplay(
-                    ctx_wrap, conn, "CurrentLocation", start_location
+                    logging.warning(f"[PLAYER_CTX] No locations found, using Unknown")
+                
+                await asyncio.wait_for(
+                    canon.update_current_roleplay(
+                        ctx_wrap, conn, "CurrentLocation", start_location
+                    ),
+                    timeout=5.0
                 )
-
-            calendar_names = await load_calendar_names(user_id, conversation_id)
-            months = calendar_names.get("months", [])
-            days = calendar_names.get("days", [])
+                logging.info(f"[PLAYER_CTX] CurrentLocation updated")
+                
+        except asyncio.TimeoutError:
+            logging.error(f"[PLAYER_CTX] Location setup timed out")
+            start_location = "Unknown"
+        except Exception as e:
+            logging.error(f"[PLAYER_CTX] Location setup failed: {e}", exc_info=True)
+            start_location = "Unknown"
+        
+        # Step 2: Set time/calendar info
+        try:
+            logging.info(f"[PLAYER_CTX] Loading calendar data")
+            calendar_names = await asyncio.wait_for(
+                load_calendar_names(user_id, conversation_id),
+                timeout=5.0
+            )
+            
+            months = calendar_names.get("months", ["Month"])
+            days = calendar_names.get("days", ["Day"])
+            
+            # Pick random time
             month_idx = random.randint(1, len(months) or 1)
             day_num = random.randint(1, 30)
             phase = random.choice(TIME_PHASES)
-            month_source = months or ["Month"]
-            day_source = days or ["Day"]
-            month_name = month_source[month_idx - 1]
-            day_name = day_source[(day_num - 1) % len(day_source)]
+            month_name = months[(month_idx - 1) % len(months)]
+            day_name = days[(day_num - 1) % len(days)]
             year = random.randint(1, 100)
-
-            await set_current_time(user_id, conversation_id, year, month_idx, day_num, phase)
-
+            
+            logging.info(f"[PLAYER_CTX] Setting time to Y{year} {month_name} {day_name} {phase}")
+            
+            await asyncio.wait_for(
+                set_current_time(user_id, conversation_id, year, month_idx, day_num, phase),
+                timeout=5.0
+            )
+            
             async with get_db_connection_context() as conn:
-                await canon.update_current_roleplay(
-                    ctx_wrap,
-                    conn,
-                    "CurrentTime",
-                    f"Year {year} {month_name} {day_name} {phase}",
+                await asyncio.wait_for(
+                    canon.update_current_roleplay(
+                        ctx_wrap,
+                        conn,
+                        "CurrentTime",
+                        f"Year {year} {month_name} {day_name} {phase}",
+                    ),
+                    timeout=5.0
                 )
+            
+            logging.info(f"[PLAYER_CTX] Time initialization complete")
+            
+        except asyncio.TimeoutError:
+            logging.error(f"[PLAYER_CTX] Time setup timed out")
         except Exception as e:
-            logging.warning(f"Failed to initialize player context: {e}")
+            logging.error(f"[PLAYER_CTX] Time setup failed: {e}", exc_info=True)
+        
+        logging.info(f"[PLAYER_CTX] Initialization complete for conv={conversation_id}")
 
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
