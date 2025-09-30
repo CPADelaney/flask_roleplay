@@ -438,123 +438,219 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
                 logger.info("[NG] payload keys=%s, preset_id=%s",
                             list(conversation_data.keys()) if isinstance(conversation_data, dict) else type(conversation_data),
                             (conversation_data or {}).get("preset_story_id"))
-                user_id_int = int(user_id)
-            except Exception:
-                logger.error(f"Invalid user_id: {user_id}")
-                return {"status": "failed", "error": "Invalid user_id"}
-
-            if not isinstance(conversation_data, dict):
-                logger.error("conversation_data is not a dict")
-                return {"status": "failed", "error": "Invalid conversation_data"}
-
-            conv_id = conversation_data.get("conversation_id")
-            if conv_id is not None:
+                
+                # Validate user_id
                 try:
-                    conversation_data["conversation_id"] = int(conv_id)
+                    user_id_int = int(user_id)
+                    logger.info(f"[NG] Validated user_id: {user_id_int}")
                 except Exception:
-                    logger.error(f"Invalid conversation_id: {conv_id}")
-                    return {"status": "failed", "error": "Invalid conversation_id"}
+                    logger.error(f"Invalid user_id: {user_id}")
+                    return {"status": "failed", "error": "Invalid user_id"}
 
-            preset_story_id = get_preset_id(conversation_data)
+                # Validate conversation_data
+                if not isinstance(conversation_data, dict):
+                    logger.error("conversation_data is not a dict")
+                    return {"status": "failed", "error": "Invalid conversation_data"}
 
-            agent = NewGameAgent()
-            from lore.core.context import CanonicalContext
-            ctx = CanonicalContext(user_id_int, conversation_data.get("conversation_id", 0))
+                # Validate conversation_id if provided
+                conv_id = conversation_data.get("conversation_id")
+                if conv_id is not None:
+                    try:
+                        conversation_data["conversation_id"] = int(conv_id)
+                        logger.info(f"[NG] Validated conversation_id: {conversation_data['conversation_id']}")
+                    except Exception:
+                        logger.error(f"Invalid conversation_id: {conv_id}")
+                        return {"status": "failed", "error": "Invalid conversation_id"}
 
-            try:
-                if preset_story_id:
-                    logger.info(f"Preset path triggered (story_id={preset_story_id})")
-                    result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
-                else:
-                    result = await agent.process_new_game(ctx, conversation_data)
+                preset_story_id = get_preset_id(conversation_data)
+                logger.info(f"[NG] Preset story ID: {preset_story_id or 'None (dynamic)'}")
 
-                def _get(attr, default=None):
-                    return getattr(result, attr, default) if hasattr(result, attr) else result.get(attr, default) if isinstance(result, dict) else default
-
-                conv_id_final = conversation_data.get("conversation_id") or _get("conversation_id")
-                if conv_id_final is None:
-                    logger.warning("No conversation_id found after pipeline; cannot mark ready.")
-                conv_name = (
-                    _get("conversation_name")
-                    or _get("environment_name")
-                    or conversation_data.get("conversation_name")
-                )
-                opening_text = _get("opening_narrative") or _get("opening_message") or "[World initialized]"
+                # Create agent and context
+                agent = NewGameAgent()
+                from lore.core.context import CanonicalContext
+                ctx = CanonicalContext(user_id_int, conversation_data.get("conversation_id", 0))
 
                 try:
-                    async with get_db_connection_context() as conn:
-                        if conv_id_final is not None:
+                    # Process game creation with timeout
+                    logger.info(f"[NG] Starting game creation (timeout: 600s)")
+                    
+                    if preset_story_id:
+                        logger.info(f"[NG] Processing preset story: {preset_story_id}")
+                        result = await asyncio.wait_for(
+                            agent.process_preset_game_direct(ctx, conversation_data, preset_story_id),
+                            timeout=600.0  # 10 minute timeout
+                        )
+                    else:
+                        logger.info(f"[NG] Processing dynamic game creation")
+                        result = await asyncio.wait_for(
+                            agent.process_new_game(ctx, conversation_data),
+                            timeout=600.0  # 10 minute timeout
+                        )
+                    
+                    logger.info(f"[NG] Agent processing complete, result type: {type(result)}")
+
+                    # Extract data from result
+                    def _get(attr, default=None):
+                        return getattr(result, attr, default) if hasattr(result, attr) else result.get(attr, default) if isinstance(result, dict) else default
+
+                    conv_id_final = conversation_data.get("conversation_id") or _get("conversation_id")
+                    logger.info(f"[NG POST] Final conversation_id: {conv_id_final}")
+                    
+                    if conv_id_final is None:
+                        logger.warning("[NG POST] No conversation_id found after pipeline; cannot mark ready.")
+                        return serialize_for_celery(result)
+                    
+                    conv_name = (
+                        _get("conversation_name")
+                        or _get("environment_name")
+                        or conversation_data.get("conversation_name")
+                    )
+                    opening_text = _get("opening_narrative") or _get("opening_message") or "[World initialized]"
+                    
+                    logger.info(f"[NG POST] Extracted - name: {conv_name}, opening_len: {len(opening_text) if opening_text else 0}")
+
+                    # Update conversation status with timeout
+                    try:
+                        logger.info(f"[NG POST] Updating conversation {conv_id_final} status to ready")
+                        async with get_db_connection_context() as conn:
+                            # Get/validate conversation name
                             name_to_persist = conv_name
                             if not name_to_persist:
-                                existing_name = await conn.fetchval(
-                                    """
-                                    SELECT conversation_name
-                                      FROM conversations
-                                     WHERE id=$1 AND user_id=$2
-                                """,
-                                    conv_id_final,
-                                    user_id_int,
+                                logger.info(f"[NG POST] No name provided, fetching existing name")
+                                existing_name = await asyncio.wait_for(
+                                    conn.fetchval(
+                                        """
+                                        SELECT conversation_name
+                                          FROM conversations
+                                         WHERE id=$1 AND user_id=$2
+                                        """,
+                                        conv_id_final,
+                                        user_id_int,
+                                    ),
+                                    timeout=5.0
                                 )
                                 name_to_persist = existing_name
-                            await conn.execute(
-                                """
-                                UPDATE conversations
-                                   SET status='ready',
-                                       conversation_name=$3
-                                 WHERE id=$1 AND user_id=$2
-                                """,
-                                conv_id_final,
-                                user_id_int,
-                                name_to_persist or "New Game",
-                            )
-                            exists = await conn.fetchval(
-                                """
-                                SELECT 1 FROM messages
-                                 WHERE conversation_id=$1 AND sender='Nyx'
-                                 LIMIT 1
-                                """,
-                                conv_id_final,
-                            )
-                            if not exists:
-                                await conn.execute(
+                                logger.info(f"[NG POST] Using existing name: {name_to_persist}")
+                            
+                            # Update conversation
+                            logger.info(f"[NG POST] Executing UPDATE conversations SET status='ready'")
+                            await asyncio.wait_for(
+                                conn.execute(
                                     """
-                                    INSERT INTO messages (conversation_id, sender, content, created_at)
-                                    VALUES ($1, 'Nyx', $2, NOW())
+                                    UPDATE conversations
+                                       SET status='ready',
+                                           conversation_name=$3
+                                     WHERE id=$1 AND user_id=$2
                                     """,
                                     conv_id_final,
-                                    opening_text,
-                                )
-                                logger.info("Inserted opening Nyx message for conversation %s", conv_id_final)
-                except Exception as upd_err:
-                    logger.error("Failed to finalize conversation row: %s", upd_err, exc_info=True)
-
-                return serialize_for_celery(result)
-
-            except Exception as e:
-                logger.exception("Critical error in process_new_game_task")
-
-                conv_id_fail = conversation_data.get("conversation_id")
-                if conv_id_fail:
-                    try:
-                        async with get_db_connection_context() as conn:
-                            await conn.execute(
-                                """
-                                UPDATE conversations
-                                   SET status='failed',
-                                       conversation_name='New Game - Task Failed'
-                                 WHERE id=$1 AND user_id=$2
-                                """,
-                                conv_id_fail,
-                                user_id_int,
+                                    user_id_int,
+                                    name_to_persist or "New Game",
+                                ),
+                                timeout=10.0
                             )
-                    except Exception as update_err:
-                        logger.error(f"Failed to update conversation status: {update_err}")
+                            logger.info(f"[NG POST] Conversation status updated successfully")
+                            
+                            # Check for opening message
+                            logger.info(f"[NG POST] Checking for existing opening message")
+                            exists = await asyncio.wait_for(
+                                conn.fetchval(
+                                    """
+                                    SELECT 1 FROM messages
+                                     WHERE conversation_id=$1 AND sender='Nyx'
+                                     LIMIT 1
+                                    """,
+                                    conv_id_final,
+                                ),
+                                timeout=5.0
+                            )
+                            
+                            if not exists:
+                                logger.info(f"[NG POST] No opening message found, inserting one (length: {len(opening_text)})")
+                                await asyncio.wait_for(
+                                    conn.execute(
+                                        """
+                                        INSERT INTO messages (conversation_id, sender, content, created_at)
+                                        VALUES ($1, 'Nyx', $2, NOW())
+                                        """,
+                                        conv_id_final,
+                                        opening_text,
+                                    ),
+                                    timeout=10.0
+                                )
+                                logger.info(f"[NG POST] Opening Nyx message inserted for conversation {conv_id_final}")
+                            else:
+                                logger.info(f"[NG POST] Opening message already exists, skipping insert")
+                                
+                    except asyncio.TimeoutError:
+                        logger.error(f"[NG POST] Finalization timed out for conversation {conv_id_final}")
+                        # Don't fail the whole task, just log it
+                    except Exception as upd_err:
+                        logger.error(f"[NG POST] Failed to finalize conversation row: {upd_err}", exc_info=True)
+                        # Don't fail the whole task, just log it
 
+                    logger.info(f"[NG COMPLETE] Task successfully completed for conversation {conv_id_final}")
+                    return serialize_for_celery(result)
+
+                except asyncio.TimeoutError:
+                    logger.exception("[NG TIMEOUT] Game creation timed out after 600 seconds")
+                    
+                    conv_id_fail = conversation_data.get("conversation_id")
+                    if conv_id_fail:
+                        try:
+                            async with get_db_connection_context() as conn:
+                                await conn.execute(
+                                    """
+                                    UPDATE conversations
+                                       SET status='failed',
+                                           conversation_name='New Game - Creation Timeout'
+                                     WHERE id=$1 AND user_id=$2
+                                    """,
+                                    conv_id_fail,
+                                    user_id_int,
+                                )
+                        except Exception as update_err:
+                            logger.error(f"Failed to update conversation status: {update_err}")
+                    
+                    return {
+                        "status": "failed",
+                        "error": "Game creation timed out after 10 minutes",
+                        "error_type": "TimeoutError",
+                        "conversation_id": conv_id_fail,
+                    }
+
+                except Exception as e:
+                    logger.exception("[NG ERROR] Critical error in process_new_game_task")
+
+                    conv_id_fail = conversation_data.get("conversation_id")
+                    if conv_id_fail:
+                        try:
+                            async with get_db_connection_context() as conn:
+                                await conn.execute(
+                                    """
+                                    UPDATE conversations
+                                       SET status='failed',
+                                           conversation_name='New Game - Task Failed'
+                                     WHERE id=$1 AND user_id=$2
+                                    """,
+                                    conv_id_fail,
+                                    user_id_int,
+                                )
+                        except Exception as update_err:
+                            logger.error(f"Failed to update conversation status: {update_err}")
+
+                    return {
+                        "status": "failed",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "conversation_id": conv_id_fail,
+                    }
+
+            except Exception as outer_e:
+                logger.exception("[NG OUTER ERROR] Outer exception in run_new_game wrapper")
                 return {
                     "status": "failed",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "conversation_id": conv_id_fail,
+                    "error": str(outer_e),
+                    "error_type": type(outer_e).__name__,
                 }
 
     return run_async_in_worker_loop(run_new_game())
