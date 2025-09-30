@@ -1,7 +1,8 @@
 # lore/core/canon.py (Upgraded with Semantic Search)
 
-import logging
+import asyncio
 import json
+import logging
 
 from db.connection import get_db_connection_context
 from nyx.nyx_governance import AgentType
@@ -827,26 +828,75 @@ async def log_canonical_event(
     parent_ids = [p['id'] for p in parent_events]
     
     # Store in database with parent links
+    event_timestamp = datetime.utcnow()
+
     event_id = await conn.fetchval("""
         INSERT INTO CanonicalEvents (
-            user_id, conversation_id, event_text, tags, significance, 
+            user_id, conversation_id, event_text, tags, significance,
             timestamp, parent_event_ids
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
-    """, ctx.user_id, ctx.conversation_id, event_text, tags_json, 
-        significance, datetime.utcnow(), json.dumps(parent_ids))
+    """, ctx.user_id, ctx.conversation_id, event_text, tags_json,
+        significance, event_timestamp, json.dumps(parent_ids))
     
     # Check for wide blast radius events that need propagation
     if significance >= 8:
         await _propagate_event_consequences(ctx, conn, event_id, event_text, tags, significance)
     
     if persist_memory:
-        # Store in memory system
+        _schedule_canonical_memory_persist(
+            ctx,
+            event_id,
+            event_text,
+            list(tags),
+            significance,
+            parent_ids,
+            event_timestamp,
+        )
+
+    return event_id
+
+
+def _schedule_canonical_memory_persist(
+    ctx,
+    event_id: int,
+    event_text: str,
+    tags: List[str],
+    significance: int,
+    parent_ids: List[int],
+    event_timestamp: datetime,
+) -> None:
+    """Kick off memory persistence without blocking the DB connection."""
+
+    asyncio.create_task(
+        _persist_canonical_event_memory(
+            ctx,
+            event_id,
+            event_text,
+            tags,
+            significance,
+            parent_ids,
+            event_timestamp,
+        )
+    )
+
+
+async def _persist_canonical_event_memory(
+    ctx,
+    event_id: int,
+    event_text: str,
+    tags: List[str],
+    significance: int,
+    parent_ids: List[int],
+    event_timestamp: datetime,
+) -> None:
+    """Persist the canonical event to the memory system with error logging."""
+
+    try:
         memory_orchestrator = await get_canon_memory_orchestrator(
             ctx.user_id, ctx.conversation_id
         )
-        from memory.memory_orchestrator import EntityType
 
         significance_float = min(1.0, max(0.1, significance / 10.0))
 
@@ -855,16 +905,18 @@ async def log_canonical_event(
             entity_id=0,
             memory_text=event_text,
             significance=significance_float,
-            tags=tags + ["canonical_event"],
+            tags=[*tags, "canonical_event"],
             metadata={
                 "event_id": event_id,
                 "significance": significance,
                 "parent_events": parent_ids,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": event_timestamp.isoformat(),
             },
         )
-
-    return event_id
+    except Exception:
+        logger.exception(
+            "Failed to persist canonical event %s to memory", event_id
+        )
 
 async def _propagate_event_consequences(
     ctx,
