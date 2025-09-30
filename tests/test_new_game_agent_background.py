@@ -375,3 +375,216 @@ def test_process_new_game_task_uses_environment_name(monkeypatch):
 
     assert result["status"] == "ready"
     assert captured_names == ["Forest of Tests"]
+
+
+def test_process_new_game_task_handles_image_timeout(monkeypatch):
+    import importlib
+    import time
+
+    user_id = 21
+    conversation_id = 404
+
+    # Ensure Nyx dependencies resolve during task import
+    fake_brain_base = types.ModuleType("nyx.core.brain.base")
+    fake_brain_base.NyxBrain = object
+    fake_checkpoint = types.ModuleType("nyx.core.brain.checkpointing_agent")
+    fake_checkpoint.CheckpointingPlannerAgent = object
+    fake_nyx_agent_sdk = types.ModuleType("nyx.nyx_agent_sdk")
+
+    class _StubSDK:
+        async def initialize_agent(self):
+            return None
+
+    fake_nyx_agent_sdk.NyxAgentSDK = _StubSDK
+    fake_nyx_agent_sdk.NyxSDKConfig = object
+
+    fake_nyx = types.ModuleType("nyx")
+    fake_nyx_core = types.ModuleType("nyx.core")
+    fake_nyx_core_brain = types.ModuleType("nyx.core.brain")
+    fake_nyx.core = fake_nyx_core
+    fake_nyx_core.brain = fake_nyx_core_brain
+    fake_nyx_core_brain.base = fake_brain_base
+    fake_nyx_core_brain.checkpointing_agent = fake_checkpoint
+
+    fake_integrate = types.ModuleType("nyx.integrate")
+
+    class FakeGovernance:
+        async def register_agent(self, *args, **kwargs):
+            return {"success": True}
+
+        async def get_agent_directives(self, *args, **kwargs):
+            return []
+
+        async def check_action_permission(self, *args, **kwargs):
+            return {"approved": True}
+
+        async def process_agent_action_report(self, *args, **kwargs):
+            return {"success": True}
+
+    async def fake_get_central_governance(*_args, **_kwargs):
+        return FakeGovernance()
+
+    fake_integrate.get_central_governance = fake_get_central_governance
+
+    monkeypatch.setitem(sys.modules, "nyx", fake_nyx)
+    monkeypatch.setitem(sys.modules, "nyx.core", fake_nyx_core)
+    monkeypatch.setitem(sys.modules, "nyx.core.brain", fake_nyx_core_brain)
+    monkeypatch.setitem(sys.modules, "nyx.core.brain.base", fake_brain_base)
+    monkeypatch.setitem(sys.modules, "nyx.core.brain.checkpointing_agent", fake_checkpoint)
+    monkeypatch.setitem(sys.modules, "nyx.integrate", fake_integrate)
+    fake_nyx.integrate = fake_integrate
+    fake_nyx.nyx_agent_sdk = fake_nyx_agent_sdk
+    monkeypatch.setitem(sys.modules, "nyx.nyx_agent_sdk", fake_nyx_agent_sdk)
+
+    sys.modules.pop("tasks", None)
+    tasks = importlib.import_module("tasks")
+
+    @contextlib.contextmanager
+    def noop_trace(**kwargs):
+        yield
+
+    monkeypatch.setattr(tasks, "trace", noop_trace)
+    monkeypatch.setattr(tasks, "run_async_in_worker_loop", asyncio.run)
+
+    status_updates: list[tuple[str, tuple]] = []
+
+    class DummyConnection:
+        async def execute(self, query, *args):
+            if "UPDATE conversations" in query:
+                status_updates.append((query, args))
+            return None
+
+        async def fetchval(self, query, *args):
+            if "SELECT conversation_name" in query:
+                return "Existing Name"
+            if "SELECT 1 FROM messages" in query:
+                return 0
+            return None
+
+        async def fetchrow(self, query, *args):
+            return None
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield DummyConnection()
+
+    monkeypatch.setattr(tasks, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    # Patch new game agent helpers to avoid heavy dependencies
+    async def fake_queue_lore(self, user_id_arg, conv_id_arg):
+        assert conv_id_arg == conversation_id
+        return "Generated lore"
+
+    async def fake_queue_conflict(self, user_id_arg, conv_id_arg):
+        assert conv_id_arg == conversation_id
+        return "Conflict"
+
+    async def fake_init_player_context(self, canon_ctx, user_id_arg, conv_id_arg):
+        assert conv_id_arg == conversation_id
+
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_queue_lore_generation", fake_queue_lore)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_queue_conflict_generation", fake_queue_conflict)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_initialize_player_context", fake_init_player_context)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_image_gen_available", lambda self: True)
+
+    from logic import currency_generator as currency_module
+
+    class FakeCurrencyGenerator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def get_currency_system(self):
+            return {
+                "currency_name": "Test Coin",
+                "currency_plural": "Test Coins",
+            }
+
+    monkeypatch.setattr(currency_module, "CurrencyGenerator", FakeCurrencyGenerator)
+
+    from lore.core import canon as canon_module
+
+    async def fake_find_currency(*args, **kwargs):
+        return None
+
+    async def fake_update_roleplay(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(canon_module, "find_or_create_currency_system", fake_find_currency)
+    monkeypatch.setattr(canon_module, "update_current_roleplay", fake_update_roleplay)
+
+    import routes.ai_image_generator as image_module
+
+    async def fake_process_scene_data(gpt_response, user_id_arg, conv_id_arg):
+        return {
+            "npcs": [
+                {"id": 1, "name": "Nyx", "visual_seed": "seed"},
+            ]
+        }
+
+    def fake_generate_prompt(scene_data):
+        return {"image_prompt": "A dramatic scene", "negative_prompt": "blurry"}
+
+    def fake_cached_images(prompt):
+        return []
+
+    def fake_save_image(url, prompt, variation_id):
+        return f"cached_{variation_id}.png"
+
+    async def fake_update_attrs(user_id_arg, conv_id_arg, npc_id, prompt_data, image_path=None):
+        return {}, {}
+
+    async def fake_track_evolution(*args, **kwargs):
+        return None
+
+    timeouts_seen: list[float | None] = []
+
+    def fake_generate_ai_image(*args, **kwargs):
+        timeouts_seen.append(kwargs.get("timeout"))
+        time.sleep(0.01)
+        return None
+
+    monkeypatch.setattr(image_module, "process_gpt_scene_data", fake_process_scene_data)
+    monkeypatch.setattr(image_module, "generate_image_prompt", fake_generate_prompt)
+    monkeypatch.setattr(image_module, "get_cached_images", fake_cached_images)
+    monkeypatch.setattr(image_module, "save_image_to_cache", fake_save_image)
+    monkeypatch.setattr(image_module, "update_npc_visual_attributes", fake_update_attrs)
+    monkeypatch.setattr(image_module, "track_visual_evolution", fake_track_evolution)
+    monkeypatch.setattr(image_module, "generate_ai_image", fake_generate_ai_image)
+
+    # Ensure new_game_agent uses the patched image generator
+    monkeypatch.setattr(new_game_agent, "generate_roleplay_image_from_gpt", image_module.generate_roleplay_image_from_gpt)
+
+    async def fake_process_new_game(self, ctx, payload):
+        payload.setdefault("conversation_id", conversation_id)
+        finalize_params = new_game_agent.FinalizeGameSetupParams(
+            opening_narrative="Welcome to the arena."
+        )
+        ctx_wrap = new_game_agent._build_run_context_wrapper(ctx.user_id, conversation_id)
+        finalize_result = await self.finalize_game_setup(ctx_wrap, finalize_params)
+        return new_game_agent.ProcessNewGameResult(
+            message="ok",
+            scenario_name="Scenario",
+            environment_name="Test Environment",
+            environment_desc="",
+            lore_summary=finalize_result.lore_summary,
+            conversation_id=conversation_id,
+            welcome_image_url=finalize_result.welcome_image_url,
+            status="ready",
+            opening_narrative=finalize_params.opening_narrative,
+        )
+
+    async def tracking_generate_roleplay_image(*args, **kwargs):
+        return await image_module.generate_roleplay_image_from_gpt(*args, **kwargs)
+
+    monkeypatch.setattr(new_game_agent, "generate_roleplay_image_from_gpt", tracking_generate_roleplay_image)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "process_new_game", fake_process_new_game)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "process_preset_game_direct", fake_process_new_game)
+
+    result = tasks.process_new_game_task(user_id, {"conversation_id": conversation_id})
+
+    assert result["status"] == "ready"
+    assert result["welcome_image_url"] is None
+    assert timeouts_seen == [5.0]
+    assert any("status='ready'" in query for query, _ in status_updates)
+

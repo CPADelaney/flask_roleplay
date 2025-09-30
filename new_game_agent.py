@@ -3163,10 +3163,18 @@ class NewGameAgent:
                 # Parse back to dict for the function call
                 scene_data = json.loads(scene_data_json)
                 
-                image_result = await generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
-                if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                image_result = await generate_roleplay_image_from_gpt(
+                    scene_data,
+                    user_id,
+                    conversation_id,
+                    timeout=5.0,
+                )
+
+                if image_result is None:
+                    logging.info("Welcome image generation skipped due to timeout or upstream failure")
+                elif "image_urls" in image_result and image_result["image_urls"]:
                     welcome_image_url = image_result["image_urls"][0]
-                    
+
                     # Store the image URL canonically
                     async with get_db_connection_context() as conn:
                         await canon.update_current_roleplay(

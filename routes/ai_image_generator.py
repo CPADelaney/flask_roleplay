@@ -1,5 +1,6 @@
 # routes/ai_image_generator.py
 
+import asyncio
 import os
 import json
 import hashlib
@@ -661,7 +662,7 @@ def save_image_to_cache(image_data, prompt, variation_id=0):
 def generate_ai_image(
     prompt,
     negative_prompt="low quality, blurry, distorted face, bad anatomy, watermark",
-    model_id="nGyN44N", 
+    model_id="nGyN44N",
     width=512,
     height=768,
     steps=30,
@@ -670,7 +671,8 @@ def generate_ai_image(
     num_images=1,
     scheduler="DPMSolverMultistep",
     use_default_neg="true",
-    lcm="false"
+    lcm="false",
+    timeout: float | None = 30.0,
 ):
     """
     Calls SinkIn's text2img using the given prompt and optional parameters.
@@ -700,8 +702,9 @@ def generate_ai_image(
 
     try:
         response = requests.post(
-            SINKIN_API_URL, 
+            SINKIN_API_URL,
             data=payload,
+            timeout=timeout,
             # no files here for text2img
         )
         response.raise_for_status()
@@ -712,6 +715,8 @@ def generate_ai_image(
             return data.get("images", [])
         else:
             logger.error(f"SinkIn error: {data.get('message')}")
+    except requests.Timeout:
+        logger.warning("SinkIn request timed out while generating an image")
     except Exception as e:
         logger.error(f"SinkIn request failed: {e}")
 
@@ -743,7 +748,12 @@ def generate_nyx_fallback_image():
 # ======================================================
 # 8️⃣ GENERATE ROLEPLAY IMAGE
 # ======================================================
-async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
+async def generate_roleplay_image_from_gpt(
+    gpt_response,
+    user_id,
+    conversation_id,
+    timeout: float | None = 30.0,
+):
     scene_data = await process_gpt_scene_data(gpt_response, user_id, conversation_id)
     
     # If there's no scene_data or no NPCs, fallback to generating an image of Nyx
@@ -766,8 +776,18 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
             }
         
         # Call generate_ai_image -> returns a list of URLs or None
-        fallback_urls = generate_ai_image(fallback_prompt, fallback_negative, num_images=1)
-        
+        fallback_urls = await asyncio.to_thread(
+            generate_ai_image,
+            fallback_prompt,
+            fallback_negative,
+            num_images=1,
+            timeout=timeout,
+        )
+
+        if fallback_urls is None:
+            logger.warning("Fallback Nyx image generation returned None; skipping image output")
+            return None
+
         if not fallback_urls or len(fallback_urls) == 0:
             return {"error": "Failed to generate fallback Nyx image"}
         
@@ -805,13 +825,19 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
             seed = int(hashlib.md5(npc_seed_text.encode()).hexdigest(), 16) % (2**32)
     
         # generate_ai_image will return a LIST of URLs
-        image_urls = generate_ai_image(
-            optimized_prompt, 
-            negative_prompt=negative_prompt, 
-            seed=seed, 
-            num_images=1  # or 3 if you want 3 at once
+        image_urls = await asyncio.to_thread(
+            generate_ai_image,
+            optimized_prompt,
+            negative_prompt,
+            seed=seed,
+            num_images=1,  # or 3 if you want 3 at once
+            timeout=timeout,
         )
-    
+
+        if image_urls is None:
+            logger.warning("Image generation returned None; aborting further variations")
+            return None
+
         if not image_urls:
             continue  # skip if no images returned
     
