@@ -126,17 +126,20 @@ base_config = {
     'result_serializer': 'json',
     'timezone': 'UTC',
     'enable_utc': True,
-    'worker_prefetch_multiplier': 1,
+    'worker_prefetch_multiplier': 1,  # Don't prefetch tasks
     'task_acks_late': True,
     'result_expires': 3600,  # 1 hour
-    'worker_max_tasks_per_child': 1000,  # Prevent memory leaks
-    # IMPORTANT: Force prefork pool for better asyncpg compatibility
+    'worker_max_tasks_per_child': 50,  # Reduced from 1000 - restart workers more often to release connections
     'worker_pool': 'prefork',
-    # Limit concurrency to avoid connection pool exhaustion
-    'worker_concurrency': int(os.getenv('CELERY_CONCURRENCY', '1')),
-    # Disable gossip and mingle for faster startup
+    # IMPORTANT: Limit concurrency to prevent connection pool exhaustion
+    'worker_concurrency': int(os.getenv('CELERY_CONCURRENCY', '2')),  # Keep low - was '1'
     'worker_disable_rate_limits': True,
-    'worker_send_task_events': False,  # Enable only if needed for monitoring
+    'worker_send_task_events': False,
+    
+    # Add these new settings:
+    'task_time_limit': 900,  # 15 minutes hard limit
+    'task_soft_time_limit': 840,  # 14 minutes soft limit
+    'worker_max_memory_per_child': 500000,  # 500MB - restart worker if it uses more
 }
 
 # Enhanced configuration for RabbitMQ
