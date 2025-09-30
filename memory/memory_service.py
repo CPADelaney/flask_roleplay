@@ -11,12 +11,13 @@ import os
 import logging
 import time
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple
+import threading
+from typing import Awaitable, Callable, Dict, List, Any, Optional, Sequence
 from datetime import datetime
 import uuid
 
 # LangChain imports
-from langchain_community.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain_core.vectorstores import VectorStore
@@ -39,9 +40,32 @@ from utils.embedding_dimensions import (
     get_target_embedding_dimension,
     measure_embedding_dimension,
 )
+from logic.chatgpt_integration import get_text_embedding
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+_HF_EMBEDDING_CACHE: Dict[str, HuggingFaceEmbeddings] = {}
+_HF_EMBEDDING_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_hf_embeddings(
+    model_name: str,
+    model_kwargs: Dict[str, Any],
+    encode_kwargs: Dict[str, Any],
+) -> HuggingFaceEmbeddings:
+    """Return a shared HuggingFace embedding instance for ``model_name``."""
+
+    with _HF_EMBEDDING_CACHE_LOCK:
+        embeddings = _HF_EMBEDDING_CACHE.get(model_name)
+        if embeddings is None:
+            embeddings = HuggingFaceEmbeddings(
+                model_name=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs,
+            )
+            _HF_EMBEDDING_CACHE[model_name] = embeddings
+    return embeddings
 
 class MemoryEmbeddingService:
     """
@@ -85,6 +109,7 @@ class MemoryEmbeddingService:
         # Initialize variables to be set up later
         self.vector_db = None
         self.embeddings = None
+        self._embedding_provider: Optional[Callable[[str], Awaitable[Sequence[float]]]] = None
         self.embedding_source_dimension: Optional[int] = None
         self.target_embedding_dimension: Optional[int] = None
         self.collection_mapping = {
@@ -116,52 +141,101 @@ class MemoryEmbeddingService:
     
     async def _setup_embeddings(self) -> None:
         """Set up the embedding model."""
-        # Use asyncio.to_thread for potentially blocking operations
-        loop = asyncio.get_event_loop()
-        
-        if self.embedding_model == "openai":
-            # OpenAI embeddings require an API key
-            openai_api_key = os.getenv("OPENAI_API_KEY")
-            if not openai_api_key:
-                raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI embeddings")
-            
-            self.embeddings = await loop.run_in_executor(
-                None,
-                lambda: OpenAIEmbeddings(
-                    openai_api_key=openai_api_key,
-                    model="text-embedding-3-small"  # Modern, efficient model
-                )
-            )
-        else:
-            # Default to local HuggingFace embeddings
-            model_name = self.config.get("hf_embedding_model", "all-MiniLM-L6-v2")
+        loop = asyncio.get_running_loop()
 
-            self.embeddings = await loop.run_in_executor(
-                None,
-                lambda: HuggingFaceEmbeddings(
-                    model_name=model_name,
-                    model_kwargs={"device": "cpu"},
-                    encode_kwargs={"normalize_embeddings": True}
-                )
-            )
-
-        def _probe_dimension() -> Optional[int]:
-            try:
-                return measure_embedding_dimension(self.embeddings)
-            except Exception as exc:
-                logger.warning(
-                    "Unable to probe embedding dimension directly; falling back. Error: %s",
-                    exc,
-                )
-                return None
-
-        self.embedding_source_dimension = await loop.run_in_executor(
-            None, _probe_dimension
-        )
+        embedding_section: Dict[str, Any] = {}
+        if isinstance(self.config, dict):
+            embedding_section = self.config.get("embedding") or {}
 
         if self.target_embedding_dimension is None:
             self.target_embedding_dimension = get_target_embedding_dimension(
                 self.config, self.embedding_model
+            )
+
+        if self.embedding_model == "openai":
+            model_name = "text-embedding-3-small"
+            if isinstance(embedding_section, dict):
+                candidate = embedding_section.get("openai_model") or embedding_section.get("model_name")
+                if isinstance(candidate, str) and candidate.strip():
+                    model_name = candidate
+            if isinstance(self.config, dict):
+                candidate = self.config.get("openai_model")
+                if isinstance(candidate, str) and candidate.strip():
+                    model_name = candidate
+
+            async def _openai_provider(text: str, *, _model: str = model_name) -> Sequence[float]:
+                return await get_text_embedding(
+                    text,
+                    model=_model,
+                    dimensions=self.target_embedding_dimension,
+                )
+
+            self.embeddings = None
+            self._embedding_provider = _openai_provider
+
+            try:
+                probe_vector = await self._embedding_provider("embedding-dimension-probe")
+                if hasattr(probe_vector, "tolist"):
+                    probe_vector = probe_vector.tolist()  # type: ignore[assignment]
+                self.embedding_source_dimension = len(list(probe_vector))
+            except Exception as exc:
+                self.embedding_source_dimension = None
+                logger.warning(
+                    "Unable to probe OpenAI embedding dimension; falling back to configuration. Error: %s",
+                    exc,
+                )
+        else:
+            model_name = "all-MiniLM-L6-v2"
+            if isinstance(embedding_section, dict):
+                candidate = embedding_section.get("model_name") or embedding_section.get("hf_embedding_model")
+                if isinstance(candidate, str) and candidate.strip():
+                    model_name = candidate
+            if isinstance(self.config, dict):
+                candidate = self.config.get("hf_embedding_model")
+                if isinstance(candidate, str) and candidate.strip():
+                    model_name = candidate
+
+            model_kwargs: Dict[str, Any] = {"device": "cpu"}
+            encode_kwargs: Dict[str, Any] = {"normalize_embeddings": True}
+
+            if isinstance(embedding_section, dict):
+                section_model_kwargs = embedding_section.get("model_kwargs")
+                if isinstance(section_model_kwargs, dict):
+                    model_kwargs.update(section_model_kwargs)
+                section_encode_kwargs = embedding_section.get("encode_kwargs")
+                if isinstance(section_encode_kwargs, dict):
+                    encode_kwargs.update(section_encode_kwargs)
+
+            embeddings = await loop.run_in_executor(
+                None,
+                lambda: _get_cached_hf_embeddings(
+                    model_name,
+                    model_kwargs,
+                    encode_kwargs,
+                ),
+            )
+
+            async def _hf_provider(text: str, *, _embeddings: HuggingFaceEmbeddings = embeddings) -> Sequence[float]:
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(
+                    None, lambda: _embeddings.embed_query(text)
+                )
+
+            self.embeddings = embeddings
+            self._embedding_provider = _hf_provider
+
+            def _probe_dimension() -> Optional[int]:
+                try:
+                    return measure_embedding_dimension(embeddings)
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "Unable to probe HuggingFace embedding dimension; falling back. Error: %s",
+                        exc,
+                    )
+                    return None
+
+            self.embedding_source_dimension = await loop.run_in_executor(
+                None, _probe_dimension
             )
 
         if (
@@ -229,16 +303,18 @@ class MemoryEmbeddingService:
         """
         if not self.initialized:
             await self.initialize()
-        
+
         try:
-            # Use asyncio.to_thread to make the embedding operation non-blocking
-            loop = asyncio.get_event_loop()
-            
-            # LangChain's embedding interface
-            embedding = await loop.run_in_executor(
-                None,
-                lambda: self.embeddings.embed_query(text)
-            )
+            if not self._embedding_provider:
+                raise RuntimeError("Embedding provider not configured")
+
+            embedding = await self._embedding_provider(text)
+
+            if hasattr(embedding, "tolist"):
+                embedding = embedding.tolist()
+            if not isinstance(embedding, Sequence):
+                embedding = list(embedding)
+            embedding = [float(value) for value in embedding]
 
             return adjust_embedding_vector(
                 embedding, self._get_target_dimension()
