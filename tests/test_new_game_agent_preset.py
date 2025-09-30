@@ -120,6 +120,7 @@ class StubConnection:
         self.fetchrow_calls = []
         self.fetchrow_results = []
         self.fetch_calls = []
+        self.fetchval_calls = []
         self.execute_calls = []
         self.npc_stat_inserts = []
         self.npc_memory_inserts = []
@@ -127,6 +128,7 @@ class StubConnection:
         self.social_link_inserts = []
         self._next_npc_id = 1000
         self.start_location_name = "Preset Hub"
+        self.current_location_value = None
 
     async def fetchrow(self, query, *args):
         normalized_query = " ".join(query.split())
@@ -174,6 +176,20 @@ class StubConnection:
             return []
 
         raise AssertionError(f"Unexpected fetch: {normalized_query} {args}")
+
+    async def fetchval(self, query, *args):
+        normalized_query = " ".join(query.split())
+        self.fetchval_calls.append((normalized_query, args))
+
+        if (
+            "SELECT value FROM CurrentRoleplay" in normalized_query
+            and "CurrentLocation" in normalized_query
+        ):
+            if args == (self.expected_user_id, self.expected_conversation_id):
+                return self.current_location_value
+            return None
+
+        raise AssertionError(f"Unexpected fetchval: {normalized_query} {args}")
 
     async def execute(self, query, *args):
         normalized_query = " ".join(query.split())
@@ -268,6 +284,72 @@ def _install_common_preset_patches(monkeypatch, calls):
     )
     monkeypatch.setattr(new_game_agent.random, "randint", fake_randint)
     monkeypatch.setattr(new_game_agent.random, "choice", fake_choice)
+
+
+def test_initialize_player_context_skips_when_location_exists(monkeypatch):
+    agent = new_game_agent.NewGameAgent()
+
+    user_id = 303
+    conversation_id = 909
+
+    stub_conn = StubConnection({}, conversation_id, user_id)
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield stub_conn
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    calls = {"canon_updates": [], "set_current_time": []}
+
+    async def fake_load_calendar_names(uid, cid):
+        assert (uid, cid) == (user_id, conversation_id)
+        return {"months": ["Dawn"], "days": ["Sol"]}
+
+    async def fake_set_current_time(uid, cid, year, month_idx, day_num, phase):
+        calls["set_current_time"].append((uid, cid, year, month_idx, day_num, phase))
+
+    async def fake_canon_update(ctx_wrap, conn, key, value):
+        calls["canon_updates"].append((key, value))
+        if key == "CurrentLocation":
+            conn.current_location_value = value
+        return None
+
+    def fake_randint(a, b):
+        return a
+
+    def fake_choice(seq):
+        if not seq:
+            raise IndexError("Cannot choose from an empty sequence")
+        return seq[0]
+
+    monkeypatch.setattr(new_game_agent, "load_calendar_names", fake_load_calendar_names)
+    monkeypatch.setattr(new_game_agent, "set_current_time", fake_set_current_time)
+    monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", fake_canon_update)
+    monkeypatch.setattr(new_game_agent.random, "randint", fake_randint)
+    monkeypatch.setattr(new_game_agent.random, "choice", fake_choice)
+
+    ctx = CanonicalContext(user_id, conversation_id)
+
+    asyncio.run(agent._initialize_player_context(ctx, user_id, conversation_id))
+
+    initial_locations = [value for key, value in calls["canon_updates"] if key == "CurrentLocation"]
+    assert initial_locations
+    initial_location = initial_locations[-1]
+    assert stub_conn.current_location_value == initial_location
+
+    initial_fetch_calls = len(stub_conn.fetch_calls)
+
+    calls["canon_updates"].clear()
+    calls["set_current_time"].clear()
+
+    asyncio.run(agent._initialize_player_context(ctx, user_id, conversation_id))
+
+    assert calls["canon_updates"] == []
+    assert calls["set_current_time"] == []
+    assert len(stub_conn.fetch_calls) == initial_fetch_calls
+    assert stub_conn.current_location_value == initial_location
+    assert len(stub_conn.fetchval_calls) >= 2
 
 
 def test_process_preset_game_reuses_existing_conversation(monkeypatch):
