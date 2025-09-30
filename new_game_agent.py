@@ -2252,9 +2252,6 @@ class NewGameAgent:
             # 4. Create all required NPCs directly
             npc_ids = await self._create_preset_npcs(ctx_wrap, preset_story_data)
 
-            # 4a. Seed initial player context (location & time)
-            await self._initialize_player_context(ctx_wrap, user_id, conversation_id)
-
             # 4b. Track preset story progress for this conversation
             async with get_db_connection_context() as conn:
                 await conn.execute(
@@ -3241,43 +3238,9 @@ class NewGameAgent:
         conversation_id: int,
     ) -> None:
         """Seed the player's starting location and time snapshot."""
-
+        
         logging.info(f"[PLAYER_CTX] Starting initialization for conv={conversation_id}")
-
-        # Early exit if the location has already been initialized.
-        try:
-            async with get_db_connection_context() as conn:
-                existing_location = await asyncio.wait_for(
-                    conn.fetchval(
-                        """
-                        SELECT value FROM CurrentRoleplay
-                        WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
-                        """,
-                        user_id,
-                        conversation_id,
-                    ),
-                    timeout=5.0,
-                )
-
-            if isinstance(existing_location, str):
-                existing_location = existing_location.strip() or None
-
-            if existing_location:
-                logging.info(
-                    "[PLAYER_CTX] CurrentLocation already set to %s; skipping initialization",
-                    existing_location,
-                )
-                return
-
-        except asyncio.TimeoutError:
-            logging.error(
-                f"[PLAYER_CTX] Existing location check timed out for conv={conversation_id}"
-            )
-        except Exception as e:
-            logging.error(
-                f"[PLAYER_CTX] Existing location check failed: {e}", exc_info=True
-            )
-
+        
         try:
             # Step 1: Set starting location
             logging.info(f"[PLAYER_CTX] Fetching locations")
