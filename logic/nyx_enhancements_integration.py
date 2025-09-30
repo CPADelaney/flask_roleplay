@@ -7,8 +7,8 @@ providing background processing, memory management, and coordination between
 all Nyx subsystems through the centralized SDK.
 """
 
-import logging
 import asyncio
+import logging
 import json
 import time
 from datetime import datetime, timezone
@@ -54,7 +54,7 @@ from nyx.user_model_sdk import UserModelManager
 from npcs.npc_orchestrator import NPCOrchestrator
 
 # DB connection
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, run_async_in_worker_loop
 
 # Performance monitoring
 from utils.performance import PerformanceTracker, timed_function
@@ -92,8 +92,6 @@ def nyx_memory_maintenance_task():
     Celery task to perform regular maintenance on Nyx's memory system.
     Should be scheduled to run daily.
     """
-    import asyncio
-    
     async def process_all_conversations():
         try:
             async with get_db_connection_context() as conn:
@@ -140,7 +138,7 @@ def nyx_memory_maintenance_task():
         except Exception as e:
             logger.error(f"Error in nyx_memory_maintenance_task: {str(e)}")
     
-    asyncio.run(process_all_conversations())
+    run_async_in_worker_loop(process_all_conversations())
     return {"status": "Memory maintenance completed"}
 
 # -----------------------------------------------------------

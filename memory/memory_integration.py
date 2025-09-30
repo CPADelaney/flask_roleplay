@@ -22,7 +22,7 @@ from memory.memory_nyx_integration import MemoryNyxBridge
 from memory.core import MemoryType, MemorySignificance
 
 # Import database connection
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, run_async_in_worker_loop
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -378,9 +378,8 @@ def memory_celery_task(func):
     """Decorator to handle async memory tasks in Celery."""
     @wraps(func)
     def wrapper(*args, **kwargs):
-        # Run the async function in the asyncio event loop
-        result = asyncio.run(func(*args, **kwargs))
-        return result
+        # Run the async function using the shared worker event loop
+        return run_async_in_worker_loop(func(*args, **kwargs))
     
     return wrapper
 

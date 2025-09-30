@@ -5,13 +5,12 @@ Connects background processing to game events and Celery tasks.
 """
 
 import logging
-import asyncio
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from celery import Celery, Task
 from celery.schedules import crontab
 
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, run_async_in_worker_loop
 from logic.time_cycle import get_current_game_day
 from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
@@ -181,7 +180,7 @@ def process_conflict_queue(user_id: int, conversation_id: int):
         except Exception as e:
             logger.error(f"Celery process_queue error: {e}")
             return []
-    return asyncio.run(_process())
+    return run_async_in_worker_loop(_process())
 
 @celery_app.task(name='conflict.daily_maintenance')
 def daily_conflict_maintenance():
@@ -215,7 +214,7 @@ def daily_conflict_maintenance():
     
         return {"processed": processed}
     
-    return asyncio.run(_maintain())
+    return run_async_in_worker_loop(_maintain())
 
 @celery_app.task(name='conflict.cleanup_old_data')
 def cleanup_old_conflict_data():
@@ -252,7 +251,7 @@ def cleanup_old_conflict_data():
             
             return {"archived": archived, "deleted_news": deleted}
     
-    return asyncio.run(_cleanup())
+    return run_async_in_worker_loop(_cleanup())
 
 # ===============================================================================
 # CELERY BEAT SCHEDULE
