@@ -440,7 +440,6 @@ class UnifiedMemoryManager:
         self.cache = MemoryCache(ttl_seconds=MEMORY_CACHE_TTL)
         self.embedding_provider = FallbackEmbedding()
 
-    @with_transaction
     async def add_memory(self,
                          memory: Union[Memory, str],
                          memory_type: MemoryType = MemoryType.OBSERVATION,
@@ -450,35 +449,91 @@ class UnifiedMemoryManager:
                          metadata: Dict[str, Any] = None,
                          embedding: List[float] = None,
                          conn: Optional[asyncpg.Connection] = None) -> int:
-        if isinstance(memory, str):
-            memory = Memory(
-                text=memory,
-                memory_type=memory_type,
-                significance=significance,
-                emotional_intensity=emotional_intensity,
-                tags=tags or [],
-                metadata=metadata or {},
-                timestamp=datetime.now()
+        start_time = time.time()
+        try:
+            if isinstance(memory, str):
+                memory = Memory(
+                    text=memory,
+                    memory_type=memory_type,
+                    significance=significance,
+                    emotional_intensity=emotional_intensity,
+                    tags=tags or [],
+                    metadata=metadata or {},
+                    timestamp=datetime.now()
+                )
+
+            if not memory.timestamp:
+                memory.timestamp = datetime.now()
+
+            normalized_type = normalize_memory_type(memory.memory_type)
+            memory.memory_type = normalized_type
+            memory_type_value = (
+                normalized_type.value if isinstance(normalized_type, MemoryType)
+                else normalized_type
             )
 
-        if not memory.embedding and not embedding:
-            embedding = await self.embedding_provider.get_embedding(memory.text)
+            # Store fidelity in metadata so it can be loaded from DB row
+            if "fidelity" not in memory.metadata:
+                memory.metadata["fidelity"] = memory.fidelity
 
-        if not memory.timestamp:
-            memory.timestamp = datetime.now()
+            embedding_to_use = embedding or memory.embedding
+            if not embedding_to_use:
+                embedding_to_use = await self.embedding_provider.get_embedding(memory.text)
+            memory.embedding = embedding_to_use
 
-        normalized_type = normalize_memory_type(memory.memory_type)
-        memory.memory_type = normalized_type
-        memory_type_value = (
-            normalized_type.value if isinstance(normalized_type, MemoryType)
-            else normalized_type
-        )
+            if conn is None:
+                from db.connection import get_db_connection_context
+                async with get_db_connection_context() as managed_conn:
+                    async with managed_conn.transaction():
+                        memory_id = await self._insert_memory_record(
+                            managed_conn,
+                            memory,
+                            memory_type_value,
+                            embedding_to_use
+                        )
+            else:
+                memory_id = await self._insert_memory_record(
+                    conn,
+                    memory,
+                    memory_type_value,
+                    embedding_to_use
+                )
 
-        # Store fidelity in metadata so it can be loaded from DB row
-        if "fidelity" not in memory.metadata:
-            memory.metadata["fidelity"] = memory.fidelity
+            await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
 
-        memory_id = await conn.fetchval(
+            if memory.significance >= MemorySignificance.HIGH:
+                await self._process_significant_memory(memory, memory_id)
+
+            elapsed = time.time() - start_time
+            await MemoryTelemetry.record(
+                self.user_id,
+                self.conversation_id,
+                operation="add_memory",
+                success=True,
+                duration=elapsed,
+                data_size=1
+            )
+
+            return memory_id
+        except Exception as e:
+            elapsed = time.time() - start_time
+            await MemoryTelemetry.record(
+                self.user_id,
+                self.conversation_id,
+                operation="add_memory",
+                success=False,
+                duration=elapsed,
+                error=str(e)
+            )
+            logger.error(f"Error in add_memory: {e}")
+            raise
+
+    async def _insert_memory_record(self,
+                                    conn: asyncpg.Connection,
+                                    memory: Memory,
+                                    memory_type_value: str,
+                                    embedding: List[float]) -> int:
+        return await conn.fetchval(
             """
             INSERT INTO unified_memories (
                 entity_type, entity_id, user_id, conversation_id,
@@ -490,31 +545,23 @@ class UnifiedMemoryManager:
             """,
             self.entity_type, self.entity_id, self.user_id, self.conversation_id,
             memory.text, memory_type_value, memory.significance, memory.emotional_intensity,
-            json.dumps(memory.tags or []), embedding or memory.embedding, json.dumps(memory.metadata or {}),
+            json.dumps(memory.tags or []), embedding, json.dumps(memory.metadata or {}),
             memory.timestamp, memory.times_recalled,
             memory.status.value if isinstance(memory.status, Enum) else memory.status,
             memory.is_consolidated
         )
 
-        await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
-
-        if memory.significance >= MemorySignificance.HIGH:
-            await self._process_significant_memory(memory, memory_id, conn)
-        return memory_id
-
     async def _process_significant_memory(self,
                                          memory: Memory,
-                                         memory_id: int,
-                                         conn: asyncpg.Connection) -> None:
+                                         memory_id: int) -> None:
         if memory.significance >= MemorySignificance.HIGH:
-            await self._create_semantic_memory(memory, memory_id, conn)
+            await self._create_semantic_memory(memory, memory_id)
         if memory.significance >= MemorySignificance.MEDIUM:
-            await self._propagate_memory(memory, conn)
+            await self._propagate_memory(memory)
 
     async def _create_semantic_memory(self,
                                       memory: Memory,
-                                      source_id: int,
-                                      conn: asyncpg.Connection) -> Optional[int]:
+                                      source_id: int) -> Optional[int]:
         semantic_text = f"Abstract understanding: {memory.text}"
         semantic_memory = Memory(
             text=semantic_text,
@@ -526,37 +573,41 @@ class UnifiedMemoryManager:
             timestamp=datetime.now()
         )
         embedding = await self.embedding_provider.get_embedding(semantic_text)
-        semantic_id = await conn.fetchval(
-            """
-            INSERT INTO unified_memories (
-                entity_type, entity_id, user_id, conversation_id,
-                memory_text, memory_type, significance, emotional_intensity,
-                tags, embedding, metadata, timestamp, times_recalled,
-                status, is_consolidated
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            RETURNING id
-            """,
-            self.entity_type, self.entity_id, self.user_id, self.conversation_id,
-            semantic_memory.text, semantic_memory.memory_type.value, semantic_memory.significance,
-            semantic_memory.emotional_intensity, json.dumps(semantic_memory.tags), embedding,
-            json.dumps(semantic_memory.metadata), semantic_memory.timestamp, 0,
-            MemoryStatus.ACTIVE.value, False
-        )
+        from db.connection import get_db_connection_context
+        async with get_db_connection_context() as conn:
+            async with conn.transaction():
+                semantic_id = await conn.fetchval(
+                    """
+                    INSERT INTO unified_memories (
+                        entity_type, entity_id, user_id, conversation_id,
+                        memory_text, memory_type, significance, emotional_intensity,
+                        tags, embedding, metadata, timestamp, times_recalled,
+                        status, is_consolidated
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    RETURNING id
+                    """,
+                    self.entity_type, self.entity_id, self.user_id, self.conversation_id,
+                    semantic_memory.text, semantic_memory.memory_type.value, semantic_memory.significance,
+                    semantic_memory.emotional_intensity, json.dumps(semantic_memory.tags), embedding,
+                    json.dumps(semantic_memory.metadata), semantic_memory.timestamp, 0,
+                    MemoryStatus.ACTIVE.value, False
+                )
         return semantic_id
 
     async def _propagate_memory(self,
-                                memory: Memory,
-                                conn: asyncpg.Connection) -> None:
-        rows = await conn.fetch(
-            """
-            SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
-            FROM SocialLinks 
-            WHERE user_id = $1 AND conversation_id = $2
-            AND ((entity1_type = $3 AND entity1_id = $4) OR (entity2_type = $3 AND entity2_id = $4))
-            AND link_level >= 30
-            """,
-            self.user_id, self.conversation_id, self.entity_type, self.entity_id
-        )
+                                memory: Memory) -> None:
+        from db.connection import get_db_connection_context
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
+                FROM SocialLinks
+                WHERE user_id = $1 AND conversation_id = $2
+                AND ((entity1_type = $3 AND entity1_id = $4) OR (entity2_type = $3 AND entity2_id = $4))
+                AND link_level >= 30
+                """,
+                self.user_id, self.conversation_id, self.entity_type, self.entity_id
+            )
         if not rows:
             return
         for row in rows:
@@ -589,7 +640,7 @@ class UnifiedMemoryManager:
                 conversation_id=self.conversation_id
             )
             try:
-                await target_manager.add_memory(propagated_memory, conn=conn)
+                await target_manager.add_memory(propagated_memory)
             except Exception as e:
                 logger.error(f"Error propagating memory to {target_type}:{target_id}: {e}")
 
