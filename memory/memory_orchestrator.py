@@ -46,6 +46,8 @@ try:
 except Exception:
     LC_MemoryEmbeddingService = None
 
+from memory.memory_integration import get_memory_service as get_shared_memory_service
+
 try:
     from memory.memory_retriever import MemoryRetrieverAgent as LC_MemoryRetrieverAgent
 except Exception:
@@ -361,15 +363,33 @@ class MemoryOrchestrator:
             # --- Embedding service (NEW preferred: memory.memory_service) ---
             # Fallback: legacy memory.embedding_service
             try:
-                if LC_MemoryEmbeddingService:
-                    vs_type = (self.memory_config or {}).get("vector_store", {}).get("type", "chroma")
-                    emb_type = (self.memory_config or {}).get("embedding", {}).get("type", "local")
+                config_map = self.memory_config if isinstance(self.memory_config, dict) else {}
+                vector_store_section = config_map.get("vector_store")
+                if not isinstance(vector_store_section, dict):
+                    vector_store_section = {}
+                embedding_section = config_map.get("embedding")
+                if not isinstance(embedding_section, dict):
+                    embedding_section = {}
+
+                vs_type = vector_store_section.get("type", "chroma")
+                emb_type = embedding_section.get("type", "local")
+                service_config = config_map or {}
+
+                if get_shared_memory_service:
+                    self.embedding_service = await get_shared_memory_service(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id,
+                        vector_store_type=vs_type,
+                        embedding_model=emb_type,
+                        config=service_config,
+                    )
+                elif LC_MemoryEmbeddingService:
                     self.embedding_service = LC_MemoryEmbeddingService(
                         user_id=self.user_id,
                         conversation_id=self.conversation_id,
                         vector_store_type=vs_type,
                         embedding_model=emb_type,
-                        config=(self.memory_config or {})
+                        config=service_config,
                     )
                     await self.embedding_service.initialize()
                 else:
