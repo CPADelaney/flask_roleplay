@@ -62,6 +62,25 @@ logger = logging.getLogger(__name__)
 
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
 
+# ===== Serialization Helpers =====
+
+def _ensure_json_serializable(value: Any) -> Any:
+    """Recursively coerce values into JSON-serializable primitives."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _ensure_json_serializable(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_ensure_json_serializable(item) for item in value]
+    return str(value)
+
+
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
 # ===== SDK Configuration =====
 
 @dataclass
@@ -188,7 +207,13 @@ async def nyx_response():
         )
         
         # 3. Rule enforcement
-        rule_results = enforce_all_rules_on_player()
+        raw_rule_results = await enforce_all_rules_on_player(
+            player_name=metadata.get("player_name", "Chase"),
+            user_id=_coerce_optional_int(user_id),
+            conversation_id=_coerce_optional_int(conversation_id),
+            metadata=metadata
+        )
+        rule_results = _ensure_json_serializable(raw_rule_results)
         
         # 4. Addiction system
         addiction_effects = await check_addiction_effects(
