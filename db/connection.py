@@ -41,6 +41,9 @@ _thread_local = threading.local()
 # Lock to prevent concurrent pool initialization
 _pool_init_lock = threading.Lock()
 
+# Shutdown state tracking
+_SHUTTING_DOWN = False
+
 # Default pool configuration
 DEFAULT_MIN_CONNECTIONS = 10
 DEFAULT_MAX_CONNECTIONS = 50
@@ -217,7 +220,14 @@ async def initialize_connection_pool(
     Returns:
         bool: True if pool was successfully initialized or already exists
     """
-    global DB_POOL, DB_POOL_LOOP
+    global DB_POOL, DB_POOL_LOOP, _SHUTTING_DOWN
+    
+    # Prevent initialization during shutdown
+    if _SHUTTING_DOWN:
+        logger.error(
+            f"Cannot initialize pool in process {os.getpid()} - worker is shutting down"
+        )
+        return False
     
     # Use lock to prevent race conditions during initialization
     with _pool_init_lock:
@@ -332,7 +342,14 @@ async def get_db_connection_pool() -> asyncpg.Pool:
     Raises:
         ConnectionError: If pool cannot be initialized
     """
-    global DB_POOL, DB_POOL_LOOP
+    global DB_POOL, DB_POOL_LOOP, _SHUTTING_DOWN
+    
+    # Refuse to initialize during shutdown
+    if _SHUTTING_DOWN:
+        raise ConnectionError(
+            f"Cannot get DB pool - worker process {os.getpid()} is shutting down"
+        )
+    
     current_loop = get_or_create_event_loop()
     
     # Check if pool is ready for current loop
@@ -380,9 +397,16 @@ async def get_db_connection_context(
         
     Raises:
         asyncio.TimeoutError: If connection cannot be acquired within timeout
-        ConnectionError: If pool is not available
+        ConnectionError: If pool is not available or worker is shutting down
     """
-    global DB_POOL, DB_POOL_LOOP
+    global DB_POOL, DB_POOL_LOOP, _SHUTTING_DOWN
+    
+    # Check shutdown state first
+    if _SHUTTING_DOWN:
+        raise ConnectionError(
+            f"Cannot acquire connection - worker process {os.getpid()} is shutting down"
+        )
+    
     current_loop = get_or_create_event_loop()
     conn: Optional[asyncpg.Connection] = None
 
@@ -401,6 +425,11 @@ async def get_db_connection_context(
     
     # Lazy initialization if needed
     if current_pool_to_use is None:
+        if _SHUTTING_DOWN:
+            raise ConnectionError(
+                f"Cannot lazy-initialize pool - worker process {os.getpid()} is shutting down"
+            )
+        
         logger.warning(f"Process {os.getpid()}: DB pool not initialized. Attempting lazy init.")
         is_celery = 'celery' in os.environ.get('SERVER_SOFTWARE', '').lower()
         
@@ -446,7 +475,7 @@ async def close_connection_pool(app: Optional[Quart] = None):
     Args:
         app: Optional Quart app instance
     """
-    global DB_POOL, DB_POOL_LOOP
+    global DB_POOL, DB_POOL_LOOP, _SHUTTING_DOWN
     pool_to_close: Optional[asyncpg.Pool] = None
 
     # Determine which pool to close
@@ -468,7 +497,7 @@ async def close_connection_pool(app: Optional[Quart] = None):
         # Close the pool
         try:
             await pool_to_close.close()
-            logger.info(f"Process {os.getpid()}: Asyncpg pool closed")
+            logger.info(f"Process {os.getpid()}: Asyncpg pool closed successfully")
         except Exception as e:
             logger.error(f"Process {os.getpid()}: Error closing pool: {e}", exc_info=True)
 
@@ -563,10 +592,12 @@ def close_worker_pool(**kwargs):
     """
     Signal handler: Close database pool when worker process shuts down.
     """
-    global DB_POOL, DB_POOL_LOOP
+    global DB_POOL, DB_POOL_LOOP, _SHUTTING_DOWN
     pid = os.getpid()
     
-    logger.info(f"Shutting down worker process {pid}")
+    # Mark as shutting down to prevent reinitialization attempts
+    _SHUTTING_DOWN = True
+    logger.info(f"Shutting down worker process {pid} - marked as shutting down")
     
     if DB_POOL:
         logger.info(f"Process {pid}: Will close global DB_POOL")
