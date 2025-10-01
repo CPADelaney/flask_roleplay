@@ -1303,6 +1303,10 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
                 },
             )
 
+            # ADD THIS DEBUG LOGGING
+            logger.info(f"[CONFLICT DEBUG] Full response: {json.dumps(initial_conflict, default=str, indent=2)}")
+            logger.info(f"[CONFLICT DEBUG] Response keys: {list(initial_conflict.keys()) if isinstance(initial_conflict, dict) else 'Not a dict'}")
+
             if initial_conflict is None:
                 summary = "No initial conflict - generation returned None"
             elif not isinstance(initial_conflict, dict):
@@ -1312,6 +1316,8 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
             else:
                 raw_result = initial_conflict.get("raw_result", {})
                 resolved_name: Optional[str] = None
+                logger.info(f"[CONFLICT DEBUG] raw_result keys: {list(raw_result.keys()) if isinstance(raw_result, dict) else 'Not a dict'}")
+                logger.info(f"[CONFLICT DEBUG] raw_result content: {json.dumps(raw_result, default=str, indent=2)}")
 
                 if isinstance(raw_result, dict):
                     conflict_name = raw_result.get("conflict_name")
