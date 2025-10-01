@@ -139,7 +139,7 @@ base_config = {
     # Add these new settings:
     'task_time_limit': 900,  # 15 minutes hard limit
     'task_soft_time_limit': 840,  # 14 minutes soft limit
-    'worker_max_memory_per_child': 500000,  # 500MB - restart worker if it uses more
+    'worker_max_memory_per_child': 1000000,  # 500MB - restart worker if it uses more
 }
 
 # Enhanced configuration for RabbitMQ
