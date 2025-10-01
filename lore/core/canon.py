@@ -5,6 +5,28 @@ import json
 import logging
 
 from db.connection import get_db_connection_context
+
+try:  # pragma: no cover - exercised in tests via monkeypatch
+    from db.connection import is_shutting_down as _is_shutting_down
+    from db.connection import track_operation as _track_operation
+except (ImportError, AttributeError):  # pragma: no cover - defensive
+    _is_shutting_down = None
+    _track_operation = None
+
+if _is_shutting_down is None:  # pragma: no cover - simple fallback
+    def is_shutting_down() -> bool:
+        return False
+else:
+    is_shutting_down = _is_shutting_down  # type: ignore[assignment]
+
+if _track_operation is None:  # pragma: no cover - simple fallback
+    async def track_operation(coro):
+        return await coro
+
+    _TRACK_OPERATION_AVAILABLE = False
+else:
+    track_operation = _track_operation  # type: ignore[assignment]
+    _TRACK_OPERATION_AVAILABLE = True
 from nyx.nyx_governance import AgentType
 from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding # Assuming you have this
@@ -869,17 +891,50 @@ def _schedule_canonical_memory_persist(
 ) -> None:
     """Kick off memory persistence without blocking the DB connection."""
 
-    asyncio.create_task(
-        _persist_canonical_event_memory(
-            ctx,
-            event_id,
-            event_text,
-            tags,
-            significance,
-            parent_ids,
-            event_timestamp,
+    if is_shutting_down():
+        logger.info(
+            "Skipping canonical memory persistence while database layer is shutting down"
         )
-    )
+        return
+
+    if _TRACK_OPERATION_AVAILABLE:
+        async def _run_tracked_persist():
+            persist_coro = _persist_canonical_event_memory(
+                ctx,
+                event_id,
+                event_text,
+                tags,
+                significance,
+                parent_ids,
+                event_timestamp,
+                log_errors=False,
+            )
+            try:
+                await track_operation(persist_coro)
+            except ConnectionError as exc:
+                persist_coro.close()
+                logger.info(
+                    "Skipping canonical memory persistence due to shutdown: %s", exc
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist canonical event %s to memory", event_id
+                )
+
+        asyncio.create_task(_run_tracked_persist())
+    else:
+        asyncio.create_task(
+            _persist_canonical_event_memory(
+                ctx,
+                event_id,
+                event_text,
+                tags,
+                significance,
+                parent_ids,
+                event_timestamp,
+                log_errors=True,
+            )
+        )
 
 
 async def _persist_canonical_event_memory(
@@ -890,6 +945,8 @@ async def _persist_canonical_event_memory(
     significance: int,
     parent_ids: List[int],
     event_timestamp: datetime,
+    *,
+    log_errors: bool = True,
 ) -> None:
     """Persist the canonical event to the memory system with error logging."""
 
@@ -914,9 +971,12 @@ async def _persist_canonical_event_memory(
             },
         )
     except Exception:
-        logger.exception(
-            "Failed to persist canonical event %s to memory", event_id
-        )
+        if log_errors:
+            logger.exception(
+                "Failed to persist canonical event %s to memory", event_id
+            )
+        else:
+            raise
 
 async def _propagate_event_consequences(
     ctx,
