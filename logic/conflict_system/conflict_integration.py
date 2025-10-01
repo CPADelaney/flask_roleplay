@@ -202,7 +202,7 @@ class ConflictSystemIntegration:
     - Appropriate for the intensity level
     - Unique and creative (avoid generic phrases like "Rising Tensions" or "Power Struggle")
     
-    Return ONLY the conflict name, nothing else."""
+    Return ONLY the conflict name, nothing else. No explanations, no quotes, no extra text."""
     
         user_prompt = f"""Create a compelling conflict name for this situation:
     
@@ -210,13 +210,15 @@ class ConflictSystemIntegration:
     Context: {context_str}
     
     Examples of good conflict names (for inspiration, don't copy):
-    - "The Velvet Ultimatum"
-    - "Thorns of Devotion"
-    - "Shattered Sanctuary"
-    - "Whispers of Betrayal"
-    - "Eclipse of Trust"
+    - The Velvet Ultimatum
+    - Thorns of Devotion
+    - Shattered Sanctuary
+    - Whispers of Betrayal
+    - Eclipse of Trust
     
-    Generate ONE unique conflict name that captures this specific situation."""
+    IMPORTANT: Respond with ONLY the conflict name (2-4 words). No quotes, no punctuation, no explanation.
+    
+    Your conflict name:"""
     
         try:
             # Generate name via LLM
@@ -224,34 +226,61 @@ class ConflictSystemIntegration:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.8,  # Higher for creativity
-                max_tokens=20,
+                max_tokens=30,  # Increased from 20
                 task_type="decision",
                 model="gpt-5-nano"
             )
             
+            # **DETAILED LOGGING**
+            logger.info(f"LLM conflict name request - type: {conflict_type}, context: {context_str}")
+            logger.info(f"Raw LLM response: {repr(response)}")
+            logger.info(f"Response type: {type(response)}, is None: {response is None}, is empty: {not response if response else 'N/A'}")
+            
             if response:
-                # Clean up the response
-                conflict_name = response.strip().strip('"').strip("'").strip('`')
+                # Clean up the response more aggressively
+                conflict_name = response.strip()
                 
-                # Validate it's not too long
-                if len(conflict_name) <= 60 and len(conflict_name.split()) <= 6:
+                # Remove common wrapper patterns
+                conflict_name = conflict_name.strip('"').strip("'").strip('`')
+                conflict_name = conflict_name.replace('**', '').replace('*', '')  # Remove markdown bold
+                
+                # If it contains multiple lines, take the first non-empty line
+                lines = [line.strip() for line in conflict_name.split('\n') if line.strip()]
+                if lines:
+                    conflict_name = lines[0]
+                
+                # Remove any "Conflict name:" or similar prefixes
+                for prefix in ['conflict name:', 'name:', 'title:']:
+                    if conflict_name.lower().startswith(prefix):
+                        conflict_name = conflict_name[len(prefix):].strip()
+                
+                logger.info(f"Cleaned conflict name: {repr(conflict_name)}")
+                logger.info(f"Length: {len(conflict_name)}, Words: {len(conflict_name.split())}")
+                
+                # Validate - be more lenient
+                word_count = len(conflict_name.split())
+                if 1 <= word_count <= 6 and 3 <= len(conflict_name) <= 60:
                     # Apply intensity modifier if needed
                     intensity = context.get('intensity', '')
-                    if intensity == 'high' and not any(word in conflict_name.lower() for word in ['critical', 'final', 'ultimate', 'breaking']):
+                    
+                    # Only add modifier if name is short enough
+                    if intensity == 'high' and word_count <= 3 and not any(word in conflict_name.lower() for word in ['critical', 'final', 'ultimate', 'breaking']):
                         conflict_name = f"Critical {conflict_name}"
-                    elif intensity == 'low' and not any(word in conflict_name.lower() for word in ['subtle', 'quiet', 'whispered', 'faint']):
+                    elif intensity == 'low' and word_count <= 3 and not any(word in conflict_name.lower() for word in ['subtle', 'quiet', 'whispered', 'faint']):
                         conflict_name = f"Subtle {conflict_name}"
                     
-                    logger.debug(f"Generated conflict name via LLM: {conflict_name}")
+                    logger.info(f"✓ Generated conflict name via LLM: {conflict_name}")
                     return conflict_name
-            
-            # If we get here, response was invalid
-            logger.warning("LLM returned invalid conflict name, using fallback")
+                else:
+                    logger.warning(f"✗ LLM conflict name failed validation - words: {word_count} (need 1-6), length: {len(conflict_name)} (need 3-60)")
+            else:
+                logger.warning("✗ LLM returned None or empty response for conflict name")
             
         except Exception as e:
-            logger.warning(f"Failed to generate conflict name via LLM: {e}", exc_info=True)
+            logger.error(f"✗ Exception generating conflict name via LLM: {e}", exc_info=True)
         
         # Fallback to template-based generation
+        logger.warning("Using fallback template for conflict name")
         return self._generate_conflict_name_fallback(conflict_type, context)
     
     
