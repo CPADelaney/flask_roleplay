@@ -225,7 +225,7 @@ class ConflictSystemIntegration:
             response = await generate_text_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                max_tokens=30,  # Increased from 20
+                max_tokens=75,  # Increased from 20
                 task_type="decision",
                 model="gpt-5-nano"
             )
