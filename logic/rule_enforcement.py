@@ -711,7 +711,51 @@ async def enforce_all_rules_on_player(
         # 1) Load player stats and rules
         pstats = await get_player_stats(player_name, user_id, conversation_id)
         async with get_db_connection_context() as conn:
-            rows = await conn.fetch("SELECT condition, effect FROM GameRules")
+            rows: List[asyncpg.Record]
+            if user_id is not None and conversation_id is not None:
+                scoped_queries = [
+                    (
+                        """
+                        SELECT condition, effect
+                          FROM GameRules
+                         WHERE enabled IS DISTINCT FROM FALSE
+                           AND (
+                                (user_id=$1 AND conversation_id=$2)
+                                OR (user_id IS NULL AND conversation_id IS NULL)
+                           )
+                        """,
+                        (uid, cid),
+                    ),
+                    (
+                        """
+                        SELECT condition, effect
+                          FROM GameRules
+                         WHERE (user_id=$1 AND conversation_id=$2)
+                            OR (user_id IS NULL AND conversation_id IS NULL)
+                        """,
+                        (uid, cid),
+                    ),
+                    ("SELECT condition, effect FROM GameRules", ()),
+                ]
+            else:
+                scoped_queries = [
+                    (
+                        "SELECT condition, effect FROM GameRules WHERE enabled IS DISTINCT FROM FALSE",
+                        (),
+                    ),
+                    ("SELECT condition, effect FROM GameRules", ()),
+                ]
+
+            rows = []
+            for query, params in scoped_queries:
+                try:
+                    if params:
+                        rows = await conn.fetch(query, *params)
+                    else:
+                        rows = await conn.fetch(query)
+                    break
+                except asyncpg.UndefinedColumnError:
+                    continue
 
         # 2) Evaluate all rules
         matches: List[Tuple[str, str]] = []
