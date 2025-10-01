@@ -3071,67 +3071,196 @@ class NewGameAgent:
         action_description="Finalized game setup including lore, conflict, currency and image"
     )
     async def finalize_game_setup(self, ctx: RunContextWrapper[GameContext], params: FinalizeGameSetupParams) -> FinalizeResult:
-        """Finalize game setup including lore generation, conflict generation and image generation."""
+        """Finalize game setup - wait for ALL operations to complete."""
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
         logging.info(f"[FINALIZE START] Beginning finalization for conv={conversation_id}")
-    
-
+        
         from lore.core import canon
-
         canon_ctx = _build_run_context_wrapper(user_id, conversation_id)
-
-        logging.info(
-            "Queueing background lore generation for user_id=%s conversation_id=%s",
-            user_id,
-            conversation_id,
-        )
-        lore_summary = await self._queue_lore_generation(user_id, conversation_id)
-
-        logging.info(
-            "Queueing background conflict generation for user_id=%s conversation_id=%s",
-            user_id,
-            conversation_id,
-        )
-        conflict_name = await self._queue_conflict_generation(user_id, conversation_id)
-
-        # Generate currency system canonically
-        logging.info(f"[FINALIZE] Starting currency generation for conv={conversation_id}")
-        currency_name = "Standard currency"
-        try:
-            from logic.currency_generator import CurrencyGenerator
-            currency_gen = CurrencyGenerator(user_id, conversation_id)
-            currency_system = await currency_gen.get_currency_system()
-            
-            # Create currency canonically
-            async with get_db_connection_context() as conn:
-                await canon.find_or_create_currency_system(
-                    canon_ctx, conn,
-                    currency_name=currency_system['currency_name'],
-                    currency_plural=currency_system['currency_plural'],
-                    minor_currency_name=currency_system.get('minor_currency_name'),
-                    minor_currency_plural=currency_system.get('minor_currency_plural'),
-                    exchange_rate=currency_system.get('exchange_rate', 100),
-                    currency_symbol=currency_system.get('currency_symbol', '$'),
-                    description=currency_system.get('description', ''),
-                    setting_context=currency_system.get('setting_context', '')
+        
+        # Run independent operations concurrently
+        logging.info(f"[FINALIZE] Starting concurrent generation tasks")
+        
+        async def generate_lore():
+            """Generate lore synchronously."""
+            try:
+                logging.info(f"Starting lore generation for conv={conversation_id}")
+                from lore.core.lore_system import LoreSystem
+                
+                # Get environment description
+                async with get_db_connection_context() as conn:
+                    row = await conn.fetchrow("""
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+                    """, user_id, conversation_id)
+                    environment_desc = row["value"] if row else "A mysterious world"
+                    
+                    npc_rows = await conn.fetch("""
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2
+                    """, user_id, conversation_id)
+                    npc_ids = [r["npc_id"] for r in npc_rows]
+                
+                lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+                lore_ctx = RunContextWrapper(context={"user_id": user_id, "conversation_id": conversation_id})
+                lore_ctx.user_id = user_id
+                lore_ctx.conversation_id = conversation_id
+                
+                lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
+                
+                # Integrate with NPCs if any exist
+                if npc_ids:
+                    logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
+                    for npc_id in npc_ids:
+                        npc_ctx = RunContextWrapper(context={
+                            "user_id": user_id, 
+                            "conversation_id": conversation_id,
+                            "npc_id": npc_id
+                        })
+                        npc_ctx.user_id = user_id
+                        npc_ctx.conversation_id = conversation_id
+                        npc_ctx.npc_id = npc_id
+                        
+                        await lore_system.initialize_npc_lore_knowledge(
+                            npc_ctx, npc_id, 
+                            cultural_background="common",
+                            faction_affiliations=[]
+                        )
+                
+                factions = len(lore_result.get("factions", []))
+                cultural = len(lore_result.get("cultural_elements", []))
+                locations = len(lore_result.get("locations", []))
+                summary = f"Generated {factions} factions, {cultural} cultural elements, and {locations} locations"
+                
+                # Store in database
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                        VALUES ($1, $2, 'LoreSummary', $3)
+                        ON CONFLICT (user_id, conversation_id, key)
+                        DO UPDATE SET value = EXCLUDED.value
+                    """, user_id, conversation_id, summary)
+                
+                logging.info(f"Lore generation complete: {summary}")
+                return summary
+                
+            except Exception as e:
+                logging.error(f"Lore generation failed: {e}", exc_info=True)
+                return f"Lore generation failed: {str(e)}"
+        
+        async def generate_conflict():
+            """Generate initial conflict synchronously."""
+            try:
+                logging.info(f"Starting conflict generation for conv={conversation_id}")
+                
+                # Check if we have enough NPCs
+                async with get_db_connection_context() as conn:
+                    npc_count = await conn.fetchval("""
+                        SELECT COUNT(*) FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2
+                    """, user_id, conversation_id)
+                
+                if npc_count < 3:
+                    summary = "No initial conflict - insufficient NPCs"
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                            VALUES ($1, $2, 'InitialConflictSummary', $3)
+                            ON CONFLICT (user_id, conversation_id, key)
+                            DO UPDATE SET value = EXCLUDED.value
+                        """, user_id, conversation_id, summary)
+                    logging.info(summary)
+                    return summary
+                
+                from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+                
+                conflict_ctx = RunContextWrapper(context={
+                    "user_id": user_id,
+                    "conversation_id": conversation_id
+                })
+                conflict_ctx.user_id = user_id
+                conflict_ctx.conversation_id = conversation_id
+                
+                conflict_integration = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
+                await conflict_integration.initialize()
+                
+                initial_conflict = await conflict_integration.generate_conflict(
+                    conflict_ctx,
+                    {
+                        "conflict_type": "major",
+                        "intensity": "medium",
+                        "player_involvement": "indirect"
+                    }
                 )
                 
-            currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
-            logging.info(f"[FINALIZE] Currency generation complete for conv={conversation_id}")
-        except Exception as e:
-            logging.error(f"[FINALIZE] Currency generation failed: {e}")
-            currency_name = "Standard currency"
-            
-        # Try to generate welcome image
-        logging.info(f"[FINALIZE] Starting image generation for conv={conversation_id}")
-        welcome_image_url = None
-        try:
-            if self._image_gen_available():
-                # Add timeout wrapper
-                logging.info(f"[FINALIZE] Calling image generation API")
-                scene_data_json = json.dumps({
+                # Extract conflict name
+                summary = "Unnamed Conflict"
+                if initial_conflict and initial_conflict.get("success"):
+                    raw_result = initial_conflict.get("raw_result", {})
+                    if isinstance(raw_result, dict):
+                        conflict_name = raw_result.get("conflict_name")
+                        if conflict_name:
+                            summary = conflict_name
+                
+                # Store in database
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                        VALUES ($1, $2, 'InitialConflictSummary', $3)
+                        ON CONFLICT (user_id, conversation_id, key)
+                        DO UPDATE SET value = EXCLUDED.value
+                    """, user_id, conversation_id, summary)
+                
+                logging.info(f"Conflict generation complete: {summary}")
+                return summary
+                
+            except Exception as e:
+                logging.error(f"Conflict generation failed: {e}", exc_info=True)
+                return f"No initial conflict - {str(e)}"
+        
+        async def generate_currency():
+            """Generate currency system synchronously."""
+            try:
+                logging.info(f"Starting currency generation for conv={conversation_id}")
+                from logic.currency_generator import CurrencyGenerator
+                
+                currency_gen = CurrencyGenerator(user_id, conversation_id)
+                currency_system = await currency_gen.get_currency_system()
+                
+                # Create currency canonically
+                async with get_db_connection_context() as conn:
+                    await canon.find_or_create_currency_system(
+                        canon_ctx, conn,
+                        currency_name=currency_system['currency_name'],
+                        currency_plural=currency_system['currency_plural'],
+                        minor_currency_name=currency_system.get('minor_currency_name'),
+                        minor_currency_plural=currency_system.get('minor_currency_plural'),
+                        exchange_rate=currency_system.get('exchange_rate', 100),
+                        currency_symbol=currency_system.get('currency_symbol', '$'),
+                        description=currency_system.get('description', ''),
+                        setting_context=currency_system.get('setting_context', '')
+                    )
+                
+                currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
+                logging.info(f"Currency generation complete: {currency_name}")
+                return currency_name
+                
+            except Exception as e:
+                logging.error(f"Currency generation failed: {e}")
+                return "Standard currency"
+        
+        async def generate_image():
+            """Generate welcome image synchronously."""
+            try:
+                if not self._image_gen_available():
+                    logging.info("Image generation not available")
+                    return None
+                
+                logging.info(f"Starting image generation for conv={conversation_id}")
+                
+                scene_data = {
                     "scene_data": {
                         "npc_names": [],
                         "setting": await self._get_setting_name(ctx),
@@ -3154,53 +3283,57 @@ class NewGameAgent:
                         "framing": "wide_shot",
                         "reason": "Initial scene visualization"
                     }
-                })
+                }
                 
-                # Parse back to dict for the function call
-                scene_data = json.loads(scene_data_json)
-                
-                image_result = await generate_roleplay_image_from_gpt(
-                    scene_data,
-                    user_id,
-                    conversation_id,
-                    timeout=10.0,
+                image_result = await asyncio.wait_for(
+                    generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id),
+                    timeout=10.0
                 )
-
-                if image_result is None:
-                    logging.info("Welcome image generation skipped due to timeout or upstream failure")
-                elif "image_urls" in image_result and image_result["image_urls"]:
+                
+                if image_result and "image_urls" in image_result and image_result["image_urls"]:
                     welcome_image_url = image_result["image_urls"][0]
-
-                    # Store the image URL canonically
+                    
+                    # Store canonically
                     async with get_db_connection_context() as conn:
                         await canon.update_current_roleplay(
-                            canon_ctx, conn,
-                            'WelcomeImageUrl', welcome_image_url
+                            canon_ctx, conn, 'WelcomeImageUrl', welcome_image_url
                         )
-                    logging.info("Welcome image generated successfully")
-            else:
-                logging.info(f"[FINALIZE] Image generation skipped - not available")
-        except asyncio.TimeoutError:
-            logging.warning(f"[FINALIZE] Image generation timed out after 10s")
-        except Exception as e:
-            logging.warning(f"[FINALIZE] Image generation failed: {e}")
+                    
+                    logging.info("Image generation complete")
+                    return welcome_image_url
+                
+                return None
+                
+            except asyncio.TimeoutError:
+                logging.warning("Image generation timed out after 10s")
+                return None
+            except Exception as e:
+                logging.warning(f"Image generation failed: {e}")
+                return None
         
-        # Establish initial player context
+        # Run all generation tasks concurrently
+        lore_summary, conflict_name, currency_name, welcome_image_url = await asyncio.gather(
+            generate_lore(),
+            generate_conflict(),
+            generate_currency(),
+            generate_image(),
+            return_exceptions=False  # Let errors propagate but don't stop other tasks
+        )
+        
+        # Initialize player context (must be sequential)
         logging.info(f"[FINALIZE] Starting player context initialization for conv={conversation_id}")
         try:
             await asyncio.wait_for(
                 self._initialize_player_context(canon_ctx, user_id, conversation_id),
-                timeout=30.0  # Add 30s timeout
+                timeout=30.0
             )
             logging.info(f"[FINALIZE] Player context initialized for conv={conversation_id}")
         except asyncio.TimeoutError:
             logging.error(f"[FINALIZE] Player context initialization timed out after 30s")
-            # Continue anyway - not critical
         except Exception as e:
             logging.error(f"[FINALIZE] Player context initialization failed: {e}", exc_info=True)
-            # Continue anyway
         
-        logging.info(f"[FINALIZE COMPLETE] Returning result for conv={conversation_id}")
+        logging.info(f"[FINALIZE COMPLETE] All operations complete for conv={conversation_id}")
         
         return FinalizeResult(
             status="finalized",
@@ -3209,7 +3342,7 @@ class NewGameAgent:
             initial_conflict=conflict_name,
             currency_system=currency_name
         )
-
+        
     async def _get_setting_name(self, ctx: RunContextWrapper[GameContext]) -> str:
         """Helper method to get the setting name from the database"""
         user_id = ctx.context["user_id"]
