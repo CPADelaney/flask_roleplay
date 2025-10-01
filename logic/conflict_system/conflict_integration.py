@@ -66,45 +66,223 @@ class ConflictSystemIntegration:
         conflict_params: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Generate a conflict via the synthesizer, matching legacy semantics."""
-
         conflict_params = conflict_params or {}
         conflict_type = conflict_params.get("conflict_type", "standard")
-
         synthesizer = await self._get_synthesizer()
         try:
             await synthesizer.initialize_all_subsystems()
         except Exception:  # pragma: no cover - synthesizer handles idempotency
             logger.debug("Synthesizer subsystem initialization failed", exc_info=True)
-
+        
         context_payload: Dict[str, Any] = {}
         if ctx is not None:
             if hasattr(ctx, "context") and isinstance(ctx.context, dict):
                 context_payload.update(ctx.context)
             if hasattr(ctx, "data") and isinstance(ctx.data, dict):
                 context_payload.update(ctx.data)
-
+        
         context_payload.setdefault("user_id", self.user_id)
         context_payload.setdefault("conversation_id", self.conversation_id)
-
+        
         # Merge additional parameters (intensity, player involvement, etc.)
         extra_context = {k: v for k, v in conflict_params.items() if k != "conflict_type"}
         context_payload.update(extra_context)
-
+        
         result = await self._interface.create_conflict(conflict_type, context_payload)
+        
         if not isinstance(result, dict):
             return None
-
+        
         status = str(result.get("status", "")).lower()
         success = status not in {"failed", "error"}
-
+        
+        # Check if we need to create the database record
+        conflict_id = result.get("conflict_id")
+        conflict_name = result.get("conflict_name")
+        
+        if success and conflict_id is None:
+            # Generate a meaningful conflict name
+            if not conflict_name:
+                conflict_name = self._generate_conflict_name(conflict_type, context_payload)
+            
+            # Create the database record
+            try:
+                from db.connection import get_db_connection_context
+                
+                async with get_db_connection_context() as conn:
+                    conflict_id = await conn.fetchval("""
+                        INSERT INTO Conflicts (
+                            user_id, conversation_id,
+                            conflict_name, conflict_type,
+                            description, status, 
+                            intensity, player_involvement,
+                            created_at
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                        RETURNING id
+                    """,
+                        self.user_id,
+                        self.conversation_id,
+                        conflict_name,
+                        conflict_type,
+                        conflict_params.get('description', f'A {conflict_type} conflict has emerged'),
+                        'active',
+                        conflict_params.get('intensity', 'medium'),
+                        conflict_params.get('player_involvement', 'indirect')
+                    )
+                    
+                    # Update result with the new conflict_id and name
+                    result['conflict_id'] = conflict_id
+                    result['conflict_name'] = conflict_name
+                    
+                    logger.info(f"Created conflict record {conflict_id}: {conflict_name}")
+                    
+            except Exception as e:
+                logger.error(f"Error creating conflict database record: {e}", exc_info=True)
+                return {
+                    "success": False,
+                    "conflict_id": None,
+                    "conflict_type": conflict_type,
+                    "message": f"Failed to create conflict record: {e}",
+                    "conflict_details": None,
+                    "raw_result": result,
+                }
+        
         return {
             "success": success,
-            "conflict_id": result.get("conflict_id"),
+            "conflict_id": conflict_id,
             "conflict_type": result.get("conflict_type", conflict_type),
+            "conflict_name": conflict_name,
             "message": result.get("message", ""),
             "conflict_details": result.get("conflict_details"),
             "raw_result": result,
         }
+    
+    async def _generate_conflict_name(self, conflict_type: str, context: Dict[str, Any]) -> str:
+        """Generate a unique conflict name using LLM based on type and context."""
+        from logic.chatgpt_integration import generate_text_completion
+        
+        # Build context information for the LLM
+        context_details = []
+        if intensity := context.get('intensity'):
+            context_details.append(f"intensity: {intensity}")
+        if involvement := context.get('player_involvement'):
+            context_details.append(f"player involvement: {involvement}")
+        if description := context.get('description'):
+            context_details.append(f"description: {description}")
+        if participants := context.get('participants'):
+            context_details.append(f"participants: {len(participants)} NPCs")
+        
+        context_str = ", ".join(context_details) if context_details else "standard conflict"
+        
+        system_prompt = """You are a creative narrative designer crafting evocative conflict names for a story-driven game.
+    Your names should be:
+    - Dramatic and memorable
+    - 2-4 words maximum
+    - Evocative of the conflict's nature
+    - Appropriate for the intensity level
+    - Unique and creative (avoid generic phrases like "Rising Tensions" or "Power Struggle")
+    
+    Return ONLY the conflict name, nothing else."""
+    
+        user_prompt = f"""Create a compelling conflict name for this situation:
+    
+    Conflict Type: {conflict_type}
+    Context: {context_str}
+    
+    Examples of good conflict names (for inspiration, don't copy):
+    - "The Velvet Ultimatum"
+    - "Thorns of Devotion"
+    - "Shattered Sanctuary"
+    - "Whispers of Betrayal"
+    - "Eclipse of Trust"
+    
+    Generate ONE unique conflict name that captures this specific situation."""
+    
+        try:
+            # Generate name via LLM
+            response = await generate_text_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.8,  # Higher for creativity
+                max_tokens=20,
+                task_type="decision",
+                model="gpt-5-nano"
+            )
+            
+            if response:
+                # Clean up the response
+                conflict_name = response.strip().strip('"').strip("'").strip('`')
+                
+                # Validate it's not too long
+                if len(conflict_name) <= 60 and len(conflict_name.split()) <= 6:
+                    # Apply intensity modifier if needed
+                    intensity = context.get('intensity', '')
+                    if intensity == 'high' and not any(word in conflict_name.lower() for word in ['critical', 'final', 'ultimate', 'breaking']):
+                        conflict_name = f"Critical {conflict_name}"
+                    elif intensity == 'low' and not any(word in conflict_name.lower() for word in ['subtle', 'quiet', 'whispered', 'faint']):
+                        conflict_name = f"Subtle {conflict_name}"
+                    
+                    logger.debug(f"Generated conflict name via LLM: {conflict_name}")
+                    return conflict_name
+            
+            # If we get here, response was invalid
+            logger.warning("LLM returned invalid conflict name, using fallback")
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate conflict name via LLM: {e}", exc_info=True)
+        
+        # Fallback to template-based generation
+        return self._generate_conflict_name_fallback(conflict_type, context)
+    
+    
+    def _generate_conflict_name_fallback(self, conflict_type: str, context: Dict[str, Any]) -> str:
+        """Fallback method using templates if LLM generation fails."""
+        import random
+        
+        templates = {
+            "major": [
+                "Power Struggle",
+                "Rising Tensions", 
+                "Clash of Wills",
+                "Inevitable Confrontation",
+                "Critical Impasse"
+            ],
+            "minor": [
+                "Minor Dispute",
+                "Small Disagreement",
+                "Tension Point",
+                "Brief Friction"
+            ],
+            "social": [
+                "Social Friction",
+                "Relationship Strain",
+                "Interpersonal Conflict",
+                "Social Divide"
+            ],
+            "power_dynamics": [
+                "Dominance Challenge",
+                "Authority Questioned",
+                "Control Contest",
+                "Hierarchy Shift"
+            ],
+            "standard": [
+                "Emerging Conflict",
+                "Brewing Storm",
+                "Tension Rising"
+            ]
+        }
+        
+        options = templates.get(conflict_type, templates["standard"])
+        base_name = random.choice(options)
+        
+        # Add context-specific details if available
+        intensity = context.get('intensity', '')
+        if intensity == 'high':
+            base_name = f"Critical {base_name}"
+        elif intensity == 'low':
+            base_name = f"Subtle {base_name}"
+        
+        return base_name
 
     # ------------------------------------------------------------------
     # Internal helpers
