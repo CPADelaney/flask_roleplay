@@ -273,7 +273,79 @@ async def get_npc_stats(
 # Condition parsing/eval
 # -------------------------------------------------------------------
 
-def parse_condition(condition_str: str) -> Tuple[str, List[Tuple[str, str, int]]]:
+def _normalize_token_values(value: Any) -> Set[str]:
+    normalized: Set[str] = set()
+    if isinstance(value, str):
+        val = value.strip().lower()
+        if val:
+            normalized.add(val)
+    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
+        for item in value:
+            normalized.update(_normalize_token_values(item))
+    return normalized
+
+
+def _extract_feasibility_sets(metadata: Optional[Dict[str, Any]]) -> Dict[str, Set[str]]:
+    """Collect category/hazard/magic markers from feasibility metadata."""
+
+    sets: Dict[str, Set[str]] = {
+        "category": set(),
+        "hazard": set(),
+        "magic": set(),
+    }
+
+    if not isinstance(metadata, dict):
+        return sets
+
+    feasibility = metadata.get("feasibility")
+    if not isinstance(feasibility, dict):
+        return sets
+
+    def add_from_violations(violations: Any) -> None:
+        if not isinstance(violations, Iterable) or isinstance(violations, (str, bytes, dict)):
+            return
+        for entry in violations:
+            if not isinstance(entry, dict):
+                continue
+            rule = str(entry.get("rule", "")).strip().lower()
+            if not rule or ":" not in rule:
+                continue
+            prefix, value = rule.split(":", 1)
+            prefix = prefix.strip()
+            value = value.strip()
+            if prefix in sets and value:
+                sets[prefix].add(value)
+
+    def add_from_entry(entry: Dict[str, Any]) -> None:
+        sets["category"].update(_normalize_token_values(entry.get("categories")))
+        sets["hazard"].update(_normalize_token_values(entry.get("hazards")))
+        sets["magic"].update(_normalize_token_values(entry.get("magic")))
+        sets["magic"].update(_normalize_token_values(entry.get("magic_requirements")))
+        add_from_violations(entry.get("violations"))
+
+    per_intent = feasibility.get("per_intent")
+    if isinstance(per_intent, Iterable) and not isinstance(per_intent, (str, bytes, dict)):
+        for entry in per_intent:
+            if isinstance(entry, dict):
+                add_from_entry(entry)
+
+    add_from_violations(feasibility.get("violations"))
+
+    overall = feasibility.get("overall")
+    if isinstance(overall, dict):
+        add_from_entry(overall)
+
+    capabilities = feasibility.get("capabilities")
+    if isinstance(capabilities, dict):
+        sets["category"].update(_normalize_token_values(capabilities.get("categories")))
+        sets["hazard"].update(_normalize_token_values(capabilities.get("hazards")))
+        sets["magic"].update(_normalize_token_values(capabilities.get("magic")))
+        sets["magic"].update(_normalize_token_values(capabilities.get("magic_flags")))
+
+    return sets
+
+
+def parse_condition(condition_str: str) -> Tuple[str, List[Dict[str, Any]]]:
     cond = (condition_str or "").strip().lower()
     if " and " in cond:
         logic_op, parts = "AND", cond.split(" and ")
@@ -282,9 +354,29 @@ def parse_condition(condition_str: str) -> Tuple[str, List[Tuple[str, str, int]]
     else:
         logic_op, parts = "SINGLE", [cond]
 
-    parsed_list: List[Tuple[str, str, int]] = []
+    parsed_list: List[Dict[str, Any]] = []
     for part in parts:
-        tokens = part.strip().split()
+        part = part.strip()
+        if not part:
+            continue
+
+        bundle_tokens: List[Dict[str, str]] = []
+        for token in part.split("|"):
+            token = token.strip()
+            if not token:
+                continue
+            if ":" in token:
+                prefix, value = token.split(":", 1)
+                prefix = prefix.strip()
+                value = value.strip()
+                if prefix and value:
+                    bundle_tokens.append({"kind": prefix, "value": value})
+                continue
+        if bundle_tokens:
+            parsed_list.append({"type": "token_bundle", "tokens": bundle_tokens})
+            continue
+
+        tokens = part.split()
         if len(tokens) == 3:
             stat_name, operator, threshold_str = tokens
             stat_name = stat_name.title()
@@ -292,32 +384,76 @@ def parse_condition(condition_str: str) -> Tuple[str, List[Tuple[str, str, int]]
                 threshold = int(threshold_str)
             except Exception:
                 threshold = 0
-            parsed_list.append((stat_name, operator, threshold))
+            parsed_list.append(
+                {
+                    "type": "numeric",
+                    "stat": stat_name,
+                    "operator": operator,
+                    "threshold": threshold,
+                }
+            )
         else:
             logger.warning(f"Unrecognized condition part: '{part}'")
     return (logic_op, parsed_list)
 
+
+def _evaluate_token_bundle(tokens: List[Dict[str, str]], token_sets: Dict[str, Set[str]]) -> bool:
+    if not tokens:
+        return False
+
+    category_hits = token_sets.get("category", set())
+    hazard_hits = token_sets.get("hazard", set())
+    magic_hits = token_sets.get("magic", set())
+
+    for token in tokens:
+        kind = str(token.get("kind", "")).strip().lower()
+        value = str(token.get("value", "")).strip().lower()
+        if not kind or not value:
+            continue
+        if kind == "category" and value in category_hits:
+            return True
+        if kind == "hazard" and (value in hazard_hits or value in category_hits):
+            return True
+        if kind == "magic" and (value in magic_hits or value in category_hits):
+            return True
+    return False
+
+
 def evaluate_condition(
     logic_op: str,
-    parsed_conditions: List[Tuple[str, str, int]],
-    stats_dict: Dict[str, int]
+    parsed_conditions: List[Dict[str, Any]],
+    stats_dict: Dict[str, int],
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    results = []
-    for (stat_name, operator, threshold) in parsed_conditions:
-        actual_value = stats_dict.get(stat_name, 0)
-        if operator == ">":
-            outcome = (actual_value > threshold)
-        elif operator == ">=":
-            outcome = (actual_value >= threshold)
-        elif operator == "<":
-            outcome = (actual_value < threshold)
-        elif operator == "<=":
-            outcome = (actual_value <= threshold)
-        elif operator == "==":
-            outcome = (actual_value == threshold)
+    results: List[bool] = []
+    token_sets = _extract_feasibility_sets(metadata)
+
+    for condition in parsed_conditions:
+        ctype = condition.get("type")
+        if ctype == "numeric":
+            stat_name = condition.get("stat", "")
+            operator = condition.get("operator", "")
+            threshold = int(condition.get("threshold", 0))
+            actual_value = stats_dict.get(stat_name, 0)
+            if operator == ">":
+                outcome = actual_value > threshold
+            elif operator == ">=":
+                outcome = actual_value >= threshold
+            elif operator == "<":
+                outcome = actual_value < threshold
+            elif operator == "<=":
+                outcome = actual_value <= threshold
+            elif operator == "==":
+                outcome = actual_value == threshold
+            else:
+                outcome = False
+            results.append(outcome)
+        elif ctype == "token_bundle":
+            tokens = condition.get("tokens") or []
+            outcome = _evaluate_token_bundle(tokens, token_sets)
+            results.append(outcome)
         else:
-            outcome = False
-        results.append(outcome)
+            results.append(False)
 
     if logic_op == "AND":
         return all(results)
@@ -582,7 +718,7 @@ async def enforce_all_rules_on_player(
         for r in rows:
             condition_str, effect_str = r["condition"], r["effect"]
             logic_op, parsed = parse_condition(condition_str)
-            if evaluate_condition(logic_op, parsed, pstats):
+            if evaluate_condition(logic_op, parsed, pstats, metadata=meta):
                 matches.append((condition_str, effect_str))
 
         violations_count = len(matches)
