@@ -2998,8 +2998,7 @@ class NewGameAgent:
                         model="gpt-5-nano",  # Use a default model
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
-                        response_model=AtmosphereData,
-                        temperature=0.85  # Higher for more creative variation
+                        response_model=AtmosphereData
                     )
                     
                     opening = result.introduction
