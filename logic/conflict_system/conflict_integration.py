@@ -60,6 +60,26 @@ class ConflictSystemIntegration:
             self.mode = self._normalize_mode(mode)
         return await self._interface.initialize_system(self.mode)
 
+    @staticmethod
+    def _normalize_intensity(intensity: Any) -> float:
+        """Convert intensity to numeric value for database storage."""
+        if isinstance(intensity, (int, float)):
+            return float(intensity)
+        
+        # Map string values to numeric scale (0.0 - 1.0)
+        intensity_map = {
+            'low': 0.3,
+            'subtle': 0.2,
+            'medium': 0.5,
+            'moderate': 0.5,
+            'high': 0.8,
+            'critical': 0.9,
+            'extreme': 1.0,
+        }
+        
+        intensity_str = str(intensity).lower().strip()
+        return intensity_map.get(intensity_str, 0.5)  # default to medium
+
     async def generate_conflict(
         self,
         ctx: Optional[RunContextWrapper],
@@ -126,7 +146,7 @@ class ConflictSystemIntegration:
                         conflict_type,
                         conflict_params.get('description', f'A {conflict_type} conflict has emerged'),
                         'active',
-                        conflict_params.get('intensity', 'medium'),
+                        self._normalize_intensity(conflict_params.get('intensity', 'medium')),  # Convert to float
                         conflict_params.get('player_involvement', 'indirect')
                     )
                     
