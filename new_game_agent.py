@@ -8,6 +8,7 @@ import uuid
 import os
 import functools
 import random
+from time import perf_counter
 from copy import deepcopy
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
@@ -3371,34 +3372,38 @@ class NewGameAgent:
             # Step 1: Set starting location
             logging.info(f"[PLAYER_CTX] Fetching locations")
             async with get_db_connection_context() as conn:
-                rows = await asyncio.wait_for(
-                    conn.fetch(
-                        """
-                        SELECT location_name FROM Locations
-                        WHERE user_id=$1 AND conversation_id=$2
-                        LIMIT 10
-                        """,
-                        user_id,
-                        conversation_id,
-                    ),
-                    timeout=5.0
+                fetch_start = perf_counter()
+                rows = await conn.fetch(
+                    """
+                    SELECT location_name FROM Locations
+                    WHERE user_id=$1 AND conversation_id=$2
+                    LIMIT 10
+                    """,
+                    user_id,
+                    conversation_id,
                 )
-                
+                logging.info(
+                    "[PLAYER_CTX] Locations fetch completed in %.2fs",
+                    perf_counter() - fetch_start,
+                )
+
                 if rows:
                     start_location = random.choice([row["location_name"] for row in rows])
                     logging.info(f"[PLAYER_CTX] Selected start location: {start_location}")
                 else:
                     start_location = "Unknown"
                     logging.warning(f"[PLAYER_CTX] No locations found, using Unknown")
-                
-                await asyncio.wait_for(
-                    canon.update_current_roleplay(
-                        ctx_wrap, conn, "CurrentLocation", start_location
-                    ),
-                    timeout=5.0
+
+                update_start = perf_counter()
+                await canon.update_current_roleplay(
+                    ctx_wrap, conn, "CurrentLocation", start_location
+                )
+                logging.info(
+                    "[PLAYER_CTX] CurrentLocation update completed in %.2fs",
+                    perf_counter() - update_start,
                 )
                 logging.info(f"[PLAYER_CTX] CurrentLocation updated")
-                
+
         except asyncio.TimeoutError:
             logging.error(f"[PLAYER_CTX] Location setup timed out")
             start_location = "Unknown"
@@ -3409,11 +3414,13 @@ class NewGameAgent:
         # Step 2: Set time/calendar info
         try:
             logging.info(f"[PLAYER_CTX] Loading calendar data")
-            calendar_names = await asyncio.wait_for(
-                load_calendar_names(user_id, conversation_id),
-                timeout=5.0
+            calendar_start = perf_counter()
+            calendar_names = await load_calendar_names(user_id, conversation_id)
+            logging.info(
+                "[PLAYER_CTX] Calendar load completed in %.2fs",
+                perf_counter() - calendar_start,
             )
-            
+
             months = calendar_names.get("months", ["Month"])
             days = calendar_names.get("days", ["Day"])
             
@@ -3424,25 +3431,29 @@ class NewGameAgent:
             month_name = months[(month_idx - 1) % len(months)]
             day_name = days[(day_num - 1) % len(days)]
             year = random.randint(1, 100)
-            
+
             logging.info(f"[PLAYER_CTX] Setting time to Y{year} {month_name} {day_name} {phase}")
-            
-            await asyncio.wait_for(
-                set_current_time(user_id, conversation_id, year, month_idx, day_num, phase),
-                timeout=5.0
+
+            time_start = perf_counter()
+            await set_current_time(user_id, conversation_id, year, month_idx, day_num, phase)
+            logging.info(
+                "[PLAYER_CTX] set_current_time completed in %.2fs",
+                perf_counter() - time_start,
             )
-            
+
             async with get_db_connection_context() as conn:
-                await asyncio.wait_for(
-                    canon.update_current_roleplay(
-                        ctx_wrap,
-                        conn,
-                        "CurrentTime",
-                        f"Year {year} {month_name} {day_name} {phase}",
-                    ),
-                    timeout=5.0
+                update_time_start = perf_counter()
+                await canon.update_current_roleplay(
+                    ctx_wrap,
+                    conn,
+                    "CurrentTime",
+                    f"Year {year} {month_name} {day_name} {phase}",
                 )
-            
+                logging.info(
+                    "[PLAYER_CTX] CurrentTime update completed in %.2fs",
+                    perf_counter() - update_time_start,
+                )
+
             logging.info(f"[PLAYER_CTX] Time initialization complete")
             
         except asyncio.TimeoutError:
