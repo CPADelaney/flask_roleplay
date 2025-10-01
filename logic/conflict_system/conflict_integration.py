@@ -111,7 +111,7 @@ class ConflictSystemIntegration:
                 
                 async with get_db_connection_context() as conn:
                     conflict_id = await conn.fetchval("""
-                        INSERT INTO Conflicts (
+                        INSERT INTO conflicts (
                             user_id, conversation_id,
                             conflict_name, conflict_type,
                             description, status, 
