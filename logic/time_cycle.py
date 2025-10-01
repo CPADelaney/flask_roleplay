@@ -33,7 +33,8 @@ from enum import Enum
 from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
 
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, is_shutting_down
+import functools
 import asyncpg
 from lore.core import canon
 
@@ -2295,6 +2296,26 @@ async def remove_expired_planned_events(user_id, conversation_id, current_year, 
     except Exception as e:
         logger.error(f"Unexpected error removing expired events: {e}", exc_info=True)
 
+def skip_on_shutdown(default_return):
+    """Decorator to skip function execution during shutdown."""
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            if is_shutting_down():
+                logger.debug(f"Skipping {func.__name__} - worker shutting down")
+                return default_return
+            
+            try:
+                return await func(*args, **kwargs)
+            except ConnectionError as e:
+                if "shutting down" in str(e).lower():
+                    logger.debug(f"{func.__name__} skipped during shutdown")
+                    return default_return
+                raise
+        return wrapper
+    return decorator
+
+@skip_on_shutdown(default_return=(1, 1, 1, "Morning"))
 async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str]:
     """
     Returns (year, month, day, time_of_day).
@@ -2307,32 +2328,34 @@ async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentYear'
             """, user_id, conversation_id)
             year = int(row_year) if row_year else 1
-
+            
             row_month = await conn.fetchval("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentMonth'
             """, user_id, conversation_id)
             month = int(row_month) if row_month else 1
-
+            
             row_day = await conn.fetchval("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
             """, user_id, conversation_id)
             day = int(row_day) if row_day else 1
-
+            
             row_tod = await conn.fetchval("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
             """, user_id, conversation_id)
             tod = row_tod if row_tod else "Morning"
-
+            
             return (year, month, day, tod)
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
-        logger.error(f"Database error getting current time: {e}", exc_info=True)
+            
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error getting current time: {e}")
         return (1, 1, 1, "Morning")
     except Exception as e:
-        logger.error(f"Unexpected error getting current time: {e}", exc_info=True)
+        logger.error(f"Unexpected error getting current time: {e}")
         return (1, 1, 1, "Morning")
+
 
 async def get_current_time_model(user_id: int, conversation_id: int) -> CurrentTimeData:
     """Get current time as Pydantic model."""
@@ -2344,6 +2367,8 @@ async def get_current_time_model(user_id: int, conversation_id: int) -> CurrentT
         time_of_day=time_of_day
     )
 
+
+@skip_on_shutdown(default_return=None)
 async def set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase):
     """
     Upserts current time info to the DB.
@@ -2358,10 +2383,11 @@ async def set_current_time(user_id, conversation_id, new_year, new_month, new_da
                 ("TimeOfDay", new_phase),
             ]:
                 await canon.update_current_roleplay(canon_ctx, conn, key, str(val))
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
-        logger.error(f"Database error setting current time: {e}", exc_info=True)
+                
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error setting current time: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error setting current time: {e}", exc_info=True)
+        logger.error(f"Unexpected error setting current time: {e}")
 
 async def advance_time(user_id, conversation_id, increment=1):
     """
