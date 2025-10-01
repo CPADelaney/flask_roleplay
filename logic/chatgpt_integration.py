@@ -1575,6 +1575,66 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
 # Utility functions using centralized client (UPDATED TO RESPONSES API)
 # ===========================================
 
+
+def _extract_output_text(response: Any) -> str:
+    """Best-effort extraction of text from a Responses API result."""
+
+    def _to_str(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, bytes):
+            try:
+                return [value.decode("utf-8", errors="ignore")]
+            except Exception:
+                return []
+        if isinstance(value, str):
+            return [value]
+
+        results: list[str] = []
+
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                results.extend(_to_str(item))
+            return results
+
+        if isinstance(value, dict):
+            for key in ("text", "output", "content", "message", "value"):
+                if key in value:
+                    results.extend(_to_str(value[key]))
+            return results
+
+        # Generic object with attributes
+        for key in ("text", "output", "content", "message", "value"):
+            if hasattr(value, key):
+                try:
+                    attr_val = getattr(value, key)
+                except Exception:
+                    continue
+                results.extend(_to_str(attr_val))
+
+        return results
+
+    primary = getattr(response, "output_text", None)
+    if isinstance(primary, str) and primary.strip():
+        return primary
+
+    candidates = _to_str(getattr(response, "output", None))
+    if not candidates:
+        candidates = _to_str(getattr(response, "content", None))
+
+    for candidate in candidates:
+        stripped = candidate.strip()
+        if stripped:
+            return stripped
+
+    # Final fallback: stringify the response output for debugging value
+    fallback = getattr(response, "output", "")
+    if isinstance(fallback, str):
+        return fallback
+
+    return ""
+
+
 async def generate_text_completion(
     system_prompt: str,
     user_prompt: str,
@@ -1639,8 +1699,9 @@ async def generate_text_completion(
             params["response_format"] = {"type": "json_object"}  # Responses JSON mode
         
         response = await client.responses.create(**params)
-        
-        return (response.output_text or "").strip()
+
+        text = _extract_output_text(response)
+        return text.strip()
         
     except Exception as e:
         logger.error(f"Error in generate_text_completion: {e}")
