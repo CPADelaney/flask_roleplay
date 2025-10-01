@@ -93,6 +93,13 @@ def test_store_world_lore_serializes_tags(monkeypatch):
         fake_connection_context,
     )
 
+    async def fake_generate_embedding(*args, **kwargs):
+        return [0.0, 0.0, 0.0]
+
+    monkeypatch.setattr(
+        "lore.lore_generator.generate_embedding", fake_generate_embedding
+    )
+
     async def run_store():
         return await builder._store_world_lore(
             name="Test Lore",
@@ -116,3 +123,63 @@ def test_store_world_lore_serializes_tags(monkeypatch):
         "A legend",
         5,
     )
+
+
+class FactionLinkConn:
+    def __init__(self):
+        self.fetchrow_history = []
+        self.execute_history = []
+
+    async def fetchval(self, query, *args):
+        lowered = query.lower()
+        if "information_schema.columns" in lowered:
+            return "faction_id"
+        if "select territory" in lowered:
+            return "Silken Dominion"
+        if "select location_name" in lowered:
+            return "Gossamer Spire"
+        raise AssertionError(f"Unexpected fetchval query: {query}")
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_history.append((query, args))
+        lowered = query.lower()
+        if "lower(name) = lower($3)" in lowered:
+            return None
+        if "regexp_replace" in lowered:
+            return {"faction_id": 404, "name": "The Silk Court"}
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+    async def execute(self, query, *args):
+        self.execute_history.append((query, args))
+        return "OK"
+
+
+@pytest.mark.asyncio
+async def test_connect_faction_handles_article_stripping(monkeypatch):
+    builder = WorldBuilder(user_id=1, conversation_id=2)
+    conn = FactionLinkConn()
+
+    @asynccontextmanager
+    async def fake_connection_context(*args, **kwargs):
+        yield conn
+
+    monkeypatch.setattr(
+        "lore.lore_generator.get_db_connection_context",
+        fake_connection_context,
+    )
+
+    normalized = "Silk Court".strip().casefold()
+
+    linked = await builder._connect_faction_to_location(55, normalized)
+
+    assert linked is True
+    assert any("regexp_replace" in q.lower() for q, _ in conn.fetchrow_history)
+
+    location_update_args = None
+    for query, args in conn.execute_history:
+        if "update locations" in query.lower():
+            location_update_args = args
+            break
+
+    assert location_update_args is not None
+    assert location_update_args[0] == "The Silk Court"

@@ -1206,9 +1206,12 @@ class FactionGenerator(BaseGenerator):
 
                 # Record controlling_faction if needed
                 if controlling_faction:
-                    await self._connect_faction_to_location(
-                        location_id, controlling_faction
-                    )
+                    normalized_faction = controlling_faction.strip()
+                    if normalized_faction:
+                        normalized_faction = normalized_faction.casefold()
+                        await self._connect_faction_to_location(
+                            location_id, normalized_faction
+                        )
             except Exception as e:
                 logging.error(
                     f"Error storing location '{loc.get('name','Unknown')}': {e}"
@@ -1714,41 +1717,63 @@ class FactionGenerator(BaseGenerator):
         self, location_id: int, faction_name: str
     ) -> bool:
         """Connect a faction to a location in the database."""
+        original_input = faction_name
+        normalized_name = faction_name.strip().casefold()
+        if not normalized_name:
+            logger.warning("Empty faction name provided for location linking")
+            return False
+
         try:
             async with get_db_connection_context() as conn:
                 faction_pk_column = await self._resolve_faction_pk_column(conn)
 
-                # Find the faction by name using the resolved PK column
-                faction_id = await conn.fetchval(
-                    f"""
-                        SELECT {faction_pk_column} FROM Factions
-                        WHERE user_id = $1 AND conversation_id = $2 AND name = $3
-                    """,
+                lookup_args = (
                     self.user_id,
                     self.conversation_id,
-                    faction_name,
+                    normalized_name,
                 )
 
-                if faction_id is None:
-                    logger.warning(f"Faction '{faction_name}' not found")
+                faction_row = await conn.fetchrow(
+                    f"""
+                        SELECT {faction_pk_column}, name
+                        FROM Factions
+                        WHERE user_id = $1 AND conversation_id = $2
+                          AND LOWER(name) = LOWER($3)
+                    """,
+                    *lookup_args,
+                )
+
+                if faction_row is None:
+                    faction_row = await conn.fetchrow(
+                        f"""
+                            SELECT {faction_pk_column}, name
+                            FROM Factions
+                            WHERE user_id = $1 AND conversation_id = $2
+                              AND REGEXP_REPLACE(LOWER(name), '^(the|a|an)\\s+', '') =
+                                  REGEXP_REPLACE(LOWER($3), '^(the|a|an)\\s+', '')
+                        """,
+                        *lookup_args,
+                    )
+
+                if faction_row is None:
+                    logger.warning(f"Faction '{original_input}' not found")
                     return False
 
-                # Update the location's controlling faction
-                # Note: The schema shows 'controlling_faction' as TEXT in Locations table
+                faction_id = faction_row[faction_pk_column]
+                canonical_name = faction_row["name"]
+
                 await conn.execute(
                     """
                         UPDATE Locations
                         SET controlling_faction = $1
                         WHERE id = $2 AND user_id = $3 AND conversation_id = $4
                     """,
-                    faction_name,
+                    canonical_name,
                     location_id,
                     self.user_id,
                     self.conversation_id,
                 )
 
-                # Also update the faction's territory if needed
-                # Get current territory
                 current_territory = await conn.fetchval(
                     f"""
                         SELECT territory FROM Factions WHERE {faction_pk_column} = $1
@@ -1756,7 +1781,6 @@ class FactionGenerator(BaseGenerator):
                     faction_id,
                 )
 
-                # Get location name
                 location_name = await conn.fetchval(
                     """
                         SELECT location_name FROM Locations WHERE id = $1
@@ -1765,7 +1789,6 @@ class FactionGenerator(BaseGenerator):
                 )
 
                 if location_name:
-                    # Update faction territory to include this location
                     new_territory = (
                         f"{current_territory}, {location_name}"
                         if current_territory
@@ -1780,7 +1803,7 @@ class FactionGenerator(BaseGenerator):
                     )
 
                 logger.info(
-                    f"Connected faction '{faction_name}' to location {location_id}"
+                    f"Connected faction '{canonical_name}' to location {location_id}"
                 )
                 return True
 
