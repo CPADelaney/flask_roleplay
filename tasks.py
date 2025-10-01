@@ -429,7 +429,7 @@ def run_npc_learning_cycle_task():
 
 @celery_app.task
 def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
-    """Process new (or preset) game creation asynchronously."""
+    """Process new (or preset) game creation - completes ALL operations before returning."""
     logger.info("CELERY – process_new_game_task called")
 
     async def run_new_game():
@@ -472,121 +472,52 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
 
                 try:
                     # Process game creation with timeout
-                    logger.info(f"[NG] Starting game creation (timeout: 600s)")
+                    # The agent now handles EVERYTHING including finalization
+                    logger.info(f"[NG] Starting complete game creation (timeout: 600s)")
                     
                     if preset_story_id:
                         logger.info(f"[NG] Processing preset story: {preset_story_id}")
                         result = await asyncio.wait_for(
                             agent.process_preset_game_direct(ctx, conversation_data, preset_story_id),
-                            timeout=600.0  # 10 minute timeout
+                            timeout=600.0
                         )
                     else:
                         logger.info(f"[NG] Processing dynamic game creation")
                         result = await asyncio.wait_for(
                             agent.process_new_game(ctx, conversation_data),
-                            timeout=600.0  # 10 minute timeout
+                            timeout=600.0
                         )
                     
                     logger.info(f"[NG] Agent processing complete, result type: {type(result)}")
 
-                    # Extract data from result
+                    # Extract conversation_id for verification
                     def _get(attr, default=None):
                         return getattr(result, attr, default) if hasattr(result, attr) else result.get(attr, default) if isinstance(result, dict) else default
 
                     conv_id_final = conversation_data.get("conversation_id") or _get("conversation_id")
-                    logger.info(f"[NG POST] Final conversation_id: {conv_id_final}")
                     
                     if conv_id_final is None:
-                        logger.warning("[NG POST] No conversation_id found after pipeline; cannot mark ready.")
+                        logger.warning("[NG POST] No conversation_id found after pipeline")
                         return serialize_for_celery(result)
                     
-                    conv_name = (
-                        _get("conversation_name")
-                        or _get("environment_name")
-                        or conversation_data.get("conversation_name")
-                    )
-                    opening_text = _get("opening_narrative") or _get("opening_message") or "[World initialized]"
-                    
-                    logger.info(f"[NG POST] Extracted - name: {conv_name}, opening_len: {len(opening_text) if opening_text else 0}")
-
-                    # Update conversation status with timeout
+                    # Verify the conversation is actually ready
                     try:
-                        logger.info(f"[NG POST] Updating conversation {conv_id_final} status to ready")
-                        async with get_db_connection_context() as conn:
-                            # Get/validate conversation name
-                            name_to_persist = conv_name
-                            if not name_to_persist:
-                                logger.info(f"[NG POST] No name provided, fetching existing name")
-                                existing_name = await asyncio.wait_for(
-                                    conn.fetchval(
-                                        """
-                                        SELECT conversation_name
-                                          FROM conversations
-                                         WHERE id=$1 AND user_id=$2
-                                        """,
-                                        conv_id_final,
-                                        user_id_int,
-                                    ),
-                                    timeout=5.0
-                                )
-                                name_to_persist = existing_name
-                                logger.info(f"[NG POST] Using existing name: {name_to_persist}")
-                            
-                            # Update conversation
-                            logger.info(f"[NG POST] Executing UPDATE conversations SET status='ready'")
-                            await asyncio.wait_for(
-                                conn.execute(
-                                    """
-                                    UPDATE conversations
-                                       SET status='ready',
-                                           conversation_name=$3
-                                     WHERE id=$1 AND user_id=$2
-                                    """,
-                                    conv_id_final,
-                                    user_id_int,
-                                    name_to_persist or "New Game",
-                                ),
-                                timeout=10.0
-                            )
-                            logger.info(f"[NG POST] Conversation status updated successfully")
-                            
-                            # Check for opening message
-                            logger.info(f"[NG POST] Checking for existing opening message")
-                            exists = await asyncio.wait_for(
-                                conn.fetchval(
-                                    """
-                                    SELECT 1 FROM messages
-                                     WHERE conversation_id=$1 AND sender='Nyx'
-                                     LIMIT 1
-                                    """,
-                                    conv_id_final,
-                                ),
-                                timeout=5.0
+                        async with get_db_connection_context(timeout=5.0) as conn:
+                            status = await conn.fetchval(
+                                "SELECT status FROM conversations WHERE id=$1 AND user_id=$2",
+                                conv_id_final,
+                                user_id_int
                             )
                             
-                            if not exists:
-                                logger.info(f"[NG POST] No opening message found, inserting one (length: {len(opening_text)})")
-                                await asyncio.wait_for(
-                                    conn.execute(
-                                        """
-                                        INSERT INTO messages (conversation_id, sender, content, created_at)
-                                        VALUES ($1, 'Nyx', $2, NOW())
-                                        """,
-                                        conv_id_final,
-                                        opening_text,
-                                    ),
-                                    timeout=10.0
+                            if status != 'ready':
+                                logger.warning(
+                                    f"[NG POST] Conversation {conv_id_final} status is '{status}', "
+                                    f"expected 'ready'. Agent may not have completed properly."
                                 )
-                                logger.info(f"[NG POST] Opening Nyx message inserted for conversation {conv_id_final}")
                             else:
-                                logger.info(f"[NG POST] Opening message already exists, skipping insert")
-                                
-                    except asyncio.TimeoutError:
-                        logger.error(f"[NG POST] Finalization timed out for conversation {conv_id_final}")
-                        # Don't fail the whole task, just log it
-                    except Exception as upd_err:
-                        logger.error(f"[NG POST] Failed to finalize conversation row: {upd_err}", exc_info=True)
-                        # Don't fail the whole task, just log it
+                                logger.info(f"[NG POST] Verified conversation {conv_id_final} is ready")
+                    except Exception as verify_err:
+                        logger.error(f"[NG POST] Failed to verify conversation status: {verify_err}")
 
                     logger.info(f"[NG COMPLETE] Task successfully completed for conversation {conv_id_final}")
                     return serialize_for_celery(result)
