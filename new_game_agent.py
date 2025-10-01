@@ -3680,12 +3680,27 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
 
-            # 2. Prepare player schedule and queue NPC creation
-            logger.info("Step 2: Preparing player schedule and queueing NPC generation in the background...")
+            # 2. Create NPCs and player schedule - WAIT for completion
+            logger.info("Step 2: Creating NPCs and player schedule...")
             schedule_context_desc = env.environment_desc + "\n\n" + env.environment_history
+            
+            # Create player schedule
             npc_sched = await self._create_player_schedule_data(ctx_wrap, schedule_context_desc)
-            await self._queue_npc_pool_fill(user_id, conversation_id, target_count=5)
-            logger.info("Background NPC generation task dispatched")
+            
+            # Create NPCs synchronously - don't queue, actually create them
+            from npcs.new_npc_creation import NPCCreationHandler
+            npc_handler = NPCCreationHandler()
+            
+            try:
+                npc_ids = await npc_handler.spawn_multiple_npcs(
+                    ctx=ctx_wrap,
+                    count=5  # Create 5 NPCs
+                )
+                logger.info(f"Created {len(npc_ids)} NPCs: {npc_ids}")
+            except Exception as npc_err:
+                logger.error(f"Failed to create NPCs: {npc_err}", exc_info=True)
+                # Continue anyway - game can work with no NPCs initially
+                npc_ids = []
 
             # Update status
             async with get_db_connection_context() as conn:
@@ -3717,46 +3732,33 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
             
-            # 4. Finalize game setup
-            logger.info("Step 4: Finalizing game setup...")
+            # 4. Finalize game setup - this now waits for lore, conflict, currency, image
+            logger.info("Step 4: Finalizing game setup (lore, conflict, currency, image)...")
             finalize_params = FinalizeGameSetupParams(
                 opening_narrative=opening
             )
             final = await self.finalize_game_setup(ctx_wrap, finalize_params)
             logger.info(f"Game setup finalized: {final.lore_summary}")
             
-            # 5. Verify setup is complete before marking ready
-            logger.info("Step 5: Verifying game setup completeness...")
-            complete, missing_components, pending_components = await self._is_setup_complete(user_id, conversation_id)
-
-            if not complete:
-                logger.warning(
-                    "Game setup incomplete for conversation %s: %s",
-                    conversation_id,
-                    "; ".join(missing_components) or "unknown issues"
-                )
-
-            if pending_components:
-                logger.info(
-                    "Background generation still pending for conversation %s: %s",
-                    conversation_id,
-                    "; ".join(pending_components)
-                )
-            
+            # 5. Store opening message
             async with get_db_connection_context() as conn:
-                # First verify the opening narrative exists
+                # Verify opening message exists
                 msg_check = await conn.fetchval("""
                     SELECT COUNT(*) FROM messages 
                     WHERE conversation_id=$1 AND sender='Nyx'
                 """, conversation_id)
                 
                 if msg_check == 0:
-                    # If no message exists, store the opening narrative now
+                    logger.info(f"Storing opening narrative (length: {len(opening)})")
                     await conn.execute("""
                         INSERT INTO messages (conversation_id, sender, content, created_at)
                         VALUES ($1, 'Nyx', $2, NOW())
                     """, conversation_id, opening)
-                
+                else:
+                    logger.info("Opening message already exists")
+            
+            # 6. Mark conversation as ready
+            async with get_db_connection_context() as conn:
                 await conn.execute("""
                     UPDATE conversations 
                     SET status='ready', 
@@ -3764,7 +3766,9 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id, f"Game: {env.setting_name}")
             
-            # Initialize WorldDirector AFTER game setup is complete
+            logger.info(f"Conversation {conversation_id} marked as ready")
+            
+            # 7. Initialize WorldDirector AFTER everything is complete
             logger.info("Initializing WorldDirector")
             try:
                 from story_agent.world_director_agent import CompleteWorldDirector
@@ -3781,16 +3785,14 @@ class NewGameAgent:
                 logger.error(f"WorldDirector init failed: {e}", exc_info=True)
                 # Don't fail the entire game creation if WorldDirector fails
             
-            # NOW start background directive processing after everything is set up
+            # 8. Start background directive processing
             if self.directive_handler:
                 self._directive_task = self.directive_handler.start_background_processing()
                 logger.info("Started background directive processing")
             
-            logger.info(f"New game creation completed for conversation {conversation_id}")
-                        
-            opening_narrative_text = opening  # Store the actual text
+            logger.info(f"New game creation FULLY COMPLETED for conversation {conversation_id}")
             
-            # Then in the return statement at the end:
+            # Return complete result
             return ProcessNewGameResult(
                 message=f"New game started. environment={env.setting_name}, conversation_id={conversation_id}",
                 scenario_name=env.scenario_name,
@@ -3800,7 +3802,7 @@ class NewGameAgent:
                 conversation_id=conversation_id,
                 welcome_image_url=final.welcome_image_url,
                 status="ready",
-                opening_narrative=opening_narrative_text  # Add this
+                opening_narrative=opening
             )
             
         except Exception as e:
