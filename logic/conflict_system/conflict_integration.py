@@ -103,7 +103,7 @@ class ConflictSystemIntegration:
         if success and conflict_id is None:
             # Generate a meaningful conflict name
             if not conflict_name:
-                conflict_name = self._generate_conflict_name(conflict_type, context_payload)
+                conflict_name = await self._generate_conflict_name(conflict_type, context_payload)
             
             # Create the database record
             try:
