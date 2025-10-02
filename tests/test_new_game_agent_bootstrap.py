@@ -182,6 +182,8 @@ async def test_process_new_game_bootstrap_seeds_governance_state(monkeypatch):
     )
 
     async def fake_create_opening(self, ctx_wrap, params):
+        assert state["current_roleplay"].get("CurrentLocation")
+        assert state["current_roleplay"].get("CurrentTime")
         return "Bootstrap opening"
 
     monkeypatch.setattr(new_game_agent.NewGameAgent, "create_opening_narrative", fake_create_opening)
