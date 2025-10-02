@@ -1293,24 +1293,77 @@ class NewGameAgent:
         else:
             raise ValueError("Invalid context object")
         
-        # Create a basic schedule structure
-        default_schedule = {}
-        for day in params.day_names:
-            default_schedule[day] = {
-                "Morning": f"Chase wakes up and prepares for the day",
-                "Afternoon": f"Chase attends to their responsibilities",
-                "Evening": f"Chase spends time on personal activities",
-                "Night": f"Chase returns home and rests"
-            }
-        
-        # Store in database
+        # Load known locations so we can reference them in the schedule
         async with get_db_connection_context() as conn:
-            await conn.execute("""
+            location_rows = await conn.fetch(
+                """
+                SELECT location_name
+                FROM Locations
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY location_name
+                """,
+                user_id,
+                conversation_id,
+            )
+
+            available_locations = [
+                row["location_name"]
+                for row in location_rows
+                if row and row.get("location_name")
+            ]
+
+            if not available_locations:
+                available_locations = []
+
+            # Create a schedule that references locations while keeping
+            # the same storage format (dict[day][phase] -> str)
+            default_schedule: Dict[str, Dict[str, str]] = {}
+            for day_index, day in enumerate(params.day_names):
+                day_schedule: Dict[str, str] = {}
+                for phase_index, phase in enumerate(TIME_PHASES):
+                    if phase == "Night":
+                        location_name = "home"
+                        activity = "Chase returns home and rests"
+                    else:
+                        if available_locations:
+                            location_name = available_locations[
+                                (day_index + phase_index) % len(available_locations)
+                            ]
+                        else:
+                            location_name = "the commons"
+
+                        if phase == "Morning":
+                            activity = "Chase prepares for the day"
+                        elif phase == "Afternoon":
+                            activity = "Chase attends to their responsibilities"
+                        else:
+                            activity = "Chase spends time on personal activities"
+
+                    if location_name.lower() in {"home", "the commons"}:
+                        location_clause = location_name
+                    else:
+                        location_clause = f"{location_name}"
+
+                    if location_name.lower() == "home":
+                        day_schedule[phase] = activity
+                    else:
+                        day_schedule[phase] = f"{activity} at {location_clause}"
+
+                default_schedule[day] = day_schedule
+
+            schedule_json = json.dumps(default_schedule)
+
+            await conn.execute(
+                """
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
                 VALUES($1, $2, 'ChaseSchedule', $3)
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, json.dumps(default_schedule))
+                """,
+                user_id,
+                conversation_id,
+                schedule_json,
+            )
         
         # Store as player memory using the new memory system
         try:
@@ -3364,19 +3417,34 @@ class NewGameAgent:
         conversation_id: int,
     ) -> None:
         """Seed the player's starting location and time snapshot."""
-        
+
         logging.info(f"[PLAYER_CTX] Starting initialization for conv={conversation_id}")
-        
+
+        now = datetime.now()
+
+        def _derive_phase_from_hour(hour: int) -> str:
+            if 5 <= hour < 12:
+                return "Morning"
+            if 12 <= hour < 17:
+                return "Afternoon"
+            if 17 <= hour < 21:
+                return "Evening"
+            return "Night"
+
+        phase = _derive_phase_from_hour(now.hour)
+
+        chase_schedule: Dict[str, Dict[str, str]] = {}
+        location_names: List[str] = []
+
         try:
-            # Step 1: Set starting location
-            logging.info(f"[PLAYER_CTX] Fetching locations")
+            logging.info(f"[PLAYER_CTX] Fetching locations and schedule")
             async with get_db_connection_context() as conn:
                 fetch_start = perf_counter()
-                rows = await conn.fetch(
+                location_rows = await conn.fetch(
                     """
                     SELECT location_name FROM Locations
                     WHERE user_id=$1 AND conversation_id=$2
-                    LIMIT 10
+                    LIMIT 25
                     """,
                     user_id,
                     conversation_id,
@@ -3386,31 +3454,36 @@ class NewGameAgent:
                     perf_counter() - fetch_start,
                 )
 
-                if rows:
-                    start_location = random.choice([row["location_name"] for row in rows])
-                    logging.info(f"[PLAYER_CTX] Selected start location: {start_location}")
-                else:
-                    start_location = "Unknown"
-                    logging.warning(f"[PLAYER_CTX] No locations found, using Unknown")
+                location_names = [
+                    row["location_name"]
+                    for row in location_rows
+                    if row and row.get("location_name")
+                ]
 
-                update_start = perf_counter()
-                await canon.update_current_roleplay(
-                    ctx_wrap, conn, "CurrentLocation", start_location
+                schedule_row = await conn.fetchrow(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='ChaseSchedule'
+                    LIMIT 1
+                    """,
+                    user_id,
+                    conversation_id,
                 )
-                logging.info(
-                    "[PLAYER_CTX] CurrentLocation update completed in %.2fs",
-                    perf_counter() - update_start,
-                )
-                logging.info(f"[PLAYER_CTX] CurrentLocation updated")
+
+                if schedule_row and schedule_row.get("value"):
+                    try:
+                        chase_schedule = json.loads(schedule_row["value"])
+                    except json.JSONDecodeError as json_err:
+                        logging.error(
+                            f"[PLAYER_CTX] Failed to decode ChaseSchedule: {json_err}",
+                            exc_info=True,
+                        )
 
         except asyncio.TimeoutError:
-            logging.error(f"[PLAYER_CTX] Location setup timed out")
-            start_location = "Unknown"
+            logging.error(f"[PLAYER_CTX] Location/schedule fetch timed out")
         except Exception as e:
-            logging.error(f"[PLAYER_CTX] Location setup failed: {e}", exc_info=True)
-            start_location = "Unknown"
-        
-        # Step 2: Set time/calendar info
+            logging.error(f"[PLAYER_CTX] Failed loading locations/schedule: {e}", exc_info=True)
+
         try:
             logging.info(f"[PLAYER_CTX] Loading calendar data")
             calendar_start = perf_counter()
@@ -3419,47 +3492,129 @@ class NewGameAgent:
                 "[PLAYER_CTX] Calendar load completed in %.2fs",
                 perf_counter() - calendar_start,
             )
+        except Exception as e:
+            logging.error(f"[PLAYER_CTX] Calendar load failed: {e}", exc_info=True)
+            calendar_names = {}
 
-            months = calendar_names.get("months", ["Month"])
-            days = calendar_names.get("days", ["Day"])
-            
-            # Pick random time
-            month_idx = random.randint(1, len(months) or 1)
-            day_num = random.randint(1, 30)
-            phase = random.choice(TIME_PHASES)
-            month_name = months[(month_idx - 1) % len(months)]
-            day_name = days[(day_num - 1) % len(days)]
-            year = random.randint(1, 100)
+        months = calendar_names.get("months") or ["Month"]
+        days = calendar_names.get("days") or list(chase_schedule.keys()) or ["Day"]
 
-            logging.info(f"[PLAYER_CTX] Setting time to Y{year} {month_name} {day_name} {phase}")
+        month_idx = ((now.month - 1) % len(months)) + 1 if months else 1
+        month_name = months[(month_idx - 1) % len(months)]
+        day_num = now.day
+        weekday_index = now.weekday()
+        day_name = days[weekday_index % len(days)]
 
+        schedule_day_key: Optional[str] = None
+        if chase_schedule:
+            lower_day_name = day_name.lower()
+            for key in chase_schedule:
+                if key.lower() == lower_day_name:
+                    schedule_day_key = key
+                    break
+            if schedule_day_key is None:
+                day_keys = list(chase_schedule.keys())
+                schedule_day_key = day_keys[weekday_index % len(day_keys)]
+
+        day_name_for_time = schedule_day_key or day_name
+
+        selected_entry: Optional[str] = None
+        if schedule_day_key:
+            day_schedule = chase_schedule.get(schedule_day_key, {})
+            if isinstance(day_schedule, dict):
+                selected_entry = day_schedule.get(phase)
+                if selected_entry is None:
+                    for phase_key, entry in day_schedule.items():
+                        if phase_key.lower() == phase.lower():
+                            selected_entry = entry
+                            break
+
+        target_location: str
+        matched_location: Optional[str] = None
+        if isinstance(selected_entry, str):
+            entry_lower = selected_entry.lower()
+            matched_location = next(
+                (
+                    name
+                    for name in location_names
+                    if name and name.lower() in entry_lower
+                ),
+                None,
+            )
+            if matched_location is None:
+                if "the commons" in entry_lower:
+                    matched_location = "the commons"
+                elif "home" in entry_lower:
+                    matched_location = "home"
+
+        if matched_location is None and phase == "Night":
+            matched_location = "home"
+
+        if matched_location is None and location_names:
+            matched_location = location_names[0]
+
+        if matched_location is None:
+            matched_location = "the commons" if chase_schedule else "Unknown"
+
+        target_location = matched_location
+
+        logging.info(
+            f"[PLAYER_CTX] Derived phase={phase}, day={day_name_for_time}, location={target_location}"
+        )
+
+        try:
+            async with get_db_connection_context() as conn:
+                update_start = perf_counter()
+                await canon.update_current_roleplay(
+                    ctx_wrap, conn, "CurrentLocation", target_location
+                )
+                logging.info(
+                    "[PLAYER_CTX] CurrentLocation update completed in %.2fs",
+                    perf_counter() - update_start,
+                )
+        except asyncio.TimeoutError:
+            logging.error(f"[PLAYER_CTX] Location setup timed out")
+        except Exception as e:
+            logging.error(f"[PLAYER_CTX] Location setup failed: {e}", exc_info=True)
+
+        year = now.year
+
+        logging.info(
+            f"[PLAYER_CTX] Setting time to Y{year} {month_name} {day_name_for_time} {phase}"
+        )
+
+        try:
             time_start = perf_counter()
             await set_current_time(user_id, conversation_id, year, month_idx, day_num, phase)
             logging.info(
                 "[PLAYER_CTX] set_current_time completed in %.2fs",
                 perf_counter() - time_start,
             )
+        except asyncio.TimeoutError:
+            logging.error(f"[PLAYER_CTX] Time setup timed out")
+        except Exception as e:
+            logging.error(f"[PLAYER_CTX] Time setup failed: {e}", exc_info=True)
 
+        current_time_value = f"Year {year} {month_name} {day_name_for_time} {phase}"
+
+        try:
             async with get_db_connection_context() as conn:
                 update_time_start = perf_counter()
                 await canon.update_current_roleplay(
                     ctx_wrap,
                     conn,
                     "CurrentTime",
-                    f"Year {year} {month_name} {day_name} {phase}",
+                    current_time_value,
                 )
                 logging.info(
                     "[PLAYER_CTX] CurrentTime update completed in %.2fs",
                     perf_counter() - update_time_start,
                 )
-
-            logging.info(f"[PLAYER_CTX] Time initialization complete")
-            
         except asyncio.TimeoutError:
-            logging.error(f"[PLAYER_CTX] Time setup timed out")
+            logging.error(f"[PLAYER_CTX] Time snapshot update timed out")
         except Exception as e:
-            logging.error(f"[PLAYER_CTX] Time setup failed: {e}", exc_info=True)
-        
+            logging.error(f"[PLAYER_CTX] Time snapshot update failed: {e}", exc_info=True)
+
         logging.info(f"[PLAYER_CTX] Initialization complete for conv={conversation_id}")
 
     @with_governance(
