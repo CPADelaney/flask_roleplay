@@ -17,7 +17,7 @@ import asyncio
 import asyncpg
 import threading
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any, Set
+from typing import Optional, Dict, Any, Set, List
 
 from quart import Quart
 import pgvector.asyncpg as pgvector_asyncpg
