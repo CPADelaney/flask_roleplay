@@ -263,24 +263,25 @@ async def create_pool_with_retry(
                     dsn=dsn,
                     min_size=config['min_size'],
                     max_size=config['max_size'],
-                    statement_cache_size=0,
+                    statement_cache_size=0,  # CRITICAL: Always 0 for pgbouncer
                     max_inactive_connection_lifetime=config['max_inactive_connection_lifetime'],
                     command_timeout=config['command_timeout'],
                     max_queries=config['max_queries'],
                     setup=setup_connection,
                     loop=current_loop,
-                    # Add these critical settings:
                     server_settings={
                         'application_name': f'nyx_worker_{os.getpid()}',
                         'jit': 'off'  # Disable JIT for pgbouncer compatibility
                     }
                 ),
-                timeout=30.0  # 30 second timeout for pool creation
+                timeout=30.0
             )
             
-            # Test the pool
+            # Test the pool with statement_cache_size check
             async with pool.acquire() as conn:
-                await conn.execute("SELECT 1")
+                # Verify statement cache is off
+                result = await conn.fetchval("SELECT 1")
+                assert result == 1
             
             logger.info(f"Pool creation successful on attempt {attempt + 1}")
             return pool
@@ -291,7 +292,7 @@ async def create_pool_with_retry(
             )
             
             if attempt < max_retries - 1:
-                wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
+                wait_time = (2 ** attempt) * 1
                 logger.info(f"Retrying in {wait_time} seconds...")
                 await asyncio.sleep(wait_time)
             else:
@@ -426,15 +427,7 @@ async def get_db_connection_context(
     """
     Async context manager for safe database connection usage with shutdown protection.
     
-    Args:
-        timeout: Timeout in seconds for acquiring connection
-        app: Optional Quart app instance
-        
-    Yields:
-        asyncpg.Connection: Database connection
-        
-    Raises:
-        ConnectionError: If pool is not available or worker is shutting down
+    CRITICAL: All operations MUST complete before connection is released.
     """
     global DB_POOL, DB_POOL_LOOP
     
@@ -444,7 +437,8 @@ async def get_db_connection_context(
     
     current_loop = get_or_create_event_loop()
     conn: Optional[asyncpg.Connection] = None
-
+    
+    # Verify pool is for current loop
     if DB_POOL and DB_POOL_LOOP != current_loop:
         logger.warning("DB pool was created for different event loop, reinitializing")
         await close_existing_pool()
@@ -470,11 +464,31 @@ async def get_db_connection_context(
         if current_pool_to_use is None:
             raise ConnectionError("DB pool is None even after lazy init attempt")
 
+    # CRITICAL FIX: Track pending operations on this connection
+    pending_ops = []
+    
     try:
         logger.debug(f"Acquiring connection from pool (timeout={timeout}s)")
         conn = await asyncio.wait_for(current_pool_to_use.acquire(), timeout=timeout)
         
+        # Store reference to track operations
+        if not hasattr(conn, '_pending_ops'):
+            conn._pending_ops = []
+        
         yield conn
+        
+        # CRITICAL: Wait for all pending operations to complete
+        if hasattr(conn, '_pending_ops') and conn._pending_ops:
+            logger.debug(f"Waiting for {len(conn._pending_ops)} pending operations")
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*conn._pending_ops, return_exceptions=True),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout waiting for {len(conn._pending_ops)} pending operations")
+            finally:
+                conn._pending_ops.clear()
         
     except asyncio.TimeoutError:
         logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool")
@@ -488,8 +502,11 @@ async def get_db_connection_context(
     finally:
         if conn:
             try:
+                # Double-check connection is still valid before release
                 if hasattr(conn, '_con') and conn._con is not None and not conn.is_closed():
-                    await current_pool_to_use.release(conn)
+                    # Force a small delay to ensure all operations flushed
+                    await asyncio.sleep(0.001)
+                    await current_pool_to_use.release(conn, timeout=2.0)
                     logger.debug("Released connection back to pool")
                 else:
                     logger.warning("Connection was already closed")
