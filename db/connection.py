@@ -57,6 +57,16 @@ DEFAULT_CONNECTION_LIFETIME = 300
 DEFAULT_COMMAND_TIMEOUT = 120
 DEFAULT_MAX_QUERIES = 50000
 
+_connection_pending_ops: Dict[int, List[asyncio.Task]] = {}
+_connection_ops_lock: Optional[asyncio.Lock] = None
+
+def _get_connection_ops_lock() -> asyncio.Lock:
+    """Get or create the connection operations lock."""
+    global _connection_ops_lock
+    if _connection_ops_lock is None:
+        _connection_ops_lock = asyncio.Lock()
+    return _connection_ops_lock
+
 # ============================================================================
 # Environment Configuration
 # ============================================================================
@@ -429,7 +439,7 @@ async def get_db_connection_context(
     
     CRITICAL: All operations MUST complete before connection is released.
     """
-    global DB_POOL, DB_POOL_LOOP
+    global DB_POOL, DB_POOL_LOOP, _connection_pending_ops
     
     # Early shutdown check
     if is_shutting_down():
@@ -437,6 +447,7 @@ async def get_db_connection_context(
     
     current_loop = get_or_create_event_loop()
     conn: Optional[asyncpg.Connection] = None
+    conn_id: Optional[int] = None
     
     # Verify pool is for current loop
     if DB_POOL and DB_POOL_LOOP != current_loop:
@@ -464,31 +475,32 @@ async def get_db_connection_context(
         if current_pool_to_use is None:
             raise ConnectionError("DB pool is None even after lazy init attempt")
 
-    # CRITICAL FIX: Track pending operations on this connection
-    pending_ops = []
-    
     try:
         logger.debug(f"Acquiring connection from pool (timeout={timeout}s)")
         conn = await asyncio.wait_for(current_pool_to_use.acquire(), timeout=timeout)
         
-        # Store reference to track operations
-        if not hasattr(conn, '_pending_ops'):
-            conn._pending_ops = []
+        # Track pending operations using connection ID instead of setting attributes
+        conn_id = id(conn)
+        lock = _get_connection_ops_lock()
+        async with lock:
+            _connection_pending_ops[conn_id] = []
         
         yield conn
         
         # CRITICAL: Wait for all pending operations to complete
-        if hasattr(conn, '_pending_ops') and conn._pending_ops:
-            logger.debug(f"Waiting for {len(conn._pending_ops)} pending operations")
+        pending_ops = []
+        async with lock:
+            pending_ops = _connection_pending_ops.get(conn_id, [])
+        
+        if pending_ops:
+            logger.debug(f"Waiting for {len(pending_ops)} pending operations on connection {conn_id}")
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(*conn._pending_ops, return_exceptions=True),
+                    asyncio.gather(*pending_ops, return_exceptions=True),
                     timeout=5.0
                 )
             except asyncio.TimeoutError:
-                logger.error(f"Timeout waiting for {len(conn._pending_ops)} pending operations")
-            finally:
-                conn._pending_ops.clear()
+                logger.error(f"Timeout waiting for {len(pending_ops)} pending operations on connection {conn_id}")
         
     except asyncio.TimeoutError:
         logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool")
@@ -500,6 +512,12 @@ async def get_db_connection_context(
         logger.error(f"Unexpected error in connection context: {e}", exc_info=True)
         raise
     finally:
+        # Clean up connection tracking
+        if conn_id is not None:
+            lock = _get_connection_ops_lock()
+            async with lock:
+                _connection_pending_ops.pop(conn_id, None)
+        
         if conn:
             try:
                 # Double-check connection is still valid before release
