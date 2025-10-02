@@ -3901,6 +3901,13 @@ async def find_or_create_quest(ctx, conn, quest_name: str, **kwargs) -> int:
         return existing['quest_id']
     
     # Create new quest
+    reward_value = kwargs.get('reward', None)
+
+    if reward_value is None:
+        reward_json = json.dumps([])
+    else:
+        reward_json = json.dumps(reward_value)
+
     quest_id = await conn.fetchval("""
         INSERT INTO Quests (
             user_id, conversation_id, quest_name, status,
@@ -3913,7 +3920,7 @@ async def find_or_create_quest(ctx, conn, quest_name: str, **kwargs) -> int:
         kwargs.get('status', 'In Progress'),
         kwargs.get('progress_detail', ''),
         kwargs.get('quest_giver', ''),
-        kwargs.get('reward', '')
+        reward_json
     )
     
     await log_canonical_event(
