@@ -6,6 +6,7 @@ Maintains reality consistency without hard-coded rules or repetitive responses.
 
 import json
 import random
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 from agents import Agent, Runner
@@ -48,6 +49,119 @@ ARCHETYPE_REGISTRY = {
     "roman_empire": RomanEmpire,
     "underwater_scifi": UnderwaterSciFi,
 }
+
+
+SETTING_KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "modern_realistic": {
+        "type": "modern_realistic",
+        "capabilities": {
+            "magic": "none",
+            "technology": "modern",
+            "physics": "realistic",
+            "supernatural": "none",
+        },
+        "technology_level": "modern",
+        "setting_era": "contemporary",
+    },
+    "fantasy_epic": {
+        "type": "high_fantasy",
+        "capabilities": {
+            "magic": "common",
+            "technology": "medieval",
+            "physics": "flexible",
+            "supernatural": "known",
+        },
+        "technology_level": "medieval",
+        "setting_era": "preindustrial",
+    },
+    "high_fantasy": {
+        "type": "high_fantasy",
+        "capabilities": {
+            "magic": "common",
+            "technology": "medieval",
+            "physics": "flexible",
+            "supernatural": "known",
+        },
+        "technology_level": "medieval",
+        "setting_era": "preindustrial",
+    },
+    "science_fiction": {
+        "type": "sci_fi_futuristic",
+        "capabilities": {
+            "magic": "none",
+            "technology": "futuristic",
+            "physics": "flexible",
+            "supernatural": "none",
+        },
+        "technology_level": "futuristic",
+        "setting_era": "far_future",
+    },
+    "soft_scifi": {
+        "type": "soft_scifi",
+        "capabilities": {
+            "magic": "none",
+            "technology": "advanced",
+            "physics": "realistic",
+            "supernatural": "none",
+        },
+        "technology_level": "near_future",
+        "setting_era": "near_future",
+    },
+    "dystopian": {
+        "type": "post_apocalyptic",
+        "capabilities": {
+            "magic": "none",
+            "technology": "scavenged",
+            "physics": "realistic",
+            "supernatural": "hidden",
+        },
+        "technology_level": "scavenged",
+        "setting_era": "near_future",
+    },
+    "modern_supernatural": {
+        "type": "supernatural_modern",
+        "capabilities": {
+            "magic": "limited",
+            "technology": "modern",
+            "physics": "flexible",
+            "supernatural": "known",
+        },
+        "technology_level": "modern",
+        "setting_era": "contemporary",
+    },
+    "urban_fantasy": {
+        "type": "urban_fantasy",
+        "capabilities": {
+            "magic": "subtle",
+            "technology": "modern",
+            "physics": "flexible",
+            "supernatural": "hidden",
+        },
+        "technology_level": "modern",
+        "setting_era": "contemporary",
+    },
+    "surrealist": {
+        "type": "surrealist",
+        "capabilities": {
+            "magic": "subtle",
+            "technology": "varies",
+            "physics": "surreal",
+            "supernatural": "common",
+        },
+        "technology_level": "varies",
+        "setting_era": "timeless",
+    },
+}
+
+
+def _get_setting_kind_defaults(setting_kind: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not setting_kind:
+        return None
+    normalized = str(setting_kind).strip().lower()
+    defaults = SETTING_KIND_DEFAULTS.get(normalized)
+    if not defaults:
+        return None
+    return deepcopy(defaults)
 
 
 def _boolish(value: Any) -> bool:
@@ -782,6 +896,8 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         world_type_value: Optional[str] = None
         technology_level = context.get("technology_level")
         setting_era = context.get("setting_era")
+        technology_level_from_db = False
+        setting_era_from_db = False
 
         for row in setting_data:
             key = row['key']
@@ -795,14 +911,21 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                 context["kind"] = value
             elif key == 'SettingCapabilities':
                 try:
-                    context["capabilities"] = json.loads(value)
-                    # Extract specific capabilities
-                    if "magic" in context["capabilities"]:
-                        context["magic_system"] = context["capabilities"]["magic"]
-                    if "technology" in context["capabilities"]:
-                        context["technology_level"] = context["capabilities"]["technology"]
-                except:
-                    pass
+                    capabilities_from_db = json.loads(value)
+                except Exception:
+                    capabilities_from_db = None
+
+                if isinstance(capabilities_from_db, dict):
+                    context["capabilities"] = capabilities_from_db
+                    if "magic" in capabilities_from_db:
+                        context["magic_system"] = capabilities_from_db["magic"]
+                    if "technology" in capabilities_from_db:
+                        technology_level = capabilities_from_db["technology"]
+                        context["technology_level"] = technology_level
+                        technology_level_from_db = True
+                    if "era" in capabilities_from_db:
+                        setting_era = capabilities_from_db["era"]
+                        setting_era_from_db = True
             elif key == 'RealityContext':
                 context["reality_context"] = value
             elif key == 'PhysicsModel':
@@ -839,8 +962,10 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                     economy_flags = {}
             elif key == 'TechnologyLevel':
                 technology_level = value
+                technology_level_from_db = True
             elif key == 'SettingEra':
                 setting_era = value
+                setting_era_from_db = True
 
         if world_type_value:
             context["type"] = world_type_value
@@ -871,6 +996,26 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         context["caps_loaded"] = caps_loaded_flag
 
         # Auto-detect if not set
+        if context["type"] == "unknown":
+            kind_defaults = _get_setting_kind_defaults(context.get("kind"))
+            if kind_defaults:
+                context["type"] = kind_defaults.get("type", context["type"])
+                default_caps = kind_defaults.get("capabilities", {}) or {}
+                merged_caps = {**default_caps, **(context.get("capabilities") or {})}
+                context["capabilities"] = merged_caps
+                if not context.get("magic_system") and "magic" in merged_caps:
+                    context["magic_system"] = merged_caps["magic"]
+                if not technology_level_from_db:
+                    tech_level_default = kind_defaults.get("technology_level") or merged_caps.get("technology")
+                    if tech_level_default:
+                        context["technology_level"] = tech_level_default
+                        technology_level_from_db = True
+                if not setting_era_from_db:
+                    era_default = kind_defaults.get("setting_era") or merged_caps.get("era")
+                    if era_default:
+                        context["setting_era"] = era_default
+                        setting_era_from_db = True
+
         if context["type"] == "unknown":
             detected = await detect_setting_type(nyx_ctx)
             context["type"] = detected["setting_type"]
