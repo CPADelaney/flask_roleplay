@@ -1668,8 +1668,24 @@ async def generate_text_completion(
     
     # Build messages for the chat completion
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": user_prompt,
+                }
+            ],
+        },
     ]
     
     # Use the async client directly for simple completions
@@ -1701,7 +1717,20 @@ async def generate_text_completion(
         response = await client.responses.create(**params)
 
         text = _extract_output_text(response)
-        return text.strip()
+        stripped_text = text.strip()
+        if stripped_text:
+            return stripped_text
+
+        logger.warning("Empty text extracted from LLM response; retrying once")
+
+        retry_response = await client.responses.create(**params)
+        retry_text = _extract_output_text(retry_response)
+        retry_stripped = retry_text.strip()
+
+        if not retry_stripped:
+            logger.error("LLM response empty after retry")
+
+        return retry_stripped
         
     except Exception as e:
         logger.error(f"Error in generate_text_completion: {e}")
