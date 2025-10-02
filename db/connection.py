@@ -56,6 +56,7 @@ DEFAULT_MAX_CONNECTIONS = 20
 DEFAULT_CONNECTION_LIFETIME = 300
 DEFAULT_COMMAND_TIMEOUT = 120
 DEFAULT_MAX_QUERIES = 50000
+DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
 
 _connection_pending_ops: Dict[int, List[asyncio.Task]] = {}
 _connection_ops_lock: Optional[asyncio.Lock] = None
@@ -103,6 +104,12 @@ def get_pool_config() -> Dict[str, int]:
         'command_timeout': int(os.getenv("DB_COMMAND_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))),
         'max_queries': int(os.getenv("DB_MAX_QUERIES", str(DEFAULT_MAX_QUERIES))),
     }
+
+
+def get_release_timeout() -> float:
+    """Return the timeout to use when releasing connections back to the pool."""
+    command_timeout = float(os.getenv("DB_COMMAND_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT)))
+    return float(os.getenv("DB_RELEASE_TIMEOUT", str(command_timeout if command_timeout > 0 else DEFAULT_RELEASE_TIMEOUT)))
 
 
 # ============================================================================
@@ -524,8 +531,22 @@ async def get_db_connection_context(
                 if hasattr(conn, '_con') and conn._con is not None and not conn.is_closed():
                     # Force a small delay to ensure all operations flushed
                     await asyncio.sleep(0.001)
-                    await current_pool_to_use.release(conn, timeout=2.0)
-                    logger.debug("Released connection back to pool")
+                    release_timeout = get_release_timeout()
+                    try:
+                        await current_pool_to_use.release(conn, timeout=release_timeout)
+                        logger.debug("Released connection back to pool")
+                    except (asyncio.TimeoutError, asyncio.CancelledError) as release_err:
+                        logger.error(
+                            f"Timeout releasing connection after {release_timeout}s; terminating connection.",
+                            exc_info=True,
+                        )
+                        try:
+                            conn.terminate()
+                            logger.warning("Connection terminated due to release timeout")
+                        except Exception:
+                            logger.exception("Failed to terminate connection after release timeout")
+                    except Exception as release_err:
+                        logger.error(f"Error releasing connection: {release_err}", exc_info=True)
                 else:
                     logger.warning("Connection was already closed")
             except Exception as release_err:

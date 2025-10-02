@@ -119,6 +119,14 @@ JWT_SECRET=your-secret-key
 API_RATE_LIMIT=100
 ```
 
+### Database connection tuning
+
+- `DB_COMMAND_TIMEOUT` controls how long queries are allowed to run before asyncpg raises a timeout.
+- `DB_RELEASE_TIMEOUT` (defaults to the command timeout) controls how long the pool waits when returning a connection. If the
+  release exceeds this window, the connection is forcibly terminated so the pool can hand out fresh connections. Increase this
+  value if you routinely run queries that hold onto connections during cleanup, or lower it to recover more aggressively from
+  hung sessions.
+
 ## Usage
 
 1. Start the development server:
