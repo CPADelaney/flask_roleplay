@@ -140,6 +140,15 @@ async def test_process_new_game_does_not_block_on_background(monkeypatch):
         fake_create_player_schedule,
     )
 
+    async def fake_initialize_player_context(self, ctx_wrap, user_id_arg, conversation_id_arg):
+        assert conversation_id_arg == created_conversation_id
+
+    monkeypatch.setattr(
+        new_game_agent.NewGameAgent,
+        "_initialize_player_context",
+        fake_initialize_player_context,
+    )
+
     async def fake_queue_npcs(self, user_id, conversation_id, target_count=5):
         assert conversation_id == created_conversation_id
 

@@ -1862,6 +1862,23 @@ class NewGameAgent:
         # Get aggregator data
         aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         aggregator_text = build_aggregator_text(aggregator_data)
+
+        roleplay_state = (aggregator_data or {}).get("current_roleplay", {})
+        current_location = roleplay_state.get("CurrentLocation")
+        current_time = roleplay_state.get("CurrentTime")
+
+        if current_location and current_time:
+            logging.debug(
+                "[OPENING] Using CurrentLocation=%s and CurrentTime=%s for narrative context",
+                current_location,
+                current_time,
+            )
+        else:
+            logging.warning(
+                "[OPENING] Missing CurrentLocation (%s) or CurrentTime (%s) in aggregator context",
+                current_location,
+                current_time,
+            )
         
         # Get calendar data for first day name
         async with get_db_connection_context() as conn:
@@ -3373,19 +3390,64 @@ class NewGameAgent:
             return_exceptions=False  # Let errors propagate but don't stop other tasks
         )
         
-        # Initialize player context (must be sequential)
-        logging.info(f"[FINALIZE] Starting player context initialization for conv={conversation_id}")
+        player_context_ready = False
         try:
-            await asyncio.wait_for(
-                self._initialize_player_context(canon_ctx, user_id, conversation_id),
-                timeout=30.0
+            async with get_db_connection_context() as conn:
+                location_row = await conn.fetchrow(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key=$3
+                    LIMIT 1
+                    """,
+                    user_id,
+                    conversation_id,
+                    "CurrentLocation",
+                )
+                time_row = await conn.fetchrow(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key=$3
+                    LIMIT 1
+                    """,
+                    user_id,
+                    conversation_id,
+                    "CurrentTime",
+                )
+                player_context_ready = bool(location_row and location_row.get("value")) and bool(
+                    time_row and time_row.get("value")
+                )
+        except Exception as check_err:
+            logging.warning(
+                f"[FINALIZE] Failed to confirm existing player context: {check_err}",
+                exc_info=True,
             )
-            logging.info(f"[FINALIZE] Player context initialized for conv={conversation_id}")
-        except asyncio.TimeoutError:
-            logging.error(f"[FINALIZE] Player context initialization timed out after 30s")
-        except Exception as e:
-            logging.error(f"[FINALIZE] Player context initialization failed: {e}", exc_info=True)
-        
+
+        if player_context_ready:
+            logging.info(
+                f"[FINALIZE] Player context already initialized for conv={conversation_id}; skipping"
+            )
+        else:
+            logging.info(
+                f"[FINALIZE] Starting player context initialization for conv={conversation_id}"
+            )
+            try:
+                await asyncio.wait_for(
+                    self._initialize_player_context(canon_ctx, user_id, conversation_id),
+                    timeout=30.0
+                )
+                logging.info(
+                    f"[FINALIZE] Player context initialized for conv={conversation_id}"
+                )
+            except asyncio.TimeoutError:
+                logging.error(
+                    f"[FINALIZE] Player context initialization timed out after 30s"
+                )
+            except Exception as e:
+                logging.error(
+                    f"[FINALIZE] Player context initialization failed: {e}",
+                    exc_info=True,
+                )
+
         logging.info(f"[FINALIZE COMPLETE] All operations complete for conv={conversation_id}")
         
         return FinalizeResult(
@@ -3880,6 +3942,24 @@ class NewGameAgent:
                 logger.error(f"Failed to create NPCs: {npc_err}", exc_info=True)
                 # Continue anyway - game can work with no NPCs initially
                 npc_ids = []
+
+            logger.info("Seeding player context prior to opening narrative generation")
+            try:
+                await asyncio.wait_for(
+                    self._initialize_player_context(ctx_wrap, user_id, conversation_id),
+                    timeout=30.0,
+                )
+                logger.info("Player context seeded before narrative prompt build")
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Player context initialization timed out before opening narrative"
+                )
+            except Exception as init_err:
+                logger.error(
+                    "Player context initialization failed before narrative: %s",
+                    init_err,
+                    exc_info=True,
+                )
 
             # Update status
             async with get_db_connection_context() as conn:
