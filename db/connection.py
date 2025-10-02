@@ -51,10 +51,10 @@ _pending_operations: Set[asyncio.Task] = set()
 _pending_operations_lock: Optional[asyncio.Lock] = None
 
 # Default pool configuration
-DEFAULT_MIN_CONNECTIONS = 10
-DEFAULT_MAX_CONNECTIONS = 50
-DEFAULT_CONNECTION_LIFETIME = 60
-DEFAULT_COMMAND_TIMEOUT = 60
+DEFAULT_MIN_CONNECTIONS = 2
+DEFAULT_MAX_CONNECTIONS = 20
+DEFAULT_CONNECTION_LIFETIME = 300
+DEFAULT_COMMAND_TIMEOUT = 120
 DEFAULT_MAX_QUERIES = 50000
 
 # ============================================================================
@@ -244,6 +244,59 @@ async def setup_connection(conn: asyncpg.Connection):
         logger.error(f"Error setting up connection: {e}", exc_info=True)
         raise
 
+async def create_pool_with_retry(
+    dsn: str,
+    config: Dict[str, int],
+    current_loop: asyncio.AbstractEventLoop,
+    max_retries: int = 3
+) -> asyncpg.Pool:
+    """Create pool with exponential backoff retry logic."""
+    for attempt in range(max_retries):
+        try:
+            logger.info(
+                f"Creating asyncpg pool (attempt {attempt + 1}/{max_retries}), "
+                f"min={config['min_size']}, max={config['max_size']}"
+            )
+            
+            pool = await asyncio.wait_for(
+                asyncpg.create_pool(
+                    dsn=dsn,
+                    min_size=config['min_size'],
+                    max_size=config['max_size'],
+                    statement_cache_size=0,
+                    max_inactive_connection_lifetime=config['max_inactive_connection_lifetime'],
+                    command_timeout=config['command_timeout'],
+                    max_queries=config['max_queries'],
+                    setup=setup_connection,
+                    loop=current_loop,
+                    # Add these critical settings:
+                    server_settings={
+                        'application_name': f'nyx_worker_{os.getpid()}',
+                        'jit': 'off'  # Disable JIT for pgbouncer compatibility
+                    }
+                ),
+                timeout=30.0  # 30 second timeout for pool creation
+            )
+            
+            # Test the pool
+            async with pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+            
+            logger.info(f"Pool creation successful on attempt {attempt + 1}")
+            return pool
+            
+        except (asyncio.TimeoutError, asyncpg.PostgresError, OSError) as e:
+            logger.warning(
+                f"Pool creation attempt {attempt + 1} failed: {e.__class__.__name__}: {e}"
+            )
+            
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
+                logger.info(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Failed to create pool after {max_retries} attempts")
+                raise
 
 async def close_existing_pool():
     """Close the existing connection pool if one exists."""
@@ -314,30 +367,17 @@ async def initialize_connection_pool(
                 f"{id(current_loop)} (min={config['min_size']}, max={config['max_size']})"
             )
             
-            local_pool = await asyncpg.create_pool(
-                dsn=dsn,
-                min_size=config['min_size'],
-                max_size=config['max_size'],
-                statement_cache_size=0,
-                max_inactive_connection_lifetime=config['max_inactive_connection_lifetime'],
-                command_timeout=config['command_timeout'],
-                max_queries=config['max_queries'],
-                setup=setup_connection,
-                loop=current_loop
-            )
+            # Use the new retry logic
+            local_pool = await create_pool_with_retry(dsn, config, current_loop)
             
-            async with local_pool.acquire() as conn:
-                await conn.execute("SELECT 1")
-                logger.info(f"Process {os.getpid()}: Pool test query successful")
-
             DB_POOL = local_pool
             DB_POOL_LOOP = current_loop
             
             if app:
                 app.db_pool = DB_POOL
                 logger.info(f"Process {os.getpid()}: DB_POOL stored on app.db_pool")
-
-            logger.info(f"Process {os.getpid()}: Asyncpg pool initialized successfully for loop {id(current_loop)}")
+        
+            logger.info(f"Process {os.getpid()}: Asyncpg pool initialized successfully")
             return True
             
         except Exception as e:
@@ -558,12 +598,27 @@ def close_worker_pool(**kwargs):
     logger.info(f"Process {pid}: Marked as shutting down, beginning graceful shutdown")
     
     async def _graceful_shutdown():
-        # Wait for pending operations
-        await wait_for_pending_operations(timeout=30.0)
+        # Wait for pending operations with a reasonable timeout
+        try:
+            await asyncio.wait_for(
+                wait_for_pending_operations(timeout=25.0),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Process {pid}: Timed out waiting for pending operations")
         
         # Now close the pool
         if DB_POOL:
-            await close_connection_pool()
+            try:
+                # Give pool time to close gracefully
+                await asyncio.wait_for(
+                    close_connection_pool(),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Process {pid}: Pool closure timed out, forcing close")
+                if not DB_POOL._closed:
+                    DB_POOL.terminate()
     
     # Execute graceful shutdown
     if DB_POOL_LOOP and not DB_POOL_LOOP.is_closed():
@@ -572,15 +627,22 @@ def close_worker_pool(**kwargs):
                 DB_POOL_LOOP.run_until_complete(_graceful_shutdown())
             else:
                 future = asyncio.run_coroutine_threadsafe(_graceful_shutdown(), DB_POOL_LOOP)
-                future.result(timeout=35)
+                future.result(timeout=45)  # Increased timeout
             logger.info(f"Process {pid}: Graceful shutdown completed")
         except Exception as e:
             logger.error(f"Process {pid}: Error during graceful shutdown: {e}", exc_info=True)
+            # Force terminate the pool
+            if DB_POOL and not DB_POOL._closed:
+                try:
+                    DB_POOL.terminate()
+                except:
+                    pass
     
     # Final cleanup
     DB_POOL = None
     DB_POOL_LOOP = None
     
+    # Close event loop
     if hasattr(_thread_local, 'event_loop') and _thread_local.event_loop:
         try:
             if not _thread_local.event_loop.is_closed() and not _thread_local.event_loop.is_running():
