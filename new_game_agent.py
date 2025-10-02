@@ -3750,17 +3750,39 @@ class NewGameAgent:
             await insert_default_player_stats_chase(user_id, conversation_id)
             logger.info(f"Default player stats for Chase inserted")
     
+            # Set up context wrapper early so we can seed provisional state
+            ctx_wrap = _build_run_context_wrapper(
+                user_id,
+                conversation_id,
+                db_dsn=DB_DSN,
+                agent_instance=self,
+            )
+
+            # Seed a provisional player snapshot before governance bootstraps
+            try:
+                await self._initialize_player_context(ctx_wrap, user_id, conversation_id)
+                logger.debug(
+                    "Seeded provisional player context for conversation %s prior to governance init",
+                    conversation_id,
+                )
+            except Exception as provisional_err:
+                logger.warning(
+                    "Failed to seed provisional player context before governance init: %s",
+                    provisional_err,
+                    exc_info=True,
+                )
+
             # Update status - environment generation
             async with get_db_connection_context() as conn:
                 await conn.execute("""
-                    UPDATE conversations 
+                    UPDATE conversations
                     SET conversation_name='New Game - Creating Environment'
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
-        
+
             # Get governance ONCE - this will handle all initialization
             governance = await get_central_governance(user_id, conversation_id)
-            
+
             # Initialize directive handler WITHOUT starting background processing yet
             await self.initialize_directive_handler(user_id, conversation_id)
             
@@ -3805,14 +3827,6 @@ class NewGameAgent:
             
             mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
             mega_desc = mega_data.get("mega_description", "No environment generated")
-            
-            # Set up context wrapper for the agent methods
-            ctx_wrap = _build_run_context_wrapper(
-                user_id,
-                conversation_id,
-                db_dsn=DB_DSN,
-                agent_instance=self,
-            )
             
             # Update status - running agent
             async with get_db_connection_context() as conn:
@@ -3904,6 +3918,20 @@ class NewGameAgent:
             )
             final = await self.finalize_game_setup(ctx_wrap, finalize_params)
             logger.info(f"Game setup finalized: {final.lore_summary}")
+
+            try:
+                refreshed_state = await governance.initialize_game_state(force=True)
+                logger.debug(
+                    "Governance state refreshed after finalization for conversation %s: %s",
+                    conversation_id,
+                    refreshed_state,
+                )
+            except Exception as refresh_err:
+                logger.warning(
+                    "Failed to refresh governance game state after finalization: %s",
+                    refresh_err,
+                    exc_info=True,
+                )
             
             # 5. Store opening message
             async with get_db_connection_context() as conn:
