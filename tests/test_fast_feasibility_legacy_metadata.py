@@ -1,0 +1,159 @@
+import asyncio
+import importlib
+import json
+import os
+import sys
+import types
+import typing
+from contextlib import asynccontextmanager
+
+import pytest
+import typing_extensions
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+typing.TypedDict = typing_extensions.TypedDict
+
+dummy_models = types.ModuleType("sentence_transformers.models")
+dummy_models.Transformer = lambda *args, **kwargs: None
+dummy_models.Pooling = lambda *args, **kwargs: None
+
+
+class DummySentenceTransformer:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def encode(self, texts, **kwargs):
+        return [[0.0] * 3 for _ in texts]
+
+    def get_sentence_embedding_dimension(self):
+        return 3
+
+
+dummy_sentence_transformers = types.ModuleType("sentence_transformers")
+dummy_sentence_transformers.SentenceTransformer = DummySentenceTransformer
+dummy_sentence_transformers.models = dummy_models
+
+sys.modules["sentence_transformers"] = dummy_sentence_transformers
+sys.modules["sentence_transformers.models"] = dummy_models
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+orchestrator = importlib.import_module("nyx.nyx_agent.orchestrator")
+feasibility = importlib.import_module("nyx.nyx_agent.feasibility")
+
+
+class FakeConnection:
+    def __init__(self):
+        self.current_roleplay: dict[str, str] = {}
+
+    async def execute(self, query, *args):
+        if "CurrentRoleplay" in query and "CurrentScene" in query:
+            self.current_roleplay["CurrentScene"] = args[2]
+        elif "CurrentRoleplay" in query and "CurrentLocation" in query:
+            self.current_roleplay["CurrentLocation"] = args[2]
+        elif "NyxAgentState" in query:
+            self.current_roleplay["NyxAgentState"] = args[2]
+        return None
+
+    async def fetch(self, query, *args):
+        if "FROM CurrentRoleplay" in query and "key = ANY" in query:
+            keys = args[2]
+            return [
+                {"key": key, "value": self.current_roleplay.get(key)}
+                for key in keys
+                if key in self.current_roleplay
+            ]
+        if "FROM GameRules" in query:
+            return []
+        return []
+
+    async def fetchval(self, *args, **kwargs):
+        return None
+
+    async def fetchrow(self, query, *args):
+        if "FROM CurrentRoleplay" in query and "key='CurrentScene'" in query:
+            value = self.current_roleplay.get("CurrentScene")
+            if value is None:
+                return None
+            return {"value": value}
+        return None
+
+
+@pytest.mark.parametrize("action_text", ["Talk to Mallory about the treasure."])
+def test_fast_feasibility_blocks_absent_entities(monkeypatch, action_text):
+    fake_conn = FakeConnection()
+    fake_conn.current_roleplay.update(
+        {
+            "SettingCapabilities": json.dumps({"technology": "modern"}),
+            "SettingType": "modern_realistic",
+            "SettingKind": "modern_realistic",
+            "RealityContext": "normal",
+            "PhysicsModel": "realistic",
+        }
+    )
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield fake_conn
+
+    monkeypatch.setattr(orchestrator, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
+
+    async def fake_parse_action_intents(text: str):
+        return [
+            {
+                "raw_text": text,
+                "categories": ["dialogue"],
+                "direct_object": ["Mallory"],
+            }
+        ]
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+
+    class DummyCtx:
+        def __init__(self):
+            self.current_context = {
+                "location": {"name": "Atrium"},
+                "npc_present": ["Ava"],
+                "items": ["Silver Key"],
+            }
+            self.user_id = 1
+            self.conversation_id = 2
+            self.scenario_state = {}
+            self._tables_available = {"scenario_states": True}
+            self.learning_metrics = {}
+            self.learned_patterns = {}
+            self.performance_metrics = {}
+            self.error_log = []
+
+        def should_run_task(self, _name: str) -> bool:
+            return False
+
+        def record_task_run(self, _name: str) -> None:
+            return None
+
+    async def _run():
+        ctx = DummyCtx()
+        await orchestrator._save_context_state(ctx)
+        stored_scene = json.loads(fake_conn.current_roleplay.get("CurrentScene", "{}"))
+        assert stored_scene["npcs"] == ["Ava"]
+        assert stored_scene["items"] == ["Silver Key"]
+
+        result = await feasibility.assess_action_feasibility_fast(
+            ctx.user_id,
+            ctx.conversation_id,
+            action_text,
+        )
+        return stored_scene, result
+
+    stored_scene, result = asyncio.run(_run())
+
+    assert stored_scene["location"]["name"] == "Atrium"
+    overall = result.get("overall", {})
+    per_intent = (result.get("per_intent") or [])[0]
+    assert overall.get("feasible") is False
+    assert overall.get("strategy") == "deny"
+    assert per_intent.get("strategy") == "deny"
+    violation_blob = json.dumps(per_intent.get("violations", []))
+    assert "mallory" in violation_blob.lower()
