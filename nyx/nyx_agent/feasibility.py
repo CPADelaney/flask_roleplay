@@ -1323,12 +1323,13 @@ async def _quick_feasibility_check(setting_context: Dict, intents: List[Dict]) -
                 })
         
         # Check prerequisites
-        if not await _check_prerequisites(intent, setting_context):
+        prereq_ok, prereq_reason = await _check_prerequisites(intent, setting_context)
+        if not prereq_ok:
             feasible = False
             prereq_missing = True
-            reason = "No vendor/point-of-sale in current scene"
+            reason = prereq_reason or "No vendor/point-of-sale in current scene"
             if not ({"trade", "mundane_action"} & categories):
-                reason = "Required elements are not present"
+                reason = prereq_reason or "Required elements are not present"
             intent_violations.append({
                 "rule": "missing_prereq",
                 "reason": reason
@@ -1407,36 +1408,114 @@ def _matches_impossibility_dynamic(intent: Dict, impossibility: Dict) -> bool:
     
     return False
 
-async def _check_prerequisites(intent: Dict, context: Dict) -> bool:
+async def _check_prerequisites(intent: Dict, context: Dict) -> Tuple[bool, Optional[str]]:
     """Check if required elements for the action are present"""
 
     categories = {str(cat).lower() for cat in intent.get("categories", [])}
-    is_mundane = "mundane_action" in categories or "trade" in categories
+
+    def _normalize_term(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned.lower() if cleaned else None
+        if isinstance(value, dict):
+            for key in ("name", "item_name", "npc_name", "label", "title", "display_name"):
+                val = value.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip().lower()
+            for key in ("id", "item_id", "npc_id", "npcId", "itemId"):
+                val = value.get(key)
+                if val is not None:
+                    return str(val).strip().lower()
+            return None
+        return str(value).strip().lower()
+
+    def _display_term(value: Any) -> str:
+        if isinstance(value, dict):
+            for key in ("name", "item_name", "npc_name", "label", "title", "display_name"):
+                val = value.get(key)
+                if val:
+                    return str(val)
+        return str(value)
+
+    available_items = context.get("available_items")
+    present_entities = context.get("present_entities")
+    location = context.get("location") or {}
+    location_features_sources = [
+        context.get("location_features"),
+        location.get("features"),
+        location.get("notable_features"),
+        location.get("points_of_interest"),
+        location.get("tags"),
+    ]
+
+    scene_tokens: Set[str] = set()
+    for values in location_features_sources:
+        scene_tokens |= _tokenize_scene_values(values)
+
+    loc_name = location.get("name")
+    if loc_name:
+        scene_tokens.add(str(loc_name).strip().lower())
+
+    available_items_tokens = _tokenize_scene_values(available_items)
+    present_entities_tokens = _tokenize_scene_values(present_entities)
+
+    has_scene_data = (
+        available_items is not None
+        or present_entities is not None
+        or bool(location)
+        or any(source is not None for source in location_features_sources)
+    )
+
+    if not has_scene_data:
+        return True, None
 
     # Check required items
-    if "instruments" in intent and not is_mundane:
-        for item in intent["instruments"]:
-            if item and item not in context.get("available_items", []):
-                return False
+    instruments = intent.get("instruments")
+    if instruments is None:
+        instruments_iter: List[Any] = []
+    elif isinstance(instruments, (list, tuple, set)):
+        instruments_iter = list(instruments)
+    else:
+        instruments_iter = [instruments]
+
+    for item in instruments_iter:
+        normalized = _normalize_term(item)
+        if not normalized:
+            continue
+        if normalized not in available_items_tokens:
+            reason = f"Required item '{_display_term(item)}' is not available here."
+            return False, reason
 
     # Check target presence
-    if "direct_object" in intent and not is_mundane:
-        all_present_entities = set(context.get("present_entities", []))
-        all_present_entities.add(context.get("location", {}).get("name", ""))
+    direct_objects = intent.get("direct_object")
+    if direct_objects is None:
+        direct_iter: List[Any] = []
+    elif isinstance(direct_objects, (list, tuple, set)):
+        direct_iter = list(direct_objects)
+    else:
+        direct_iter = [direct_objects]
 
-        for target in intent["direct_object"]:
-            if target and target not in all_present_entities:
-                # Check if it's an item
-                if target not in context.get("available_items", []):
-                    return False
-    
+    for target in direct_iter:
+        normalized = _normalize_term(target)
+        if not normalized:
+            continue
+        if (
+            normalized not in present_entities_tokens
+            and normalized not in available_items_tokens
+            and normalized not in scene_tokens
+        ):
+            reason = f"{_display_term(target)} isn't here right now."
+            return False, reason
+
     # Check ability requirements based on categories
     if "spellcasting" in categories and context.get("magic_system") == "none":
-        return False
+        return False, "Spellcasting isn't possible in this setting."
     if "hacking" in categories and context.get("technology_level") in ["primitive", "medieval"]:
-        return False
+        return False, "Hacking isn't possible with the current technology level."
 
-    return True
+    return True, None
 
 async def _full_dynamic_assessment(
     nyx_ctx: NyxContext,
