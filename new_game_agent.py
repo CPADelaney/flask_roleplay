@@ -183,6 +183,29 @@ def _build_fallback_environment_payload() -> Dict[str, Any]:
     return deepcopy(FALLBACK_ENVIRONMENT_PAYLOAD)
 
 
+def _find_schedule_location_match(
+    chase_schedule: Dict[str, Dict[str, Any]],
+    location_names: List[str],
+) -> Optional[Tuple[str, str, str]]:
+    """Return the first schedule entry referencing a known location."""
+
+    normalized_locations = [name.lower() for name in location_names if name]
+    if not normalized_locations:
+        return None
+
+    for day_name, phases in chase_schedule.items():
+        if not isinstance(phases, dict):
+            continue
+        for phase_name, entry in phases.items():
+            if not entry:
+                continue
+            entry_text = str(entry).lower()
+            for idx, normalized in enumerate(normalized_locations):
+                if normalized in entry_text:
+                    return day_name, phase_name, location_names[idx]
+    return None
+
+
 def _build_run_context_wrapper(
     user_id: int,
     conversation_id: int,
@@ -3391,6 +3414,7 @@ class NewGameAgent:
         )
         
         player_context_ready = False
+        needs_refresh = False
         try:
             async with get_db_connection_context() as conn:
                 location_row = await conn.fetchrow(
@@ -3413,23 +3437,76 @@ class NewGameAgent:
                     conversation_id,
                     "CurrentTime",
                 )
-                player_context_ready = bool(location_row and location_row.get("value")) and bool(
-                    time_row and time_row.get("value")
+                location_value = location_row.get("value") if location_row else None
+                time_value = time_row.get("value") if time_row else None
+                player_context_ready = bool(location_value) and bool(time_value)
+
+                placeholder_tokens = {"home", "unknown", "the commons"}
+                normalized_location = (
+                    str(location_value).strip().lower() if location_value else ""
                 )
+
+                if player_context_ready and normalized_location in placeholder_tokens:
+                    location_rows = await conn.fetch(
+                        """
+                        SELECT location_name FROM Locations
+                        WHERE user_id=$1 AND conversation_id=$2
+                        LIMIT 25
+                        """,
+                        user_id,
+                        conversation_id,
+                    )
+                    location_names = [
+                        row["location_name"]
+                        for row in location_rows
+                        if row and row.get("location_name")
+                    ]
+
+                    schedule_row = await conn.fetchrow(
+                        """
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id=$1 AND conversation_id=$2 AND key='ChaseSchedule'
+                        LIMIT 1
+                        """,
+                        user_id,
+                        conversation_id,
+                    )
+
+                    chase_schedule: Dict[str, Dict[str, Any]] = {}
+                    if schedule_row and schedule_row.get("value"):
+                        raw_schedule = schedule_row["value"]
+                        if isinstance(raw_schedule, dict):
+                            chase_schedule = raw_schedule
+                        else:
+                            try:
+                                chase_schedule = json.loads(raw_schedule)
+                            except json.JSONDecodeError:
+                                logging.warning(
+                                    "[FINALIZE] Failed to decode ChaseSchedule while checking context",
+                                    exc_info=True,
+                                )
+
+                    if location_names or _find_schedule_location_match(chase_schedule, location_names):
+                        needs_refresh = True
         except Exception as check_err:
             logging.warning(
                 f"[FINALIZE] Failed to confirm existing player context: {check_err}",
                 exc_info=True,
             )
 
-        if player_context_ready:
+        if player_context_ready and not needs_refresh:
             logging.info(
                 f"[FINALIZE] Player context already initialized for conv={conversation_id}; skipping"
             )
         else:
-            logging.info(
-                f"[FINALIZE] Starting player context initialization for conv={conversation_id}"
-            )
+            if player_context_ready and needs_refresh:
+                logging.info(
+                    f"[FINALIZE] Refreshing placeholder player context for conv={conversation_id}"
+                )
+            else:
+                logging.info(
+                    f"[FINALIZE] Starting player context initialization for conv={conversation_id}"
+                )
             try:
                 await asyncio.wait_for(
                     self._initialize_player_context(canon_ctx, user_id, conversation_id),
@@ -3546,6 +3623,12 @@ class NewGameAgent:
         except Exception as e:
             logging.error(f"[PLAYER_CTX] Failed loading locations/schedule: {e}", exc_info=True)
 
+        if not location_names and not chase_schedule:
+            logging.info(
+                "[PLAYER_CTX] No locations or schedule available yet; skipping initialization"
+            )
+            return
+
         try:
             logging.info(f"[PLAYER_CTX] Loading calendar data")
             calendar_start = perf_counter()
@@ -3610,13 +3693,23 @@ class NewGameAgent:
                     matched_location = "home"
 
         if matched_location is None and phase == "Night":
-            matched_location = "home"
+            matched_location = None
+
+        placeholder_tokens = {"home", "unknown"}
+
+        if matched_location is None or str(matched_location).strip().lower() in placeholder_tokens:
+            fallback_match = _find_schedule_location_match(chase_schedule, location_names)
+            if fallback_match:
+                fallback_day, fallback_phase, fallback_location = fallback_match
+                matched_location = fallback_location
+                day_name_for_time = fallback_day
+                phase = fallback_phase
 
         if matched_location is None and location_names:
             matched_location = location_names[0]
 
         if matched_location is None:
-            matched_location = "the commons" if chase_schedule else "Unknown"
+            matched_location = "Unknown"
 
         target_location = matched_location
 

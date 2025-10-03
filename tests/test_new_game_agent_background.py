@@ -681,3 +681,84 @@ def test_initialize_player_context_aligns_with_schedule(monkeypatch):
     assert ("CurrentTime", expected_time) in updates
     assert recorded_time_args["args"] == (user_id, conversation_id, 2024, 1, 18, "Morning")
 
+
+def test_initialize_player_context_avoids_home_placeholder(monkeypatch):
+    user_id = 101
+    conversation_id = 404
+
+    fixed_now = datetime(2024, 3, 18, 23, 45)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now
+            return fixed_now.replace(tzinfo=tz)
+
+    monkeypatch.setattr(new_game_agent, "datetime", FixedDateTime)
+
+    schedule = {
+        "Monday": {
+            "Morning": "Chase trains within the Velvet Sanctum",
+            "Evening": "Chase surveys the district at Shadow Bazaar",
+            "Night": "Chase returns home and rests",
+        }
+    }
+
+    location_rows = [
+        {"location_name": "Velvet Sanctum"},
+        {"location_name": "Shadow Bazaar"},
+    ]
+
+    class DummyConnection:
+        async def fetch(self, query, *args):
+            if "FROM Locations" in query:
+                return location_rows
+            return []
+
+        async def fetchrow(self, query, *args):
+            if "ChaseSchedule" in query:
+                return {"value": json.dumps(schedule)}
+            return None
+
+        async def execute(self, query, *args):
+            return None
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield DummyConnection()
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    async def fake_load_calendar_names(unused_user_id, unused_conversation_id):
+        return {"months": ["Month"], "days": ["Monday"], "seasons": []}
+
+    monkeypatch.setattr(new_game_agent, "load_calendar_names", fake_load_calendar_names)
+
+    recorded_time_args = {}
+
+    async def fake_set_current_time(*args):
+        recorded_time_args["args"] = args
+
+    monkeypatch.setattr(new_game_agent, "set_current_time", fake_set_current_time)
+
+    updates = []
+
+    async def fake_update_current_roleplay(ctx, conn, key, value):
+        updates.append((key, value))
+
+    monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", fake_update_current_roleplay)
+
+    async def runner():
+        agent = new_game_agent.NewGameAgent()
+        ctx_wrap = new_game_agent._build_run_context_wrapper(user_id, conversation_id)
+
+        await agent._initialize_player_context(ctx_wrap, user_id, conversation_id)
+
+    asyncio.run(runner())
+
+    assert ("CurrentLocation", "Velvet Sanctum") in updates
+    expected_time = "Year 2024 Month Monday Morning"
+    assert ("CurrentTime", expected_time) in updates
+    assert recorded_time_args["args"] == (user_id, conversation_id, 2024, 1, 18, "Morning")
+
