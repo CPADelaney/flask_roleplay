@@ -22,6 +22,7 @@ from nyx.nyx_agent.feasibility import (
 
 from .config import Config
 from .context import NyxContext
+from ._feasibility_helpers import extract_defer_details
 from .models import *
 from .agents import nyx_main_agent, reflection_agent, DEFAULT_MODEL_SETTINGS
 from .assembly import assemble_nyx_response, resolve_scene_requests
@@ -296,6 +297,32 @@ async def process_user_input(
                     v.get("reason", "") for v in constraints
                 ) + ". Describe attempt with appropriate limitations.]"
                 enhanced_input = f"{constraint_text}\n\n{user_input}"
+            elif feasible_flag is False and strategy == "defer":
+                guidance, leads, extra_meta = extract_defer_details(feas)
+                if not guidance:
+                    guidance = "The scene isn't ready for that yet. Ground the action in the current reality."
+                if leads:
+                    guidance = f"{guidance}\n\nTry one of these grounded steps first: {', '.join(leads[:3])}."
+
+                logger.info(f"[{trace_id}] ACTION DEFERRED (full feasibility)")
+
+                metadata = {
+                    "choices": [{"text": lead} for lead in leads[:4]],
+                    "universal_updates": False,
+                    "feasibility": feas,
+                    "action_blocked": True,
+                    "action_deferred": True,
+                    "reality_maintained": True,
+                }
+                metadata.update(extra_meta)
+
+                return {
+                    "success": True,
+                    "response": guidance,
+                    "metadata": metadata,
+                    "trace_id": trace_id,
+                    "processing_time": time.time() - start_time,
+                }
             elif feasible_flag is True:
                 # Record possibility for consistency
                 try:

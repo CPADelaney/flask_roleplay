@@ -27,6 +27,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 # ── Core modern orchestrator
 from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
 from .nyx_agent.context import NyxContext, SceneScope
+from .nyx_agent._feasibility_helpers import extract_defer_details
 
 from nyx.nyx_agent.models import NyxResponse
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
@@ -389,26 +390,34 @@ class NyxAgentSDK:
                 strategy = (overall.get("strategy") or "").lower()
     
                 # Hard block at SDK if 'deny'
-                if feasible_flag is False and strategy == "deny":
+                if feasible_flag is False and strategy in {"deny", "defer"}:
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
-                    guidance = first.get("narrator_guidance") or "That can't happen here."
-                    alternatives = first.get("suggested_alternatives") or []
-                    violations = first.get("violations") or []
-    
+                    if strategy == "defer":
+                        guidance, alternatives, extra_meta = extract_defer_details(feas)
+                        guidance = guidance or "Let's try that a different way."
+                    else:
+                        guidance = first.get("narrator_guidance") or "That can't happen here."
+                        alternatives = first.get("suggested_alternatives") or []
+                        extra_meta = {"violations": first.get("violations") or []}
+
+                    metadata = {
+                        "action_blocked": True,
+                        "feasibility": feas,
+                        "block_stage": "pre_orchestrator",
+                        "strategy": strategy,
+                    }
+                    if strategy == "defer":
+                        metadata["action_deferred"] = True
+                    metadata.update(extra_meta)
+
                     resp = NyxResponse(
                         narrative=guidance,
                         choices=[{"text": alt} for alt in alternatives[:4]],
-                        metadata={
-                            "action_blocked": True,
-                            "feasibility": feas,
-                            "block_stage": "pre_orchestrator",
-                            "violations": violations,
-                            "strategy": "deny",
-                        },
+                        metadata=metadata,
                         success=True,
                         trace_id=trace_id,
-                        processing_time=time.time() - t0
+                        processing_time=time.time() - t0,
                     )
                     self._write_cache(cache_key, resp)
                     return resp
