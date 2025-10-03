@@ -5,7 +5,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Iterable
 from contextlib import asynccontextmanager
 
 from agents import Agent, Runner, RunConfig, RunContextWrapper, ModelSettings
@@ -47,6 +47,67 @@ except Exception:  # pragma: no cover
     enforce_all_rules_on_player = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def _is_meaningful(value: Any) -> bool:
+    """Return True if the value carries information (non-empty/None)."""
+    if value is None:
+        return False
+    if isinstance(value, (str, bytes, list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _ensure_list(value: Any) -> List[Any]:
+    """Coerce arbitrary metadata into a list for scene storage."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (set, tuple)):
+        return list(value)
+    return [value]
+
+
+def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize legacy scene metadata keys onto canonical fields."""
+    normalized: Dict[str, Any] = dict(context or {})
+
+    def adopt(canonical: str, legacy_keys: Iterable[str], default_factory: Optional[Any] = None,
+              coerce_list: bool = False) -> None:
+        if not _is_meaningful(normalized.get(canonical)):
+            for key in legacy_keys:
+                if key in normalized and _is_meaningful(normalized.get(key)):
+                    value = normalized[key]
+                    normalized[canonical] = _ensure_list(value) if coerce_list else value
+                    break
+
+        if canonical not in normalized:
+            if callable(default_factory):
+                normalized[canonical] = default_factory()
+            elif default_factory is not None:
+                normalized[canonical] = default_factory
+        elif coerce_list:
+            normalized[canonical] = _ensure_list(normalized.get(canonical))
+
+    adopt("current_location", ("location", "active_location", "scene_location"), default_factory=lambda: {})
+    adopt(
+        "present_npcs",
+        ("npc_present", "npcs", "present_entities", "participants", "active_npcs"),
+        default_factory=list,
+        coerce_list=True,
+    )
+    adopt(
+        "available_items",
+        ("items", "inventory", "inventory_items", "scene_items"),
+        default_factory=list,
+        coerce_list=True,
+    )
+
+    if not _is_meaningful(normalized.get("present_entities")):
+        normalized["present_entities"] = list(normalized.get("present_npcs", []))
+
+    return normalized
 
 # ===== Logging Helper =====
 @asynccontextmanager
@@ -222,8 +283,9 @@ async def process_user_input(
         async with _log_step("context_init", trace_id):
             nyx_context = NyxContext(user_id, conversation_id)
             await nyx_context.initialize()
-            nyx_context.current_context = (context_data or {}).copy()
-            nyx_context.current_context["user_input"] = user_input
+            base_context = _normalize_scene_context(context_data or {})
+            base_context["user_input"] = user_input
+            nyx_context.current_context = base_context
             
             # [Keep existing SettingType detection code]
             # ...
@@ -498,13 +560,20 @@ async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
     async with get_db_connection_context() as conn:
         try:
+            normalized_context = _normalize_scene_context(getattr(ctx, "current_context", {}))
+            if isinstance(getattr(ctx, "current_context", None), dict):
+                ctx.current_context.clear()
+                ctx.current_context.update(normalized_context)
+            else:
+                ctx.current_context = normalized_context
+
             # Get emotional state from current_context or provide default
             emotional_state = ctx.current_context.get('emotional_state', {
                 'valence': 0.0,
                 'arousal': 0.5,
                 'dominance': 0.7
             })
-            
+
             # Save emotional state
             await conn.execute("""
                 INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)

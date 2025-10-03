@@ -302,6 +302,30 @@ def _fail_open_missing_caps(
     return {"overall": {"feasible": True, "strategy": "allow"}, "per_intent": per_intent}
 
 
+def _tokenize_scene_values(values: Any) -> Set[str]:
+    tokens: Set[str] = set()
+    if values is None:
+        return tokens
+    if isinstance(values, dict):
+        for key in ("name", "npc_name", "item_name", "title", "label", "display_name"):
+            val = values.get(key)
+            if val:
+                tokens.add(str(val).strip().lower())
+        for key in ("id", "npc_id", "item_id", "npcId", "itemId"):
+            val = values.get(key)
+            if val is not None:
+                tokens.add(str(val).strip().lower())
+        return tokens
+    if isinstance(values, (list, tuple, set)):
+        for entry in values:
+            tokens |= _tokenize_scene_values(entry)
+        return tokens
+    token = str(values).strip().lower()
+    if token:
+        tokens.add(token)
+    return tokens
+
+
 def load_world_caps(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Compose world capabilities from the active archetypes."""
 
@@ -2214,7 +2238,13 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     scene_npcs = (scene.get("npcs") or scene.get("present_npcs") or []) if isinstance(scene, dict) else []
     scene_items = (scene.get("items") or scene.get("available_items") or []) if isinstance(scene, dict) else []
     location_features = (scene.get("location_features") or []) if isinstance(scene, dict) else []
+    if isinstance(location_features, str):
+        location_features = [location_features]
     time_phase = (scene.get("time_phase") or scene.get("time_of_day") or "day") if isinstance(scene, dict) else "day"
+
+    scene_npc_tokens = _tokenize_scene_values(scene_npcs)
+    scene_item_tokens = _tokenize_scene_values(scene_items)
+    location_token = str(location_name).strip().lower() if location_name else ""
 
     # Use only the last few impossibilities (most recent canon)
     last_imps = (established_impossibilities or [])[-12:]
@@ -2249,6 +2279,42 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             inferred = _infer_categories_from_text(text_l)
             if inferred:
                 cats = inferred
+
+        referenced_targets = _tokenize_scene_values(intent.get("direct_object"))
+        referenced_items = _tokenize_scene_values(intent.get("instruments"))
+        missing_target_tokens = [
+            token
+            for token in referenced_targets
+            if token and token not in scene_npc_tokens and token not in scene_item_tokens and token != location_token
+        ]
+        missing_item_tokens = [
+            token
+            for token in referenced_items
+            if token and token not in scene_item_tokens
+        ]
+        if missing_target_tokens or missing_item_tokens:
+            violations: List[Dict[str, str]] = []
+            if missing_target_tokens:
+                violations.append({
+                    "rule": "npc_absent",
+                    "reason": f"{', '.join(sorted(set(missing_target_tokens)))} not present in the scene",
+                })
+            if missing_item_tokens:
+                violations.append({
+                    "rule": "item_absent",
+                    "reason": f"{', '.join(sorted(set(missing_item_tokens)))} not available here",
+                })
+
+            per_intent.append({
+                "feasible": False,
+                "strategy": "deny",
+                "violations": violations,
+                "narrator_guidance": "Those targets aren't here. Try acting with the NPCs or items that are present.",
+                "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
+                "categories": sorted(cats),
+            })
+            any_hard_block = True
+            continue
 
         # (A) Established Impossibilities (hard deny if categories overlap)
         hit_imposs = []
