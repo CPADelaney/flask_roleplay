@@ -27,7 +27,13 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 # ── Core modern orchestrator
 from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
 from .nyx_agent.context import NyxContext, SceneScope
-from .nyx_agent._feasibility_helpers import extract_defer_details
+from .nyx_agent._feasibility_helpers import (
+    DeferPromptContext,
+    build_defer_fallback_text,
+    build_defer_prompt,
+    coalesce_agent_output_text,
+    extract_defer_details,
+)
 
 from nyx.nyx_agent.models import NyxResponse
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
@@ -206,6 +212,32 @@ class NyxAgentSDK:
         # optional per-conversation context kept only when explicitly warmed
         self._warm_contexts: Dict[str, NyxContext] = {}
         self._snapshot_store = ConversationSnapshotStore()
+
+    async def _generate_defer_narrative(
+        self,
+        context: DeferPromptContext,
+        trace_id: str,
+    ) -> Optional[str]:
+        """Ask Nyx to craft a defer narrative; return None if the call fails."""
+
+        if Runner is None or nyx_main_agent is None:
+            return None
+
+        prompt = build_defer_prompt(context)
+        if not prompt.strip():
+            return None
+
+        try:
+            result = await Runner.run(
+                nyx_main_agent,
+                prompt,
+                max_turns=2,
+            )
+        except Exception:
+            logger.debug(f"[SDK-{trace_id}] Nyx defer taunt generation failed", exc_info=True)
+            return None
+
+        return coalesce_agent_output_text(result)
 
     # ── lifecycle -------------------------------------------------------------
 
@@ -394,14 +426,25 @@ class NyxAgentSDK:
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
                     if strategy == "defer":
-                        persona_text, alternatives, extra_meta = extract_defer_details(feas)
-                        guidance = persona_text or (
-                            "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
-                        )
+                        defer_context, extra_meta = extract_defer_details(feas)
+                        leads = extra_meta.get("leads", [])
+                        guidance = None
+                        if defer_context:
+                            guidance = await self._generate_defer_narrative(defer_context, trace_id)
+                        if not guidance:
+                            if defer_context:
+                                guidance = build_defer_fallback_text(defer_context)
+                            else:
+                                guidance = (
+                                    "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
+                                )
+                        alternatives = leads
                     else:
                         guidance = first.get("narrator_guidance") or "That can't happen here."
                         alternatives = first.get("suggested_alternatives") or []
                         extra_meta = {"violations": first.get("violations") or []}
+
+                    alt_list = list(alternatives) if isinstance(alternatives, (list, tuple)) else []
 
                     metadata = {
                         "action_blocked": True,
@@ -415,7 +458,7 @@ class NyxAgentSDK:
 
                     resp = NyxResponse(
                         narrative=guidance,
-                        choices=[{"text": alt} for alt in alternatives[:4]],
+                        choices=[{"text": alt} for alt in alt_list[:4]],
                         metadata=metadata,
                         success=True,
                         trace_id=trace_id,

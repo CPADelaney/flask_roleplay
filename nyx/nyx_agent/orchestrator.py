@@ -22,7 +22,13 @@ from nyx.nyx_agent.feasibility import (
 
 from .config import Config
 from .context import NyxContext
-from ._feasibility_helpers import extract_defer_details
+from ._feasibility_helpers import (
+    DeferPromptContext,
+    build_defer_fallback_text,
+    build_defer_prompt,
+    coalesce_agent_output_text,
+    extract_defer_details,
+)
 from .models import *
 from .agents import nyx_main_agent, reflection_agent, DEFAULT_MODEL_SETTINGS
 from .assembly import assemble_nyx_response, resolve_scene_requests
@@ -47,6 +53,40 @@ except Exception:  # pragma: no cover
     enforce_all_rules_on_player = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+async def _generate_defer_taunt(
+    context: DeferPromptContext,
+    trace_id: str,
+    nyx_context: Optional[NyxContext] = None,
+) -> Optional[str]:
+    """Ask Nyx to craft a defer response; fall back to None on failure."""
+
+    if Runner is None or nyx_main_agent is None:
+        return None
+
+    prompt = build_defer_prompt(context)
+    if not prompt.strip():
+        return None
+
+    run_kwargs = {"max_turns": 2}
+    if RunContextWrapper is not None and nyx_context is not None:
+        try:
+            run_kwargs["context"] = RunContextWrapper(nyx_context)
+        except Exception:
+            logger.debug(f"[{trace_id}] Failed to wrap Nyx context for defer taunt", exc_info=True)
+
+    try:
+        result = await Runner.run(
+            nyx_main_agent,
+            prompt,
+            **run_kwargs,
+        )
+    except Exception:
+        logger.debug(f"[{trace_id}] Nyx defer taunt generation failed", exc_info=True)
+        return None
+
+    return coalesce_agent_output_text(result)
 
 
 def _is_meaningful(value: Any) -> bool:
@@ -360,10 +400,16 @@ async def process_user_input(
                 ) + ". Describe attempt with appropriate limitations.]"
                 enhanced_input = f"{constraint_text}\n\n{user_input}"
             elif feasible_flag is False and strategy == "defer":
-                persona_text, leads, extra_meta = extract_defer_details(feas)
-                guidance = persona_text or (
-                    "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
-                )
+                defer_context, extra_meta = extract_defer_details(feas)
+                leads = extra_meta.get("leads", [])
+                guidance = None
+                if defer_context:
+                    guidance = await _generate_defer_taunt(defer_context, trace_id, nyx_context)
+                if not guidance:
+                    if defer_context:
+                        guidance = build_defer_fallback_text(defer_context)
+                    else:
+                        guidance = "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
 
                 logger.info(f"[{trace_id}] ACTION DEFERRED (full feasibility)")
 
