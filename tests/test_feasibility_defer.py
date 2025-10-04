@@ -37,7 +37,10 @@ sys.modules["sentence_transformers.models"] = dummy_models
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from nyx.nyx_agent import feasibility
-from nyx.nyx_agent._feasibility_helpers import extract_defer_details
+from nyx.nyx_agent._feasibility_helpers import (
+    build_defer_fallback_text,
+    extract_defer_details,
+)
 from nyx.nyx_agent_sdk import NyxAgentSDK
 
 
@@ -46,7 +49,7 @@ def anyio_backend():
     return "asyncio"
 
 
-def test_extract_defer_details_returns_guidance_and_leads():
+def test_extract_defer_details_returns_context_and_leads():
     feasibility_payload = {
         "overall": {"feasible": False, "strategy": "defer"},
         "per_intent": [
@@ -58,13 +61,18 @@ def test_extract_defer_details_returns_guidance_and_leads():
         ],
     }
 
-    guidance, leads, extra = extract_defer_details(feasibility_payload)
+    context, extra = extract_defer_details(feasibility_payload)
 
-    assert any(keyword in guidance.lower() for keyword in ("pet", "kitten", "sweet thing"))
-    assert "locate the key" in guidance.lower()
-    assert leads == ["Search the study", "Ask the caretaker"]
-    assert extra["leads"] == leads
+    assert context is not None
+    assert context.persona_prefix in ("Oh, pet,", "Mmm, kitten,", "Sweet thing,")
+    assert "locate the key" in context.narrator_guidance.lower()
+    assert context.leads == ["Search the study", "Ask the caretaker"]
+    assert extra["leads"] == context.leads
     assert extra["violations"] == [{"reason": "you haven't located the key yet"}]
+
+    fallback = build_defer_fallback_text(context)
+    assert any(keyword in fallback.lower() for keyword in ("pet", "kitten", "sweet thing"))
+    assert "locate the key" in fallback.lower()
 
 
 def test_extract_defer_details_empty_for_non_defer():
@@ -73,10 +81,9 @@ def test_extract_defer_details_empty_for_non_defer():
         "per_intent": [],
     }
 
-    guidance, leads, extra = extract_defer_details(feasibility_payload)
+    context, extra = extract_defer_details(feasibility_payload)
 
-    assert guidance == ""
-    assert leads == []
+    assert context is None
     assert extra == {}
 
 
@@ -157,6 +164,19 @@ async def test_sdk_defer_response_includes_reason_and_tone(monkeypatch):
         raising=False,
     )
 
+    class DummyRunner:
+        called = False
+        last_prompt = None
+
+        @staticmethod
+        async def run(_agent, prompt, **_kwargs):
+            DummyRunner.called = True
+            DummyRunner.last_prompt = prompt
+            return types.SimpleNamespace(messages=[{"content": "Oh, pet, you haven't located the key yet. Bring me the key first."}])
+
+    monkeypatch.setattr("nyx.nyx_agent_sdk.Runner", DummyRunner, raising=False)
+    monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_main_agent", object(), raising=False)
+
     sdk = NyxAgentSDK()
     response = await sdk.process_user_input(
         message="I shove past the lock and barge inside",
@@ -167,5 +187,8 @@ async def test_sdk_defer_response_includes_reason_and_tone(monkeypatch):
 
     assert response.metadata.get("action_deferred") is True
     assert response.metadata["violations"][0]["reason"] == "you haven't located the key yet"
-    assert any(keyword in response.narrative.lower() for keyword in ("pet", "kitten", "sweet thing"))
-    assert "locate the key" in response.narrative.lower()
+    assert DummyRunner.called is True
+    assert "you haven't located the key yet" in DummyRunner.last_prompt
+    assert response.narrative.lower().startswith("oh, pet")
+    violation_reason = response.metadata["violations"][0]["reason"].lower()
+    assert violation_reason in response.narrative.lower()
