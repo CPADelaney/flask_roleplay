@@ -394,8 +394,10 @@ class NyxAgentSDK:
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
                     if strategy == "defer":
-                        guidance, alternatives, extra_meta = extract_defer_details(feas)
-                        guidance = guidance or "Let's try that a different way."
+                        persona_text, alternatives, extra_meta = extract_defer_details(feas)
+                        guidance = persona_text or (
+                            "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
+                        )
                     else:
                         guidance = first.get("narrator_guidance") or "That can't happen here."
                         alternatives = first.get("suggested_alternatives") or []

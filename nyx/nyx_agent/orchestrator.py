@@ -360,11 +360,10 @@ async def process_user_input(
                 ) + ". Describe attempt with appropriate limitations.]"
                 enhanced_input = f"{constraint_text}\n\n{user_input}"
             elif feasible_flag is False and strategy == "defer":
-                guidance, leads, extra_meta = extract_defer_details(feas)
-                if not guidance:
-                    guidance = "The scene isn't ready for that yet. Ground the action in the current reality."
-                if leads:
-                    guidance = f"{guidance}\n\nTry one of these grounded steps first: {', '.join(leads[:3])}."
+                persona_text, leads, extra_meta = extract_defer_details(feas)
+                guidance = persona_text or (
+                    "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
+                )
 
                 logger.info(f"[{trace_id}] ACTION DEFERRED (full feasibility)")
 
