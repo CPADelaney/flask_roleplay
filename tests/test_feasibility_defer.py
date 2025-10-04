@@ -38,6 +38,12 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from nyx.nyx_agent import feasibility
 from nyx.nyx_agent._feasibility_helpers import extract_defer_details
+from nyx.nyx_agent_sdk import NyxAgentSDK
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
 def test_extract_defer_details_returns_guidance_and_leads():
@@ -47,17 +53,18 @@ def test_extract_defer_details_returns_guidance_and_leads():
             {
                 "narrator_guidance": "You need to locate the key first.",
                 "leads": ["Search the study", "Ask the caretaker"],
-                "violations": [{"reason": "missing_prerequisite"}],
+                "violations": [{"reason": "you haven't located the key yet"}],
             }
         ],
     }
 
     guidance, leads, extra = extract_defer_details(feasibility_payload)
 
-    assert guidance == "You need to locate the key first."
+    assert any(keyword in guidance.lower() for keyword in ("pet", "kitten", "sweet thing"))
+    assert "locate the key" in guidance.lower()
     assert leads == ["Search the study", "Ask the caretaker"]
     assert extra["leads"] == leads
-    assert extra["violations"] == [{"reason": "missing_prerequisite"}]
+    assert extra["violations"] == [{"reason": "you haven't located the key yet"}]
 
 
 def test_extract_defer_details_empty_for_non_defer():
@@ -112,3 +119,53 @@ def test_assess_action_feasibility_defers_for_missing_mundane_prereqs(monkeypatc
         assert "shopkeeper" in intent_result["violations"][0]["reason"].lower()
 
     asyncio.run(_run())
+
+
+@pytest.mark.anyio
+async def test_sdk_defer_response_includes_reason_and_tone(monkeypatch):
+    async def fake_assess_action_feasibility_fast(**_kwargs):
+        return {
+            "overall": {"feasible": False, "strategy": "defer"},
+            "per_intent": [
+                {
+                    "narrator_guidance": "You need to locate the key first",
+                    "leads": ["search the study"],
+                    "violations": [{"reason": "you haven't located the key yet"}],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "nyx.nyx_agent.feasibility.assess_action_feasibility_fast",
+        fake_assess_action_feasibility_fast,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "nyx.nyx_agent_sdk.assess_action_feasibility_fast",
+        fake_assess_action_feasibility_fast,
+        raising=False,
+    )
+    monkeypatch.setattr("nyx.nyx_agent_sdk.content_moderation_guardrail", None, raising=False)
+
+    async def fail_orchestrator_call(*_args, **_kwargs):
+        raise AssertionError("orchestrator should not be called when defer is handled pre-orchestration")
+
+    monkeypatch.setattr(
+        NyxAgentSDK,
+        "_call_orchestrator_with_timeout",
+        fail_orchestrator_call,
+        raising=False,
+    )
+
+    sdk = NyxAgentSDK()
+    response = await sdk.process_user_input(
+        message="I shove past the lock and barge inside",
+        conversation_id="1",
+        user_id="1",
+        metadata={},
+    )
+
+    assert response.metadata.get("action_deferred") is True
+    assert response.metadata["violations"][0]["reason"] == "you haven't located the key yet"
+    assert any(keyword in response.narrative.lower() for keyword in ("pet", "kitten", "sweet thing"))
+    assert "locate the key" in response.narrative.lower()
