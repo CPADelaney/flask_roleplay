@@ -124,6 +124,18 @@ def build_defer_prompt(context: DeferPromptContext) -> str:
         "Explicitly reference the missing prerequisites and encourage the player to pursue the suggested leads."
     )
 
+    absent_rules = {
+        str((violation or {}).get("rule", "")).lower()
+        for violation in context.violations
+        if isinstance(violation, dict)
+    }
+    if {"npc_absent", "item_absent"} & absent_rules:
+        instructions += (
+            " When the player imagines people or objects that aren't there, let exasperated "
+            "disbelief drip through—call out how imaginary their targets or gear are while "
+            "keeping the given persona prefix."
+        )
+
     return (
         f"{instructions}\n"
         f"Persona prefix: {context.persona_prefix}\n"
