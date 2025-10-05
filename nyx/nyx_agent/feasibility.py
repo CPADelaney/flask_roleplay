@@ -51,6 +51,334 @@ ARCHETYPE_REGISTRY = {
 }
 
 
+LOCATION_REFERENCE_KEYWORDS: Set[str] = {
+    "here",
+    "right here",
+    "current location",
+    "current spot",
+    "current place",
+    "current area",
+    "current room",
+    "current zone",
+    "this area",
+    "this place",
+    "this location",
+    "this room",
+    "around here",
+    "around us",
+    "around me",
+    "where am i",
+    "where i am",
+    "where we are",
+    "our location",
+}
+
+MUNDANE_SEARCH_TOKEN_SYNONYMS: Dict[str, Set[str]] = {
+    "coin": {"coin", "coins", "penny", "pennies", "small coin", "loose coin"},
+    "rock": {"rock", "rocks", "stone", "stones", "boulder", "boulders"},
+    "pebble": {"pebble", "pebbles"},
+    "small_object": {
+        "small object",
+        "small_object",
+        "small item",
+        "small items",
+        "tiny object",
+        "tiny item",
+        "little object",
+        "little item",
+        "trinket",
+        "trinkets",
+    },
+}
+
+MUNDANE_SEARCH_TEXT_MARKERS: Tuple[str, ...] = (
+    "look for",
+    "search for",
+    "search around",
+    "look around for",
+    "scan for",
+    "scour",
+    "hunt for",
+    "feel around for",
+    "fish around for",
+    "check for",
+    "dig around for",
+    "poke around for",
+)
+
+SEARCH_CATEGORY_HINTS: Set[str] = {
+    "investigation",
+    "search",
+    "perception",
+    "exploration",
+    "explore",
+    "survey",
+    "scavenge",
+    "scout",
+}
+
+MUNDANE_SEARCH_CONTEXT_HINTS: Dict[str, Set[str]] = {
+    "coin": {
+        "market",
+        "shop",
+        "store",
+        "street",
+        "road",
+        "alley",
+        "tavern",
+        "inn",
+        "hall",
+        "floor",
+        "ground",
+        "camp",
+        "dormitory",
+        "bedroom",
+        "casino",
+        "bank",
+        "bazaar",
+        "plaza",
+        "square",
+        "town",
+        "village",
+        "marketplace",
+        "counter",
+        "desk",
+        "table",
+        "bar",
+    },
+    "rock": {
+        "ground",
+        "dirt",
+        "soil",
+        "grass",
+        "trail",
+        "path",
+        "forest",
+        "woods",
+        "cave",
+        "cavern",
+        "mountain",
+        "cliff",
+        "hillside",
+        "shore",
+        "beach",
+        "river",
+        "riverbank",
+        "stream",
+        "lake",
+        "pond",
+        "garden",
+        "yard",
+        "field",
+        "rubble",
+        "ruins",
+        "quarry",
+        "mine",
+        "stone",
+        "rock",
+    },
+    "pebble": {
+        "ground",
+        "dirt",
+        "soil",
+        "trail",
+        "path",
+        "forest",
+        "woods",
+        "cave",
+        "cavern",
+        "mountain",
+        "cliff",
+        "shore",
+        "beach",
+        "river",
+        "riverbank",
+        "stream",
+        "lake",
+        "pond",
+        "garden",
+        "yard",
+        "field",
+        "rubble",
+        "ruins",
+        "stone",
+        "gravel",
+        "rock",
+    },
+    "small_object": {
+        "desk",
+        "table",
+        "shelf",
+        "drawer",
+        "counter",
+        "crate",
+        "box",
+        "market",
+        "shop",
+        "store",
+        "workshop",
+        "laboratory",
+        "office",
+        "room",
+        "hall",
+        "cabin",
+        "floor",
+        "ground",
+        "camp",
+        "cargo",
+    },
+}
+
+
+def _normalize_location_phrase(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).replace("_", " ").split()).strip().lower()
+
+
+def _location_reference_aliases(location_token: Optional[str], scene: Any) -> Set[str]:
+    aliases: Set[str] = set(LOCATION_REFERENCE_KEYWORDS)
+    if location_token:
+        raw = str(location_token).strip().lower()
+        if raw:
+            aliases.add(raw)
+        normalized = _normalize_location_phrase(location_token)
+        if normalized:
+            aliases.add(normalized)
+            for part in normalized.split():
+                if len(part) > 2:
+                    aliases.add(part)
+
+    if isinstance(scene, dict):
+        location_payload = scene.get("location")
+        location_type = scene.get("location_type")
+        location_kind = None
+
+        if isinstance(location_payload, dict):
+            location_kind = (
+                location_payload.get("type")
+                or location_payload.get("category")
+                or location_payload.get("kind")
+            )
+        elif isinstance(location_payload, str):
+            location_kind = location_payload
+
+        location_kind = location_kind or location_type
+        normalized_kind = _normalize_location_phrase(location_kind)
+        if normalized_kind:
+            aliases.add(normalized_kind)
+            for part in normalized_kind.split():
+                if len(part) > 2:
+                    aliases.add(part)
+
+    return {alias for alias in aliases if alias}
+
+
+def _canonicalize_mundane_search_token(token: str) -> Optional[str]:
+    raw = str(token).strip().lower()
+    normalized = _normalize_location_phrase(token)
+    for canonical, synonyms in MUNDANE_SEARCH_TOKEN_SYNONYMS.items():
+        if raw in synonyms or normalized in synonyms:
+            return canonical
+    if normalized.endswith("s"):
+        singular = normalized[:-1]
+        for canonical, synonyms in MUNDANE_SEARCH_TOKEN_SYNONYMS.items():
+            if singular in synonyms:
+                return canonical
+    return None
+
+
+def _has_search_signal(text_l: str, categories: Set[str]) -> bool:
+    category_markers = {c.strip().lower() for c in categories if c}
+    if category_markers & SEARCH_CATEGORY_HINTS:
+        return True
+    return any(marker in text_l for marker in MUNDANE_SEARCH_TEXT_MARKERS)
+
+
+def _collect_location_context_tokens(
+    scene: Any,
+    location_features: Any,
+    location_token: str,
+) -> Set[str]:
+    tokens: Set[str] = set()
+    tokens |= _tokenize_scene_values(location_features)
+
+    if isinstance(scene, dict):
+        tokens |= _tokenize_scene_values(scene.get("location_type"))
+        tokens |= _tokenize_scene_values(scene.get("terrain"))
+        tokens |= _tokenize_scene_values(scene.get("biome"))
+        tokens |= _tokenize_scene_values(scene.get("environment"))
+        location_payload = scene.get("location")
+        if location_payload is not None:
+            tokens |= _tokenize_scene_values(location_payload)
+
+    if location_token:
+        raw = str(location_token).strip().lower()
+        if raw:
+            tokens.add(raw)
+        normalized = _normalize_location_phrase(location_token)
+        if normalized:
+            tokens.add(normalized)
+
+    return {token for token in tokens if token}
+
+
+def _is_plausible_mundane_search_target(
+    token: str,
+    text_l: str,
+    categories: Set[str],
+    location_token: str,
+    location_context_tokens: Set[str],
+) -> bool:
+    canonical = _canonicalize_mundane_search_token(token)
+    if not canonical:
+        return False
+
+    if not _has_search_signal(text_l, categories):
+        return False
+
+    context_blob = " ".join(sorted(location_context_tokens)).lower()
+    if canonical == "coin":
+        if location_token or context_blob:
+            return True
+        return False
+
+    hints = MUNDANE_SEARCH_CONTEXT_HINTS.get(canonical, set())
+    if any(hint in context_blob for hint in hints):
+        return True
+
+    if canonical in {"rock", "pebble"} and location_token:
+        normalized_loc = _normalize_location_phrase(location_token)
+        if any(
+            keyword in normalized_loc
+            for keyword in (
+                "rock",
+                "stone",
+                "mountain",
+                "cavern",
+                "trail",
+                "path",
+                "shore",
+                "beach",
+                "forest",
+                "field",
+            )
+        ):
+            return True
+
+    return False
+
+
+def _is_location_reference_token(token: str, location_aliases: Set[str]) -> bool:
+    normalized = _normalize_location_phrase(token)
+    if not normalized:
+        return False
+    if normalized in location_aliases:
+        return True
+    raw = str(token).strip().lower()
+    return raw in location_aliases
+
+
 SETTING_KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "modern_realistic": {
         "type": "modern_realistic",
@@ -2390,6 +2718,12 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     scene_npc_tokens = _tokenize_scene_values(scene_npcs)
     scene_item_tokens = _tokenize_scene_values(scene_items)
     location_token = str(location_name).strip().lower() if location_name else ""
+    location_aliases = _location_reference_aliases(location_token, scene)
+    location_context_tokens = _collect_location_context_tokens(
+        scene,
+        location_features,
+        location_token,
+    )
 
     # Use only the last few impossibilities (most recent canon)
     last_imps = (established_impossibilities or [])[-12:]
@@ -2445,13 +2779,28 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         missing_target_tokens = [
             token
             for token in referenced_targets
-            if token and token not in scene_npc_tokens and token not in scene_item_tokens and token != location_token
+            if (
+                token
+                and token not in scene_npc_tokens
+                and token not in scene_item_tokens
+                and not _is_location_reference_token(token, location_aliases)
+            )
         ]
-        missing_item_tokens = [
-            token
-            for token in referenced_items
-            if token and token not in scene_item_tokens
-        ]
+        missing_item_tokens: List[str] = []
+        for token in referenced_items:
+            if not token or token in scene_item_tokens:
+                continue
+            if _is_location_reference_token(token, location_aliases):
+                continue
+            if _is_plausible_mundane_search_target(
+                token,
+                text_l,
+                cats,
+                location_token,
+                location_context_tokens,
+            ):
+                continue
+            missing_item_tokens.append(token)
         if missing_target_tokens or missing_item_tokens:
             violations: List[Dict[str, str]] = []
             missing_target_phrase = _format_missing_names(missing_target_tokens)
