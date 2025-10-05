@@ -109,11 +109,16 @@ async def get_location_description(ctx) -> str:
     # Fetch the current location from database
     async with get_db_connection_context() as conn:
         row = await conn.fetchrow("""
-            SELECT value FROM CurrentRoleplay 
-            WHERE user_id = $1 AND conversation_id = $2 AND key = 'current_location'
+            SELECT value FROM CurrentRoleplay
+            WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
         """, user_id, conversation_id)
-        
+
         if not row or not row["value"]:
+            logger.warning(
+                "Current location lookup failed for user_id=%s conversation_id=%s",
+                user_id,
+                conversation_id,
+            )
             return "Current location not set"
         
         current_location = row["value"]
@@ -127,6 +132,12 @@ async def get_location_description(ctx) -> str:
         if location_row and location_row["description"]:
             return location_row["description"]
         else:
+            logger.warning(
+                "Location description missing for '%s' (user_id=%s conversation_id=%s)",
+                current_location,
+                user_id,
+                conversation_id,
+            )
             return f"No description available for {current_location}"
 
 @function_tool
