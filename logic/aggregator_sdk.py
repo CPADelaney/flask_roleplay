@@ -207,6 +207,7 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
         # Build base context
         result = {
             'currentRoleplay': current_roleplay,
+            'current_roleplay': current_roleplay,
             'currentLocation': current_location,
             'timeOfDay': time_of_day,
             'playerName': player_name,
@@ -426,8 +427,15 @@ def format_context_for_compatibility(optimized_context: Dict[str, Any]) -> Dict[
     compatible["unintroduced_npcs"] = []
 
     # Current roleplay
+    current_roleplay_data = None
     if "current_roleplay" in optimized_context:
-        compatible["current_roleplay"] = optimized_context["current_roleplay"]
+        current_roleplay_data = optimized_context["current_roleplay"]
+    elif "currentRoleplay" in optimized_context:
+        current_roleplay_data = optimized_context["currentRoleplay"]
+
+    if current_roleplay_data is not None:
+        compatible["current_roleplay"] = current_roleplay_data
+        compatible["currentRoleplay"] = current_roleplay_data
 
     # Location details
     if "location_details" in optimized_context:
@@ -479,11 +487,14 @@ async def fallback_get_context(
     Fallback context retrieval directly from the database.
     """
     try:
+        current_roleplay_state: Dict[str, Any] = {}
+
         minimal_context = {
             "player_stats": {},
             "introduced_npcs": [],
             "unintroduced_npcs": [],
-            "current_roleplay": {},
+            "current_roleplay": current_roleplay_state,
+            "currentRoleplay": current_roleplay_state,
             "year": "1040",
             "month": "6",
             "day": "15",
@@ -556,11 +567,13 @@ async def fallback_get_context(
 
     except Exception as e:
         logger.error(f"Error in fallback_get_context: {e}", exc_info=True)
+        error_roleplay_state: Dict[str, Any] = {}
         return {
             "player_stats": {},
             "introduced_npcs": [],
             "unintroduced_npcs": [],
-            "current_roleplay": {},
+            "current_roleplay": error_roleplay_state,
+            "currentRoleplay": error_roleplay_state,
             "error": str(e)
         }
 
