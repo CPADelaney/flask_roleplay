@@ -39,6 +39,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 from nyx.nyx_agent import feasibility
 from nyx.nyx_agent._feasibility_helpers import (
     build_defer_fallback_text,
+    coalesce_agent_output_text,
     extract_defer_details,
 )
 from nyx.nyx_agent_sdk import NyxAgentSDK
@@ -73,6 +74,25 @@ def test_extract_defer_details_returns_context_and_leads():
     fallback = build_defer_fallback_text(context)
     assert any(keyword in fallback.lower() for keyword in ("pet", "kitten", "sweet thing"))
     assert "locate the key" in fallback.lower()
+
+
+def test_coalesce_agent_output_prefers_final_output():
+    agent_result = types.SimpleNamespace(
+        final_output="  Oh, pet, bring me the key first.  ",
+        messages=[{"content": "fallback"}],
+    )
+
+    assert (
+        coalesce_agent_output_text(agent_result)
+        == "Oh, pet, bring me the key first."
+    )
+
+    dict_result = {
+        "final_output": "  Sweet thing, patience.  ",
+        "messages": [{"content": "not used"}],
+    }
+
+    assert coalesce_agent_output_text(dict_result) == "Sweet thing, patience."
 
 
 def test_extract_defer_details_empty_for_non_defer():
@@ -172,7 +192,10 @@ async def test_sdk_defer_response_includes_reason_and_tone(monkeypatch):
         async def run(_agent, prompt, **_kwargs):
             DummyRunner.called = True
             DummyRunner.last_prompt = prompt
-            return types.SimpleNamespace(messages=[{"content": "Oh, pet, you haven't located the key yet. Bring me the key first."}])
+            return types.SimpleNamespace(
+                final_output="  Oh, pet, you haven't located the key yet. Bring me the key first.  ",
+                messages=[{"content": "fallback"}],
+            )
 
     monkeypatch.setattr("nyx.nyx_agent_sdk.Runner", DummyRunner, raising=False)
     monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_main_agent", object(), raising=False)
@@ -189,6 +212,6 @@ async def test_sdk_defer_response_includes_reason_and_tone(monkeypatch):
     assert response.metadata["violations"][0]["reason"] == "you haven't located the key yet"
     assert DummyRunner.called is True
     assert "you haven't located the key yet" in DummyRunner.last_prompt
-    assert response.narrative.lower().startswith("oh, pet")
+    assert response.narrative == "Oh, pet, you haven't located the key yet. Bring me the key first."
     violation_reason = response.metadata["violations"][0]["reason"].lower()
     assert violation_reason in response.narrative.lower()
