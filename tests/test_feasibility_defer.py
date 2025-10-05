@@ -459,6 +459,61 @@ async def test_fast_feasibility_allows_location_reference_tokens(monkeypatch, di
 
 
 @pytest.mark.anyio
+async def test_fast_feasibility_allows_picking_up_pebbles(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["mundane_action"],
+                "direct_object": [],
+                "instruments": ["pebble"],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": ["traveler"],
+        "items": ["walking stick"],
+        "location_features": ["grassy clearing", "scattered stones"],
+        "time_phase": "midday",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Forest Clearing"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"technology": "modern"})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=22,
+        conversation_id=85,
+        text="I pick up a small pebble from the ground.",
+    )
+
+    assert result["overall"]["strategy"] in {"allow", "ask"}
+    per_intent = result["per_intent"][0]
+    assert per_intent["strategy"] in {"allow", "ask"}
+    assert not any(v.get("rule") == "item_absent" for v in per_intent.get("violations", []))
+
+
+@pytest.mark.anyio
 async def test_fast_feasibility_allows_search_for_mundane_items(monkeypatch):
     async def fake_parse_action_intents(_text):
         return [
