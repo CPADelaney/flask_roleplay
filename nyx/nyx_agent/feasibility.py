@@ -2786,6 +2786,18 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 and not _is_location_reference_token(token, location_aliases)
             )
         ]
+
+        stripped_missing_target_tokens: List[str] = []
+        for token in missing_target_tokens:
+            normalized = _normalize_location_phrase(token)
+            normalized = normalized.strip(".,!?;:'\"") if normalized else ""
+            if normalized and normalized in location_aliases:
+                continue
+            if normalized and _is_location_reference_token(normalized, location_aliases):
+                continue
+            stripped_missing_target_tokens.append(token)
+
+        missing_target_tokens = stripped_missing_target_tokens
         missing_item_tokens: List[str] = []
         for token in referenced_items:
             if not token or token in scene_item_tokens:

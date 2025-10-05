@@ -397,12 +397,19 @@ async def test_fast_feasibility_missing_targets_uses_sharper_language(monkeypatc
 
 
 @pytest.mark.anyio
-async def test_fast_feasibility_allows_location_reference_tokens(monkeypatch):
+@pytest.mark.parametrize(
+    "direct_object,text",
+    [
+        (["current_location"], "Where am I right now?"),
+        (["here?"], "Where am I?"),
+    ],
+)
+async def test_fast_feasibility_allows_location_reference_tokens(monkeypatch, direct_object, text):
     async def fake_parse_action_intents(_text):
         return [
             {
                 "categories": ["question"],
-                "direct_object": ["current_location"],
+                "direct_object": direct_object,
                 "instruments": [],
             }
         ]
@@ -442,7 +449,7 @@ async def test_fast_feasibility_allows_location_reference_tokens(monkeypatch):
     result = await feasibility.assess_action_feasibility_fast(
         user_id=21,
         conversation_id=84,
-        text="Where am I right now?",
+        text=text,
     )
 
     assert result["overall"] == {"feasible": True, "strategy": "allow"}
