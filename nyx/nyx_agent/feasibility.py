@@ -326,6 +326,49 @@ def _tokenize_scene_values(values: Any) -> Set[str]:
     return tokens
 
 
+def _display_scene_values(values: Any) -> List[str]:
+    """Collect human-readable labels from scene structures (deduped, preserves order)."""
+
+    collected: List[str] = []
+
+    def _collect(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, dict):
+            for key in ("name", "npc_name", "item_name", "label", "title", "display_name"):
+                val = value.get(key)
+                if isinstance(val, str) and val.strip():
+                    collected.append(val.strip())
+                    return
+            for key in ("id", "item_id", "npc_id", "npcId", "itemId"):
+                val = value.get(key)
+                if val is not None:
+                    collected.append(str(val).strip())
+                    return
+            if value:
+                collected.append(str(value))
+            return
+        if isinstance(value, (list, tuple, set)):
+            for entry in value:
+                _collect(entry)
+            return
+        text = str(value).strip()
+        if text:
+            collected.append(text)
+
+    _collect(values)
+
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for label in collected:
+        lowered = label.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(label)
+    return ordered
+
+
 def load_world_caps(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Compose world capabilities from the active archetypes."""
 
@@ -2312,6 +2355,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     # ---- 5) Per-intent evaluation ---------------------------------------------
     per_intent: List[Dict[str, Any]] = []
     any_hard_block = False
+    any_defer = False
 
     # Quick scene affordances for alternatives
     scene_npcs = (scene.get("npcs") or scene.get("present_npcs") or []) if isinstance(scene, dict) else []
@@ -2384,15 +2428,23 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     "reason": f"{', '.join(sorted(set(missing_item_tokens)))} not available here",
                 })
 
+            lead_candidates = _scene_alternatives(
+                _display_scene_values(scene_npcs),
+                _display_scene_values(scene_items),
+                _display_scene_values(location_features),
+                time_phase,
+            )
+
             per_intent.append({
                 "feasible": False,
-                "strategy": "deny",
+                "strategy": "defer",
                 "violations": violations,
                 "narrator_guidance": "Those targets aren't here. Try acting with the NPCs or items that are present.",
-                "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
+                "leads": lead_candidates,
+                "suggested_alternatives": lead_candidates,
                 "categories": sorted(cats),
             })
-            any_hard_block = True
+            any_defer = True
             continue
 
         # (A) Established Impossibilities (hard deny if categories overlap)
@@ -2456,7 +2508,12 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             "categories": sorted(cats),
         })
 
-    overall = {"feasible": not any_hard_block, "strategy": "deny" if any_hard_block else "allow"}
+    if any_hard_block:
+        overall = {"feasible": False, "strategy": "deny"}
+    elif any_defer:
+        overall = {"feasible": False, "strategy": "defer"}
+    else:
+        overall = {"feasible": True, "strategy": "allow"}
 
     # If parse failed and we had literally no signal, prefer ASK rather than deny
     if parse_error and all((not i.get("categories") for i in intents)):
