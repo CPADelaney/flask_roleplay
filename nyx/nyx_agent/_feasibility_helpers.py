@@ -157,6 +157,15 @@ def coalesce_agent_output_text(result: Any) -> Optional[str]:
     if result is None:
         return None
 
+    final_output = getattr(result, "final_output", None)
+    if isinstance(final_output, str) and final_output.strip():
+        return final_output.strip()
+
+    if isinstance(result, dict):
+        final_output = result.get("final_output")
+        if isinstance(final_output, str) and final_output.strip():
+            return final_output.strip()
+
     potential_sequences: List[Sequence[Any]] = []
     for attr in ("messages", "history", "events"):
         value = getattr(result, attr, None)
