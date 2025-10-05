@@ -2418,6 +2418,16 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 reasons.append({"rule": f"unavailable:{c}", "reason": "Unavailable here"})
         return reasons
 
+    def _format_missing_names(tokens):
+        unique = sorted({token for token in tokens if token})
+        if not unique:
+            return ""
+        if len(unique) == 1:
+            return unique[0]
+        if len(unique) == 2:
+            return f"{unique[0]} and {unique[1]}"
+        return ", ".join(unique[:-1]) + f", and {unique[-1]}"
+
     for intent in intents or [{}]:
         cats = set(intent.get("categories") or [])
         if not cats:
@@ -2444,16 +2454,46 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         ]
         if missing_target_tokens or missing_item_tokens:
             violations: List[Dict[str, str]] = []
+            missing_target_phrase = _format_missing_names(missing_target_tokens)
+            missing_item_phrase = _format_missing_names(missing_item_tokens)
             if missing_target_tokens:
                 violations.append({
                     "rule": "npc_absent",
-                    "reason": f"{', '.join(sorted(set(missing_target_tokens)))} not present in the scene",
+                    "reason": (
+                        f"No sign of {missing_target_phrase} anywhere in this scene—"
+                        "I'm genuinely baffled about who you're trying to engage."
+                    ),
                 })
             if missing_item_tokens:
                 violations.append({
                     "rule": "item_absent",
-                    "reason": f"{', '.join(sorted(set(missing_item_tokens)))} not available here",
+                    "reason": (
+                        f"No sign of {missing_item_phrase} anywhere in this scene—"
+                        "I'm genuinely baffled about what stash you're imagining."
+                    ),
                 })
+
+            if missing_target_phrase and missing_item_phrase:
+                narrator_guidance = (
+                    f"There's no {missing_target_phrase} anywhere in sight, and no "
+                    f"{missing_item_phrase} to grab—what fantasy are you chasing? "
+                    "Work with the NPCs or items that are actually present."
+                )
+            elif missing_target_phrase:
+                narrator_guidance = (
+                    f"There's no {missing_target_phrase} anywhere in sight—what "
+                    "fantasy are you chasing? Work with the NPCs that are actually present."
+                )
+            elif missing_item_phrase:
+                narrator_guidance = (
+                    f"There's no {missing_item_phrase} to grab—what fantasy are you "
+                    "chasing? Work with the items that are actually here."
+                )
+            else:
+                narrator_guidance = (
+                    "What fantasy are you chasing? Work with the NPCs or items that are "
+                    "actually present."
+                )
 
             lead_candidates = _scene_alternatives(
                 _display_scene_values(scene_npcs),
@@ -2466,7 +2506,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 "feasible": False,
                 "strategy": "defer",
                 "violations": violations,
-                "narrator_guidance": "Those targets aren't here. Try acting with the NPCs or items that are present.",
+                "narrator_guidance": narrator_guidance,
                 "leads": lead_candidates,
                 "suggested_alternatives": lead_candidates,
                 "categories": sorted(cats),

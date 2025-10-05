@@ -39,7 +39,9 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from nyx.nyx_agent import feasibility
 from nyx.nyx_agent._feasibility_helpers import (
+    DeferPromptContext,
     build_defer_fallback_text,
+    build_defer_prompt,
     coalesce_agent_output_text,
     extract_defer_details,
 )
@@ -94,6 +96,29 @@ def test_coalesce_agent_output_prefers_final_output():
     }
 
     assert coalesce_agent_output_text(dict_result) == "Sweet thing, patience."
+
+
+def test_build_defer_prompt_includes_disbelief_instruction_for_absent_targets():
+    context = DeferPromptContext(
+        narrator_guidance="There's no bull anywhere in sight—what fantasy are you chasing?",
+        leads=["Talk to the bartender"],
+        violations=[
+            {
+                "rule": "npc_absent",
+                "reason": "No sign of bull anywhere in this scene—I'm genuinely baffled about who you're trying to engage.",
+            }
+        ],
+        persona_prefix="Oh, pet,",
+        reason_phrases=[
+            "No sign of bull anywhere in this scene—I'm genuinely baffled about who you're trying to engage."
+        ],
+    )
+
+    prompt = build_defer_prompt(context)
+
+    lower_prompt = prompt.lower()
+    assert "exasperated disbelief" in lower_prompt
+    assert "imaginary" in lower_prompt
 
 
 def test_extract_defer_details_empty_for_non_defer():
@@ -305,6 +330,70 @@ async def test_fast_feasibility_ignores_inherent_instruments(monkeypatch):
     assert "grappling hook" in reason
     assert "hand" not in reason
     assert "mouth" not in reason
+
+
+@pytest.mark.anyio
+async def test_fast_feasibility_missing_targets_uses_sharper_language(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["mundane_action"],
+                "direct_object": ["bull"],
+                "instruments": ["fruit roll-up"],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": ["bartender"],
+        "items": ["bar stool"],
+        "location_features": ["sticky floor"],
+        "time_phase": "dawn",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Tavern"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"technology": "modern"})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=12,
+        conversation_id=88,
+        text="I stare down the bull and whip out a fruit roll-up",
+    )
+
+    per_intent = result["per_intent"][0]
+    guidance = per_intent["narrator_guidance"].lower()
+    assert "what fantasy are you chasing" in guidance
+    assert "bull" in guidance
+    assert "fruit roll-up" in guidance
+
+    target_violation = next(v for v in per_intent["violations"] if v["rule"] == "npc_absent")
+    item_violation = next(v for v in per_intent["violations"] if v["rule"] == "item_absent")
+
+    assert "no sign of bull" in target_violation["reason"].lower()
+    assert "baffled" in target_violation["reason"].lower()
+    assert "no sign of fruit roll-up" in item_violation["reason"].lower()
+    assert "baffled" in item_violation["reason"].lower()
 
 
 @pytest.mark.anyio
