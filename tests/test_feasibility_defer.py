@@ -250,6 +250,64 @@ async def test_fast_feasibility_defer_on_missing_scene_entities(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_fast_feasibility_ignores_inherent_instruments(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["mundane_action"],
+                "direct_object": ["dockhand"],
+                "instruments": ["hands", "mouth", "grappling hook"],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": ["dockhand"],
+        "items": ["rope"],
+        "location_features": ["cargo crates"],
+        "time_phase": "night",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Hangar Bay"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"technology": "modern"})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=9,
+        conversation_id=99,
+        text="I lash out with my hands, teeth, and a grappling hook",
+    )
+
+    per_intent = result["per_intent"][0]
+    assert per_intent["strategy"] == "defer"
+    item_violation = next(v for v in per_intent["violations"] if v["rule"] == "item_absent")
+    reason = item_violation["reason"].lower()
+    assert "grappling hook" in reason
+    assert "hand" not in reason
+    assert "mouth" not in reason
+
+
+@pytest.mark.anyio
 async def test_sdk_defer_response_includes_reason_and_tone(monkeypatch):
     async def fake_assess_action_feasibility_fast(**_kwargs):
         return {

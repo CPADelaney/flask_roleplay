@@ -2142,6 +2142,28 @@ def _safe_json_loads(s: Optional[str], default):
     except Exception:
         return default
 
+INHERENT_INSTRUMENT_TOKENS: Set[str] = {
+    "hand",
+    "hands",
+    "palm",
+    "palms",
+    "fist",
+    "fists",
+    "finger",
+    "fingers",
+    "thumb",
+    "thumbs",
+    "arm",
+    "arms",
+    "mouth",
+    "teeth",
+    "tongue",
+    "voice",
+    "voices",
+    "breath",
+}
+
+
 async def assess_action_feasibility_fast(user_id: int, conversation_id: int, text: str) -> Dict[str, Any]:
     """
     Conversation/scene-aware quick feasibility gate with LOUD logging and dynamic judgments.
@@ -2405,6 +2427,11 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
         referenced_targets = _tokenize_scene_values(intent.get("direct_object"))
         referenced_items = _tokenize_scene_values(intent.get("instruments"))
+        referenced_items = {
+            token
+            for token in referenced_items
+            if token and token not in INHERENT_INSTRUMENT_TOKENS
+        }
         missing_target_tokens = [
             token
             for token in referenced_targets
