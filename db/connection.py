@@ -553,8 +553,16 @@ async def get_db_connection_context(
                 logger.error(f"Error releasing connection: {release_err}", exc_info=True)
 
 
-async def close_connection_pool(app: Optional[Quart] = None):
-    """Close the connection pool."""
+async def close_connection_pool(app: Optional[Quart] = None, *, force_terminate: bool = False):
+    """Close the connection pool.
+
+    Args:
+        app: Optional Quart application that may own the pool reference.
+        force_terminate: When ``True`` skip the graceful ``Pool.close`` call and
+            terminate the pool directly. This is used by Celery workers during
+            shutdown where asyncpg 0.30.0 currently crashes when ``close`` is
+            invoked after ``wait_for_pending_operations`` drains work.
+    """
     global DB_POOL, DB_POOL_LOOP
     pool_to_close: Optional[asyncpg.Pool] = None
 
@@ -564,19 +572,57 @@ async def close_connection_pool(app: Optional[Quart] = None):
     elif DB_POOL and not DB_POOL._closed:
         pool_to_close = DB_POOL
         logger.info(f"Process {os.getpid()}: Will close global DB_POOL")
-    
+
     if pool_to_close:
         if DB_POOL is pool_to_close:
             DB_POOL = None
             DB_POOL_LOOP = None
         if app and hasattr(app, 'db_pool') and app.db_pool is pool_to_close:
             app.db_pool = None
-        
-        try:
-            await pool_to_close.close()
-            logger.info(f"Process {os.getpid()}: Asyncpg pool closed successfully")
-        except Exception as e:
-            logger.error(f"Process {os.getpid()}: Error closing pool: {e}", exc_info=True)
+
+        if force_terminate:
+            logger.info(
+                f"Process {os.getpid()}: Terminating DB pool (force_terminate=True)"
+            )
+            try:
+                pool_to_close.terminate()
+            except Exception as e:
+                logger.error(
+                    f"Process {os.getpid()}: Error terminating pool: {e}",
+                    exc_info=True,
+                )
+            finally:
+                if hasattr(pool_to_close, "_closed"):
+                    pool_to_close._closed = True
+        else:
+            try:
+                logger.info(
+                    f"Process {os.getpid()}: Closing asyncpg pool gracefully"
+                )
+                await pool_to_close.close()
+                logger.info(
+                    f"Process {os.getpid()}: Asyncpg pool closed successfully"
+                )
+            except AttributeError as err:
+                logger.warning(
+                    f"Process {os.getpid()}: Pool.close raised {err!r}; terminating instead",
+                    exc_info=True,
+                )
+                try:
+                    pool_to_close.terminate()
+                except Exception as terminate_err:
+                    logger.error(
+                        f"Process {os.getpid()}: Error terminating pool after close failure: {terminate_err}",
+                        exc_info=True,
+                    )
+                finally:
+                    if hasattr(pool_to_close, "_closed"):
+                        pool_to_close._closed = True
+            except Exception as e:
+                logger.error(
+                    f"Process {os.getpid()}: Error closing pool: {e}",
+                    exc_info=True,
+                )
 
 
 async def check_pool_health() -> Dict[str, Any]:
@@ -666,15 +712,22 @@ def close_worker_pool(**kwargs):
         # Now close the pool
         if DB_POOL:
             try:
-                # Give pool time to close gracefully
-                await asyncio.wait_for(
-                    close_connection_pool(),
-                    timeout=10.0
+                logger.info(
+                    f"Process {pid}: Terminating DB pool after draining operations"
                 )
-            except asyncio.TimeoutError:
-                logger.warning(f"Process {pid}: Pool closure timed out, forcing close")
-                if not DB_POOL._closed:
-                    DB_POOL.terminate()
+                await close_connection_pool(force_terminate=True)
+            except Exception as e:
+                logger.error(
+                    f"Process {pid}: Error terminating pool: {e}",
+                    exc_info=True,
+                )
+                if DB_POOL and not getattr(DB_POOL, "_closed", False):
+                    try:
+                        DB_POOL.terminate()
+                    except Exception:
+                        logger.exception(
+                            f"Process {pid}: Failed to terminate pool during shutdown"
+                        )
     
     # Execute graceful shutdown
     if DB_POOL_LOOP and not DB_POOL_LOOP.is_closed():
