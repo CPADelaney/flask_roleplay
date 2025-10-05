@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import types
@@ -146,6 +147,106 @@ def test_assess_action_feasibility_defers_for_missing_mundane_prereqs(monkeypatc
         assert "shopkeeper" in intent_result["violations"][0]["reason"].lower()
 
     asyncio.run(_run())
+
+
+@pytest.mark.anyio
+async def test_fast_feasibility_defer_on_missing_scene_entities(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["social"],
+                "direct_object": ["captain mira"],
+                "instruments": ["plasma lance"],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": ["dockhand"],
+        "items": ["wrench"],
+        "location_features": ["cargo crates"],
+        "time_phase": "night",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Hangar Bay"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"technology": "modern"})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=7,
+        conversation_id=42,
+        text="I call out to Captain Mira with the plasma lance",
+    )
+
+    assert result["overall"] == {"feasible": False, "strategy": "defer"}
+    assert result["per_intent"], "expected per-intent details"
+    intent_result = result["per_intent"][0]
+    assert intent_result["strategy"] == "defer"
+    assert intent_result["leads"]
+    assert any(v["rule"] == "npc_absent" for v in intent_result["violations"])
+    assert any("dockhand" in lead.lower() for lead in intent_result["leads"])
+
+    monkeypatch.setattr("nyx.nyx_agent_sdk.content_moderation_guardrail", None, raising=False)
+
+    async def fail_orchestrator_call(*_args, **_kwargs):
+        raise AssertionError("orchestrator should not be invoked on defer")
+
+    monkeypatch.setattr(
+        NyxAgentSDK,
+        "_call_orchestrator_with_timeout",
+        fail_orchestrator_call,
+        raising=False,
+    )
+
+    class DummyRunner:
+        called = False
+        last_prompt = None
+
+        @staticmethod
+        async def run(_agent, prompt, **_kwargs):
+            DummyRunner.called = True
+            DummyRunner.last_prompt = prompt
+            return types.SimpleNamespace(
+                final_output="  Mmm, kitten, find the dockhand before you posture.  ",
+                messages=[{"content": "fallback"}],
+            )
+
+    monkeypatch.setattr("nyx.nyx_agent_sdk.Runner", DummyRunner, raising=False)
+    monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_main_agent", object(), raising=False)
+
+    sdk = NyxAgentSDK()
+    response = await sdk.process_user_input(
+        message="I call out to Captain Mira with the plasma lance",
+        conversation_id="42",
+        user_id="7",
+        metadata={},
+    )
+
+    assert response.metadata.get("action_deferred") is True
+    assert response.metadata.get("strategy") == "defer"
+    assert DummyRunner.called is True
+    assert "dockhand" in (DummyRunner.last_prompt or "").lower()
+    assert response.narrative == "Mmm, kitten, find the dockhand before you posture."
 
 
 @pytest.mark.anyio
