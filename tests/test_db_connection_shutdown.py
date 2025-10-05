@@ -27,8 +27,45 @@ async def test_track_operation_respects_shutdown(monkeypatch):
     db_connection.mark_shutting_down()
     assert db_connection.is_shutting_down() is True
 
+    blocked_coro = sample_operation()
     with pytest.raises(ConnectionError):
-        await db_connection.track_operation(sample_operation())
+        try:
+            await db_connection.track_operation(blocked_coro)
+        finally:
+            try:
+                blocked_coro.close()
+            except RuntimeError:
+                # Coroutine was already consumed by track_operation
+                pass
 
     # No pending work should remain and shutdown wait should be a no-op.
     await db_connection.wait_for_pending_operations()
+
+
+@pytest.mark.asyncio
+async def test_close_connection_pool_falls_back_to_terminate(monkeypatch):
+    """Close gracefully unless asyncpg raises AttributeError."""
+
+    class DummyPool:
+        def __init__(self):
+            self._closed = False
+            self.terminate_called = False
+
+        async def close(self):
+            raise AttributeError("'connection' object has no attribute 'is_closed'")
+
+        def terminate(self):
+            self.terminate_called = True
+            self._closed = True
+
+    dummy_pool = DummyPool()
+
+    monkeypatch.setattr(db_connection, "DB_POOL", dummy_pool)
+    monkeypatch.setattr(db_connection, "DB_POOL_LOOP", None)
+
+    # Should not raise even though close() fails; terminate is used instead.
+    await db_connection.close_connection_pool()
+
+    assert dummy_pool.terminate_called is True
+    # close_connection_pool should have cleared the module globals
+    assert db_connection.DB_POOL is None
