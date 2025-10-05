@@ -323,6 +323,59 @@ def _collect_location_context_tokens(
     return {token for token in tokens if token}
 
 
+def _matches_ambient_debris_token(token: str) -> bool:
+    if not token:
+        return False
+
+    raw = str(token).strip().lower()
+    normalized = _normalize_location_phrase(token)
+    candidates: Set[str] = {raw, normalized}
+    if normalized.endswith("s"):
+        candidates.add(normalized[:-1])
+
+    for candidate in list(candidates):
+        if not candidate:
+            continue
+        cleaned = candidate.replace("-", " ")
+        if cleaned in AMBIENT_DEBRIS_KEYWORDS:
+            return True
+        parts = cleaned.split()
+        if any(part in AMBIENT_DEBRIS_KEYWORDS for part in parts):
+            return True
+
+    canonical = _canonicalize_mundane_search_token(token)
+    if canonical and canonical in AMBIENT_DEBRIS_CANONICALS:
+        return True
+
+    return False
+
+
+def _looks_like_sterile_environment(
+    location_token: str, location_context_tokens: Set[str]
+) -> bool:
+    tokens: Set[str] = set(location_context_tokens or set())
+    if location_token:
+        tokens.add(location_token)
+
+    for token in tokens:
+        raw = str(token).strip().lower()
+        normalized = _normalize_location_phrase(token)
+        candidates = {raw, normalized}
+        for candidate in list(candidates):
+            if not candidate:
+                continue
+            cleaned = candidate.replace("-", " ")
+            if cleaned in STERILE_ENVIRONMENT_HINTS:
+                return True
+            parts = cleaned.split()
+            if any(part in STERILE_ENVIRONMENT_HINTS for part in parts):
+                return True
+            for hint in STERILE_ENVIRONMENT_HINTS:
+                if " " in hint and hint in cleaned:
+                    return True
+    return False
+
+
 def _is_plausible_mundane_search_target(
     token: str,
     text_l: str,
@@ -2492,6 +2545,46 @@ INHERENT_INSTRUMENT_TOKENS: Set[str] = {
 }
 
 
+AMBIENT_DEBRIS_KEYWORDS: Set[str] = {
+    "coin",
+    "coins",
+    "penny",
+    "pennies",
+    "rock",
+    "rocks",
+    "stone",
+    "stones",
+    "pebble",
+    "pebbles",
+    "stick",
+    "sticks",
+    "twig",
+    "twigs",
+    "branch",
+    "branches",
+}
+
+AMBIENT_DEBRIS_CANONICALS: Set[str] = {"coin", "rock", "pebble"}
+
+STERILE_ENVIRONMENT_HINTS: Set[str] = {
+    "lab",
+    "laboratory",
+    "cleanroom",
+    "clean room",
+    "medbay",
+    "med bay",
+    "medical bay",
+    "medical lab",
+    "clinic",
+    "hospital",
+    "infirmary",
+    "sickbay",
+    "sterile",
+    "operating room",
+    "surgical wing",
+}
+
+
 async def assess_action_feasibility_fast(user_id: int, conversation_id: int, text: str) -> Dict[str, Any]:
     """
     Conversation/scene-aware quick feasibility gate with LOUD logging and dynamic judgments.
@@ -2724,6 +2817,9 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         location_features,
         location_token,
     )
+    sterile_environment = _looks_like_sterile_environment(
+        location_token, location_context_tokens
+    )
 
     # Use only the last few impossibilities (most recent canon)
     last_imps = (established_impossibilities or [])[-12:]
@@ -2813,6 +2909,13 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             ):
                 continue
             missing_item_tokens.append(token)
+        if missing_item_tokens and not sterile_environment:
+            filtered_tokens = [
+                token
+                for token in missing_item_tokens
+                if not _matches_ambient_debris_token(token)
+            ]
+            missing_item_tokens = filtered_tokens
         if missing_target_tokens or missing_item_tokens:
             violations: List[Dict[str, str]] = []
             missing_target_phrase = _format_missing_names(missing_target_tokens)
