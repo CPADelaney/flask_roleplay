@@ -375,6 +375,46 @@ def test_location_refresh_uses_aggregator_current_roleplay():
     assert snapshot["scene_id"] == "Sunspire Plaza"
 
 
+def test_location_refresh_ignores_placeholder_overrides():
+    context = NyxContext(user_id=21, conversation_id=23)
+    broker = _StubContextBroker(context)
+    context.context_broker = broker
+
+    user_key = str(context.user_id)
+    convo_key = str(context.conversation_id)
+    _SNAPSHOT_STORE.put(user_key, convo_key, {})
+
+    initial_context = {
+        "currentRoleplay": {
+            "CurrentLocation": {
+                "id": "frostpeak_tavern",
+                "name": "Frostpeak Tavern",
+            }
+        }
+    }
+
+    asyncio.run(context.build_context_for_input("set scene", initial_context))
+
+    assert context.current_location == "Frostpeak Tavern"
+
+    placeholder_context = {
+        "currentRoleplay": {"CurrentLocation": "Unknown"},
+        "location_name": "Unknown",
+        "location": "Unknown",
+        "location_id": "unknown",
+    }
+
+    asyncio.run(context.build_context_for_input("placeholder scene", placeholder_context))
+
+    assert context.current_location == "Frostpeak Tavern"
+    assert context.current_context["location_name"] == "Frostpeak Tavern"
+    assert context.current_context["location_id"] == "frostpeak_tavern"
+
+    snapshot = _SNAPSHOT_STORE.get(user_key, convo_key)
+    assert snapshot["location_name"] == "Frostpeak Tavern"
+    assert snapshot["scene_id"] == "Frostpeak Tavern"
+
+
 def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
     calls: dict[str, tuple[str, tuple]] = {}
 

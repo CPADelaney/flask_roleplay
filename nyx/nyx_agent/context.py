@@ -74,6 +74,17 @@ from lore.core.canon import ensure_canonical_context
 
 _SNAPSHOT_STORE = ConversationSnapshotStore()
 
+_PLACEHOLDER_LOCATION_TOKENS = {
+    "unknown",
+    "n/a",
+    "na",
+    "none",
+    "null",
+    "undefined",
+    "tbd",
+    "-",
+}
+
 
 def build_canonical_snapshot_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """Extract the minimal snapshot fields that should be persisted canonically."""
@@ -2323,6 +2334,17 @@ class NyxContext:
             )
 
     @staticmethod
+    def _is_placeholder_location_token(token: str) -> bool:
+        if not isinstance(token, str):
+            return False
+
+        normalized = token.strip()
+        if not normalized:
+            return True
+
+        return normalized.casefold() in _PLACEHOLDER_LOCATION_TOKENS
+
+    @staticmethod
     def _normalize_location_value(value: Any) -> Optional[str]:
         """Normalize location values stored as TEXT/JSON into a simple identifier."""
         if value is None:
@@ -2345,12 +2367,18 @@ class NyxContext:
 
             if isinstance(parsed, str):
                 parsed = parsed.strip()
+                if NyxContext._is_placeholder_location_token(parsed):
+                    return None
                 return parsed or None
             if isinstance(parsed, dict):
                 for key in ("name", "location", "location_name", "id", "scene_id"):
                     token = parsed.get(key)
-                    if isinstance(token, str) and token.strip():
-                        return token.strip()
+                    if isinstance(token, str):
+                        token_str = token.strip()
+                        if NyxContext._is_placeholder_location_token(token_str):
+                            continue
+                        if token_str:
+                            return token_str
                     if isinstance(token, (int, float)):
                         token_str = str(token).strip()
                         if token_str:
@@ -2358,18 +2386,26 @@ class NyxContext:
                 return None
             if isinstance(parsed, (int, float)):
                 token = str(parsed).strip()
+                if NyxContext._is_placeholder_location_token(token):
+                    return None
                 return token or None
             return None
 
         if isinstance(value, (int, float)):
             token = str(value).strip()
+            if NyxContext._is_placeholder_location_token(token):
+                return None
             return token or None
 
         if isinstance(value, dict):
             for key in ("name", "location", "location_name", "id", "scene_id"):
                 token = value.get(key)
-                if isinstance(token, str) and token.strip():
-                    return token.strip()
+                if isinstance(token, str):
+                    token_str = token.strip()
+                    if NyxContext._is_placeholder_location_token(token_str):
+                        continue
+                    if token_str:
+                        return token_str
                 if isinstance(token, (int, float)):
                     token_str = str(token).strip()
                     if token_str:
@@ -2432,10 +2468,16 @@ class NyxContext:
 
         return None
 
-    def _refresh_location_from_context(self) -> None:
+    def _refresh_location_from_context(
+        self,
+        previous_location_id: Optional[str] = None,
+    ) -> None:
         """Update current location tracking based on the merged context payload."""
         canonical_location = self._extract_canonical_location(self.current_context)
         if not canonical_location:
+            return
+
+        if self._is_placeholder_location_token(canonical_location):
             return
 
         previous_location = self.current_location
@@ -2443,6 +2485,8 @@ class NyxContext:
         normalized_location_id = self._normalize_location_value(
             self.current_context.get("location_id")
         )
+        if normalized_location_id and self._is_placeholder_location_token(normalized_location_id):
+            normalized_location_id = None
         if not normalized_location_id:
             for nested_key in ("currentRoleplay", "current_roleplay"):
                 nested = self.current_context.get(nested_key)
@@ -2492,6 +2536,9 @@ class NyxContext:
                         )
                     if normalized_location_id:
                         break
+
+        if not normalized_location_id and previous_location_id:
+            normalized_location_id = self._normalize_location_value(previous_location_id)
 
         if not normalized_location_id:
             normalized_location_id = canonical_location
@@ -2623,10 +2670,11 @@ class NyxContext:
         start_time = time.time()
         
         # Merge provided context
+        previous_location_id = self.current_context.get("location_id")
         if context_data:
             self.current_context.update(context_data)
 
-        self._refresh_location_from_context()
+        self._refresh_location_from_context(previous_location_id=previous_location_id)
 
         # Compute scene scope
         scene_scope = await self.context_broker.compute_scene_scope(
