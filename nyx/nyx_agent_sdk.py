@@ -970,9 +970,11 @@ class NyxAgentSDK:
     async def _build_side_effect_payload(
         self,
         resp: NyxResponse,
-        user_id: int,
-        conversation_id: int,
+        user_id: str,
+        conversation_id: str,
         trace_id: str,
+        user_id_int: Optional[int] = None,
+        conversation_id_int: Optional[int] = None,
     ) -> tuple[str, Dict[str, Dict[str, Any]]]:
         metadata = resp.metadata or {}
         user_key = str(user_id)
@@ -1117,8 +1119,8 @@ class NyxAgentSDK:
         self._snapshot_store.put(user_key, conversation_key, updated_snapshot)
 
         canonical_payload = build_canonical_snapshot_payload(updated_snapshot)
-        if canonical_payload:
-            await persist_canonical_snapshot(user_id, conversation_id, canonical_payload)
+        if canonical_payload and user_id_int is not None and conversation_id_int is not None:
+            await persist_canonical_snapshot(user_id_int, conversation_id_int, canonical_payload)
 
         grouped = group_side_effects(events)
         return turn_id, grouped
@@ -1126,15 +1128,36 @@ class NyxAgentSDK:
     async def _fanout_post_turn(
         self,
         resp: NyxResponse,
-        user_id: int,
-        conversation_id: int,
+        user_id: str,
+        conversation_id: str,
         trace_id: str,
     ) -> None:
         if post_turn_dispatch is None:
             return
+        user_id_text = str(user_id)
+        conversation_id_text = str(conversation_id)
+        user_id_int: Optional[int]
+        conversation_id_int: Optional[int]
+        try:
+            user_id_int = int(user_id_text)
+            conversation_id_int = int(conversation_id_text)
+        except (TypeError, ValueError):
+            logger.warning(
+                "[SDK-%s] Skipping canonical snapshot persistence due to non-integer identifiers user_id=%s conversation_id=%s",
+                trace_id,
+                user_id,
+                conversation_id,
+            )
+            user_id_int = None
+            conversation_id_int = None
         try:
             turn_id, grouped = await self._build_side_effect_payload(
-                resp, user_id, conversation_id, trace_id
+                resp,
+                user_id_text,
+                conversation_id_text,
+                trace_id,
+                user_id_int,
+                conversation_id_int,
             )
         except Exception:
             logger.exception("[SDK-%s] Failed to build side-effect payload", trace_id)
@@ -1143,8 +1166,8 @@ class NyxAgentSDK:
             return
 
         payload = {
-            "user_id": str(user_id),
-            "conversation_id": str(conversation_id),
+            "user_id": user_id_text,
+            "conversation_id": conversation_id_text,
             "turn_id": turn_id,
             "trace_id": trace_id,
             "side_effects": grouped,
