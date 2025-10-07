@@ -71,6 +71,7 @@ from nyx.response_filter import ResponseFilter
 from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from lore.core.canon import ensure_canonical_context
+from logic.aggregator_sdk import get_comprehensive_context
 
 _SNAPSHOT_STORE = ConversationSnapshotStore()
 
@@ -2254,6 +2255,49 @@ class NyxContext:
                     self.log_error(e, {"task": "init"})
 
         await self._hydrate_location_from_db()
+
+        if not self.current_location:
+            try:
+                fallback_context = await get_comprehensive_context(
+                    self.user_id,
+                    self.conversation_id,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "Failed to fetch fallback context for user_id=%s conversation_id=%s",
+                    self.user_id,
+                    self.conversation_id,
+                    exc_info=True,
+                )
+            else:
+                if isinstance(fallback_context, dict):
+                    previous_location_id = self.current_context.get("location_id")
+                    self.current_context.update(fallback_context)
+                    self._refresh_location_from_context(
+                        previous_location_id=previous_location_id
+                    )
+
+                    normalized_location = self._normalize_location_value(
+                        self.current_location
+                    )
+                    if normalized_location:
+                        self.current_location = normalized_location
+                        try:
+                            user_key = str(self.user_id)
+                            conversation_key = str(self.conversation_id)
+                            snapshot = _SNAPSHOT_STORE.get(
+                                user_key, conversation_key
+                            )
+                            snapshot["location_name"] = normalized_location
+                            snapshot.setdefault("scene_id", normalized_location)
+                            _SNAPSHOT_STORE.put(
+                                user_key, conversation_key, snapshot
+                            )
+                        except Exception as snapshot_exc:  # pragma: no cover - cache best effort
+                            logger.debug(
+                                "Snapshot store seed failed after fallback context: %s",
+                                snapshot_exc,
+                            )
 
         # Initialize the context broker
         self.context_broker = ContextBroker(self)
