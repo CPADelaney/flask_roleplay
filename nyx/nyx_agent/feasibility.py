@@ -6,6 +6,7 @@ Maintains reality consistency without hard-coded rules or repetitive responses.
 
 import json
 import random
+import unicodedata
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -48,6 +49,14 @@ ARCHETYPE_REGISTRY = {
     "modern_baseline": ModernBaseline,
     "roman_empire": RomanEmpire,
     "underwater_scifi": UnderwaterSciFi,
+}
+
+
+PLAYER_SELF_REFERENCE_TOKENS: Set[str] = {
+    "i",
+    "me",
+    "myself",
+    "my self",
 }
 
 
@@ -235,6 +244,25 @@ def _normalize_location_phrase(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).replace("_", " ").split()).strip().lower()
+
+
+def _normalize_self_reference_phrase(value: Any) -> str:
+    if value is None:
+        return ""
+    normalized = unicodedata.normalize("NFKD", str(value))
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.replace("_", " ").replace("-", " ")
+    return " ".join(normalized.split()).strip().lower()
+
+
+def _is_self_reference_token(token: Any) -> bool:
+    normalized = _normalize_self_reference_phrase(token)
+    if not normalized:
+        return False
+    if normalized in PLAYER_SELF_REFERENCE_TOKENS:
+        return True
+    collapsed = normalized.replace(" ", "")
+    return collapsed in PLAYER_SELF_REFERENCE_TOKENS
 
 
 def _location_reference_aliases(location_token: Optional[str], scene: Any) -> Set[str]:
@@ -2888,6 +2916,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             for token in referenced_targets
             if (
                 token
+                and not _is_self_reference_token(token)
                 and token not in scene_npc_tokens
                 and token not in scene_item_tokens
                 and not _is_location_reference_token(token, location_aliases)
@@ -2901,6 +2930,8 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             if normalized and normalized in location_aliases:
                 continue
             if normalized and _is_location_reference_token(normalized, location_aliases):
+                continue
+            if _is_self_reference_token(normalized):
                 continue
             stripped_missing_target_tokens.append(token)
 
