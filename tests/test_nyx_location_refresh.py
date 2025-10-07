@@ -340,6 +340,41 @@ def test_location_refresh_persists_canonical_location():
     assert context.current_context["location_id"] == "frostpeak_tavern"
 
 
+def test_location_refresh_uses_aggregator_current_roleplay():
+    context = NyxContext(user_id=11, conversation_id=13)
+    broker = _StubContextBroker(context)
+    context.context_broker = broker
+
+    user_key = str(context.user_id)
+    convo_key = str(context.conversation_id)
+    _SNAPSHOT_STORE.put(user_key, convo_key, {})
+
+    context_data = {
+        "aggregator_data": {
+            "currentRoleplay": {
+                "CurrentLocation": {
+                    "id": "sunspire_plaza",
+                    "name": "Sunspire Plaza",
+                }
+            }
+        }
+    }
+
+    asyncio.run(context.build_context_for_input("look around", context_data))
+
+    assert context.current_location == "Sunspire Plaza"
+    assert context.current_context["location_name"] == "Sunspire Plaza"
+    assert context.current_context["current_location"] == "Sunspire Plaza"
+    assert context.current_context["location_id"] == "sunspire_plaza"
+    assert broker.last_scope is not None
+    assert broker.last_scope.location_id == "sunspire_plaza"
+    assert broker.last_scope.location_name == "Sunspire Plaza"
+
+    snapshot = _SNAPSHOT_STORE.get(user_key, convo_key)
+    assert snapshot["location_name"] == "Sunspire Plaza"
+    assert snapshot["scene_id"] == "Sunspire Plaza"
+
+
 def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
     calls: dict[str, tuple[str, tuple]] = {}
 
