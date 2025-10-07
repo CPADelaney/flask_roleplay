@@ -2182,6 +2182,29 @@ class NyxContext:
         except Exception as exc:  # pragma: no cover - best effort cache seed
             logger.debug("Snapshot store seed failed: %s", exc)
 
+    async def _persist_location_to_db(self, canonical_location: str) -> None:
+        """Persist the canonical location to the backing CurrentRoleplay row."""
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'CurrentLocation', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                    canonical_location,
+                )
+        except Exception as exc:  # pragma: no cover - best effort persistence
+            logger.warning(
+                "Failed to persist CurrentLocation for user_id=%s conversation_id=%s: %s",
+                self.user_id,
+                self.conversation_id,
+                exc,
+            )
+
     @staticmethod
     def _normalize_location_value(value: Any) -> Optional[str]:
         """Normalize location values stored as TEXT/JSON into a simple identifier."""
@@ -2320,6 +2343,24 @@ class NyxContext:
                 _SNAPSHOT_STORE.put(user_key, conversation_key, snapshot)
             except Exception as exc:  # pragma: no cover - best effort cache seed
                 logger.debug("Snapshot store update failed: %s", exc)
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                loop.create_task(self._persist_location_to_db(canonical_location))
+            else:  # pragma: no cover - fallback when invoked outside an event loop
+                try:
+                    asyncio.run(self._persist_location_to_db(canonical_location))
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to schedule CurrentLocation persistence for user_id=%s conversation_id=%s: %s",
+                        self.user_id,
+                        self.conversation_id,
+                        exc,
+                    )
 
     async def _init_memory_orchestrator(self):
         """Initialize memory orchestrator"""
