@@ -9,6 +9,7 @@ import json
 import uuid
 from typing import Dict, Any, Optional
 from nyx.nyx_agent.utils import _extract_last_assistant_text
+from utils.conversation_history import fetch_recent_turns
 
 # ---- Logging setup (flip with LOG_LEVEL env var) ---------------------
 def setup_logging(level: str | None = None) -> None:
@@ -192,13 +193,15 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
         from logic.aggregator_sdk import get_aggregated_roleplay_context
         aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+        recent_turns = await fetch_recent_turns(user_id, conversation_id)
 
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
             "player_name": aggregator_data.get("playerName", "Chase"),
             "npc_present": aggregator_data.get("npcsPresent", []),
-            "aggregator_data": aggregator_data
+            "aggregator_data": aggregator_data,
+            "recent_turns": recent_turns,
         }
 
         # Apply universal update if provided
@@ -223,6 +226,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 # Refresh aggregator data post-update
                 aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                 context["aggregator_data"] = aggregator_data
+                context["recent_turns"] = await fetch_recent_turns(user_id, conversation_id)
                 
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)

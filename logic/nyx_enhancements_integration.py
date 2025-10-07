@@ -58,6 +58,7 @@ from db.connection import get_db_connection_context, run_async_in_worker_loop
 
 # Performance monitoring
 from utils.performance import PerformanceTracker, timed_function
+from utils.conversation_history import fetch_recent_turns
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -178,10 +179,13 @@ async def enhanced_background_chat_task(
         # Build context metadata
         performance_tracker.start_phase("context_preparation")
         
+        recent_turns = await fetch_recent_turns(user_id, conversation_id)
+
         metadata = {
             "background_task": True,
             "timestamp": time.time()
         }
+        metadata["recent_turns"] = recent_turns
         
         # Add universal update if provided
         if universal_update:
@@ -212,6 +216,7 @@ async def enhanced_background_chat_task(
                         metadata["npc_present"] = [npc.get("npc_id") for npc in npcs_data if npc.get("npc_id")]
                     except:
                         pass
+
                         
         except Exception as e:
             logger.warning(f"Could not fetch scene context: {e}")

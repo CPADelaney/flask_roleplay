@@ -2227,7 +2227,35 @@ class NyxContext:
         
         # Load or fetch the context bundle
         bundle = await self.context_broker.load_or_fetch_bundle(scene_scope)
-        
+
+        # Propagate recent conversation turns into the bundle metadata
+        raw_recent = self.current_context.get("recent_turns")
+        if raw_recent is None:
+            raw_recent = self.current_context.get("recent_interactions")
+
+        canonical_recent: List[Dict[str, Any]] = []
+        if isinstance(raw_recent, list):
+            for entry in raw_recent:
+                if not isinstance(entry, dict):
+                    continue
+                sender = entry.get("sender")
+                content = entry.get("content")
+                if sender is None and content is None:
+                    continue
+                turn: Dict[str, Any] = {}
+                if sender is not None:
+                    turn["sender"] = sender
+                if content is not None:
+                    turn["content"] = content
+                canonical_recent.append(turn)
+
+        self.current_context["recent_turns"] = canonical_recent
+        bundle.metadata["recent_interactions"] = list(canonical_recent)
+
+        narrative_data = bundle.narrative.data
+        if isinstance(narrative_data, dict) and not narrative_data.get("recent"):
+            narrative_data["recent"] = list(canonical_recent)
+
         # Determine token budget from config or use default
         token_budget = 8000  # Default
         if hasattr(self, 'config') and hasattr(self.config, 'model_context_budget'):

@@ -143,6 +143,31 @@ def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any
         default_factory=list,
         coerce_list=True,
     )
+    adopt(
+        "recent_interactions",
+        ("recent_turns", "recent_dialogue", "recent_messages"),
+        default_factory=list,
+        coerce_list=True,
+    )
+
+    if isinstance(normalized.get("recent_interactions"), list):
+        canonical_turns: List[Dict[str, Any]] = []
+        for entry in normalized.get("recent_interactions", []):
+            if not isinstance(entry, dict):
+                continue
+            sender = entry.get("sender")
+            content = entry.get("content")
+            if sender is None and content is None:
+                continue
+            turn: Dict[str, Any] = {}
+            if sender is not None:
+                turn["sender"] = sender
+            if content is not None:
+                turn["content"] = content
+            canonical_turns.append(turn)
+        normalized["recent_interactions"] = canonical_turns
+        if not _is_meaningful(normalized.get("recent_turns")):
+            normalized["recent_turns"] = canonical_turns
 
     if not _is_meaningful(normalized.get("present_entities")):
         normalized["present_entities"] = list(normalized.get("present_npcs", []))

@@ -19,6 +19,7 @@ from agents.tracing import get_current_trace
 
 # --- DB utils (async loop + connection mgmt) ---
 from db.connection import get_db_connection_context, run_async_in_worker_loop
+from utils.conversation_history import fetch_recent_turns
 
 # --- LLM + NPC + memory integration (unchanged external modules) ---
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
@@ -168,6 +169,7 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
                 # 1) Build aggregator context
                 from logic.aggregator import get_aggregated_roleplay_context
                 aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+                recent_turns = await fetch_recent_turns(user_id, conversation_id)
 
                 context = {
                     "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
@@ -175,6 +177,7 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
                     "player_name": aggregator_data.get("playerName", "Chase"),
                     "npc_present": aggregator_data.get("npcsPresent", []),
                     "aggregator_data": aggregator_data,
+                    "recent_turns": recent_turns,
                 }
 
                 # 2) Optional universal updates
@@ -193,6 +196,7 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
                         # Refresh
                         aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                         context["aggregator_data"] = aggregator_data
+                        context["recent_turns"] = await fetch_recent_turns(user_id, conversation_id)
                     except Exception as update_err:
                         logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
                         return {"error": "Failed to apply world updates"}
