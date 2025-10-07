@@ -3574,60 +3574,81 @@ class NewGameAgent:
 
         chase_schedule: Dict[str, Dict[str, str]] = {}
         location_names: List[str] = []
+        placeholder_tokens = {"home", "unknown", "the commons"}
+        max_attempts = 5
+        min_real_locations = 1
+        base_backoff = 0.25
 
-        try:
-            logging.info(f"[PLAYER_CTX] Fetching locations and schedule")
-            async with get_db_connection_context() as conn:
-                fetch_start = perf_counter()
-                location_rows = await conn.fetch(
-                    """
-                    SELECT location_name FROM Locations
-                    WHERE user_id=$1 AND conversation_id=$2
-                    LIMIT 25
-                    """,
-                    user_id,
-                    conversation_id,
-                )
+        for attempt in range(1, max_attempts + 1):
+            try:
                 logging.info(
-                    "[PLAYER_CTX] Locations fetch completed in %.2fs",
-                    perf_counter() - fetch_start,
+                    f"[PLAYER_CTX] Fetching locations and schedule (attempt {attempt}/{max_attempts})"
+                )
+                async with get_db_connection_context() as conn:
+                    fetch_start = perf_counter()
+                    location_rows = await conn.fetch(
+                        """
+                        SELECT location_name FROM Locations
+                        WHERE user_id=$1 AND conversation_id=$2
+                        LIMIT 25
+                        """,
+                        user_id,
+                        conversation_id,
+                    )
+                    logging.info(
+                        "[PLAYER_CTX] Locations fetch completed in %.2fs",
+                        perf_counter() - fetch_start,
+                    )
+
+                    location_names = [
+                        row["location_name"]
+                        for row in location_rows
+                        if row
+                        and row.get("location_name")
+                        and str(row["location_name"]).strip()
+                        and str(row["location_name"]).strip().lower() not in placeholder_tokens
+                    ]
+
+                    schedule_row = await conn.fetchrow(
+                        """
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id=$1 AND conversation_id=$2 AND key='ChaseSchedule'
+                        LIMIT 1
+                        """,
+                        user_id,
+                        conversation_id,
+                    )
+
+                    if schedule_row and schedule_row.get("value"):
+                        try:
+                            chase_schedule = json.loads(schedule_row["value"])
+                        except json.JSONDecodeError as json_err:
+                            logging.error(
+                                f"[PLAYER_CTX] Failed to decode ChaseSchedule: {json_err}",
+                                exc_info=True,
+                            )
+
+            except asyncio.TimeoutError:
+                logging.error(f"[PLAYER_CTX] Location/schedule fetch timed out")
+            except Exception as e:
+                logging.error(
+                    f"[PLAYER_CTX] Failed loading locations/schedule: {e}", exc_info=True
                 )
 
-                location_names = [
-                    row["location_name"]
-                    for row in location_rows
-                    if row and row.get("location_name")
-                ]
+            if len(location_names) >= min_real_locations:
+                break
 
-                schedule_row = await conn.fetchrow(
-                    """
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id=$1 AND conversation_id=$2 AND key='ChaseSchedule'
-                    LIMIT 1
-                    """,
-                    user_id,
-                    conversation_id,
+            if attempt < max_attempts:
+                delay = base_backoff * attempt
+                logging.info(
+                    f"[PLAYER_CTX] Waiting {delay:.2f}s before re-fetching locations"
                 )
+                await asyncio.sleep(delay)
 
-                if schedule_row and schedule_row.get("value"):
-                    try:
-                        chase_schedule = json.loads(schedule_row["value"])
-                    except json.JSONDecodeError as json_err:
-                        logging.error(
-                            f"[PLAYER_CTX] Failed to decode ChaseSchedule: {json_err}",
-                            exc_info=True,
-                        )
-
-        except asyncio.TimeoutError:
-            logging.error(f"[PLAYER_CTX] Location/schedule fetch timed out")
-        except Exception as e:
-            logging.error(f"[PLAYER_CTX] Failed loading locations/schedule: {e}", exc_info=True)
-
-        if not location_names and not chase_schedule:
-            logging.info(
-                "[PLAYER_CTX] No locations or schedule available yet; skipping initialization"
+        if not location_names:
+            logging.warning(
+                "[PLAYER_CTX] Proceeding without persisted locations; using fallback options"
             )
-            return
 
         try:
             logging.info(f"[PLAYER_CTX] Loading calendar data")
@@ -3695,8 +3716,6 @@ class NewGameAgent:
         if matched_location is None and phase == "Night":
             matched_location = None
 
-        placeholder_tokens = {"home", "unknown"}
-
         if matched_location is None or str(matched_location).strip().lower() in placeholder_tokens:
             fallback_match = _find_schedule_location_match(chase_schedule, location_names)
             if fallback_match:
@@ -3709,7 +3728,15 @@ class NewGameAgent:
             matched_location = location_names[0]
 
         if matched_location is None:
-            matched_location = "Unknown"
+            fallback_locations = (
+                FALLBACK_ENVIRONMENT_PAYLOAD.get("locations")
+                or _build_fallback_environment_payload().get("locations")
+                or []
+            )
+            if fallback_locations:
+                matched_location = fallback_locations[0].get("location_name", "Unknown")
+            else:
+                matched_location = "Unknown"
 
         target_location = matched_location
 
