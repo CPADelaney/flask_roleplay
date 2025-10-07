@@ -227,6 +227,15 @@ class _AsyncNullConnection:  # pragma: no cover - db shim
     async def fetchrow(self, *args, **kwargs):
         return None
 
+    async def execute(self, *args, **kwargs):
+        return None
+
+    async def fetch(self, *args, **kwargs):
+        return []
+
+    async def fetchval(self, *args, **kwargs):
+        return 1
+
 
 stub_db_connection.get_db_connection_context = lambda: _AsyncNullConnection()
 stub_db_connection.is_shutting_down = lambda: False

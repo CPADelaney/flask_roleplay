@@ -2273,7 +2273,7 @@ class NyxContext:
                 if isinstance(fallback_context, dict):
                     previous_location_id = self.current_context.get("location_id")
                     self.current_context.update(fallback_context)
-                    self._refresh_location_from_context(
+                    await self._refresh_location_from_context(
                         previous_location_id=previous_location_id
                     )
 
@@ -2512,7 +2512,7 @@ class NyxContext:
 
         return None
 
-    def _refresh_location_from_context(
+    async def _refresh_location_from_context(
         self,
         previous_location_id: Optional[str] = None,
     ) -> None:
@@ -2606,23 +2606,7 @@ class NyxContext:
             except Exception as exc:  # pragma: no cover - best effort cache seed
                 logger.debug("Snapshot store update failed: %s", exc)
 
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop and loop.is_running():
-                loop.create_task(self._persist_location_to_db(canonical_location))
-            else:  # pragma: no cover - fallback when invoked outside an event loop
-                try:
-                    asyncio.run(self._persist_location_to_db(canonical_location))
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to schedule CurrentLocation persistence for user_id=%s conversation_id=%s: %s",
-                        self.user_id,
-                        self.conversation_id,
-                        exc,
-                    )
+            await self._persist_location_to_db(canonical_location)
 
     async def _init_memory_orchestrator(self):
         """Initialize memory orchestrator"""
@@ -2718,7 +2702,9 @@ class NyxContext:
         if context_data:
             self.current_context.update(context_data)
 
-        self._refresh_location_from_context(previous_location_id=previous_location_id)
+        await self._refresh_location_from_context(
+            previous_location_id=previous_location_id
+        )
 
         # Compute scene scope
         scene_scope = await self.context_broker.compute_scene_scope(
