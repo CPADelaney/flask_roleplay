@@ -29,7 +29,12 @@ from .nyx_agent.orchestrator import (
     process_user_input as _orchestrator_process,
     _preserve_hydrated_location,
 )
-from .nyx_agent.context import NyxContext, SceneScope
+from .nyx_agent.context import (
+    NyxContext,
+    SceneScope,
+    build_canonical_snapshot_payload,
+    persist_canonical_snapshot,
+)
 from .nyx_agent._feasibility_helpers import (
     DeferPromptContext,
     build_defer_fallback_text,
@@ -962,7 +967,7 @@ class NyxAgentSDK:
         except Exception:
             logger.debug("enqueue_task failed (non-fatal)", exc_info=True)
 
-    def _build_side_effect_payload(
+    async def _build_side_effect_payload(
         self,
         resp: NyxResponse,
         user_id: int,
@@ -1111,6 +1116,10 @@ class NyxAgentSDK:
 
         self._snapshot_store.put(user_key, conversation_key, updated_snapshot)
 
+        canonical_payload = build_canonical_snapshot_payload(updated_snapshot)
+        if canonical_payload:
+            await persist_canonical_snapshot(user_id, conversation_id, canonical_payload)
+
         grouped = group_side_effects(events)
         return turn_id, grouped
 
@@ -1124,7 +1133,9 @@ class NyxAgentSDK:
         if post_turn_dispatch is None:
             return
         try:
-            turn_id, grouped = self._build_side_effect_payload(resp, user_id, conversation_id, trace_id)
+            turn_id, grouped = await self._build_side_effect_payload(
+                resp, user_id, conversation_id, trace_id
+            )
         except Exception:
             logger.exception("[SDK-%s] Failed to build side-effect payload", trace_id)
             return
