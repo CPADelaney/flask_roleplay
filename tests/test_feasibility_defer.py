@@ -459,6 +459,61 @@ async def test_fast_feasibility_allows_location_reference_tokens(monkeypatch, di
 
 
 @pytest.mark.anyio
+async def test_fast_feasibility_ignores_self_reference_targets(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["self_action"],
+                "direct_object": ["myself"],
+                "instruments": [],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": ["bartender"],
+        "items": ["bar stool"],
+        "location_features": ["oak bar", "framed map"],
+        "time_phase": "day",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Tavern"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"technology": "modern"})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=32,
+        conversation_id=93,
+        text="I steady myself and take a deep breath.",
+    )
+
+    assert result["overall"]["strategy"] != "defer"
+    per_intent = result["per_intent"][0]
+    assert per_intent["strategy"] != "defer"
+    assert not any(v.get("rule") == "npc_absent" for v in per_intent.get("violations", []))
+
+
+@pytest.mark.anyio
 async def test_fast_feasibility_allows_picking_up_pebbles(monkeypatch):
     async def fake_parse_action_intents(_text):
         return [
