@@ -53,6 +53,7 @@ ARCHETYPE_REGISTRY = {
 
 LOCATION_REFERENCE_KEYWORDS: Set[str] = {
     "here",
+    "location",
     "right here",
     "current location",
     "current spot",
@@ -1923,6 +1924,16 @@ async def _check_prerequisites(intent: Dict, context: Dict) -> Tuple[bool, Optio
 
     for target in direct_iter:
         normalized = _normalize_term(target)
+        display_normalized = _normalize_term(_display_term(target))
+
+        if (
+            (normalized and normalized in LOCATION_REFERENCE_KEYWORDS)
+            or (display_normalized and display_normalized in LOCATION_REFERENCE_KEYWORDS)
+        ):
+            if loc_name:
+                continue
+            return False, "No current location recorded."
+
         if not normalized:
             continue
         if (

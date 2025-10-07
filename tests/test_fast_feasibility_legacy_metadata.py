@@ -157,3 +157,49 @@ def test_fast_feasibility_blocks_absent_entities(monkeypatch, action_text):
     assert per_intent.get("strategy") == "deny"
     violation_blob = json.dumps(per_intent.get("violations", []))
     assert "mallory" in violation_blob.lower()
+
+
+@pytest.mark.parametrize("action_text", ["Inspect the location for clues."])
+def test_fast_feasibility_allows_location_reference(monkeypatch, action_text):
+    fake_conn = FakeConnection()
+    fake_conn.current_roleplay.update(
+        {
+            "SettingCapabilities": json.dumps({"technology": "modern"}),
+            "SettingType": "modern_realistic",
+            "SettingKind": "modern_realistic",
+            "RealityContext": "normal",
+            "PhysicsModel": "realistic",
+            "CurrentLocation": "Atrium",
+            "CurrentScene": json.dumps({"location": {"name": "Atrium"}}),
+        }
+    )
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield fake_conn
+
+    monkeypatch.setattr(orchestrator, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
+
+    async def fake_parse_action_intents(text: str):
+        return [
+            {
+                "raw_text": text,
+                "categories": ["investigation"],
+                "direct_object": ["location"],
+            }
+        ]
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+
+    async def _run():
+        return await feasibility.assess_action_feasibility_fast(1, 2, action_text)
+
+    result = asyncio.run(_run())
+
+    overall = result.get("overall", {})
+    per_intent = (result.get("per_intent") or [])[0]
+    assert overall.get("feasible") is True
+    assert overall.get("strategy") == "allow"
+    assert per_intent.get("feasible") is True
+    assert per_intent.get("strategy") == "allow"
