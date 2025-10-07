@@ -982,10 +982,15 @@ class ContextBroker:
         scope = SceneScope()
         
         # Extract location (keep both ID and name)
-        scope.location_id = current_state.get('location_id') or current_state.get('location')
-        scope.location_name = current_state.get('location_name')
-        if not scope.location_id:
-            scope.location_id = self.ctx.current_location
+        location_id = self.ctx._normalize_location_value(current_state.get('location_id'))
+        if not location_id:
+            location_id = self.ctx._normalize_location_value(current_state.get('location'))
+
+        canonical_location = self.ctx._extract_canonical_location(current_state)
+        scope.location_id = location_id or canonical_location or self.ctx.current_location
+
+        location_name = self.ctx._normalize_location_value(current_state.get('location_name'))
+        scope.location_name = location_name or canonical_location or self.ctx.current_location
         
         # Refresh NPC alias cache if stale
         await self._build_npc_alias_cache()
@@ -2232,6 +2237,90 @@ class NyxContext:
 
         return None
 
+    def _extract_canonical_location(self, mapping: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Pull the best-effort canonical location string from a context mapping."""
+        if not isinstance(mapping, dict):
+            return None
+
+        candidate_keys = (
+            "location_name",
+            "location",
+            "currentLocation",
+            "current_location",
+            "location_id",
+        )
+
+        for key in candidate_keys:
+            if key in mapping:
+                normalized = self._normalize_location_value(mapping.get(key))
+                if normalized:
+                    return normalized
+
+        for nested_key in ("currentRoleplay", "current_roleplay"):
+            nested = mapping.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            for location_key in ("CurrentLocation", "currentLocation", "current_location"):
+                normalized = self._normalize_location_value(nested.get(location_key))
+                if normalized:
+                    return normalized
+
+        return None
+
+    def _refresh_location_from_context(self) -> None:
+        """Update current location tracking based on the merged context payload."""
+        canonical_location = self._extract_canonical_location(self.current_context)
+        if not canonical_location:
+            return
+
+        previous_location = self.current_location
+
+        normalized_location_id = self._normalize_location_value(
+            self.current_context.get("location_id")
+        )
+        if not normalized_location_id:
+            for nested_key in ("currentRoleplay", "current_roleplay"):
+                nested = self.current_context.get(nested_key)
+                if not isinstance(nested, dict):
+                    continue
+                current_location = (
+                    nested.get("CurrentLocation")
+                    or nested.get("currentLocation")
+                    or nested.get("current_location")
+                )
+                if isinstance(current_location, dict):
+                    normalized_location_id = self._normalize_location_value(
+                        current_location.get("id")
+                        or current_location.get("location_id")
+                        or current_location.get("location")
+                    )
+                else:
+                    normalized_location_id = self._normalize_location_value(current_location)
+                if normalized_location_id:
+                    break
+
+        if not normalized_location_id:
+            normalized_location_id = canonical_location
+
+        self.current_location = canonical_location
+        self.current_context["location"] = canonical_location
+        self.current_context["location_name"] = canonical_location
+        self.current_context["current_location"] = canonical_location
+        self.current_context["location_id"] = normalized_location_id
+        if "currentLocation" in self.current_context:
+            self.current_context["currentLocation"] = canonical_location
+
+        if canonical_location != previous_location:
+            try:
+                user_key = str(self.user_id)
+                conversation_key = str(self.conversation_id)
+                snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
+                snapshot["location_name"] = canonical_location
+                snapshot.setdefault("scene_id", str(canonical_location))
+                _SNAPSHOT_STORE.put(user_key, conversation_key, snapshot)
+            except Exception as exc:  # pragma: no cover - best effort cache seed
+                logger.debug("Snapshot store update failed: %s", exc)
+
     async def _init_memory_orchestrator(self):
         """Initialize memory orchestrator"""
         try:
@@ -2324,7 +2413,9 @@ class NyxContext:
         # Merge provided context
         if context_data:
             self.current_context.update(context_data)
-        
+
+        self._refresh_location_from_context()
+
         # Compute scene scope
         scene_scope = await self.context_broker.compute_scene_scope(
             user_input,
