@@ -68,6 +68,9 @@ from nyx.user_model_sdk import UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.response_filter import ResponseFilter
 from nyx.core.emotions.emotional_core import EmotionalCore
+from nyx.conversation.snapshot_store import ConversationSnapshotStore
+
+_SNAPSHOT_STORE = ConversationSnapshotStore()
 
 # Import NPC orchestrator and related types
 from npcs.npc_orchestrator import NPCOrchestrator, NPCSnapshot, NPCStatus
@@ -2114,18 +2117,126 @@ class NyxContext:
                 except Exception as e:
                     logger.error(f"Initialization failed: {e}")
                     self.log_error(e, {"task": "init"})
-        
+
+        await self._hydrate_location_from_db()
+
         # Initialize the context broker
         self.context_broker = ContextBroker(self)
         await self.context_broker.initialize()
-        
+
         logger.info(f"NyxContext initialized for user {self.user_id}, conversation {self.conversation_id}")
-    
+
+    async def _hydrate_location_from_db(self) -> None:
+        """Preload the current location from the CurrentRoleplay table."""
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT value
+                    FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                    LIMIT 1
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Failed to hydrate current location for user_id=%s conversation_id=%s: %s",
+                self.user_id,
+                self.conversation_id,
+                exc,
+            )
+            return
+
+        if not row:
+            return
+
+        try:
+            raw_value = row["value"]
+        except (KeyError, IndexError):
+            raw_value = None
+
+        normalized_location = self._normalize_location_value(raw_value)
+        if not normalized_location:
+            return
+
+        self.current_location = normalized_location
+        self.current_context["location"] = normalized_location
+        self.current_context.setdefault("location_id", normalized_location)
+        self.current_context.setdefault("location_name", normalized_location)
+        self.current_context.setdefault("current_location", normalized_location)
+
+        try:
+            user_key = str(self.user_id)
+            conversation_key = str(self.conversation_id)
+            snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
+            snapshot["location_name"] = normalized_location
+            snapshot.setdefault("scene_id", str(normalized_location))
+            _SNAPSHOT_STORE.put(user_key, conversation_key, snapshot)
+        except Exception as exc:  # pragma: no cover - best effort cache seed
+            logger.debug("Snapshot store seed failed: %s", exc)
+
+    @staticmethod
+    def _normalize_location_value(value: Any) -> Optional[str]:
+        """Normalize location values stored as TEXT/JSON into a simple identifier."""
+        if value is None:
+            return None
+
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8")
+            except Exception:
+                value = value.decode("utf-8", errors="ignore")
+
+        if isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, json.JSONDecodeError):
+                parsed = candidate
+
+            if isinstance(parsed, str):
+                parsed = parsed.strip()
+                return parsed or None
+            if isinstance(parsed, dict):
+                for key in ("name", "location", "location_name", "id", "scene_id"):
+                    token = parsed.get(key)
+                    if isinstance(token, str) and token.strip():
+                        return token.strip()
+                    if isinstance(token, (int, float)):
+                        token_str = str(token).strip()
+                        if token_str:
+                            return token_str
+                return None
+            if isinstance(parsed, (int, float)):
+                token = str(parsed).strip()
+                return token or None
+            return None
+
+        if isinstance(value, (int, float)):
+            token = str(value).strip()
+            return token or None
+
+        if isinstance(value, dict):
+            for key in ("name", "location", "location_name", "id", "scene_id"):
+                token = value.get(key)
+                if isinstance(token, str) and token.strip():
+                    return token.strip()
+                if isinstance(token, (int, float)):
+                    token_str = str(token).strip()
+                    if token_str:
+                        return token_str
+
+        return None
+
     async def _init_memory_orchestrator(self):
         """Initialize memory orchestrator"""
         try:
             self.memory_orchestrator = await get_memory_orchestrator(
-                self.user_id, 
+                self.user_id,
                 self.conversation_id
             )
             logger.info("Memory Orchestrator initialized")
