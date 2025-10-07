@@ -4,16 +4,19 @@ Dynamic feasibility system that learns what's possible/impossible in each unique
 Maintains reality consistency without hard-coded rules or repetitive responses.
 """
 
+import asyncio
 import json
+import logging
 import random
+import unicodedata
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
+
 from agents import Agent, Runner
-from nyx.nyx_agent.context import NyxContext
 from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
-import asyncio
+from nyx.nyx_agent.context import NyxContext
 
 from nyx.feas.actions.mundane import evaluate_mundane
 from nyx.feas.archetypes.modern_baseline import ModernBaseline
@@ -22,7 +25,6 @@ from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
 from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +51,9 @@ ARCHETYPE_REGISTRY = {
     "roman_empire": RomanEmpire,
     "underwater_scifi": UnderwaterSciFi,
 }
+
+
+PLAYER_SELF_REFERENCE_TOKENS: Set[str] = {"me", "myself"}
 
 
 LOCATION_REFERENCE_KEYWORDS: Set[str] = {
@@ -235,6 +240,30 @@ def _normalize_location_phrase(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).replace("_", " ").split()).strip().lower()
+
+
+def _strip_diacritics(value: str) -> str:
+    return "".join(char for char in unicodedata.normalize("NFKD", value) if not unicodedata.combining(char))
+
+
+def _normalize_self_reference_token(token: str) -> str:
+    if not token:
+        return ""
+    normalized = _strip_diacritics(token)
+    normalized = normalized.replace("_", " ")
+    normalized = " ".join(normalized.split()).strip().lower()
+    normalized = normalized.strip(".,!?;:'\"")
+    return normalized
+
+
+def _is_self_reference_token(token: str) -> bool:
+    normalized = _normalize_self_reference_token(token)
+    if not normalized:
+        return False
+    if normalized in PLAYER_SELF_REFERENCE_TOKENS:
+        return True
+    compact = normalized.replace(" ", "")
+    return compact in PLAYER_SELF_REFERENCE_TOKENS
 
 
 def _location_reference_aliases(location_token: Optional[str], scene: Any) -> Set[str]:
@@ -2883,21 +2912,26 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             for token in referenced_items
             if token and token not in INHERENT_INSTRUMENT_TOKENS
         }
-        missing_target_tokens = [
-            token
-            for token in referenced_targets
-            if (
-                token
-                and token not in scene_npc_tokens
-                and token not in scene_item_tokens
-                and not _is_location_reference_token(token, location_aliases)
-            )
-        ]
+        missing_target_tokens: List[str] = []
+        for token in referenced_targets:
+            if not token:
+                continue
+            if _is_self_reference_token(token):
+                continue
+            if token in scene_npc_tokens:
+                continue
+            if token in scene_item_tokens:
+                continue
+            if _is_location_reference_token(token, location_aliases):
+                continue
+            missing_target_tokens.append(token)
 
         stripped_missing_target_tokens: List[str] = []
         for token in missing_target_tokens:
             normalized = _normalize_location_phrase(token)
             normalized = normalized.strip(".,!?;:'\"") if normalized else ""
+            if _is_self_reference_token(normalized):
+                continue
             if normalized and normalized in location_aliases:
                 continue
             if normalized and _is_location_reference_token(normalized, location_aliases):
