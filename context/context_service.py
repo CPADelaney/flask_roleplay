@@ -551,19 +551,30 @@ class ContextService:
 
     async def _get_relevant_npcs(self, input_text: str, location: Optional[str] = None) -> List[NPCData]:
         """
-        Internal method: get NPCs relevant to current input & location 
+        Internal method: get NPCs relevant to current input & location
         (fallback to DB if vector search not available).
         """
+        resolved_location = (location or "").strip() or None
+        if resolved_location and resolved_location.lower() == "unknown":
+            resolved_location = None
+
         # If vector search is enabled
         if self.vector_service and input_text and self.config.is_enabled("use_vector_search"):
             try:
                 vector_context = await self.vector_service.get_context_for_input(
                     input_text=input_text,
-                    current_location=location
+                    current_location=resolved_location
                 )
                 if "npcs" in vector_context and vector_context["npcs"]:
                     npcs = []
                     for npc in vector_context["npcs"]:
+                        location_match = (
+                            resolved_location
+                            and npc.get("location")
+                            and npc.get("location").lower() == resolved_location.lower()
+                        )
+                        base_relevance = npc.get("relevance", 0.5)
+                        adjusted_relevance = max(base_relevance, 0.7) if location_match else base_relevance
                         npcs.append(NPCData(
                             npc_id=npc.get("npc_id", ""),
                             npc_name=npc.get("npc_name", ""),
@@ -575,16 +586,16 @@ class ContextService:
                             intensity=npc.get("intensity"),
                             current_location=npc.get("location"),
                             physical_description=npc.get("description", ""),
-                            relevance=npc.get("relevance", 0.5)
+                            relevance=adjusted_relevance
                         ))
                     return npcs
             except Exception as e:
                 logger.error(f"Error getting NPCs from vector service: {e}")
-        
+
         try:
             from db.connection import get_db_connection_context
             import asyncpg
-            
+
             # Use proper async context manager syntax
             async with get_db_connection_context() as conn:
                 params = [self.user_id, self.conversation_id]
@@ -596,16 +607,21 @@ class ContextService:
                     FROM NPCStats
                     WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
                 """
-                
-                if location:
+
+                if resolved_location:
                     query += " AND (current_location IS NULL OR current_location=$3)"
-                    params.append(location)
-                
+                    params.append(resolved_location)
+
                 query += " ORDER BY closeness DESC, trust DESC LIMIT 10"
-                
+
                 rows = await conn.fetch(query, *params)
                 npcs = []
                 for row in rows:
+                    current_location = row["current_location"] or "Unknown"
+                    location_match = (
+                        resolved_location
+                        and current_location.lower() == resolved_location.lower()
+                    )
                     npcs.append(NPCData(
                         npc_id=row["npc_id"],
                         npc_name=row["npc_name"],
@@ -615,9 +631,9 @@ class ContextService:
                         trust=row["trust"],
                         respect=row["respect"],
                         intensity=row["intensity"],
-                        current_location=row["current_location"] or "Unknown",
+                        current_location=current_location,
                         physical_description=row["physical_description"] or "",
-                        relevance=0.7 if row["current_location"] == location else 0.5
+                        relevance=0.7 if location_match else 0.5
                     ))
                 return npcs
         except Exception as e:
@@ -980,15 +996,28 @@ class ContextService:
         # Get base context and convert to dict
         base_context_model = await self._get_base_context(location)
         context = base_context_model.dict()  # Convert Pydantic model to dictionary
+
+        # Resolve the most accurate location available for downstream consumers
+        resolved_location = (
+            location
+            or base_context_model.current_roleplay.CurrentLocation
+            or base_context_model.current_location
+        )
+
+        if resolved_location and resolved_location.strip().lower() == "unknown":
+            resolved_location = None
         
         # Possibly get relevant NPCs
         if include_npcs:
-            npcs = await self._get_relevant_npcs(input_text=input_text, location=location)
+            npcs = await self._get_relevant_npcs(
+                input_text=input_text,
+                location=resolved_location,
+            )
             context["npcs"] = [npc.dict() for npc in npcs]
-        
+
         # Possibly get location details
         if include_location:
-            loc_data = await self._get_location_details(location)
+            loc_data = await self._get_location_details(resolved_location)
             context["location_details"] = loc_data.dict()
         
         # Possibly get quest info
