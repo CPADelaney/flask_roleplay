@@ -60,6 +60,8 @@ PLAYER_SELF_REFERENCE_TOKENS: Set[str] = {
     "my self",
 }
 
+SELF_REFERENCE_STRIP_CHARS = ".,!?;:'\"`´“”’"
+
 
 LOCATION_REFERENCE_KEYWORDS: Set[str] = {
     "here",
@@ -256,14 +258,21 @@ def _normalize_self_reference_phrase(value: Any) -> str:
     return " ".join(normalized.split()).strip().lower()
 
 
-def _is_self_reference_token(token: Any) -> bool:
+def _canonicalize_self_reference_token(token: Any) -> str:
     normalized = _normalize_self_reference_phrase(token)
     if not normalized:
-        return False
-    if normalized in PLAYER_SELF_REFERENCE_TOKENS:
-        return True
-    collapsed = normalized.replace(" ", "")
-    return collapsed in PLAYER_SELF_REFERENCE_TOKENS
+        return ""
+    stripped = normalized.strip(SELF_REFERENCE_STRIP_CHARS)
+    collapsed = stripped.replace(" ", "")
+    if stripped in PLAYER_SELF_REFERENCE_TOKENS:
+        return stripped
+    if collapsed in PLAYER_SELF_REFERENCE_TOKENS:
+        return collapsed
+    return ""
+
+
+def _is_self_reference_token(token: Any) -> bool:
+    return bool(_canonicalize_self_reference_token(token))
 
 
 def _location_reference_aliases(location_token: Optional[str], scene: Any) -> Set[str]:
@@ -2928,15 +2937,15 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
         stripped_missing_target_tokens: List[str] = []
         for token in missing_target_tokens:
+            if _canonicalize_self_reference_token(token):
+                continue
             normalized = _normalize_location_phrase(token)
-            normalized = normalized.strip(".,!?;:'\"") if normalized else ""
-            if _is_self_reference_token(normalized):
+            normalized = normalized.strip(SELF_REFERENCE_STRIP_CHARS) if normalized else ""
+            if _canonicalize_self_reference_token(normalized):
                 continue
             if normalized and normalized in location_aliases:
                 continue
             if normalized and _is_location_reference_token(normalized, location_aliases):
-                continue
-            if _is_self_reference_token(normalized):
                 continue
             stripped_missing_target_tokens.append(token)
 
