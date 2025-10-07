@@ -174,6 +174,17 @@ def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any
 
     return normalized
 
+
+def _preserve_hydrated_location(target: Dict[str, Any], location: Any) -> None:
+    """Ensure hydrated location metadata survives context merges."""
+
+    if not _is_meaningful(location):
+        return
+
+    for key in ("current_location", "location", "location_name", "location_id"):
+        if not _is_meaningful(target.get(key)):
+            target[key] = location
+
 # ===== Logging Helper =====
 @asynccontextmanager
 async def _log_step(name: str, trace_id: str, **meta):
@@ -351,7 +362,8 @@ async def process_user_input(
             base_context = _normalize_scene_context(context_data or {})
             base_context["user_input"] = user_input
             nyx_context.current_context = base_context
-            
+            _preserve_hydrated_location(nyx_context.current_context, nyx_context.current_location)
+
             # [Keep existing SettingType detection code]
             # ...
 

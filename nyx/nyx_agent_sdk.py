@@ -25,7 +25,10 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # ── Core modern orchestrator
-from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
+from .nyx_agent.orchestrator import (
+    process_user_input as _orchestrator_process,
+    _preserve_hydrated_location,
+)
 from .nyx_agent.context import NyxContext, SceneScope
 from .nyx_agent._feasibility_helpers import (
     DeferPromptContext,
@@ -741,6 +744,7 @@ class NyxAgentSDK:
         await ctx.initialize()
         ctx.current_context = (metadata or {}).copy()
         ctx.current_context["user_input"] = message
+        _preserve_hydrated_location(ctx.current_context, ctx.current_location)
 
         enhanced_input = message
         feasibility: Optional[Dict[str, Any]] = None

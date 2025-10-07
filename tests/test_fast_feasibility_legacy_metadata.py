@@ -203,3 +203,22 @@ def test_fast_feasibility_allows_location_reference(monkeypatch, action_text):
     assert overall.get("strategy") == "allow"
     assert per_intent.get("feasible") is True
     assert per_intent.get("strategy") == "allow"
+
+
+def test_hydrated_location_survives_normalization_roundtrip():
+    hydrated = "Atrium"
+    raw_context = {
+        "current_location": {},
+        "location": "",
+        "location_name": None,
+        "location_id": None,
+    }
+
+    base_context = orchestrator._normalize_scene_context(raw_context)
+    orchestrator._preserve_hydrated_location(base_context, hydrated)
+    renormalized = orchestrator._normalize_scene_context(base_context)
+
+    assert renormalized["current_location"] == hydrated
+    assert renormalized["location"] == hydrated
+    assert renormalized["location_name"] == hydrated
+    assert renormalized["location_id"] == hydrated
