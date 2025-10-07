@@ -229,10 +229,12 @@ class _AsyncNullConnection:  # pragma: no cover - db shim
 
 
 stub_db_connection.get_db_connection_context = lambda: _AsyncNullConnection()
+stub_db_connection.is_shutting_down = lambda: False
 sys.modules.setdefault("db.connection", stub_db_connection)
 
 stub_asyncpg = types.ModuleType("asyncpg")
 stub_asyncpg.Pool = object
+stub_asyncpg.Connection = object
 sys.modules.setdefault("asyncpg", stub_asyncpg)
 
 stub_user_model_sdk = types.ModuleType("nyx.user_model_sdk")
@@ -298,6 +300,57 @@ class _StubContextBroker(ContextBroker):
 
     def log_metrics_line(self, scene_key, packed_context):  # pragma: no cover - noop
         return None
+
+
+def test_initialize_seeds_location_from_context_fallback(monkeypatch):
+    async def fake_fetch_canonical_snapshot(*_args, **_kwargs):
+        return None
+
+    async def fake_get_comprehensive_context(*_args, **_kwargs):
+        return {
+            "currentRoleplay": {
+                "CurrentLocation": {
+                    "id": "azure_library",
+                    "name": "Azure Library",
+                }
+            },
+            "location_name": "Azure Library",
+        }
+
+    class _InitOnlyBroker:
+        def __init__(self, ctx: NyxContext) -> None:
+            self.ctx = ctx
+
+        async def initialize(self) -> None:  # pragma: no cover - simple stub
+            return None
+
+    monkeypatch.setattr(
+        sys.modules["nyx.nyx_agent.context"],
+        "fetch_canonical_snapshot",
+        fake_fetch_canonical_snapshot,
+    )
+    monkeypatch.setattr(
+        sys.modules["nyx.nyx_agent.context"],
+        "get_comprehensive_context",
+        fake_get_comprehensive_context,
+    )
+    monkeypatch.setattr(
+        sys.modules["nyx.nyx_agent.context"],
+        "ContextBroker",
+        _InitOnlyBroker,
+    )
+
+    context = NyxContext(user_id=31, conversation_id=37)
+    asyncio.run(context.initialize())
+
+    assert context.current_location == "Azure Library"
+    assert context.current_context["location_name"] == "Azure Library"
+    assert context.current_context["current_location"] == "Azure Library"
+    assert context.current_context["location_id"] == "azure_library"
+
+    snapshot = _SNAPSHOT_STORE.get(str(context.user_id), str(context.conversation_id))
+    assert snapshot["location_name"] == "Azure Library"
+    assert snapshot["scene_id"] == "Azure Library"
 
 
 def test_location_refresh_persists_canonical_location():
