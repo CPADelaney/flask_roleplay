@@ -57,6 +57,7 @@ from utils.performance import PerformanceTracker, timed_function
 from utils.caching import NPC_CACHE, MEMORY_CACHE
 from db.connection import get_db_connection_context
 from agents import RunContextWrapper
+from utils.conversation_history import fetch_recent_turns
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +143,17 @@ async def nyx_response():
         data = await request.get_json() or {}
         user_input = data.get("user_input", "").strip()
         conversation_id = data.get("conversation_id")
-        
+
+        try:
+            conversation_id_int = int(conversation_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid conversation_id"}), 400
+
         if not user_input or not conversation_id:
             return jsonify({"error": "Missing required parameters"}), 400
-        
+
         tracker.end_phase()
-        
+
         # Build context metadata
         tracker.start_phase("context_building")
         metadata = {
@@ -158,6 +164,7 @@ async def nyx_response():
             "activity_type": data.get("activity_type", "conversation"),
             "timestamp": time.time()
         }
+        metadata["recent_turns"] = await fetch_recent_turns(user_id, conversation_id_int)
         
         # Merge any additional context
         if data.get("additional_context"):
@@ -175,13 +182,13 @@ async def nyx_response():
         # Optional: Warm cache for this conversation/location
         if metadata.get("location"):
             asyncio.create_task(
-                sdk.warmup_cache(str(conversation_id), metadata["location"])
+                sdk.warmup_cache(str(conversation_id_int), metadata["location"])
             )
         
         # Main SDK call
         sdk_response: SDKResponse = await sdk.process_user_input(
             message=user_input,
-            conversation_id=str(conversation_id),
+            conversation_id=str(conversation_id_int),
             user_id=str(user_id),
             metadata=metadata
         )

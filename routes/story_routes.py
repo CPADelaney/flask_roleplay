@@ -32,6 +32,7 @@ from utils.db_helpers import db_transaction, with_transaction, handle_database_o
 from utils.performance import PerformanceTracker, timed_function, STATS
 from utils.caching import NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE, COMPUTATION_CACHE, cache
 from utils.performance import timed_function
+from utils.conversation_history import fetch_recent_turns
 
 # Import core logic modules
 from db.connection import get_db_connection_context
@@ -1690,13 +1691,15 @@ async def next_storybeat():
         # 2) Build aggregator context
         tracker.start_phase("get_context")
         aggregator_data = await get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        recent_turns = await fetch_recent_turns(user_id, conv_id)
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
             "player_input": user_input,
             "player_name": player_name,
             # You can pass the entire aggregator if desired:
-            "aggregator_data": aggregator_data
+            "aggregator_data": aggregator_data,
+            "recent_turns": recent_turns,
         }
         tracker.end_phase()
 
