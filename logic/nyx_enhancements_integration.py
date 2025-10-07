@@ -195,14 +195,22 @@ async def enhanced_background_chat_task(
         # Get current scene context if available
         try:
             async with get_db_connection_context() as conn:
-                # Get current location
+                # Get current location and normalize it for SDK metadata
                 location_row = await conn.fetchrow("""
-                    SELECT value FROM CurrentRoleplay 
-                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'location'
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
                 """, user_id, conversation_id)
-                
-                if location_row and location_row["value"]:
-                    metadata["location"] = location_row["value"]
+
+                raw_location = None
+                if location_row is not None:
+                    try:
+                        raw_location = location_row["value"]
+                    except (KeyError, TypeError, IndexError):
+                        raw_location = getattr(location_row, "value", None)
+
+                normalized_location = NyxContext._normalize_location_value(raw_location)
+                if normalized_location:
+                    metadata["location"] = normalized_location
                 
                 # Get active NPCs
                 npcs_row = await conn.fetchrow("""
