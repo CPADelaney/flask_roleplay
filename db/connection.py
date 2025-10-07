@@ -61,6 +61,115 @@ DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
 _connection_pending_ops: Dict[int, List[asyncio.Task]] = {}
 _connection_ops_lock: Optional[asyncio.Lock] = None
 
+
+def _is_asyncpg_waiter_cancel_bug(exc: BaseException) -> bool:
+    """Return ``True`` when the asyncpg "waiter cancelled" race condition is detected."""
+
+    if not isinstance(exc, AttributeError):
+        return False
+
+    message = str(exc)
+    return "'NoneType' object has no attribute 'cancelled'" in message
+
+
+class _ResilientConnectionWrapper:
+    """Wrap an ``asyncpg.Connection`` to transparently heal the waiter cancellation bug."""
+
+    _RETRYABLE_METHODS = {
+        "execute",
+        "fetch",
+        "fetchrow",
+        "fetchval",
+        "executemany",
+        "copy_records_to_table",
+        "copy_to_table",
+        "copy_from_table",
+    }
+
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        conn: asyncpg.Connection,
+        conn_id: int,
+        ops_lock: asyncio.Lock,
+    ) -> None:
+        self._pool = pool
+        self._conn = conn
+        self._conn_id = conn_id
+        self._ops_lock = ops_lock
+        self._refresh_lock = asyncio.Lock()
+        self._release_timeout = get_release_timeout()
+
+    @property
+    def raw_connection(self) -> asyncpg.Connection:
+        return self._conn
+
+    @property
+    def conn_id(self) -> int:
+        return self._conn_id
+
+    def __getattr__(self, item: str):  # pragma: no cover - passthrough wrapper
+        attr = getattr(self._conn, item)
+
+        if item in self._RETRYABLE_METHODS and callable(attr):
+            async def _wrapped(*args, __attr=attr, __name=item, **kwargs):
+                return await self._call_with_retry(__name, __attr, *args, **kwargs)
+
+            return _wrapped
+
+        return attr
+
+    async def _call_with_retry(self, name: str, method, *args, **kwargs):
+        attempt = 0
+
+        while True:
+            try:
+                return await method(*args, **kwargs)
+            except AttributeError as exc:
+                if not _is_asyncpg_waiter_cancel_bug(exc) or attempt >= 1:
+                    raise
+
+                attempt += 1
+                logger.warning(
+                    "Detected asyncpg waiter cancellation bug while executing %s; refreshing connection and retrying once.",
+                    name,
+                )
+                await self._refresh_connection()
+                method = getattr(self._conn, name)
+
+    async def _refresh_connection(self) -> None:
+        async with self._refresh_lock:
+            old_conn = self._conn
+            old_conn_id = self._conn_id
+
+            # Remove tracking for the existing connection before releasing it.
+            async with self._ops_lock:
+                _connection_pending_ops.pop(old_conn_id, None)
+
+            if old_conn is not None:
+                try:
+                    await self._pool.release(old_conn, timeout=self._release_timeout)
+                except Exception:
+                    logger.warning(
+                        "Releasing connection after waiter cancellation bug failed; terminating.",
+                        exc_info=True,
+                    )
+                    try:
+                        old_conn.terminate()
+                    except Exception:
+                        logger.exception("Failed to terminate broken asyncpg connection")
+
+            # Acquire a fresh connection and register it for tracking.
+            new_conn = await self._pool.acquire()
+            new_conn_id = id(new_conn)
+
+            async with self._ops_lock:
+                _connection_pending_ops[new_conn_id] = []
+
+            self._conn = new_conn
+            self._conn_id = new_conn_id
+            self._release_timeout = get_release_timeout()
+
 def _get_connection_ops_lock() -> asyncio.Lock:
     """Get or create the connection operations lock."""
     global _connection_ops_lock
@@ -455,6 +564,7 @@ async def get_db_connection_context(
     current_loop = get_or_create_event_loop()
     conn: Optional[asyncpg.Connection] = None
     conn_id: Optional[int] = None
+    wrapped_conn: Optional[_ResilientConnectionWrapper] = None
     
     # Verify pool is for current loop
     if DB_POOL and DB_POOL_LOOP != current_loop:
@@ -485,29 +595,38 @@ async def get_db_connection_context(
     try:
         logger.debug(f"Acquiring connection from pool (timeout={timeout}s)")
         conn = await asyncio.wait_for(current_pool_to_use.acquire(), timeout=timeout)
-        
+
         # Track pending operations using connection ID instead of setting attributes
         conn_id = id(conn)
         lock = _get_connection_ops_lock()
         async with lock:
             _connection_pending_ops[conn_id] = []
-        
-        yield conn
-        
+
+        wrapped_conn = _ResilientConnectionWrapper(current_pool_to_use, conn, conn_id, lock)
+
+        yield wrapped_conn
+
+        # Determine which connection ID is active after the caller returns.
+        active_conn_id = wrapped_conn.conn_id if wrapped_conn else conn_id
+
         # CRITICAL: Wait for all pending operations to complete
         pending_ops = []
         async with lock:
-            pending_ops = _connection_pending_ops.get(conn_id, [])
+            pending_ops = _connection_pending_ops.get(active_conn_id, [])
         
         if pending_ops:
-            logger.debug(f"Waiting for {len(pending_ops)} pending operations on connection {conn_id}")
+            logger.debug(
+                f"Waiting for {len(pending_ops)} pending operations on connection {active_conn_id}"
+            )
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*pending_ops, return_exceptions=True),
                     timeout=5.0
                 )
             except asyncio.TimeoutError:
-                logger.error(f"Timeout waiting for {len(pending_ops)} pending operations on connection {conn_id}")
+                logger.error(
+                    f"Timeout waiting for {len(pending_ops)} pending operations on connection {active_conn_id}"
+                )
         
     except asyncio.TimeoutError:
         logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool")
@@ -520,20 +639,30 @@ async def get_db_connection_context(
         raise
     finally:
         # Clean up connection tracking
-        if conn_id is not None:
-            lock = _get_connection_ops_lock()
+        lock = _get_connection_ops_lock()
+        active_conn_obj: Optional[asyncpg.Connection] = None
+        active_conn_id = None
+
+        if wrapped_conn is not None:
+            active_conn_obj = wrapped_conn.raw_connection
+            active_conn_id = wrapped_conn.conn_id
+        else:
+            active_conn_obj = conn
+            active_conn_id = conn_id
+
+        if active_conn_id is not None:
             async with lock:
-                _connection_pending_ops.pop(conn_id, None)
-        
-        if conn:
+                _connection_pending_ops.pop(active_conn_id, None)
+
+        if active_conn_obj:
             try:
                 # Double-check connection is still valid before release
-                if hasattr(conn, '_con') and conn._con is not None and not conn.is_closed():
+                if hasattr(active_conn_obj, '_con') and active_conn_obj._con is not None and not active_conn_obj.is_closed():
                     # Force a small delay to ensure all operations flushed
                     await asyncio.sleep(0.001)
                     release_timeout = get_release_timeout()
                     try:
-                        await current_pool_to_use.release(conn, timeout=release_timeout)
+                        await current_pool_to_use.release(active_conn_obj, timeout=release_timeout)
                         logger.debug("Released connection back to pool")
                     except (asyncio.TimeoutError, asyncio.CancelledError) as release_err:
                         logger.error(
@@ -541,7 +670,7 @@ async def get_db_connection_context(
                             exc_info=True,
                         )
                         try:
-                            conn.terminate()
+                            active_conn_obj.terminate()
                             logger.warning("Connection terminated due to release timeout")
                         except Exception:
                             logger.exception("Failed to terminate connection after release timeout")
