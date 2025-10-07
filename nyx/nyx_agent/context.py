@@ -42,6 +42,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple, Union
 from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
+import lore.core.canon as canon
 
 from logic.conflict_system.conflict_synthesizer import get_synthesizer
 from logic.conflict_system.background_processor import get_conflict_scheduler
@@ -69,8 +70,116 @@ from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.response_filter import ResponseFilter
 from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
+from lore.core.canon import ensure_canonical_context
 
 _SNAPSHOT_STORE = ConversationSnapshotStore()
+
+
+def build_canonical_snapshot_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract the minimal snapshot fields that should be persisted canonically."""
+
+    if not isinstance(snapshot, dict):
+        return {}
+
+    payload: Dict[str, Any] = {}
+
+    for key in (
+        "scene_id",
+        "location_name",
+        "region_id",
+        "world_version",
+        "conflict_id",
+        "conflict_active",
+        "time_window",
+        "updated_at",
+    ):
+        if key not in snapshot:
+            continue
+        value = snapshot.get(key)
+        if value is None and key not in {"world_version", "conflict_active"}:
+            continue
+        payload[key] = value
+
+    participants = snapshot.get("participants")
+    if isinstance(participants, (list, tuple, set)):
+        payload["participants"] = [str(p) for p in participants]
+    elif participants is not None:
+        payload["participants"] = [str(participants)]
+
+    return payload
+
+
+async def persist_canonical_snapshot(
+    user_id: int,
+    conversation_id: int,
+    snapshot_payload: Dict[str, Any],
+) -> None:
+    """Upsert the reduced snapshot payload into the canonical CurrentRoleplay table."""
+
+    if not snapshot_payload:
+        return
+
+    try:
+        canonical_ctx = ensure_canonical_context(
+            {"user_id": user_id, "conversation_id": conversation_id}
+        )
+        async with get_db_connection_context() as conn:
+            await canon.update_current_roleplay(
+                canonical_ctx,
+                conn,
+                "CurrentSnapshot",
+                json_dumps(snapshot_payload),
+            )
+    except Exception:
+        logger.warning(
+            "Failed to persist canonical snapshot for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+            exc_info=True,
+        )
+
+
+async def fetch_canonical_snapshot(
+    user_id: int, conversation_id: int
+) -> Optional[Dict[str, Any]]:
+    """Load the reduced snapshot payload from the canonical CurrentRoleplay table."""
+
+    try:
+        canonical_ctx = ensure_canonical_context(
+            {"user_id": user_id, "conversation_id": conversation_id}
+        )
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT value
+                FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentSnapshot'
+                """,
+                canonical_ctx.user_id,
+                canonical_ctx.conversation_id,
+            )
+        if not row:
+            return None
+        raw_value = row.get("value")
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, (bytes, bytearray)):
+            raw_value = raw_value.decode("utf-8")
+        if isinstance(raw_value, str):
+            data = json_loads(raw_value)
+        elif isinstance(raw_value, dict):
+            data = raw_value
+        else:
+            return None
+        return dict(data) if isinstance(data, dict) else None
+    except Exception:
+        logger.warning(
+            "Failed to fetch canonical snapshot for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+            exc_info=True,
+        )
+        return None
 
 # Import NPC orchestrator and related types
 from npcs.npc_orchestrator import NPCOrchestrator, NPCSnapshot, NPCStatus
@@ -2088,9 +2197,19 @@ class NyxContext:
             self.config = Config
         except ImportError:
             pass
-        
+
+        user_key = str(self.user_id)
+        conversation_key = str(self.conversation_id)
+        snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
+        if not snapshot:
+            canonical_snapshot = await fetch_canonical_snapshot(
+                self.user_id, self.conversation_id
+            )
+            if canonical_snapshot:
+                _SNAPSHOT_STORE.put(user_key, conversation_key, canonical_snapshot)
+
         initialization_tasks = []
-        
+
         # Initialize Memory Orchestrator
         initialization_tasks.append(self._init_memory_orchestrator())
         
