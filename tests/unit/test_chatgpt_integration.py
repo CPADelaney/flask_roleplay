@@ -56,7 +56,7 @@ def test_generate_text_completion_fallback(monkeypatch):
     )
 
     assert result == "Successful fallback"
-    assert dummy_client.responses.last_input[0]["content"][0]["type"] == "text"
+    assert dummy_client.responses.last_input[0]["content"][0]["type"] == "input_text"
     assert dummy_client.responses.last_input[1]["content"][0]["text"] == "user"
 
 
