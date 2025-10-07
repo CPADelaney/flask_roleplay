@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import typing
+
 from pathlib import Path
 
 from typing_extensions import TypedDict as _CompatTypedDict
@@ -230,6 +231,9 @@ class _AsyncNullConnection:  # pragma: no cover - db shim
 stub_db_connection.get_db_connection_context = lambda: _AsyncNullConnection()
 sys.modules.setdefault("db.connection", stub_db_connection)
 
+stub_asyncpg = types.ModuleType("asyncpg")
+stub_asyncpg.Pool = object
+sys.modules.setdefault("asyncpg", stub_asyncpg)
 
 stub_user_model_sdk = types.ModuleType("nyx.user_model_sdk")
 stub_user_model_sdk.UserModelManager = object
@@ -258,6 +262,15 @@ from nyx.nyx_agent.context import (
     NyxContext,
     SceneScope,
     _SNAPSHOT_STORE,
+)
+
+from context.context_service import (
+    BaseContextData,
+    ContextService,
+    LocationData,
+    PlayerStats,
+    RoleplayData,
+    TimeInfo,
 )
 
 
@@ -325,3 +338,81 @@ def test_location_refresh_persists_canonical_location():
     assert broker.last_scope is not None
     assert broker.last_scope.location_name == "Frostpeak Tavern"
     assert context.current_context["location_id"] == "frostpeak_tavern"
+
+
+def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
+    calls: dict[str, tuple[str, tuple]] = {}
+
+    class _StubConnection:
+        async def fetch(self, query, *params):
+            calls["query"] = query
+            calls["params"] = params
+            return [
+                {
+                    "npc_id": "npc-1",
+                    "npc_name": "Aria",
+                    "dominance": 0.1,
+                    "cruelty": 0.2,
+                    "closeness": 0.9,
+                    "trust": 0.8,
+                    "respect": 0.7,
+                    "intensity": 0.6,
+                    "current_location": "Frostpeak Tavern",
+                    "physical_description": "A bard with a quick smile.",
+                }
+            ]
+
+    class _StubDBContext:
+        async def __aenter__(self):
+            return _StubConnection()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        sys.modules["db.connection"],
+        "get_db_connection_context",
+        lambda: _StubDBContext(),
+    )
+
+    base_context = BaseContextData(
+        time_info=TimeInfo(year="1040", month="6", day="15", time_of_day="Morning"),
+        player_stats=PlayerStats(),
+        current_roleplay=RoleplayData(CurrentLocation="Frostpeak Tavern"),
+        current_location="Frostpeak Tavern",
+        relationship_overview=None,
+    )
+
+    async def fake_get_base_context(self, requested_location):
+        return base_context
+
+    observed_location: dict[str, str | None] = {}
+
+    async def fake_get_location_details(self, location):
+        observed_location["location"] = location
+        return LocationData(location_name=location or "Unknown")
+
+    async def fake_get_quest_information(self):
+        return []
+
+    async def fake_trim(self, context, budget):
+        return context
+
+    monkeypatch.setattr(ContextService, "_get_base_context", fake_get_base_context)
+    monkeypatch.setattr(ContextService, "_get_location_details", fake_get_location_details)
+    monkeypatch.setattr(ContextService, "_get_quest_information", fake_get_quest_information)
+    monkeypatch.setattr(ContextService, "_trim_to_budget", fake_trim)
+
+    service = ContextService(user_id=1, conversation_id=2)
+    service.initialized = True
+    service.config = types.SimpleNamespace(is_enabled=lambda _: False)
+    service.context_manager = types.SimpleNamespace(version=7)
+
+    result = asyncio.run(service.get_context(input_text="hello there"))
+
+    assert calls["params"][2] == "Frostpeak Tavern"
+    assert result["npcs"]
+    assert result["npcs"][0]["npc_name"] == "Aria"
+    assert result["npcs"][0]["current_location"] == "Frostpeak Tavern"
+    assert result["npcs"][0]["relevance"] == 0.7
+    assert observed_location["location"] == "Frostpeak Tavern"
