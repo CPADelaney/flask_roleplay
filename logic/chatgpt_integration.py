@@ -1119,7 +1119,7 @@ async def get_chatgpt_response(
             if not row:
                 logger.error(f"Conversation {conversation_id} not found")
                 return {
-                    "type": "text",
+                    "type": "input_text",
                     "response": "Error: Conversation not found",
                     "tokens_used": 0
                 }
@@ -1127,7 +1127,7 @@ async def get_chatgpt_response(
     except Exception as e:
         logger.error(f"Error getting user_id for conversation {conversation_id}: {e}")
         return {
-            "type": "text",
+            "type": "input_text",
             "response": "Error: Database error",
             "tokens_used": 0
         }
@@ -1333,7 +1333,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
             }
         else:
             return {
-                "type": "text",
+                "type": "input_text",
                 "function_name": None,
                 "function_args": None,
                 "response": (response.output_text or ""),  # Use output_text for text
@@ -1463,7 +1463,7 @@ DO NOT produce user-facing text here; only the JSON.
             }
         else:
             return {
-                "type": "text",
+                "type": "input_text",
                 "function_name": None,
                 "function_args": None,
                 "response": (final_response.output_text or ""),  # Use output_text for text
@@ -1672,7 +1672,7 @@ async def generate_text_completion(
             "role": "system",
             "content": [
                 {
-                    "type": "text",
+                    "type": "input_text",
                     "text": system_prompt,
                 }
             ],
@@ -1681,7 +1681,7 @@ async def generate_text_completion(
             "role": "user",
             "content": [
                 {
-                    "type": "text",
+                    "type": "input_text",
                     "text": user_prompt,
                 }
             ],
