@@ -877,25 +877,34 @@ class UnifiedMemoryManager:
         archive_ids = []
         for row in rows:
             memory_id = row['id']
-            significance = row['significance']
-            times_recalled = row['times_recalled']
-            days_old = row['days_old']
-            recall_factor = min(1.0, times_recalled / recall_threshold)
-            age_factor = min(1.0, days_old / 100)
-            decay_amount = decay_rate * age_factor * (1 - recall_factor)
-            new_significance = max(1, significance - decay_amount)
+            significance_raw = row['significance']
+            times_recalled_raw = row['times_recalled']
+            days_old_raw = row['days_old']
 
-            if new_significance < significance:
+            significance = float(significance_raw) if significance_raw is not None else 0.0
+            significance_int = int(round(significance)) if significance_raw is not None else 0
+            times_recalled = float(times_recalled_raw or 0)
+            times_recalled_int = int(times_recalled_raw or 0)
+            days_old = float(days_old_raw or 0.0)
+
+            recall_threshold_value = float(recall_threshold) if recall_threshold else 1.0
+            recall_factor = min(1.0, times_recalled / recall_threshold_value)
+            age_factor = min(1.0, days_old / 100.0)
+            decay_amount = float(decay_rate) * age_factor * (1 - recall_factor)
+            new_significance = max(1.0, significance - decay_amount)
+            new_significance_int = max(1, int(round(new_significance)))
+
+            if new_significance_int < significance_int:
                 await conn.execute(
                     """
                     UPDATE unified_memories
                     SET significance = $1
                     WHERE id = $2
                     """,
-                    new_significance, memory_id
+                    new_significance_int, memory_id
                 )
                 affected_count += 1
-                if new_significance == 1 and times_recalled <= 1:
+                if new_significance_int == 1 and times_recalled_int <= 1:
                     archive_ids.append(memory_id)
 
         if archive_ids:
