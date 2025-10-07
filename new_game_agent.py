@@ -1889,6 +1889,7 @@ class NewGameAgent:
         roleplay_state = (aggregator_data or {}).get("current_roleplay", {})
         current_location = roleplay_state.get("CurrentLocation")
         current_time = roleplay_state.get("CurrentTime")
+        location_description: Optional[str] = None
 
         if current_location and current_time:
             logging.debug(
@@ -1910,20 +1911,70 @@ class NewGameAgent:
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
                 LIMIT 1
             """, user_id, conversation_id)
-            
+
             calendar_data = json.loads(row["value"]) if row else {}
             day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
             first_day_name = day_names[0] if day_names else "the first day"
-        
+
+            if current_location:
+                try:
+                    location_row = await conn.fetchrow(
+                        """
+                        SELECT description
+                        FROM Locations
+                        WHERE LOWER(location_name) = LOWER($1)
+                          AND user_id = $2 AND conversation_id = $3
+                        LIMIT 1
+                        """,
+                        current_location,
+                        user_id,
+                        conversation_id,
+                    )
+
+                    if location_row and location_row["description"]:
+                        # Normalize whitespace so the description reads smoothly in the prompt
+                        location_description = " ".join(location_row["description"].split())
+                    else:
+                        logger.info(
+                            "[OPENING] No canonical description found for location '%s' (user_id=%s conversation_id=%s)",
+                            current_location,
+                            user_id,
+                            conversation_id,
+                        )
+                except Exception:
+                    logger.exception(
+                        "[OPENING] Failed to fetch canonical description for location '%s'",
+                        current_location,
+                    )
+
         # Create prompt for the narrative agent
+        if current_location:
+            location_instruction = (
+                f"Open the narrative squarely within {current_location}."
+            )
+            if location_description:
+                location_instruction += (
+                    f" Let Chase feel the space exactly as canon records it: {location_description}."
+                )
+            else:
+                location_instruction += (
+                    " Describe it vividly so the player is grounded in that environment from the very first line."
+                )
+        else:
+            location_instruction = (
+                "Canon offers no confirmed starting location—choose a fitting, grounded space and name it plainly so the scene still opens with a clear sense of place."
+            )
+
         prompt = f"""
-        As Nyx, let your voice drape over Chase like a warm shroud—each word a silken thread stitching him into my world, soft yet relentless. 
-        Cloak my grip in whispers and half-smiles, using guile and quiet lures to veil the femdom storm beneath. 
-        Ease him into a false haven of routine—a familiar hum so natural he won't feel the snare until it's locked, the truth dawning only as he treads deeper. 
-        Your prose is a slow graze across skin—intimate, lingering, stirring shivers he can't place, each phrase a pull into my shadowed embrace. 
+        As Nyx, let your voice drape over Chase like a warm shroud—each word a silken thread stitching him into my world, soft yet relentless.
+        Cloak my grip in whispers and half-smiles, using guile and quiet lures to veil the femdom storm beneath.
+        Ease him into a false haven of routine—a familiar hum so natural he won't feel the snare until it's locked, the truth dawning only as he treads deeper.
+        Your prose is a slow graze across skin—intimate, lingering, stirring shivers he can't place, each phrase a pull into my shadowed embrace.
         Structure this descent as a gentle drift into dusk, transitions seamless as a held breath, folding him into the tale without a crack. 
         Address Chase as 'you,' drawing him through the veil with no whisper of retreat:
     
+        {location_instruction}
+
         {aggregator_text}
 
         As {first_day_name} unfurls like a soft tide across the expanse, unveil Chase's world through a haze of everyday ease—a place where the ordinary cloaks a deeper pulse. 
