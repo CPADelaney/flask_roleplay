@@ -2304,16 +2304,14 @@ class NyxContext:
     async def _persist_location_to_db(self, canonical_location: str) -> None:
         """Persist the canonical location to the backing CurrentRoleplay row."""
         try:
+            canonical_ctx = ensure_canonical_context(
+                {"user_id": self.user_id, "conversation_id": self.conversation_id}
+            )
             async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                    VALUES ($1, $2, 'CurrentLocation', $3)
-                    ON CONFLICT (user_id, conversation_id, key)
-                    DO UPDATE SET value = EXCLUDED.value
-                    """,
-                    self.user_id,
-                    self.conversation_id,
+                await canon.update_current_roleplay(
+                    canonical_ctx,
+                    conn,
+                    "CurrentLocation",
                     canonical_location,
                 )
         except Exception as exc:  # pragma: no cover - best effort persistence
