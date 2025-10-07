@@ -2405,6 +2405,31 @@ class NyxContext:
                 if normalized:
                     return normalized
 
+        aggregator_data = mapping.get("aggregator_data")
+        if isinstance(aggregator_data, dict):
+            for key in candidate_keys:
+                if key in aggregator_data:
+                    normalized = self._normalize_location_value(
+                        aggregator_data.get(key)
+                    )
+                    if normalized:
+                        return normalized
+
+            for nested_key in ("currentRoleplay", "current_roleplay"):
+                nested = aggregator_data.get(nested_key)
+                if not isinstance(nested, dict):
+                    continue
+                for location_key in (
+                    "CurrentLocation",
+                    "currentLocation",
+                    "current_location",
+                ):
+                    normalized = self._normalize_location_value(
+                        nested.get(location_key)
+                    )
+                    if normalized:
+                        return normalized
+
         return None
 
     def _refresh_location_from_context(self) -> None:
@@ -2438,6 +2463,35 @@ class NyxContext:
                     normalized_location_id = self._normalize_location_value(current_location)
                 if normalized_location_id:
                     break
+
+        if not normalized_location_id:
+            aggregator_data = self.current_context.get("aggregator_data")
+            if isinstance(aggregator_data, dict):
+                for nested_key in ("currentRoleplay", "current_roleplay"):
+                    nested = aggregator_data.get(nested_key)
+                    if not isinstance(nested, dict):
+                        continue
+                    current_location = (
+                        nested.get("CurrentLocation")
+                        or nested.get("currentLocation")
+                        or nested.get("current_location")
+                    )
+                    if isinstance(current_location, dict):
+                        normalized_location_id = self._normalize_location_value(
+                            current_location.get("id")
+                            or current_location.get("location_id")
+                            or current_location.get("location")
+                        )
+                        if not normalized_location_id:
+                            normalized_location_id = self._normalize_location_value(
+                                current_location
+                            )
+                    else:
+                        normalized_location_id = self._normalize_location_value(
+                            current_location
+                        )
+                    if normalized_location_id:
+                        break
 
         if not normalized_location_id:
             normalized_location_id = canonical_location
