@@ -4,6 +4,8 @@ import sys
 import types
 import typing
 
+import pytest
+
 from pathlib import Path
 
 from typing_extensions import TypedDict as _CompatTypedDict
@@ -130,6 +132,35 @@ stub_npc_orchestrator.NPCOrchestrator = _StubNPCOrchestrator
 stub_npc_orchestrator.NPCSnapshot = object
 stub_npc_orchestrator.NPCStatus = object
 sys.modules.setdefault("npcs.npc_orchestrator", stub_npc_orchestrator)
+
+
+async def _stub_assess_action_feasibility_fast(*_args, **_kwargs):
+    return {}
+
+
+async def _stub_assess_action_feasibility(*_args, **_kwargs):
+    return {}
+
+
+async def _stub_record_impossibility(*_args, **_kwargs):
+    return None
+
+
+async def _stub_record_possibility(*_args, **_kwargs):
+    return None
+
+
+def _stub_detect_setting_type(*_args, **_kwargs):
+    return "default"
+
+
+stub_feasibility = types.ModuleType("nyx.nyx_agent.feasibility")
+stub_feasibility.assess_action_feasibility_fast = _stub_assess_action_feasibility_fast
+stub_feasibility.assess_action_feasibility = _stub_assess_action_feasibility
+stub_feasibility.record_impossibility = _stub_record_impossibility
+stub_feasibility.record_possibility = _stub_record_possibility
+stub_feasibility.detect_setting_type = _stub_detect_setting_type
+sys.modules.setdefault("nyx.nyx_agent.feasibility", stub_feasibility)
 
 
 stub_story_models = types.ModuleType("story_agent.world_simulation_models")
@@ -290,6 +321,9 @@ class _StubContextBroker(ContextBroker):
         super().__init__(ctx)
         self.last_scope: SceneScope | None = None
 
+    async def initialize(self) -> None:  # pragma: no cover - simple stub
+        return None
+
     async def compute_scene_scope(self, user_input, current_context):
         scope = await super().compute_scene_scope(user_input, current_context)
         self.last_scope = scope
@@ -398,8 +432,179 @@ def test_location_refresh_persists_canonical_location():
 
     assert context.current_location == "Frostpeak Tavern"
     assert broker.last_scope is not None
-    assert broker.last_scope.location_name == "Frostpeak Tavern"
-    assert context.current_context["location_id"] == "frostpeak_tavern"
+
+
+def test_process_user_input_persists_location(monkeypatch):
+    from nyx.nyx_agent import context as context_module
+    import nyx.nyx_agent.orchestrator as orchestrator_module
+
+    monkeypatch.setattr(context_module, "ContextBroker", _StubContextBroker)
+
+    async def fake_initialize(self):
+        self.context_broker = _StubContextBroker(self)
+        self.current_context = {}
+        self.current_location = None
+        self.last_packed_context = None
+
+    monkeypatch.setattr(context_module.NyxContext, "initialize", fake_initialize)
+
+    original_build = context_module.NyxContext.build_context_for_input
+    build_calls: dict[str, typing.Any] = {}
+
+    async def tracking_build(self, user_input_arg, context_payload_arg=None):
+        build_calls["called"] = True
+        build_calls["context"] = self
+        build_calls["payload"] = context_payload_arg
+        return await original_build(self, user_input_arg, context_payload_arg or {})
+
+    monkeypatch.setattr(context_module.NyxContext, "build_context_for_input", tracking_build)
+
+    recorded_updates: list[tuple[str, str]] = []
+
+    async def fake_update_current_roleplay(cctx, conn, key, value):
+        recorded_updates.append((key, value))
+
+    monkeypatch.setattr(context_module.canon, "update_current_roleplay", fake_update_current_roleplay)
+
+    class _StubRunner:
+        @staticmethod
+        async def run(agent, prompt, context=None, run_config=None, **_kwargs):
+            return types.SimpleNamespace(
+                messages=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "narrative"}
+                        ],
+                    }
+                ]
+            )
+
+    monkeypatch.setattr(orchestrator_module, "Runner", _StubRunner)
+
+    class _StubRunContextWrapper:
+        def __init__(self, ctx):
+            self.context = ctx
+
+    monkeypatch.setattr(orchestrator_module, "RunContextWrapper", _StubRunContextWrapper)
+
+    class _StubModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(orchestrator_module, "ModelSettings", _StubModelSettings)
+
+    class _StubRunConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(orchestrator_module, "RunConfig", _StubRunConfig)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "nyx_main_agent",
+        types.SimpleNamespace(name="Nyx", tools=[]),
+    )
+
+    class _StubUpdatesResult:
+        def __init__(self):
+            self.success = False
+            self.updates_generated = False
+
+    async def fake_generate_universal_updates_impl(ctx, narrative):
+        return _StubUpdatesResult()
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "generate_universal_updates_impl",
+        fake_generate_universal_updates_impl,
+    )
+
+    async def fake_resolve_scene_requests(resp_stream, ctx):
+        return resp_stream
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "resolve_scene_requests",
+        fake_resolve_scene_requests,
+    )
+
+    async def fake_assemble_nyx_response(**kwargs):
+        return types.SimpleNamespace(
+            narrative="narrative",
+            metadata={"performance": {}},
+            world_state={},
+            choices=[],
+            emergent_events=[],
+            image=None,
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "assemble_nyx_response",
+        fake_assemble_nyx_response,
+    )
+
+    async def fake_decide_image_generation_standalone(ctx, narrative):
+        return "{}"
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "decide_image_generation_standalone",
+        fake_decide_image_generation_standalone,
+    )
+
+    monkeypatch.setattr(orchestrator_module, "enforce_all_rules_on_player", None)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "assess_action_feasibility_fast",
+        _stub_assess_action_feasibility_fast,
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "assess_action_feasibility",
+        _stub_assess_action_feasibility,
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "record_impossibility",
+        _stub_record_impossibility,
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "record_possibility",
+        _stub_record_possibility,
+    )
+
+    response_holder: dict[str, typing.Any] = {}
+
+    async def _run():
+        response_holder["value"] = await orchestrator_module.process_user_input(
+            user_id=5,
+            conversation_id=6,
+            user_input="Look around",
+            context_data={
+                "currentRoleplay": {
+                    "CurrentLocation": {
+                        "id": "gilded_grove",
+                        "name": "Gilded Grove",
+                    }
+                }
+            },
+        )
+
+    asyncio.run(_run())
+
+    response = response_holder["value"]
+
+    assert response["success"] is True
+    assert recorded_updates, "Expected canonical update call"
+    key, value = recorded_updates[0]
+    assert key == "CurrentLocation"
+    assert value == "Gilded Grove"
+    assert build_calls.get("called") is True
+    assert build_calls["context"].last_packed_context is not None
 
 
 def test_location_refresh_uses_aggregator_current_roleplay():

@@ -22,7 +22,7 @@ from nyx.nyx_agent.feasibility import (
 )
 
 from .config import Config
-from .context import NyxContext
+from .context import NyxContext, PackedContext
 from ._feasibility_helpers import (
     DeferPromptContext,
     build_defer_fallback_text,
@@ -327,6 +327,7 @@ async def process_user_input(
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     nyx_context: Optional[NyxContext] = None
+    packed_context: Optional[PackedContext] = None
 
     logger.info(f"[{trace_id}] ========== PROCESS START ==========")
     logger.info(f"[{trace_id}] user_id={user_id} conversation_id={conversation_id}")
@@ -376,6 +377,12 @@ async def process_user_input(
             base_context["user_input"] = user_input
             nyx_context.current_context = base_context
             _preserve_hydrated_location(nyx_context.current_context, nyx_context.current_location)
+
+            packed_context = await nyx_context.build_context_for_input(
+                user_input,
+                base_context,
+            )
+            nyx_context.last_packed_context = packed_context
 
             # [Keep existing SettingType detection code]
             # ...
