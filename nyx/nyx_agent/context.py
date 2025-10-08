@@ -2358,23 +2358,64 @@ class NyxContext:
 
     async def _persist_location_to_db(self, canonical_location: str) -> None:
         """Persist the canonical location to the backing CurrentRoleplay row."""
+        fallback_required = False
+
         try:
             canonical_ctx = ensure_canonical_context(
                 {"user_id": self.user_id, "conversation_id": self.conversation_id}
             )
             async with get_db_connection_context() as conn:
-                await canon.update_current_roleplay(
-                    canonical_ctx,
-                    conn,
-                    "CurrentLocation",
-                    canonical_location,
-                )
+                try:
+                    await canon.update_current_roleplay(
+                        canonical_ctx,
+                        conn,
+                        "CurrentLocation",
+                        canonical_location,
+                    )
+                    return
+                except Exception as canon_exc:
+                    fallback_required = True
+                    logger.warning(
+                        "Primary CurrentLocation persist failed for user_id=%s conversation_id=%s: %s",
+                        self.user_id,
+                        self.conversation_id,
+                        canon_exc,
+                        exc_info=True,
+                    )
         except Exception as exc:  # pragma: no cover - best effort persistence
             logger.warning(
                 "Failed to persist CurrentLocation for user_id=%s conversation_id=%s: %s",
                 self.user_id,
                 self.conversation_id,
                 exc,
+                exc_info=True,
+            )
+            return
+
+        if not fallback_required:
+            return
+
+        try:
+            async with get_db_connection_context() as fallback_conn:
+                await fallback_conn.execute(
+                    """
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                    "CurrentLocation",
+                    canonical_location,
+                )
+        except Exception as fallback_exc:  # pragma: no cover - log and continue
+            logger.error(
+                "Fallback CurrentLocation persist failed for user_id=%s conversation_id=%s: %s",
+                self.user_id,
+                self.conversation_id,
+                fallback_exc,
+                exc_info=True,
             )
 
     @staticmethod
