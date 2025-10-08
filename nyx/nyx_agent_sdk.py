@@ -28,6 +28,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 from .nyx_agent.orchestrator import (
     process_user_input as _orchestrator_process,
     _preserve_hydrated_location,
+    DEFER_RUN_TIMEOUT_SECONDS,
 )
 from .nyx_agent.context import (
     NyxContext,
@@ -236,13 +237,25 @@ class NyxAgentSDK:
             return None
 
         try:
-            result = await Runner.run(
-                nyx_main_agent,
-                prompt,
-                max_turns=2,
+            result = await asyncio.wait_for(
+                Runner.run(
+                    nyx_main_agent,
+                    prompt,
+                    max_turns=2,
+                ),
+                timeout=DEFER_RUN_TIMEOUT_SECONDS,
             )
+        except asyncio.TimeoutError:
+            logger.debug(
+                f"[SDK-{trace_id}] Nyx defer narrative generation timed out",
+                exc_info=True,
+            )
+            return None
         except Exception:
-            logger.debug(f"[SDK-{trace_id}] Nyx defer taunt generation failed", exc_info=True)
+            logger.debug(
+                f"[SDK-{trace_id}] Nyx defer narrative generation failed",
+                exc_info=True,
+            )
             return None
 
         return coalesce_agent_output_text(result)

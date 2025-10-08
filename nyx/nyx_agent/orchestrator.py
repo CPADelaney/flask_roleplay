@@ -1,6 +1,7 @@
 # nyx/nyx_agent/orchestrator.py
 """Main orchestration and runtime functions for Nyx Agent SDK with enhanced reality enforcement"""
 
+import asyncio
 import json
 import logging
 import time
@@ -55,6 +56,9 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+DEFER_RUN_TIMEOUT_SECONDS: float = 8.0
+
+
 async def _generate_defer_taunt(
     context: DeferPromptContext,
     trace_id: str,
@@ -77,11 +81,20 @@ async def _generate_defer_taunt(
             logger.debug(f"[{trace_id}] Failed to wrap Nyx context for defer taunt", exc_info=True)
 
     try:
-        result = await Runner.run(
-            nyx_main_agent,
-            prompt,
-            **run_kwargs,
+        result = await asyncio.wait_for(
+            Runner.run(
+                nyx_main_agent,
+                prompt,
+                **run_kwargs,
+            ),
+            timeout=DEFER_RUN_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        logger.debug(
+            f"[{trace_id}] Nyx defer taunt generation timed out",
+            exc_info=True,
+        )
+        return None
     except Exception:
         logger.debug(f"[{trace_id}] Nyx defer taunt generation failed", exc_info=True)
         return None
