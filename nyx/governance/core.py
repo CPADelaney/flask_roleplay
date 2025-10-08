@@ -984,7 +984,9 @@ class NyxUnifiedGovernor(
             "narrative_state": {},
             "world_state": {},
         }
-    
+
+        from nyx.nyx_agent.context import NyxContext  # Local import to avoid circular dependency during module load
+
         try:
             async with get_db_connection_context() as conn:
                 # Get current location
@@ -993,10 +995,81 @@ class NyxUnifiedGovernor(
                     WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
                     LIMIT 1
                 """, self.user_id, self.conversation_id)
-                if row: 
-                    game_state["current_location"] = row["value"]
+                if row:
+                    raw_location = None
+                    try:
+                        raw_location = row["value"]
+                    except (KeyError, TypeError, IndexError):
+                        raw_location = getattr(row, "value", None)
+
+                    normalized_location = NyxContext._normalize_location_value(raw_location)
+                    game_state["current_location"] = normalized_location or raw_location
                 else:
                     logger.warning("No current location found in database")
+
+                    from context.context_service import get_comprehensive_context
+
+                    fallback_location: Optional[str] = None
+                    try:
+                        fallback_context = await get_comprehensive_context(
+                            self.user_id,
+                            self.conversation_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to fetch fallback context for location", exc_info=True
+                        )
+                    else:
+                        candidates: List[Any] = []
+                        if isinstance(fallback_context, dict):
+                            candidates.extend(
+                                [
+                                    fallback_context.get("current_location"),
+                                    fallback_context.get("currentLocation"),
+                                ]
+                            )
+
+                            for key in ("current_roleplay", "currentRoleplay"):
+                                mapping = fallback_context.get(key)
+                                if isinstance(mapping, dict):
+                                    candidates.extend(
+                                        mapping.get(candidate_key)
+                                        for candidate_key in (
+                                            "CurrentLocation",
+                                            "location",
+                                            "location_name",
+                                            "scene_id",
+                                        )
+                                    )
+
+                            location_details = fallback_context.get("location_details")
+                            if isinstance(location_details, dict):
+                                candidates.extend(
+                                    location_details.get(candidate_key)
+                                    for candidate_key in (
+                                        "location_name",
+                                        "name",
+                                        "id",
+                                        "scene_id",
+                                    )
+                                )
+                        else:
+                            candidates.append(fallback_context)
+
+                        for candidate in candidates:
+                            normalized = NyxContext._normalize_location_value(candidate)
+                            if normalized:
+                                fallback_location = normalized
+                                break
+
+                    if fallback_location:
+                        game_state["current_location"] = fallback_location
+                    else:
+                        logger.debug(
+                            "Fallback context did not provide a usable location for user_id=%s conversation_id=%s",
+                            self.user_id,
+                            self.conversation_id,
+                        )
                 
                 # Get current time
                 row = await conn.fetchrow("""
@@ -1004,10 +1077,58 @@ class NyxUnifiedGovernor(
                     WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentTime'
                     LIMIT 1
                 """, self.user_id, self.conversation_id)
-                if row: 
+                if row:
                     game_state["current_time"] = row["value"]
                 else:
                     logger.warning("No current time found in database")
+
+                    try:
+                        from logic.time_cycle import get_current_time_model  # Local import to avoid circular dependency
+
+                        current_time_model = await get_current_time_model(
+                            self.user_id,
+                            self.conversation_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to derive current time components for user_id=%s conversation_id=%s",
+                            self.user_id,
+                            self.conversation_id,
+                            exc_info=True,
+                        )
+                    else:
+                        if current_time_model:
+                            current_time_value = (
+                                f"Year {current_time_model.year} "
+                                f"{current_time_model.month} "
+                                f"{current_time_model.day} "
+                                f"{current_time_model.time_of_day}"
+                            )
+
+                            game_state["current_time"] = current_time_value
+
+                            try:
+                                from lore.core import canon  # Local import to avoid circular dependency
+
+                                canon_ctx = type(
+                                    "_CanonCtx",
+                                    (),
+                                    {
+                                        "user_id": self.user_id,
+                                        "conversation_id": self.conversation_id,
+                                    },
+                                )()
+                                await canon.update_current_roleplay(
+                                    canon_ctx,
+                                    conn,
+                                    "CurrentTime",
+                                    current_time_value,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Failed to persist derived CurrentTime value",
+                                    exc_info=True,
+                                )
 
                 # Get player stats using the effective player name
                 row = await conn.fetchrow("""
