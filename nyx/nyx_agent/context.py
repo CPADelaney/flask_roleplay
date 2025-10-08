@@ -1725,57 +1725,131 @@ class ContextBroker:
             for hint_npc in hint_npcs:
                 if hint_npc not in npc_list:
                     npc_list.append(hint_npc)
-            
-            # Fetch memories for NPCs
-            for npc_id in npc_list:
-                if hasattr(self.ctx.memory_orchestrator, 'retrieve_memories'):
-                    result = await self.ctx.memory_orchestrator.retrieve_memories(
-                        entity_type=EntityType.NPC,
-                        entity_id=npc_id,
-                        query=" ".join(list(scope.topics)[:5]),
-                        limit=3,
-                        use_llm_analysis=False  # Fast path
+
+            orchestrator = self.ctx.memory_orchestrator
+            timeout = getattr(self.ctx, 'memory_fetch_timeout', 1.5)
+
+            async def _await_with_timeout(coro, label: str):
+                try:
+                    return await asyncio.wait_for(coro, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Memory fetch timed out for %s after %.2fs", label, timeout
                     )
-                else:
-                    # Fallback to recall if available
-                    result = await self.ctx.memory_orchestrator.recall(
+                except Exception:
+                    logger.error("Memory fetch failed for %s", label, exc_info=True)
+                return None
+
+            async def _fetch_npc_memories(npc_id: Union[int, str]):
+                if hasattr(orchestrator, 'retrieve_memories'):
+                    query = " ".join(list(scope.topics)[:5])
+                    return await _await_with_timeout(
+                        orchestrator.retrieve_memories(
+                            entity_type=EntityType.NPC,
+                            entity_id=npc_id,
+                            query=query,
+                            limit=3,
+                            use_llm_analysis=False
+                        ),
+                        f"NPC {npc_id}"
+                    )
+                query = " ".join(scope.topics)
+                return await _await_with_timeout(
+                    orchestrator.recall(
                         entity_type=EntityType.NPC,
                         entity_id=npc_id,
-                        query=" ".join(scope.topics),
+                        query=query,
                         limit=3
+                    ),
+                    f"NPC {npc_id}"
+                )
+
+            async def _fetch_location_memories(location_id: Union[int, str]):
+                if hasattr(orchestrator, 'retrieve_memories'):
+                    return await _await_with_timeout(
+                        orchestrator.retrieve_memories(
+                            entity_type=EntityType.LOCATION,
+                            entity_id=location_id,
+                            limit=5,
+                            use_llm_analysis=False
+                        ),
+                        f"location {location_id}"
                     )
-                
-                if result and 'memories' in result:
-                    relevant_memories.extend(result['memories'][:3])
-            
-            # Get location memories
-            if scope.location_id:
-                if hasattr(self.ctx.memory_orchestrator, 'retrieve_memories'):
-                    result = await self.ctx.memory_orchestrator.retrieve_memories(
+                return await _await_with_timeout(
+                    orchestrator.recall(
                         entity_type=EntityType.LOCATION,
-                        entity_id=scope.location_id,
-                        limit=5,
-                        use_llm_analysis=False
-                    )
-                else:
-                    result = await self.ctx.memory_orchestrator.recall(
-                        entity_type=EntityType.LOCATION,
-                        entity_id=scope.location_id,
+                        entity_id=location_id,
                         query="",
                         limit=5
-                    )
-                
-                if result and 'memories' in result:
-                    recent_memories.extend(result['memories'][:5])
-            
-            # Get memory patterns if available
-            if hasattr(self.ctx, 'analyze_memory_patterns') and scope.topics:
-                pattern_result = await self.ctx.analyze_memory_patterns(
-                    topic=", ".join(list(scope.topics)[:3])
+                    ),
+                    f"location {location_id}"
                 )
+
+            async def _fetch_patterns():
+                try:
+                    return await asyncio.wait_for(
+                        self.ctx.analyze_memory_patterns(
+                            topic=", ".join(list(scope.topics)[:3])
+                        ),
+                        timeout=timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Memory pattern analysis timed out after %.2fs", timeout
+                    )
+                except Exception:
+                    logger.error("Memory pattern analysis failed", exc_info=True)
+                return None
+
+            tasks: List[asyncio.Task] = []
+            npc_tasks: List[asyncio.Task] = []
+
+            for npc_id in npc_list:
+                npc_task = asyncio.create_task(_fetch_npc_memories(npc_id))
+                npc_tasks.append(npc_task)
+                tasks.append(npc_task)
+
+            location_task: Optional[asyncio.Task] = None
+            if scope.location_id:
+                location_task = asyncio.create_task(
+                    _fetch_location_memories(scope.location_id)
+                )
+                tasks.append(location_task)
+
+            pattern_task: Optional[asyncio.Task] = None
+            if hasattr(self.ctx, 'analyze_memory_patterns') and scope.topics:
+                pattern_task = asyncio.create_task(_fetch_patterns())
+                tasks.append(pattern_task)
+
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=False)
+
+            for npc_task in npc_tasks:
+                if npc_task.cancelled():
+                    continue
+                try:
+                    result = npc_task.result()
+                except Exception:
+                    continue
+                if result and 'memories' in result:
+                    relevant_memories.extend(result['memories'][:3])
+
+            if location_task and not location_task.cancelled():
+                try:
+                    location_result = location_task.result()
+                except Exception:
+                    location_result = None
+                if location_result and 'memories' in location_result:
+                    recent_memories.extend(location_result['memories'][:5])
+
+            if pattern_task and not pattern_task.cancelled():
+                try:
+                    pattern_result = pattern_task.result()
+                except Exception:
+                    pattern_result = None
                 if pattern_result and 'predictions' in pattern_result:
                     patterns = pattern_result['predictions'][:3]
-                
+
         except Exception as e:
             logger.error(f"Memory fetch failed: {e}")
         
