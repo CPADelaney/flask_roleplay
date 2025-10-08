@@ -1996,44 +1996,114 @@ class ContextBroker:
             "tensions": {},
             "opportunities": [],
         }
-    
+
         try:
-            # Use get_conflict_state (existing API)
-            conflict_ids = list(getattr(scope, "conflict_ids", []))[:5]
-            if hasattr(synthesizer, "get_conflict_state"):
-                for conflict_id in conflict_ids:
-                    state = await synthesizer.get_conflict_state(conflict_id)
-                    if state:
-                        subsystem = state.get("subsystem_data", {}) if isinstance(state, dict) else {}
-                        tension = subsystem.get("tension", {}) if isinstance(subsystem, dict) else {}
-                        stakeholder = subsystem.get("stakeholder", {}) if isinstance(subsystem, dict) else {}
-    
-                        conflict_data["active"].append({
-                            "id": conflict_id,
-                            "type": state.get("conflict_type") if isinstance(state, dict) else None,
-                            "intensity": tension.get("level", 0.5),
-                            "stakeholders": stakeholder.get("stakeholders", []),
-                        })
-    
+            conflict_state_timeout = getattr(self.ctx, "conflict_state_timeout", 0.75)
+            tension_timeout = getattr(self.ctx, "conflict_tension_timeout", 0.5)
+
             # Build NPC list including link hints for conflict filtering
             relevant_npcs = set(getattr(scope, "npc_ids", []) or [])
             link_hints = getattr(scope, "link_hints", {}) or {}
             if isinstance(link_hints, dict) and "related_npcs" in link_hints:
                 related = link_hints.get("related_npcs") or []
                 relevant_npcs.update(related[:3])
-    
-            # Get tensions using existing calculate_conflict_tensions
-            if hasattr(self.ctx, "calculate_conflict_tensions"):
-                all_tensions = await self.ctx.calculate_conflict_tensions()
+
+            timed_out_conflicts: List[int] = []
+            failed_conflicts: List[int] = []
+            conflict_tasks: List[asyncio.Task] = []
+            tension_task: Optional[asyncio.Task] = None
+
+            async def _fetch_conflict_state(conflict_id: int):
+                try:
+                    result = await asyncio.wait_for(
+                        synthesizer.get_conflict_state(conflict_id),
+                        timeout=conflict_state_timeout,
+                    )
+                    return conflict_id, result
+                except asyncio.TimeoutError:
+                    timed_out_conflicts.append(conflict_id)
+                    logger.warning(
+                        "Conflict state fetch for %s timed out after %.2fs",
+                        conflict_id,
+                        conflict_state_timeout,
+                    )
+                except Exception:
+                    failed_conflicts.append(conflict_id)
+                    logger.error(
+                        "Conflict state fetch failed for %s", conflict_id, exc_info=True
+                    )
+                return conflict_id, None
+
+            async def _fetch_tensions():
+                if not hasattr(self.ctx, "calculate_conflict_tensions"):
+                    return None
+                try:
+                    return await asyncio.wait_for(
+                        self.ctx.calculate_conflict_tensions(),
+                        timeout=tension_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Conflict tension calculation timed out after %.2fs",
+                        tension_timeout,
+                    )
+                except Exception:
+                    logger.error("Conflict tension calculation failed", exc_info=True)
+                return None
+
+            conflict_ids = list(getattr(scope, "conflict_ids", []))[:5]
+
+            if conflict_ids or relevant_npcs:
+                async with asyncio.TaskGroup() as tg:
+                    for conflict_id in conflict_ids:
+                        task = tg.create_task(_fetch_conflict_state(conflict_id))
+                        conflict_tasks.append(task)
+                    if relevant_npcs:
+                        tension_task = tg.create_task(_fetch_tensions())
+
+            for task in conflict_tasks:
+                if task.cancelled():
+                    continue
+                try:
+                    conflict_id, state = task.result()
+                except Exception:
+                    continue
+                if not state:
+                    continue
+                subsystem = state.get("subsystem_data", {}) if isinstance(state, dict) else {}
+                tension = subsystem.get("tension", {}) if isinstance(subsystem, dict) else {}
+                stakeholder = subsystem.get("stakeholder", {}) if isinstance(subsystem, dict) else {}
+
+                conflict_data["active"].append(
+                    {
+                        "id": conflict_id,
+                        "type": state.get("conflict_type") if isinstance(state, dict) else None,
+                        "intensity": tension.get("level", 0.5),
+                        "stakeholders": stakeholder.get("stakeholders", []),
+                    }
+                )
+
+            if tension_task and not tension_task.cancelled():
+                try:
+                    all_tensions = tension_task.result()
+                except Exception:
+                    all_tensions = None
                 if relevant_npcs and all_tensions:
                     conflict_data["tensions"] = self._filter_tensions_for_npcs(
                         all_tensions,
                         relevant_npcs,
                     )
-    
+
+            if timed_out_conflicts or failed_conflicts:
+                logger.info(
+                    "Conflict section assembled with partial data (timed_out=%s, failed=%s)",
+                    timed_out_conflicts,
+                    failed_conflicts,
+                )
+
         except Exception as e:
             logger.error("Conflict fetch failed: %s", e)
-    
+
         return BundleSection(
             data=conflict_data,
             canonical=False,
