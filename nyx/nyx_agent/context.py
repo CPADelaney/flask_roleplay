@@ -2147,6 +2147,7 @@ class NyxContext:
     current_context: Dict[str, Any] = field(default_factory=dict)
     current_location: Optional[str] = None
     current_world_state: Optional[Any] = None
+    last_packed_context: Optional['PackedContext'] = None
     config: Optional[Any] = None  # For model context budget
     
     # ────────── NPC-SPECIFIC STATE ──────────
