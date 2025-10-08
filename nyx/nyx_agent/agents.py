@@ -17,6 +17,17 @@ DEFAULT_MODEL_SETTINGS = ModelSettings(
 
 # ===== Sub-Agent Definitions =====
 
+nyx_defer_agent = Agent[NyxContext](
+    name="Nyx Defer",
+    instructions=(
+        "You are Nyx offering a quick defer message."
+        " Respond in one or two short sentences, stay playful,"
+        " and promise to follow up soon."
+    ),
+    model="gpt-5-nano",
+    model_settings=DEFAULT_MODEL_SETTINGS,
+)
+
 memory_agent = Agent[NyxContext](
     name="Memory Manager",
     handoff_description="Consult memory system for context or store important information",

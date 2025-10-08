@@ -64,13 +64,14 @@ except Exception:  # pragma: no cover
 # Fallback agent runtime (loaded lazily; optional in some environments)
 try:
     from agents import Runner, RunConfig, ModelSettings, RunContextWrapper
-    from .nyx_agent.agents import nyx_main_agent, DEFAULT_MODEL_SETTINGS
+    from .nyx_agent.agents import nyx_main_agent, nyx_defer_agent, DEFAULT_MODEL_SETTINGS
 except Exception:  # pragma: no cover
     Runner = None
     RunConfig = None
     ModelSettings = None
     RunContextWrapper = None
     nyx_main_agent = None
+    nyx_defer_agent = None
     DEFAULT_MODEL_SETTINGS = None
 
 # Core feasibility + canon tracking helpers (best-effort import)
@@ -229,7 +230,7 @@ class NyxAgentSDK:
     ) -> Optional[str]:
         """Ask Nyx to craft a defer narrative; return None if the call fails."""
 
-        if Runner is None or nyx_main_agent is None:
+        if Runner is None or nyx_defer_agent is None:
             return None
 
         prompt = build_defer_prompt(context)
@@ -239,7 +240,7 @@ class NyxAgentSDK:
         try:
             result = await asyncio.wait_for(
                 Runner.run(
-                    nyx_main_agent,
+                    nyx_defer_agent,
                     prompt,
                     max_turns=2,
                 ),

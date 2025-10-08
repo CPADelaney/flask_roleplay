@@ -73,7 +73,7 @@ async def test_generate_defer_taunt_times_out(monkeypatch: pytest.MonkeyPatch) -
                 raise
 
     monkeypatch.setattr(orchestrator, "Runner", HangingRunner)
-    monkeypatch.setattr(orchestrator, "nyx_main_agent", object())
+    monkeypatch.setattr(orchestrator, "nyx_defer_agent", object())
     monkeypatch.setattr(orchestrator, "DEFER_RUN_TIMEOUT_SECONDS", 0.05)
 
     context = DeferPromptContext(
@@ -93,6 +93,38 @@ async def test_generate_defer_taunt_times_out(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.anyio
+async def test_generate_defer_taunt_uses_defer_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    class CapturingRunner:
+        @staticmethod
+        async def run(agent, prompt, **kwargs):
+            captured["agent"] = agent
+            captured["prompt"] = prompt
+            captured["kwargs"] = kwargs
+            return {"messages": [{"content": "Nyx will be right back."}]}
+
+    monkeypatch.setattr(orchestrator, "Runner", CapturingRunner)
+    monkeypatch.setattr(orchestrator, "RunContextWrapper", None, raising=False)
+    monkeypatch.setattr(orchestrator, "nyx_defer_agent", "defer-agent")
+
+    context = DeferPromptContext(
+        narrator_guidance="Clockwork is stalling.",
+        leads=["Consult the oracle"],
+        violations=[{"rule": "missing_item", "reason": "The sigil is absent."}],
+        persona_prefix="Darling,",
+        reason_phrases=["the sigil is still missing"],
+    )
+
+    result = await orchestrator._generate_defer_taunt(context, trace_id="capture-test")
+
+    assert result == "Nyx will be right back."
+    assert captured["agent"] == "defer-agent"
+    assert captured["prompt"].strip()
+    assert captured["kwargs"]["max_turns"] == 2
+
+
+@pytest.mark.anyio
 async def test_sdk_generate_defer_narrative_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     class HangingRunner:
         @staticmethod
@@ -103,7 +135,7 @@ async def test_sdk_generate_defer_narrative_times_out(monkeypatch: pytest.Monkey
                 raise
 
     monkeypatch.setattr("nyx.nyx_agent_sdk.Runner", HangingRunner)
-    monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_main_agent", object())
+    monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_defer_agent", object())
     monkeypatch.setattr(orchestrator, "DEFER_RUN_TIMEOUT_SECONDS", 0.05)
     assert orchestrator.DEFER_RUN_TIMEOUT_SECONDS == 0.05
     assert sdk_module._orchestrator.DEFER_RUN_TIMEOUT_SECONDS == 0.05
@@ -124,3 +156,36 @@ async def test_sdk_generate_defer_narrative_times_out(monkeypatch: pytest.Monkey
 
     assert result is None
     assert elapsed < 1.0, f"SDK defer narrative should timeout quickly, got {elapsed:.2f}s"
+
+
+@pytest.mark.anyio
+async def test_sdk_generate_defer_narrative_uses_defer_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    class CapturingRunner:
+        @staticmethod
+        async def run(agent, prompt, **kwargs):
+            captured["agent"] = agent
+            captured["prompt"] = prompt
+            captured["kwargs"] = kwargs
+            return {"messages": [{"content": "Promise kept soon."}]}
+
+    monkeypatch.setattr("nyx.nyx_agent_sdk.Runner", CapturingRunner)
+    monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_defer_agent", "sdk-defer-agent")
+
+    sdk = NyxAgentSDK()
+
+    context = DeferPromptContext(
+        narrator_guidance="Systems cooling off.",
+        leads=["Wait a heartbeat"],
+        violations=[{"rule": "overclock", "reason": "Need recovery time."}],
+        persona_prefix="Pet,",
+        reason_phrases=["let me catch my breath"],
+    )
+
+    result = await sdk._generate_defer_narrative(context, trace_id="sdk-capture")
+
+    assert result == "Promise kept soon."
+    assert captured["agent"] == "sdk-defer-agent"
+    assert captured["prompt"].strip()
+    assert captured["kwargs"]["max_turns"] == 2

@@ -31,7 +31,7 @@ from ._feasibility_helpers import (
     extract_defer_details,
 )
 from .models import *
-from .agents import nyx_main_agent, reflection_agent, DEFAULT_MODEL_SETTINGS
+from .agents import nyx_main_agent, nyx_defer_agent, reflection_agent, DEFAULT_MODEL_SETTINGS
 from .assembly import assemble_nyx_response, resolve_scene_requests
 from .tools import (
     update_relationship_state,
@@ -66,7 +66,7 @@ async def _generate_defer_taunt(
 ) -> Optional[str]:
     """Ask Nyx to craft a defer response; fall back to None on failure."""
 
-    if Runner is None or nyx_main_agent is None:
+    if Runner is None or nyx_defer_agent is None:
         return None
 
     prompt = build_defer_prompt(context)
@@ -83,7 +83,7 @@ async def _generate_defer_taunt(
     try:
         result = await asyncio.wait_for(
             Runner.run(
-                nyx_main_agent,
+                nyx_defer_agent,
                 prompt,
                 **run_kwargs,
             ),
