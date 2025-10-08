@@ -28,8 +28,8 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 from .nyx_agent.orchestrator import (
     process_user_input as _orchestrator_process,
     _preserve_hydrated_location,
-    DEFER_RUN_TIMEOUT_SECONDS,
 )
+from .nyx_agent import orchestrator as _orchestrator
 from .nyx_agent.context import (
     NyxContext,
     SceneScope,
@@ -243,7 +243,7 @@ class NyxAgentSDK:
                     prompt,
                     max_turns=2,
                 ),
-                timeout=DEFER_RUN_TIMEOUT_SECONDS,
+                timeout=_orchestrator.DEFER_RUN_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             logger.debug(

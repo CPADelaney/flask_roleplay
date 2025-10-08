@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from nyx.nyx_agent._feasibility_helpers import DeferPromptContext  # noqa: E402
 from nyx.nyx_agent import orchestrator  # noqa: E402
+import nyx.nyx_agent_sdk as sdk_module  # noqa: E402
 from nyx.nyx_agent_sdk import NyxAgentSDK  # noqa: E402
 
 
@@ -103,7 +104,9 @@ async def test_sdk_generate_defer_narrative_times_out(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("nyx.nyx_agent_sdk.Runner", HangingRunner)
     monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_main_agent", object())
-    monkeypatch.setattr("nyx.nyx_agent_sdk.DEFER_RUN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(orchestrator, "DEFER_RUN_TIMEOUT_SECONDS", 0.05)
+    assert orchestrator.DEFER_RUN_TIMEOUT_SECONDS == 0.05
+    assert sdk_module._orchestrator.DEFER_RUN_TIMEOUT_SECONDS == 0.05
 
     sdk = NyxAgentSDK()
 
