@@ -477,6 +477,49 @@ def test_location_refresh_ignores_placeholder_overrides():
     assert snapshot["scene_id"] == "Frostpeak Tavern"
 
 
+def test_location_persist_falls_back_when_canon_update_fails(monkeypatch):
+    executed: list[tuple[str, tuple]] = []
+    contexts: list[object] = []
+
+    class _StubConn:
+        async def execute(self, query, *params):
+            executed.append((query.strip(), params))
+
+    class _StubManager:
+        def __init__(self) -> None:
+            contexts.append(self)
+            self._conn = _StubConn()
+
+        async def __aenter__(self):
+            return self._conn
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    import nyx.nyx_agent.context as context_module
+
+    monkeypatch.setattr(
+        context_module,
+        "get_db_connection_context",
+        lambda: _StubManager(),
+    )
+
+    async def _fail_update(*_args, **_kwargs):  # pragma: no cover - explicit failure path
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(context_module.canon, "update_current_roleplay", _fail_update)
+
+    ctx = NyxContext(user_id=31, conversation_id=42)
+
+    asyncio.run(ctx._persist_location_to_db("Azure Library"))
+
+    assert len(contexts) == 2  # first attempt + fallback
+    assert executed, "Fallback insert was not executed"
+    query, params = executed[-1]
+    assert "INSERT INTO CurrentRoleplay" in query
+    assert params == (31, 42, "CurrentLocation", "Azure Library")
+
+
 def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
     calls: dict[str, tuple[str, tuple]] = {}
 
