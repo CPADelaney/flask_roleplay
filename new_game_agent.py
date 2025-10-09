@@ -44,6 +44,11 @@ DB_DSN = os.getenv("DB_DSN")
 
 logger = logging.getLogger(__name__)
 
+try:
+    PRESET_LOCATION_CANON_TIMEOUT = float(os.getenv("PRESET_LOCATION_CANON_TIMEOUT", "5.0"))
+except ValueError:
+    PRESET_LOCATION_CANON_TIMEOUT = 5.0
+
 NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER
 NEW_GAME_AGENT_NYX_ID = "new_game_director_agent"  # Use consistent ID throughout
 
@@ -2534,48 +2539,148 @@ class NewGameAgent:
         return calendar_data
     
     async def _create_preset_locations(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[str]:
-        """Create locations directly from preset data"""
+        """Create preset locations with a lightweight fallback when canon is slow."""
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
-        location_ids = []
-        
+        location_names: List[str] = []
+
         from lore.core import canon
-        
+
+        canonical_available = True
+        fallback_reason: Optional[str] = None
+
+        try:
+            await asyncio.wait_for(
+                canon.get_canon_memory_orchestrator(user_id, conversation_id),
+                timeout=PRESET_LOCATION_CANON_TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001 - bootstrap fallback should never hard fail
+            canonical_available = False
+            fallback_reason = "timeout" if isinstance(exc, asyncio.TimeoutError) else repr(exc)
+            logger.info(
+                "preset_location_bootstrap_lightweight_path",
+                extra={
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "path": "lightweight",
+                    "reason": fallback_reason,
+                },
+            )
+
         async with get_db_connection_context() as conn:
-            for loc_data in preset_data.get('required_locations', []):
-                # Handle different data formats
+            for loc_data in preset_data.get("required_locations", []):
                 if isinstance(loc_data, dict):
-                    location_name = loc_data.get('name', 'Unknown Location')
-                    description = loc_data.get('description', '')
-                    location_type = loc_data.get('type', 'general')
-                    
-                    # Extract additional data
-                    areas = loc_data.get('areas', {})
-                    schedule = loc_data.get('schedule', {})
-                    atmosphere = loc_data.get('atmosphere', '')
-                    
+                    raw_name = loc_data.get("name", "Unknown Location")
+                    description = loc_data.get("description", "")
+                    requested_type = loc_data.get("type")
+
+                    areas = loc_data.get("areas", {})
+                    schedule = loc_data.get("schedule", {})
+                    atmosphere = loc_data.get("atmosphere", "")
+
                     metadata = {
-                        'location_type': location_type,
-                        'areas': areas,
-                        'schedule': schedule,
-                        'atmosphere': atmosphere
+                        "location_type": requested_type,
+                        "areas": areas,
+                        "schedule": schedule,
+                        "atmosphere": atmosphere,
                     }
+                    raw_open_hours = (
+                        loc_data.get("open_hours")
+                        or loc_data.get("open_hours_json")
+                        or metadata.get("schedule")
+                    )
                 else:
-                    # Handle simple string format
-                    location_name = str(loc_data)
+                    raw_name = str(loc_data)
                     description = f"A location in {preset_data['name']}"
+                    requested_type = None
                     metadata = {}
-                
-                # Create location
-                location_id = await canon.find_or_create_location(
-                    ctx, conn,
-                    location_name,
-                    description=description,
-                    metadata=metadata
+                    raw_open_hours = None
+
+                normalized_name = (raw_name or "Unknown Location").strip() or "Unknown Location"
+                normalized_description = (description or f"The area known as {normalized_name}").strip()
+                if not normalized_description:
+                    normalized_description = f"The area known as {normalized_name}"
+                normalized_type = (requested_type or "settlement").strip() or "settlement"
+
+                open_hours = None
+                if isinstance(raw_open_hours, str):
+                    try:
+                        open_hours = json.loads(raw_open_hours)
+                    except json.JSONDecodeError:
+                        open_hours = None
+                elif isinstance(raw_open_hours, dict):
+                    open_hours = raw_open_hours
+
+                if canonical_available:
+                    try:
+                        canonical_name = await asyncio.wait_for(
+                            canon.find_or_create_location(
+                                ctx,
+                                conn,
+                                normalized_name,
+                                description=normalized_description,
+                                metadata=metadata,
+                                location_type=normalized_type,
+                            ),
+                            timeout=PRESET_LOCATION_CANON_TIMEOUT,
+                        )
+                        location_names.append(canonical_name)
+                        continue
+                    except asyncio.TimeoutError:
+                        canonical_available = False
+                        fallback_reason = fallback_reason or "timeout"
+                    except Exception as exc:  # noqa: BLE001 - log and fall back
+                        canonical_available = False
+                        fallback_reason = fallback_reason or repr(exc)
+                        logger.exception(
+                            "preset_location_bootstrap_canon_failure",
+                            extra={
+                                "conversation_id": conversation_id,
+                                "user_id": user_id,
+                                "location_name": normalized_name,
+                            },
+                        )
+
+                reason_to_log = fallback_reason or "lightweight_mode_active"
+                logger.info(
+                    "preset_location_bootstrap_lightweight_path",
+                    extra={
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "location_name": normalized_name,
+                        "path": "lightweight",
+                        "reason": reason_to_log,
+                    },
                 )
-                location_ids.append(location_id)
-        
-        return location_ids
+
+                fallback_row = await conn.fetchrow(
+                    """
+                    INSERT INTO Locations (
+                        user_id, conversation_id, location_name, description,
+                        location_type, open_hours
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (user_id, conversation_id, location_name)
+                    DO UPDATE SET
+                        description = EXCLUDED.description,
+                        location_type = EXCLUDED.location_type,
+                        open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours)
+                    RETURNING location_name
+                    """,
+                    user_id,
+                    conversation_id,
+                    normalized_name,
+                    normalized_description,
+                    normalized_type,
+                    open_hours,
+                )
+
+                if fallback_row and "location_name" in fallback_row:
+                    location_names.append(fallback_row["location_name"])
+                else:
+                    location_names.append(normalized_name)
+
+        return location_names
     
     async def _create_preset_npcs(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[int]:
         """Create NPCs directly from preset data without invoking heavy managers."""
