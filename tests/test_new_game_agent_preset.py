@@ -574,6 +574,93 @@ def test_process_preset_game_handles_dict_story_data(monkeypatch):
         preset_story_id,
     )
 
+
+def test_process_preset_game_seeds_location_before_governance(monkeypatch):
+    agent = new_game_agent.NewGameAgent()
+
+    user_id = 404
+    conversation_id = 808
+    preset_story_id = "location_story"
+    conversation_data = {"conversation_id": conversation_id, "preset_story_id": preset_story_id}
+
+    story_payload = {
+        "id": preset_story_id,
+        "name": "Location Story",
+        "synopsis": "An adventure centered on a key locale.",
+        "theme": "mystery",
+        "locations": [],
+        "npcs": [],
+        "required_locations": [
+            {"name": "Velvet Sanctum"},
+            {"name": "Thorn Garden"},
+        ],
+        "required_npcs": [],
+    }
+
+    stub_conn = StubConnection(
+        story_payload,
+        conversation_id,
+        user_id,
+        return_raw_story_data=True,
+    )
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield stub_conn
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    calls = {
+        "environment": [],
+        "calendar": [],
+        "locations": [],
+        "opening": [],
+        "stats": [],
+        "canon_updates": [],
+        "set_current_time": [],
+        "calendar_names": [],
+        "finalize": [],
+    }
+
+    original_setup_environment = new_game_agent.NewGameAgent._setup_preset_environment
+    _install_common_preset_patches(monkeypatch, calls)
+    monkeypatch.setattr(new_game_agent.NewGameAgent, "_setup_preset_environment", original_setup_environment)
+
+    expected_location = "Velvet Sanctum"
+    state = {"current_roleplay": {}}
+    location_updates: list[str] = []
+
+    async def tracking_canon_update(ctx_wrap, conn, key, value):
+        calls.setdefault("canon_updates", []).append((key, value))
+        state["current_roleplay"][key] = value
+        if key == "CurrentLocation":
+            location_updates.append(value)
+        return None
+
+    monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", tracking_canon_update)
+
+    class FakeGovernance:
+        def __init__(self):
+            self.initialize_calls = 0
+
+        async def initialize_game_state(self, force: bool = False):
+            self.initialize_calls += 1
+            assert location_updates, "CurrentLocation should be seeded before governance initialization"
+            assert state["current_roleplay"].get("CurrentLocation") == expected_location
+            return dict(state["current_roleplay"])
+
+    fake_governance = FakeGovernance()
+
+    ctx = CanonicalContext(user_id, conversation_id)
+
+    result = asyncio.run(agent.process_preset_game_direct(ctx, conversation_data, preset_story_id))
+
+    assert result.conversation_id == conversation_id
+    assert location_updates and location_updates[0] == expected_location
+    post_state = asyncio.run(fake_governance.initialize_game_state())
+    assert fake_governance.initialize_calls == 1
+    assert post_state["CurrentLocation"] == expected_location
+
 class SetupCheckStubConnection:
     def __init__(
         self,

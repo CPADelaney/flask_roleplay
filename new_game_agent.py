@@ -2482,7 +2482,7 @@ class NewGameAgent:
         environment_desc = preset_data['synopsis']
         environment_history = f"The world of {preset_data['name']} - {preset_data['theme']}"
         scenario_name = preset_data['name']
-        
+
         # Store in database
         async with get_db_connection_context() as conn:
             # Setting info
@@ -2513,7 +2513,26 @@ class NewGameAgent:
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value = EXCLUDED.value
             """, user_id, conversation_id, scenario_name)
-    
+
+            initial_location: Optional[str] = None
+            required_locations = preset_data.get('required_locations')
+            if isinstance(required_locations, list) and required_locations:
+                first_location = required_locations[0]
+                if isinstance(first_location, dict):
+                    candidate = first_location.get('name')
+                else:
+                    candidate = first_location
+
+                if isinstance(candidate, str):
+                    stripped = candidate.strip()
+                    if stripped:
+                        initial_location = stripped
+                elif candidate is not None:
+                    initial_location = str(candidate)
+
+            if initial_location:
+                await canon.update_current_roleplay(ctx, conn, "CurrentLocation", initial_location)
+
     async def _setup_standard_calendar(self, ctx: RunContextWrapper[GameContext]):
         """Set up a standard 12-month calendar without LLM"""
         user_id = ctx.context["user_id"]
