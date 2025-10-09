@@ -96,7 +96,7 @@ class MigrationAwareStubConnection:
             return None
         if normalized_query.startswith("INSERT INTO Locations"):
             if not self.constraint_exists:
-                raise asyncpg.exceptions.InvalidColumnReferenceError(
+                raise asyncpg.exceptions.UndefinedObjectError(
                     "constraint idx_locations_user_conversation_name does not exist"
                 )
             self.insert_calls.append((normalized_query, args))
@@ -167,7 +167,7 @@ class ManualUpsertStubConnection:
 
         if normalized_query.startswith("INSERT INTO Locations") and "ON CONFLICT" in normalized_query:
             self.insert_attempts += 1
-            raise asyncpg.InvalidColumnReferenceError(
+            raise asyncpg.UndefinedObjectError(
                 "constraint idx_locations_user_conversation_name does not exist"
             )
 
