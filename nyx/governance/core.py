@@ -1009,13 +1009,50 @@ class NyxUnifiedGovernor(
 
                     from context.context_service import get_comprehensive_context
 
+                    async def _persist_recovered_location(location_value: str) -> None:
+                        try:
+                            from lore.core.canon import (
+                                ensure_canonical_context,
+                                update_current_roleplay,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Failed to import lore canonical helpers while persisting fallback location for user_id=%s conversation_id=%s",
+                                self.user_id,
+                                self.conversation_id,
+                                exc_info=True,
+                            )
+                            return
+
+                        canonical_ctx = ensure_canonical_context(
+                            {
+                                "user_id": self.user_id,
+                                "conversation_id": self.conversation_id,
+                            }
+                        )
+
+                        try:
+                            await update_current_roleplay(
+                                canonical_ctx,
+                                conn,
+                                "CurrentLocation",
+                                location_value,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to persist recovered current location for user_id=%s conversation_id=%s; continuing with in-memory fallback",
+                                self.user_id,
+                                self.conversation_id,
+                                exc_info=True,
+                            )
+
                     fallback_location: Optional[str] = None
                     try:
                         fallback_context = await get_comprehensive_context(
                             self.user_id,
                             self.conversation_id,
                         )
-                    except Exception as exc:
+                    except Exception:
                         logger.warning(
                             "Failed to fetch fallback context for location", exc_info=True
                         )
@@ -1064,47 +1101,63 @@ class NyxUnifiedGovernor(
 
                     if fallback_location:
                         game_state["current_location"] = fallback_location
-
-                        try:
-                            from lore.core.canon import (
-                                ensure_canonical_context,
-                                update_current_roleplay,
-                            )
-                        except Exception:
-                            logger.debug(
-                                "Failed to import lore canonical helpers while persisting fallback location for user_id=%s conversation_id=%s",
-                                self.user_id,
-                                self.conversation_id,
-                                exc_info=True,
-                            )
-                        else:
-                            canonical_ctx = ensure_canonical_context(
-                                {
-                                    "user_id": self.user_id,
-                                    "conversation_id": self.conversation_id,
-                                }
-                            )
-
-                            try:
-                                await update_current_roleplay(
-                                    canonical_ctx,
-                                    conn,
-                                    "CurrentLocation",
-                                    fallback_location,
-                                )
-                            except Exception:
-                                logger.warning(
-                                    "Failed to persist recovered current location for user_id=%s conversation_id=%s; continuing with in-memory fallback",
-                                    self.user_id,
-                                    self.conversation_id,
-                                    exc_info=True,
-                                )
+                        await _persist_recovered_location(fallback_location)
                     else:
                         logger.debug(
                             "Fallback context did not provide a usable location for user_id=%s conversation_id=%s",
                             self.user_id,
                             self.conversation_id,
                         )
+
+                    if not game_state["current_location"]:
+                        db_fallback_location: Optional[str] = None
+                        try:
+                            location_rows = await conn.fetch(
+                                """
+                                SELECT location_name
+                                FROM Locations
+                                WHERE user_id = $1 AND conversation_id = $2
+                                ORDER BY id DESC
+                                LIMIT 25
+                                """,
+                                self.user_id,
+                                self.conversation_id,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to query Locations for fallback current location for user_id=%s conversation_id=%s",
+                                self.user_id,
+                                self.conversation_id,
+                                exc_info=True,
+                            )
+                            location_rows = []
+
+                        for location_row in location_rows:
+                            try:
+                                raw_name = location_row.get("location_name")
+                            except AttributeError:
+                                raw_name = location_row["location_name"]
+
+                            normalized = NyxContext._normalize_location_value(raw_name)
+                            if normalized:
+                                db_fallback_location = normalized
+                                break
+
+                        if db_fallback_location:
+                            game_state["current_location"] = db_fallback_location
+                            logger.info(
+                                "Recovered current location from Locations fallback for user_id=%s conversation_id=%s: %s",
+                                self.user_id,
+                                self.conversation_id,
+                                db_fallback_location,
+                            )
+                            await _persist_recovered_location(db_fallback_location)
+                        else:
+                            logger.debug(
+                                "Locations fallback did not yield a usable location for user_id=%s conversation_id=%s",
+                                self.user_id,
+                                self.conversation_id,
+                            )
                 
                 # Get current time
                 row = await conn.fetchrow("""
