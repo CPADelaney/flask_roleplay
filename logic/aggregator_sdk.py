@@ -209,6 +209,8 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
             'currentRoleplay': current_roleplay,
             'current_roleplay': current_roleplay,
             'currentLocation': current_location,
+            'current_location': current_location,
+            'location': current_location,
             'timeOfDay': time_of_day,
             'playerName': player_name,
             'playerStats': player_stats,
