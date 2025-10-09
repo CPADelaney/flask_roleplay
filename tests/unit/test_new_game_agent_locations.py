@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -89,7 +90,13 @@ def test_create_preset_locations_uses_fallback(monkeypatch, caplog):
     preset_payload = {
         "name": "Bootstrap",
         "required_locations": [
-            {"name": "Quick Plaza", "description": "Central hub", "type": "public"}
+            {"name": "Quick Plaza", "description": "Central hub", "type": "public"},
+            {
+                "name": "Schedule Hall",
+                "description": "Detailed coordination center",
+                "type": "administrative",
+                "open_hours": {"Mon": "09:00-17:00"},
+            },
         ],
     }
 
@@ -103,11 +110,18 @@ def test_create_preset_locations_uses_fallback(monkeypatch, caplog):
 
     locations, elapsed = asyncio.run(run_creation())
 
-    assert locations == ["Quick Plaza"]
+    assert locations == ["Quick Plaza", "Schedule Hall"]
     assert elapsed < 1.0, "fallback should avoid long waits"
     assert stub_conn.insert_calls, "fallback path should write to Locations"
+    assert len(stub_conn.insert_calls) == 2
 
     fallback_logs = [record for record in caplog.records if record.getMessage() == "preset_location_bootstrap_lightweight_path"]
     assert fallback_logs, "should log lightweight path usage"
     assert getattr(fallback_logs[0], "location_name", None) == "Quick Plaza"
     assert getattr(fallback_logs[0], "reason", "") in {"timeout", "lightweight_mode_active"}
+
+    _, first_insert_args = stub_conn.insert_calls[0]
+    _, second_insert_args = stub_conn.insert_calls[1]
+    assert first_insert_args[2] == "Quick Plaza"
+    assert second_insert_args[2] == "Schedule Hall"
+    assert second_insert_args[5] == json.dumps({"Mon": "09:00-17:00"})

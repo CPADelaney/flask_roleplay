@@ -2767,14 +2767,24 @@ class NewGameAgent:
                     normalized_description = f"The area known as {normalized_name}"
                 normalized_type = (requested_type or "settlement").strip() or "settlement"
 
-                open_hours = None
-                if isinstance(raw_open_hours, str):
+                open_hours_serialized: Optional[str] = None
+                if raw_open_hours is None:
+                    open_hours_serialized = None
+                elif isinstance(raw_open_hours, str):
                     try:
-                        open_hours = json.loads(raw_open_hours)
+                        parsed_hours = json.loads(raw_open_hours)
                     except json.JSONDecodeError:
-                        open_hours = None
-                elif isinstance(raw_open_hours, dict):
-                    open_hours = raw_open_hours
+                        open_hours_serialized = raw_open_hours
+                    else:
+                        try:
+                            open_hours_serialized = json.dumps(parsed_hours)
+                        except (TypeError, ValueError):
+                            open_hours_serialized = None
+                else:
+                    try:
+                        open_hours_serialized = json.dumps(raw_open_hours)
+                    except (TypeError, ValueError):
+                        open_hours_serialized = None
 
                 if canonical_available:
                     try:
@@ -2837,7 +2847,7 @@ class NewGameAgent:
                     normalized_name,
                     normalized_description,
                     normalized_type,
-                    open_hours,
+                    open_hours_serialized,
                 )
 
                 if fallback_row and "location_name" in fallback_row:
