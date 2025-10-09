@@ -13,6 +13,8 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple, Set
 
+import asyncpg
+
 from logic.setting_rules import synthesize_setting_rules
 
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, OutputGuardrail
@@ -2828,27 +2830,89 @@ class NewGameAgent:
                     },
                 )
 
-                fallback_row = await conn.fetchrow(
-                    """
-                    INSERT INTO Locations (
-                        user_id, conversation_id, location_name, description,
-                        location_type, open_hours
+                try:
+                    fallback_row = await conn.fetchrow(
+                        """
+                        INSERT INTO Locations (
+                            user_id, conversation_id, location_name, description,
+                            location_type, open_hours
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT ON CONSTRAINT idx_locations_user_conversation_name
+                        DO UPDATE SET
+                            description = EXCLUDED.description,
+                            location_type = EXCLUDED.location_type,
+                            open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours)
+                        RETURNING location_name
+                        """,
+                        user_id,
+                        conversation_id,
+                        normalized_name,
+                        normalized_description,
+                        normalized_type,
+                        open_hours_serialized,
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT ON CONSTRAINT idx_locations_user_conversation_name
-                    DO UPDATE SET
-                        description = EXCLUDED.description,
-                        location_type = EXCLUDED.location_type,
-                        open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours)
-                    RETURNING location_name
-                    """,
-                    user_id,
-                    conversation_id,
-                    normalized_name,
-                    normalized_description,
-                    normalized_type,
-                    open_hours_serialized,
-                )
+                except asyncpg.InvalidColumnReferenceError:
+                    logger.warning(
+                        "preset_location_missing_unique_constraint; run the Locations uniqueness migration",
+                        extra={
+                            "conversation_id": conversation_id,
+                            "user_id": user_id,
+                            "location_name": normalized_name,
+                            "action": "manual_upsert",
+                            "remediation": "run the Locations uniqueness migration",
+                        },
+                    )
+
+                    existing_location = await conn.fetchrow(
+                        """
+                        SELECT location_name, description, location_type, open_hours
+                        FROM Locations
+                        WHERE user_id = $1
+                          AND conversation_id = $2
+                          AND location_name = $3
+                        """,
+                        user_id,
+                        conversation_id,
+                        normalized_name,
+                    )
+
+                    if existing_location:
+                        fallback_row = await conn.fetchrow(
+                            """
+                            UPDATE Locations
+                            SET description = $4,
+                                location_type = $5,
+                                open_hours = COALESCE($6, Locations.open_hours)
+                            WHERE user_id = $1
+                              AND conversation_id = $2
+                              AND location_name = $3
+                            RETURNING location_name
+                            """,
+                            user_id,
+                            conversation_id,
+                            normalized_name,
+                            normalized_description,
+                            normalized_type,
+                            open_hours_serialized,
+                        )
+                    else:
+                        fallback_row = await conn.fetchrow(
+                            """
+                            INSERT INTO Locations (
+                                user_id, conversation_id, location_name, description,
+                                location_type, open_hours
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING location_name
+                            """,
+                            user_id,
+                            conversation_id,
+                            normalized_name,
+                            normalized_description,
+                            normalized_type,
+                            open_hours_serialized,
+                        )
 
                 if fallback_row and "location_name" in fallback_row:
                     location_names.append(fallback_row["location_name"])
