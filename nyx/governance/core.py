@@ -1064,6 +1064,41 @@ class NyxUnifiedGovernor(
 
                     if fallback_location:
                         game_state["current_location"] = fallback_location
+
+                        try:
+                            from lore.core.canon import (
+                                ensure_canonical_context,
+                                update_current_roleplay,
+                            )
+
+                            canonical_ctx = ensure_canonical_context(
+                                {
+                                    "user_id": self.user_id,
+                                    "conversation_id": self.conversation_id,
+                                }
+                            )
+
+                            try:
+                                await update_current_roleplay(
+                                    canonical_ctx,
+                                    conn,
+                                    "CurrentLocation",
+                                    fallback_location,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Failed to persist recovered current location for user_id=%s conversation_id=%s",
+                                    self.user_id,
+                                    self.conversation_id,
+                                    exc_info=True,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "Failed to import lore canonical helpers while persisting fallback location for user_id=%s conversation_id=%s",
+                                self.user_id,
+                                self.conversation_id,
+                                exc_info=True,
+                            )
                     else:
                         logger.debug(
                             "Fallback context did not provide a usable location for user_id=%s conversation_id=%s",
