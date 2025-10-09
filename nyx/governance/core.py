@@ -1070,7 +1070,14 @@ class NyxUnifiedGovernor(
                                 ensure_canonical_context,
                                 update_current_roleplay,
                             )
-
+                        except Exception:
+                            logger.debug(
+                                "Failed to import lore canonical helpers while persisting fallback location for user_id=%s conversation_id=%s",
+                                self.user_id,
+                                self.conversation_id,
+                                exc_info=True,
+                            )
+                        else:
                             canonical_ctx = ensure_canonical_context(
                                 {
                                     "user_id": self.user_id,
@@ -1087,18 +1094,11 @@ class NyxUnifiedGovernor(
                                 )
                             except Exception:
                                 logger.warning(
-                                    "Failed to persist recovered current location for user_id=%s conversation_id=%s",
+                                    "Failed to persist recovered current location for user_id=%s conversation_id=%s; continuing with in-memory fallback",
                                     self.user_id,
                                     self.conversation_id,
                                     exc_info=True,
                                 )
-                        except Exception:
-                            logger.debug(
-                                "Failed to import lore canonical helpers while persisting fallback location for user_id=%s conversation_id=%s",
-                                self.user_id,
-                                self.conversation_id,
-                                exc_info=True,
-                            )
                     else:
                         logger.debug(
                             "Fallback context did not provide a usable location for user_id=%s conversation_id=%s",
