@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import json
@@ -89,8 +90,7 @@ def dummy_get_db_connection_context():
     return DummyConnectionContext()
 
 
-@pytest.mark.asyncio
-async def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
+def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
     monkeypatch.setattr(
         aggregator_sdk,
         "get_db_connection_context",
@@ -106,9 +106,13 @@ async def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatc
         staticmethod(fake_check_preset_story),
     )
 
-    context = await aggregator_sdk.get_aggregated_roleplay_context(1, 2, "Chase")
+    context = asyncio.run(
+        aggregator_sdk.get_aggregated_roleplay_context(1, 2, "Chase")
+    )
 
     assert "currentRoleplay" in context
     assert "current_roleplay" in context
     assert context["currentRoleplay"] is context["current_roleplay"]
+    assert context["currentLocation"] == context["current_location"]
+    assert context["current_location"] == context["location"]
     assert context["currentRoleplay"]["CurrentLocation"] == "Chapel of Thorns"
