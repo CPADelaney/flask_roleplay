@@ -74,7 +74,15 @@ async def test_process_new_game_bootstrap_seeds_governance_state(monkeypatch):
     }
     warnings: list[str] = []
 
+    async def failing_log(*args, **kwargs):
+        raise RuntimeError("canonical logging offline")
+
+    monkeypatch.setattr(new_game_agent.canon, "log_canonical_event", failing_log)
+
     class DummyConnection:
+        def __init__(self):
+            self._state = state
+
         async def fetchrow(self, query, *args):
             if "INSERT INTO conversations" in query:
                 return {"id": created_conversation_id}
@@ -82,14 +90,23 @@ async def test_process_new_game_bootstrap_seeds_governance_state(monkeypatch):
                 return {"id": created_conversation_id}
             if "SELECT value FROM CurrentRoleplay" in query:
                 key = query.split("key='")[-1].split("'")[0]
-                value = state["current_roleplay"].get(key)
+                value = self._state["current_roleplay"].get(key)
                 return {"value": value} if value is not None else None
             return None
 
         async def execute(self, query, *args):
+            if "INSERT INTO CurrentRoleplay" in query and len(args) >= 4:
+                key = args[2]
+                value = args[3]
+                self._state["current_roleplay"][key] = value
+                self._state["updates"].append((key, value))
+            if query.strip().upper().startswith("DELETE FROM CURRENTROLEPLAY"):
+                self._state["current_roleplay"].clear()
             return None
 
         async def fetch(self, query, *args):
+            if "FROM Locations" in query:
+                return [{"location_name": "Bootstrap Square"}]
             return []
 
         async def fetchval(self, query, *args):
@@ -111,12 +128,6 @@ async def test_process_new_game_bootstrap_seeds_governance_state(monkeypatch):
         "insert_default_player_stats_chase",
         fake_insert_default_player_stats,
     )
-
-    async def fake_update_current_roleplay(ctx, conn, key: str, value: str):
-        state["current_roleplay"][key] = value
-        state["updates"].append((key, value))
-
-    monkeypatch.setattr(new_game_agent.canon, "update_current_roleplay", fake_update_current_roleplay)
 
     async def fake_set_current_time(user_id, conversation_id, year, month_idx, day_num, phase):
         state["set_time"] = {
@@ -189,8 +200,14 @@ async def test_process_new_game_bootstrap_seeds_governance_state(monkeypatch):
     monkeypatch.setattr(new_game_agent.NewGameAgent, "create_opening_narrative", fake_create_opening)
 
     async def fake_finalize(self, ctx_wrap, params):
-        await fake_update_current_roleplay(ctx_wrap, None, "CurrentLocation", final_location)
-        await fake_update_current_roleplay(ctx_wrap, None, "CurrentTime", final_time)
+        async with new_game_agent.get_db_connection_context() as conn:
+            await new_game_agent.canon.update_current_roleplay(
+                ctx_wrap, conn, "CurrentLocation", final_location
+            )
+        async with new_game_agent.get_db_connection_context() as conn:
+            await new_game_agent.canon.update_current_roleplay(
+                ctx_wrap, conn, "CurrentTime", final_time
+            )
         return new_game_agent.FinalizeResult(
             status="ok",
             welcome_image_url=None,
@@ -289,4 +306,72 @@ async def test_process_new_game_bootstrap_seeds_governance_state(monkeypatch):
     }
     assert state["current_roleplay"]["CurrentLocation"] == final_location
     assert state["current_roleplay"]["CurrentTime"] == final_time
+
+
+@pytest.mark.anyio("asyncio")
+async def test_initialize_player_context_persists_on_canon_log_failure(monkeypatch):
+    user_id = 7
+    conversation_id = 21
+    ctx = CanonicalContext(user_id=user_id, conversation_id=conversation_id)
+
+    state = {
+        "current_roleplay": {},
+        "set_time_calls": [],
+    }
+
+    async def failing_log(*args, **kwargs):
+        raise RuntimeError("memory system offline")
+
+    monkeypatch.setattr(new_game_agent.canon, "log_canonical_event", failing_log)
+
+    class DummyConnection:
+        def __init__(self):
+            self._state = state
+
+        async def fetch(self, query, *args):
+            if "FROM Locations" in query:
+                return [{"location_name": "Starter Plaza"}]
+            return []
+
+        async def fetchrow(self, query, *args):
+            if "ChaseSchedule" in query:
+                return None
+            return None
+
+        async def execute(self, query, *args):
+            if "INSERT INTO CurrentRoleplay" in query and len(args) >= 4:
+                key = args[2]
+                value = args[3]
+                self._state["current_roleplay"][key] = value
+            return None
+
+        async def fetchval(self, query, *args):
+            return None
+
+    connection = DummyConnection()
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield connection
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_db_context)
+
+    async def fake_set_current_time(user, convo, year, month_idx, day_num, phase):
+        state["set_time_calls"].append((year, month_idx, day_num, phase))
+
+    monkeypatch.setattr(new_game_agent, "set_current_time", fake_set_current_time)
+
+    async def fake_load_calendar_names(user, convo):
+        return {"months": ["MonthOne"], "days": ["Monday"]}
+
+    monkeypatch.setattr(new_game_agent, "load_calendar_names", fake_load_calendar_names)
+
+    agent = new_game_agent.NewGameAgent()
+
+    await agent._initialize_player_context(ctx, user_id, conversation_id)
+
+    assert state["current_roleplay"].get("CurrentLocation") == "Starter Plaza"
+    assert "CurrentTime" in state["current_roleplay"]
+    assert state["current_roleplay"]["CurrentTime"].startswith("Year")
+    assert state["set_time_calls"]
 
