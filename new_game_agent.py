@@ -2852,7 +2852,7 @@ class NewGameAgent:
                         normalized_type,
                         open_hours_serialized,
                     )
-                except asyncpg.InvalidColumnReferenceError:
+                except (asyncpg.InvalidColumnReferenceError, asyncpg.UndefinedObjectError):
                     logger.warning(
                         "preset_location_missing_unique_constraint; run the Locations uniqueness migration",
                         extra={
