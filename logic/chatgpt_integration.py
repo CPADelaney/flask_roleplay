@@ -1666,36 +1666,15 @@ async def generate_text_completion(
     if PREPARE_CONTEXT_AVAILABLE:
         system_prompt = await prepare_context(system_prompt, user_prompt)
     
-    # Build messages for the chat completion
-    messages = [
-        {
-            "role": "system",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": system_prompt,
-                }
-            ],
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": user_prompt,
-                }
-            ],
-        },
-    ]
-    
     # Use the async client directly for simple completions
     client = _client_manager.async_client
-    
+
     try:
         # Build parameters for Responses API
         params = {
             "model": model,
-            "input": messages,
+            "instructions": system_prompt,
+            "input": user_prompt,
             "max_output_tokens": max_tokens,
         }
         

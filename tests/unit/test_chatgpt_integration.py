@@ -37,9 +37,11 @@ def test_generate_text_completion_fallback(monkeypatch):
         def __init__(self, text: str):
             self.text = text
             self.last_input = None
+            self.last_instructions = None
 
         async def create(self, **kwargs):
             self.last_input = kwargs.get("input")
+            self.last_instructions = kwargs.get("instructions")
             chunk = SimpleNamespace(text=self.text, type="output_text", annotations=[])
             message = SimpleNamespace(content=[chunk], role="assistant")
             return SimpleNamespace(output_text="", output=[message])
@@ -56,8 +58,8 @@ def test_generate_text_completion_fallback(monkeypatch):
     )
 
     assert result == "Successful fallback"
-    assert dummy_client.responses.last_input[0]["content"][0]["type"] == "input_text"
-    assert dummy_client.responses.last_input[1]["content"][0]["text"] == "user"
+    assert dummy_client.responses.last_instructions == "system"
+    assert dummy_client.responses.last_input == "user"
 
 
 def test_generate_text_completion_retries_when_empty(monkeypatch):
@@ -67,10 +69,12 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
         def __init__(self):
             self.calls = 0
             self.last_input = None
+            self.last_instructions = None
 
         async def create(self, **kwargs):
             self.calls += 1
             self.last_input = kwargs.get("input")
+            self.last_instructions = kwargs.get("instructions")
             if self.calls == 1:
                 return SimpleNamespace(output_text="   ", output=[])
 
@@ -91,4 +95,4 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
 
     assert result == "Second attempt"
     assert dummy_client.responses.calls == 2
-    assert dummy_client.responses.last_input[0]["content"][0]["text"] == "system"
+    assert dummy_client.responses.last_instructions == "system"
