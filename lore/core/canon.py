@@ -2558,12 +2558,20 @@ async def update_current_roleplay(ctx, conn, key: str, value: str) -> None:
         DO UPDATE SET value = EXCLUDED.value
     """, ctx.user_id, ctx.conversation_id, key, value)
     
-    await log_canonical_event(
-        ctx, conn,
-        f"CurrentRoleplay updated: {key} = {value}",
-        tags=["roleplay", "update", key.lower()],
-        significance=3
-    )
+    try:
+        await log_canonical_event(
+            ctx, conn,
+            f"CurrentRoleplay updated: {key} = {value}",
+            tags=["roleplay", "update", key.lower()],
+            significance=3
+        )
+    except Exception as exc:  # pragma: no cover - exercised via regression tests
+        logger.warning(
+            "Failed to log canonical event for CurrentRoleplay %s update: %s",
+            key,
+            exc,
+            exc_info=True,
+        )
 
     
 async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
