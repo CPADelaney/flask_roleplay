@@ -3619,6 +3619,65 @@ class NewGameAgent:
 
         now = datetime.now()
 
+        async def _upsert_roleplay_value(
+            conn,
+            key: str,
+            value: Any,
+        ) -> None:
+            """Persist a CurrentRoleplay value with verification and fallback."""
+
+            serialized_value = str(value)
+
+            try:
+                await canon.update_current_roleplay(
+                    ctx_wrap,
+                    conn,
+                    key,
+                    serialized_value,
+                )
+            except Exception as canon_err:  # pragma: no cover - defensive fallback
+                logging.error(
+                    "[PLAYER_CTX] Canonical update failed for %s: %s",
+                    key,
+                    canon_err,
+                    exc_info=True,
+                )
+            else:
+                stored_value = await conn.fetchval(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key=$3
+                    LIMIT 1
+                    """,
+                    user_id,
+                    conversation_id,
+                    key,
+                )
+
+                if stored_value == serialized_value:
+                    return
+
+                logging.warning(
+                    "[PLAYER_CTX] Canonical update for %s returned %r; expected %r. Applying direct fallback.",
+                    key,
+                    stored_value,
+                    serialized_value,
+                )
+
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id,
+                conversation_id,
+                key,
+                serialized_value,
+            )
+
+
         def _derive_phase_from_hour(hour: int) -> str:
             if 5 <= hour < 12:
                 return "Morning"
@@ -3811,8 +3870,10 @@ class NewGameAgent:
         try:
             async with get_db_connection_context() as conn:
                 update_start = perf_counter()
-                await canon.update_current_roleplay(
-                    ctx_wrap, conn, "CurrentLocation", target_location
+                await _upsert_roleplay_value(
+                    conn,
+                    "CurrentLocation",
+                    target_location,
                 )
                 logging.info(
                     "[PLAYER_CTX] CurrentLocation update completed in %.2fs",
@@ -3846,8 +3907,7 @@ class NewGameAgent:
         try:
             async with get_db_connection_context() as conn:
                 update_time_start = perf_counter()
-                await canon.update_current_roleplay(
-                    ctx_wrap,
+                await _upsert_roleplay_value(
                     conn,
                     "CurrentTime",
                     current_time_value,
