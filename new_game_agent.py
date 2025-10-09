@@ -3488,8 +3488,10 @@ class NewGameAgent:
                     conversation_id,
                     "CurrentTime",
                 )
-                location_value = location_row.get("value") if location_row else None
-                time_value = time_row.get("value") if time_row else None
+                location_value = (
+                    dict(location_row).get("value") if location_row else None
+                )
+                time_value = dict(time_row).get("value") if time_row else None
                 player_context_ready = bool(location_value) and bool(time_value)
 
                 placeholder_tokens = {"home", "unknown", "the commons"}
@@ -3507,11 +3509,14 @@ class NewGameAgent:
                         user_id,
                         conversation_id,
                     )
-                    location_names = [
-                        row["location_name"]
-                        for row in location_rows
-                        if row and row.get("location_name")
-                    ]
+                    location_names = []
+                    for row in location_rows:
+                        if not row:
+                            continue
+                        row_dict = dict(row)
+                        location_name = row_dict.get("location_name")
+                        if location_name:
+                            location_names.append(location_name)
 
                     schedule_row = await conn.fetchrow(
                         """
@@ -3524,13 +3529,15 @@ class NewGameAgent:
                     )
 
                     chase_schedule: Dict[str, Dict[str, Any]] = {}
-                    if schedule_row and schedule_row.get("value"):
-                        raw_schedule = schedule_row["value"]
-                        if isinstance(raw_schedule, dict):
-                            chase_schedule = raw_schedule
+                    schedule_value = None
+                    if schedule_row:
+                        schedule_value = dict(schedule_row).get("value")
+                    if schedule_value:
+                        if isinstance(schedule_value, dict):
+                            chase_schedule = schedule_value
                         else:
                             try:
-                                chase_schedule = json.loads(raw_schedule)
+                                chase_schedule = json.loads(schedule_value)
                             except json.JSONDecodeError:
                                 logging.warning(
                                     "[FINALIZE] Failed to decode ChaseSchedule while checking context",
@@ -3651,14 +3658,18 @@ class NewGameAgent:
                         perf_counter() - fetch_start,
                     )
 
-                    location_names = [
-                        row["location_name"]
-                        for row in location_rows
-                        if row
-                        and row.get("location_name")
-                        and str(row["location_name"]).strip()
-                        and str(row["location_name"]).strip().lower() not in placeholder_tokens
-                    ]
+                    location_names = []
+                    for row in location_rows:
+                        if not row:
+                            continue
+                        row_dict = dict(row)
+                        location_name = row_dict.get("location_name")
+                        if (
+                            location_name
+                            and str(location_name).strip()
+                            and str(location_name).strip().lower() not in placeholder_tokens
+                        ):
+                            location_names.append(location_name)
 
                     schedule_row = await conn.fetchrow(
                         """
@@ -3670,14 +3681,16 @@ class NewGameAgent:
                         conversation_id,
                     )
 
-                    if schedule_row and schedule_row.get("value"):
-                        try:
-                            chase_schedule = json.loads(schedule_row["value"])
-                        except json.JSONDecodeError as json_err:
-                            logging.error(
-                                f"[PLAYER_CTX] Failed to decode ChaseSchedule: {json_err}",
-                                exc_info=True,
-                            )
+                    if schedule_row:
+                        schedule_value = dict(schedule_row).get("value")
+                        if schedule_value:
+                            try:
+                                chase_schedule = json.loads(schedule_value)
+                            except json.JSONDecodeError as json_err:
+                                logging.error(
+                                    f"[PLAYER_CTX] Failed to decode ChaseSchedule: {json_err}",
+                                    exc_info=True,
+                                )
 
             except asyncio.TimeoutError:
                 logging.error(f"[PLAYER_CTX] Location/schedule fetch timed out")
