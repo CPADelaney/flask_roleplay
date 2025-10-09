@@ -11,7 +11,7 @@ import random
 from time import perf_counter
 from copy import deepcopy
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Set
 
 from logic.setting_rules import synthesize_setting_rules
 
@@ -208,6 +208,99 @@ def _find_schedule_location_match(
             for idx, normalized in enumerate(normalized_locations):
                 if normalized in entry_text:
                     return day_name, phase_name, location_names[idx]
+    return None
+
+
+def _coerce_location_string(value: Any) -> Optional[str]:
+    """Normalize potential location names from preset data."""
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if value is None:
+        return None
+    coerced = str(value).strip()
+    return coerced or None
+
+
+def _extract_location_from_entry(entry: Any) -> Optional[str]:
+    """Pull a best-effort location name from a preset location entry."""
+
+    if isinstance(entry, dict):
+        for key in ("starting_location", "name", "location_name", "display_name"):
+            candidate = _coerce_location_string(entry.get(key))
+            if candidate:
+                return candidate
+        # Some presets may nest location hints deeper (e.g. within a scene payload)
+        for key in ("scene", "location"):
+            nested = entry.get(key)
+            candidate = _coerce_location_string(nested)
+            if candidate:
+                return candidate
+        return None
+    return _coerce_location_string(entry)
+
+
+def _derive_preset_starting_location(preset_data: Dict[str, Any]) -> Optional[str]:
+    """Determine a sensible starting location hint from preset metadata."""
+
+    preferred_keys = (
+        "starting_scene",
+        "starting_location",
+        "initial_scene",
+        "initial_location",
+        "default_scene",
+    )
+
+    for key in preferred_keys:
+        if key not in preset_data:
+            continue
+        value = preset_data.get(key)
+        candidate = _extract_location_from_entry(value)
+        if candidate:
+            return candidate
+
+    required_locations = preset_data.get("required_locations") or []
+    if isinstance(required_locations, list):
+        for entry in required_locations:
+            candidate = _extract_location_from_entry(entry)
+            if candidate:
+                return candidate
+
+    return None
+
+
+def _select_canonical_location(
+    hint: Optional[str],
+    location_names: List[str],
+) -> Optional[str]:
+    """Match a location hint against canonicalized location names."""
+
+    normalized_hint = hint.strip().lower() if isinstance(hint, str) else None
+
+    textual_candidates: List[str] = []
+    for name in location_names:
+        if isinstance(name, str):
+            candidate = _coerce_location_string(name)
+            if not candidate:
+                continue
+            if normalized_hint and candidate.lower() == normalized_hint:
+                return candidate
+            textual_candidates.append(candidate)
+
+    if normalized_hint:
+        coerced_hint = _coerce_location_string(hint)
+        if coerced_hint:
+            return coerced_hint
+
+    if textual_candidates:
+        return textual_candidates[0]
+
+    for name in location_names:
+        candidate = _coerce_location_string(name)
+        if candidate:
+            return candidate
+
     return None
 
 
@@ -664,11 +757,12 @@ class NewGameAgent:
                 function_tool(self.finalize_game_setup),  # Wrap with function_tool
                 function_tool(self.generate_lore)  # Wrap with function_tool
             ],
-            output_type=GameCreationResult, 
+            output_type=GameCreationResult,
             model="gpt-5-nano"
         )
-        
+
         # Directive handler for processing Nyx directives
+        self._initialized_player_contexts: Set[Tuple[int, int]] = set()
         self.directive_handler = None
         self._directive_task: Optional[asyncio.Task] = None
 
@@ -2388,10 +2482,77 @@ class NewGameAgent:
             
             # 2. Set up standard calendar (NO LLM)
             await self._setup_standard_calendar(ctx_wrap)
-            
+
+            # Prime the starting scene before heavier helpers run
+            preset_location_hint = _derive_preset_starting_location(preset_story_data)
+            provisional_location: Optional[str] = None
+            if preset_location_hint:
+                try:
+                    async with get_db_connection_context() as conn:
+                        await canon.update_current_roleplay(
+                            ctx_wrap,
+                            conn,
+                            "CurrentLocation",
+                            preset_location_hint,
+                        )
+                    provisional_location = preset_location_hint
+                except Exception as seed_err:  # noqa: BLE001 - guardrail only
+                    logger.warning(
+                        "Failed to seed preset starting location prior to bootstrap: %s",
+                        seed_err,
+                        exc_info=True,
+                    )
+
             # 3. Create all required locations directly
-            location_ids = await self._create_preset_locations(ctx_wrap, preset_story_data)
-            
+            location_names = await self._create_preset_locations(ctx_wrap, preset_story_data)
+
+            canonical_start = _select_canonical_location(
+                preset_location_hint,
+                location_names,
+            )
+            if canonical_start and canonical_start != provisional_location:
+                try:
+                    async with get_db_connection_context() as conn:
+                        await canon.update_current_roleplay(
+                            ctx_wrap,
+                            conn,
+                            "CurrentLocation",
+                            canonical_start,
+                        )
+                except Exception as confirm_err:  # noqa: BLE001 - soft failure
+                    logger.warning(
+                        "Unable to update CurrentLocation with canonical preset value: %s",
+                        confirm_err,
+                        exc_info=True,
+                    )
+
+            initialized_successfully = False
+            try:
+                await self._initialize_player_context(ctx_wrap, user_id, conversation_id)
+                initialized_successfully = True
+            except Exception as init_err:  # noqa: BLE001 - fallback handled later
+                logger.warning(
+                    "Preset player context refresh failed after location bootstrap: %s",
+                    init_err,
+                    exc_info=True,
+                )
+
+            if initialized_successfully and canonical_start:
+                try:
+                    async with get_db_connection_context() as conn:
+                        await canon.update_current_roleplay(
+                            ctx_wrap,
+                            conn,
+                            "CurrentLocation",
+                            canonical_start,
+                        )
+                except Exception as post_init_err:  # noqa: BLE001 - don't fail preset setup
+                    logger.warning(
+                        "Unable to preserve canonical preset location after initialization: %s",
+                        post_init_err,
+                        exc_info=True,
+                    )
+
             # 4. Create all required NPCs directly
             npc_ids = await self._create_preset_npcs(ctx_wrap, preset_story_data)
 
@@ -2514,22 +2675,7 @@ class NewGameAgent:
                 DO UPDATE SET value = EXCLUDED.value
             """, user_id, conversation_id, scenario_name)
 
-            initial_location: Optional[str] = None
-            required_locations = preset_data.get('required_locations')
-            if isinstance(required_locations, list) and required_locations:
-                first_location = required_locations[0]
-                if isinstance(first_location, dict):
-                    candidate = first_location.get('name')
-                else:
-                    candidate = first_location
-
-                if isinstance(candidate, str):
-                    stripped = candidate.strip()
-                    if stripped:
-                        initial_location = stripped
-                elif candidate is not None:
-                    initial_location = str(candidate)
-
+            initial_location = _derive_preset_starting_location(preset_data)
             if initial_location:
                 await canon.update_current_roleplay(ctx, conn, "CurrentLocation", initial_location)
 
@@ -3741,22 +3887,63 @@ class NewGameAgent:
 
         logging.info(f"[PLAYER_CTX] Starting initialization for conv={conversation_id}")
 
-        now = datetime.now()
+        cache_key = (user_id, conversation_id)
 
-        def _derive_phase_from_hour(hour: int) -> str:
-            if 5 <= hour < 12:
-                return "Morning"
-            if 12 <= hour < 17:
-                return "Afternoon"
-            if 17 <= hour < 21:
-                return "Evening"
-            return "Night"
+        phase = TIME_PHASES[0]
 
-        phase = _derive_phase_from_hour(now.hour)
+        placeholder_tokens = {"home", "unknown", "the commons"}
+
+        try:
+            async with get_db_connection_context() as conn:
+                existing_location = await conn.fetchval(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
+                    LIMIT 1
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+                existing_time = await conn.fetchval(
+                    """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentTime'
+                    LIMIT 1
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+        except Exception as existing_err:  # noqa: BLE001 - context readiness is best-effort
+            logging.debug(
+                f"[PLAYER_CTX] Unable to confirm existing snapshot, continuing bootstrap: {existing_err}",
+                exc_info=True,
+            )
+            existing_location = None
+            existing_time = None
+        else:
+            normalized_existing = (
+                str(existing_location).strip().lower() if existing_location else ""
+            )
+        location_ready = bool(existing_location) and normalized_existing not in placeholder_tokens
+        time_ready = bool(existing_time)
+
+        if location_ready and time_ready:
+            self._initialized_player_contexts.add(cache_key)
+            logging.info(
+                f"[PLAYER_CTX] Snapshot already present for conv={conversation_id}; skipping reinitialization"
+            )
+            return
+
+        if cache_key in self._initialized_player_contexts and not location_ready:
+            logging.info(
+                f"[PLAYER_CTX] Cached initialization state allows skip for conv={conversation_id}"
+            )
+            return
+
+        skip_location_write = location_ready
 
         chase_schedule: Dict[str, Dict[str, str]] = {}
         location_names: List[str] = []
-        placeholder_tokens = {"home", "unknown", "the commons"}
         max_attempts = 5
         min_real_locations = 1
         base_backoff = 0.25
@@ -3853,11 +4040,11 @@ class NewGameAgent:
         months = calendar_names.get("months") or ["Month"]
         days = calendar_names.get("days") or list(chase_schedule.keys()) or ["Day"]
 
-        month_idx = ((now.month - 1) % len(months)) + 1 if months else 1
-        month_name = months[(month_idx - 1) % len(months)]
-        day_num = now.day
-        weekday_index = now.weekday()
-        day_name = days[weekday_index % len(days)]
+        month_idx = 1
+        month_name = months[0] if months else "Month"
+        day_num = 1
+        day_name = days[0] if days else "Day"
+        weekday_index = 0
 
         schedule_day_key: Optional[str] = None
         if chase_schedule:
@@ -3912,6 +4099,9 @@ class NewGameAgent:
                 day_name_for_time = fallback_day
                 phase = fallback_phase
 
+        if skip_location_write and existing_location:
+            matched_location = existing_location
+
         if matched_location is None and location_names:
             matched_location = location_names[0]
 
@@ -3932,22 +4122,27 @@ class NewGameAgent:
             f"[PLAYER_CTX] Derived phase={phase}, day={day_name_for_time}, location={target_location}"
         )
 
-        try:
-            async with get_db_connection_context() as conn:
-                update_start = perf_counter()
-                await canon.update_current_roleplay(
-                    ctx_wrap, conn, "CurrentLocation", target_location
-                )
-                logging.info(
-                    "[PLAYER_CTX] CurrentLocation update completed in %.2fs",
-                    perf_counter() - update_start,
-                )
-        except asyncio.TimeoutError:
-            logging.error(f"[PLAYER_CTX] Location setup timed out")
-        except Exception as e:
-            logging.error(f"[PLAYER_CTX] Location setup failed: {e}", exc_info=True)
+        if not skip_location_write:
+            try:
+                async with get_db_connection_context() as conn:
+                    update_start = perf_counter()
+                    await canon.update_current_roleplay(
+                        ctx_wrap, conn, "CurrentLocation", target_location
+                    )
+                    logging.info(
+                        "[PLAYER_CTX] CurrentLocation update completed in %.2fs",
+                        perf_counter() - update_start,
+                    )
+            except asyncio.TimeoutError:
+                logging.error(f"[PLAYER_CTX] Location setup timed out")
+            except Exception as e:
+                logging.error(f"[PLAYER_CTX] Location setup failed: {e}", exc_info=True)
+        else:
+            logging.info(
+                f"[PLAYER_CTX] Preserving existing CurrentLocation for conv={conversation_id}"
+            )
 
-        year = now.year
+        year = 1
 
         logging.info(
             f"[PLAYER_CTX] Setting time to Y{year} {month_name} {day_name_for_time} {phase}"
@@ -3985,6 +4180,7 @@ class NewGameAgent:
         except Exception as e:
             logging.error(f"[PLAYER_CTX] Time snapshot update failed: {e}", exc_info=True)
 
+        self._initialized_player_contexts.add(cache_key)
         logging.info(f"[PLAYER_CTX] Initialization complete for conv={conversation_id}")
 
     @with_governance(
