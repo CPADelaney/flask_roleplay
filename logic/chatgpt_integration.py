@@ -1830,7 +1830,8 @@ async def generate_text_completion(
         if response_format == "json":
             params["response_format"] = {"type": "json_object"}  # Responses JSON mode
         
-        response = await client.responses.create(**params)
+        model_limit = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
+        ceiling_reached = False
 
         def _is_max_token_incomplete(result: Any) -> bool:
             """Return True when the Responses API result hit the max token ceiling."""
@@ -1847,25 +1848,41 @@ async def generate_text_completion(
                 reason = getattr(details, "reason", None)
             return reason == "max_output_tokens"
 
-        if _is_max_token_incomplete(response):
-            original_limit = params.get("max_output_tokens", max_tokens)
-            model_limit = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
-            headroom = max(original_limit, 512)
-            expanded_limit = min(original_limit + headroom, model_limit)
+        while True:
+            response = await client.responses.create(**params)
 
-            if expanded_limit > original_limit:
+            if not _is_max_token_incomplete(response):
+                break
+
+            current_limit = params.get("max_output_tokens", max_tokens)
+            if current_limit >= model_limit:
                 logger.info(
-                    "LLM response incomplete due to max_output_tokens; increasing allowance from %s to %s",
-                    original_limit,
-                    expanded_limit,
+                    "LLM response incomplete due to max_output_tokens; model ceiling %s already reached",
+                    model_limit,
                 )
-                params["max_output_tokens"] = expanded_limit
-                response = await client.responses.create(**params)
-            else:
+                ceiling_reached = True
+                break
+
+            headroom = max(current_limit, 512)
+            expanded_limit = min(current_limit + headroom, model_limit)
+
+            if expanded_limit <= current_limit:
                 logger.info(
                     "LLM response incomplete due to max_output_tokens but cannot increase allowance beyond %s",
-                    original_limit,
+                    current_limit,
                 )
+                ceiling_reached = current_limit >= model_limit
+                break
+
+            logger.info(
+                "LLM response incomplete due to max_output_tokens; increasing allowance from %s to %s",
+                current_limit,
+                expanded_limit,
+            )
+            if expanded_limit == model_limit:
+                logger.info("LLM max_output_tokens escalation reached the model ceiling of %s", model_limit)
+
+            params["max_output_tokens"] = expanded_limit
 
         text, was_refusal = _extract_output_text(response)
         stripped_text = text.strip()
@@ -1874,6 +1891,23 @@ async def generate_text_completion(
                 logger.warning("LLM response contained a refusal: %s", stripped_text)
                 return RefusalText(stripped_text)
             return stripped_text
+
+        if ceiling_reached:
+            diagnostics = _collect_response_diagnostics(response) or {}
+            diagnostics.update(
+                {
+                    "max_output_tokens": params.get("max_output_tokens", max_tokens),
+                    "model_token_limit": model_limit,
+                }
+            )
+            logger.error(
+                "LLM response empty and model ceiling reached; raising EmptyLLMOutputError without fallback. Diagnostics: %s",
+                diagnostics,
+            )
+            raise EmptyLLMOutputError(
+                "LLM response empty after reaching model max_output_tokens ceiling",
+                diagnostics=diagnostics,
+            )
 
         diagnostics = _collect_response_diagnostics(response)
         if diagnostics:
