@@ -59,7 +59,9 @@ def test_generate_text_completion_fallback(monkeypatch):
 
     assert result == "Successful fallback"
     assert dummy_client.responses.last_instructions == "system"
-    assert dummy_client.responses.last_input == "user"
+    assert dummy_client.responses.last_input == [
+        {"role": "user", "content": "user"}
+    ]
 
 
 def test_generate_text_completion_retries_when_empty(monkeypatch):
@@ -96,3 +98,6 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
     assert result == "Second attempt"
     assert dummy_client.responses.calls == 2
     assert dummy_client.responses.last_instructions == "system"
+    assert dummy_client.responses.last_input == [
+        {"role": "user", "content": "user"}
+    ]
