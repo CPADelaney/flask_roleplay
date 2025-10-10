@@ -42,9 +42,16 @@ def test_generate_text_completion_fallback(monkeypatch):
         async def create(self, **kwargs):
             self.last_input = kwargs.get("input")
             self.last_instructions = kwargs.get("instructions")
-            chunk = SimpleNamespace(text=self.text, type="output_text", annotations=[])
-            message = SimpleNamespace(content=[chunk], role="assistant")
-            return SimpleNamespace(output_text="", output=[message])
+            text_value = SimpleNamespace(value=self.text)
+            chunk = SimpleNamespace(
+                text=text_value,
+                type="output_text",
+                annotations=[],
+            )
+            content_collection = SimpleNamespace(data=[chunk])
+            message = SimpleNamespace(content=content_collection, role="assistant")
+            output_collection = SimpleNamespace(data=[message])
+            return SimpleNamespace(output_text="", output=output_collection)
 
     dummy_client = SimpleNamespace(responses=DummyResponsesClient("Successful fallback"))
     chatgpt_integration._client_manager._async_client = dummy_client
@@ -78,11 +85,18 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
             self.last_input = kwargs.get("input")
             self.last_instructions = kwargs.get("instructions")
             if self.calls == 1:
-                return SimpleNamespace(output_text="   ", output=[])
+                return SimpleNamespace(output_text="   ", output=SimpleNamespace(data=[]))
 
-            chunk = SimpleNamespace(text="Second attempt", type="output_text", annotations=[])
-            message = SimpleNamespace(content=[chunk], role="assistant")
-            return SimpleNamespace(output_text="", output=[message])
+            text_value = SimpleNamespace(value="Second attempt")
+            chunk = SimpleNamespace(
+                text=text_value,
+                type="output_text",
+                annotations=[],
+            )
+            content_collection = SimpleNamespace(data=[chunk])
+            message = SimpleNamespace(content=content_collection, role="assistant")
+            output_collection = SimpleNamespace(data=[message])
+            return SimpleNamespace(output_text="", output=output_collection)
 
     dummy_client = SimpleNamespace(responses=DummyResponsesClient())
     chatgpt_integration._client_manager._async_client = dummy_client
