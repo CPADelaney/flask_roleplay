@@ -7,7 +7,7 @@ tf-keras==2.19.0
 PyYAML==6.0.2
 
 # Pin problematic packages to avoid backtracking
-openai==1.13.4                    # keep — compatible
+openai==1.109.1                    # keep — compatible
 openai-agents==0.3.3              # upgrade to this
 openai-agents-mcp==0.0.8          # upgrade into the 0.2.x line
 mcp-agent==0.1.8             # upgrade into the 0.2.x line
