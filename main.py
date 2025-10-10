@@ -10,6 +10,8 @@ import uuid
 from typing import Dict, Any, Optional
 from nyx.nyx_agent.utils import _extract_last_assistant_text
 from utils.conversation_history import fetch_recent_turns
+from openai_integration.scene_manager import SceneManager
+from openai_integration.conversations import ConversationManager
 
 # ---- Logging setup (flip with LOG_LEVEL env var) ---------------------
 def setup_logging(level: str | None = None) -> None:
@@ -189,6 +191,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
     logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}, request_id={request_id}")
     
+    openai_conv_id: Optional[int] = None
+
     try:  # Main try block for the entire function
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
         from logic.aggregator_sdk import get_aggregated_roleplay_context
@@ -204,6 +208,112 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             "recent_turns": recent_turns,
         }
 
+        # --- OpenAI conversation + scene rotation management -----------------
+        openai_context: Dict[str, Any] = {}
+        openai_rotation_payload: Dict[str, Any] = {}
+        openai_record: Optional[Dict[str, Any]] = None
+
+        if isinstance(aggregator_data, dict):
+            openai_context = (
+                aggregator_data.get("openai_integration")
+                or aggregator_data.get("openaiIntegration")
+                or aggregator_data.get("openai")
+                or {}
+            )
+
+            if isinstance(openai_context, dict):
+                openai_rotation_payload = (
+                    openai_context.get("scene_rotation")
+                    or openai_context.get("sceneRotation")
+                    or {}
+                )
+
+                openai_record = openai_context.get("conversation") or openai_context.get("conversation_record")
+                if not isinstance(openai_record, dict):
+                    openai_record = None
+
+        if openai_record:
+            context["openai_conversation"] = openai_record
+            openai_conv_id = (
+                openai_record.get("id")
+                or openai_record.get("openai_conversation_id")
+                or openai_conv_id
+            )
+
+            assistant_id = (
+                openai_record.get("assistant_id")
+                or openai_record.get("openai_assistant_id")
+            )
+            thread_id = (
+                openai_record.get("thread_id")
+                or openai_record.get("openai_thread_id")
+            )
+
+            if assistant_id and thread_id:
+                try:
+                    persisted_conversation = await ConversationManager().get_or_create_conversation(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        openai_assistant_id=assistant_id,
+                        openai_thread_id=thread_id,
+                        openai_run_id=(
+                            openai_record.get("run_id")
+                            or openai_record.get("openai_run_id")
+                        ),
+                        openai_response_id=(
+                            openai_record.get("response_id")
+                            or openai_record.get("openai_response_id")
+                        ),
+                        status=openai_record.get("status", "active"),
+                        metadata=openai_record.get("metadata"),
+                    )
+                except Exception as conv_err:  # pragma: no cover - defensive logging
+                    logger.error(
+                        "[BG Task %s] Failed to persist OpenAI conversation: %s",
+                        conversation_id,
+                        conv_err,
+                        exc_info=True,
+                    )
+                else:
+                    if persisted_conversation:
+                        openai_conv_id = (
+                            persisted_conversation.get("id")
+                            or openai_conv_id
+                        )
+                        context["openai_conversation"] = persisted_conversation
+
+        rotated_scene: Optional[Dict[str, Any]] = None
+        if isinstance(openai_rotation_payload, dict):
+            new_scene = openai_rotation_payload.get("new_scene") or openai_rotation_payload.get("next_scene")
+            closing_scene = openai_rotation_payload.get("closing_scene") or openai_rotation_payload.get("closing")
+
+            if new_scene:
+                try:
+                    rotated_scene = await SceneManager(conversation_id=conversation_id).rotate_if_needed(
+                        new_scene=new_scene,
+                        closing_scene=closing_scene,
+                    )
+                except Exception as scene_err:  # pragma: no cover - defensive logging
+                    logger.error(
+                        "[BG Task %s] Failed to rotate OpenAI scene: %s",
+                        conversation_id,
+                        scene_err,
+                        exc_info=True,
+                    )
+                else:
+                    if rotated_scene:
+                        context["openai_active_scene"] = rotated_scene
+                        await sio.emit(
+                            'scene_change',
+                            {
+                                'scene': rotated_scene,
+                                'openai_conversation_id': openai_conv_id,
+                            },
+                            room=str(conversation_id),
+                        )
+
+        context["openai_conversation_id"] = openai_conv_id
+        
         # Apply universal update if provided
         if universal_update:
             logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
@@ -230,13 +340,27 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
-                await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                await sio.emit(
+                    'error',
+                    {
+                        'error': 'Failed to apply world updates.',
+                        'openai_conversation_id': openai_conv_id,
+                    },
+                    room=str(conversation_id),
+                )
                 if request_id:
                     await clear_request_processing(request_id, redis_pool)
                 return
             except Exception as update_err:
                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                await sio.emit(
+                    'error',
+                    {
+                        'error': 'Failed to apply world updates.',
+                        'openai_conversation_id': openai_conv_id,
+                    },
+                    room=str(conversation_id),
+                )
                 if request_id:
                     await clear_request_processing(request_id, redis_pool)
                 return
@@ -250,7 +374,14 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         if not response or not response.get("success", False):
             error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
             logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
-            await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
+            await sio.emit(
+                'error',
+                {
+                    'error': error_msg,
+                    'openai_conversation_id': openai_conv_id,
+                },
+                room=str(conversation_id),
+            )
             if request_id:
                 await clear_request_processing(request_id, redis_pool)
             return
@@ -340,9 +471,10 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     reason = img_data["image_generation"].get("reason", "Narrative moment")
                     logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
                     await sio.emit('image', {
-                        'image_url': image_url, 
-                        'prompt_used': prompt_used, 
-                        'reason': reason
+                        'image_url': image_url,
+                        'prompt_used': prompt_used,
+                        'reason': reason,
+                        'openai_conversation_id': openai_conv_id,
                     }, room=str(conversation_id))
                 else:
                     logger.warning(f"[BG Task {conversation_id}] Image generation task ran but produced no valid URLs. Response: {res}")
@@ -367,36 +499,46 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
             # Send final completion message with enhanced data
             completion_data = {
-                'full_text': stream_text, 
+                'full_text': stream_text,
                 'request_id': request_id,
                 'success': True,
-                'metadata': response.get('metadata') if isinstance(response, dict) else None
+                'metadata': response.get('metadata') if isinstance(response, dict) else None,
+                'openai_conversation_id': openai_conv_id,
             }
-            
+
             await sio.emit('done', completion_data, room=str(conversation_id))
             logger.info(f"[BG Task {conversation_id}] Finished streaming response (len={len(stream_text)}).")
         else:
             logger.warning(f"[BG Task {conversation_id}] No message content to stream after processing.")
             await sio.emit('done', {
-                'full_text': 'I encountered an issue generating a response. Please try again.', 
+                'full_text': 'I encountered an issue generating a response. Please try again.',
                 'request_id': request_id,
                 'success': False,
-                'error': 'Empty response content'
+                'error': 'Empty response content',
+                'openai_conversation_id': openai_conv_id,
             }, room=str(conversation_id))
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-        
+
         # Send a user-friendly error message
         error_response = 'I encountered an error processing your message. Please try again.'
-        await sio.emit('error', {'error': f"Server error: {str(e)}"}, room=str(conversation_id))
-        
+        await sio.emit(
+            'error',
+            {
+                'error': f"Server error: {str(e)}",
+                'openai_conversation_id': openai_conv_id,
+            },
+            room=str(conversation_id),
+        )
+
         # Also send a done event with the error for consistency
         await sio.emit('done', {
             'full_text': error_response,
             'request_id': request_id,
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'openai_conversation_id': openai_conv_id,
         }, room=str(conversation_id))
         
     finally:
