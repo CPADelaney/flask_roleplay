@@ -1700,7 +1700,7 @@ async def generate_text_completion(
                     "role": "user",
                     "content": [
                         {
-                            "type": "text",
+                            "type": "input_text",
                             "text": user_prompt,
                         }
                     ],
