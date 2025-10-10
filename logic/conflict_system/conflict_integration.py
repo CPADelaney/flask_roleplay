@@ -235,6 +235,10 @@ class ConflictSystemIntegration:
             logger.info(f"Raw LLM response: {repr(response)}")
             logger.info(f"Response type: {type(response)}, is None: {response is None}, is empty: {not response if response else 'N/A'}")
             
+            if getattr(response, "is_refusal", False):
+                logger.warning("LLM refused to generate conflict name; using fallback template")
+                return self._generate_conflict_name_fallback(conflict_type, context)
+
             if response:
                 # Clean up the response more aggressively
                 conflict_name = response.strip()

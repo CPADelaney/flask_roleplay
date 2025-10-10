@@ -69,7 +69,7 @@ def test_generate_text_completion_fallback(monkeypatch):
     assert dummy_client.responses.last_input == [
         {
             "role": "user",
-            "content": [{"type": "text", "text": "user"}],
+            "content": [{"type": "input_text", "text": "user"}],
         }
     ]
 
@@ -118,6 +118,20 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
     assert dummy_client.responses.last_input == [
         {
             "role": "user",
-            "content": [{"type": "text", "text": "user"}],
+            "content": [{"type": "input_text", "text": "user"}],
         }
     ]
+
+
+def test_extract_output_text_surfaces_refusal(monkeypatch):
+    chatgpt_integration = _load_chatgpt_module(monkeypatch)
+
+    refusal_chunk = SimpleNamespace(type="refusal", refusal="I can't help with that.")
+    message = SimpleNamespace(content=[refusal_chunk])
+    output_collection = SimpleNamespace(data=[message])
+    response = SimpleNamespace(output_text="", output=output_collection)
+
+    text, is_refusal = chatgpt_integration._extract_output_text(response)
+
+    assert text == "I can't help with that."
+    assert is_refusal is True

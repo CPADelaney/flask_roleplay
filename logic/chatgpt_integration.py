@@ -1577,21 +1577,39 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
 # ===========================================
 
 
-def _extract_output_text(response: Any) -> str:
-    """Best-effort extraction of text from a Responses API result."""
+class RefusalText(str):
+    """String subclass used to tag LLM refusals while remaining str-compatible."""
 
-    def _to_str(value: Any) -> list[str]:
+    @property
+    def is_refusal(self) -> bool:  # pragma: no cover - trivial property
+        return True
+
+
+def _extract_output_text(response: Any) -> tuple[str, bool]:
+    """Best-effort extraction of text and refusal metadata from a Responses API result."""
+
+    def _to_candidates(value: Any, *, forced_refusal: bool | None = None) -> list[tuple[str, bool]]:
         if value is None:
             return []
         if isinstance(value, bytes):
             try:
-                return [value.decode("utf-8", errors="ignore")]
+                decoded = value.decode("utf-8", errors="ignore")
             except Exception:
                 return []
+            return [(decoded, bool(forced_refusal))]
         if isinstance(value, str):
-            return [value]
+            return [(value, bool(forced_refusal))]
 
-        results: list[str] = []
+        results: list[tuple[str, bool]] = []
+
+        # Explicit refusal handling
+        if hasattr(value, "refusal") and not isinstance(value, (str, bytes, bytearray)):
+            try:
+                refusal_val = getattr(value, "refusal")
+            except Exception:
+                refusal_val = None
+            else:
+                results.extend(_to_candidates(refusal_val, forced_refusal=True))
 
         # OpenAI SDK collections often expose a `.data` attribute that holds the
         # actual sequence contents. Recurse into it before any other handling so
@@ -1602,26 +1620,28 @@ def _extract_output_text(response: Any) -> str:
             except Exception:
                 data_value = None
             else:
-                results.extend(_to_str(data_value))
+                results.extend(_to_candidates(data_value, forced_refusal=forced_refusal))
 
         sequence_types = (list, tuple)
 
         if isinstance(value, sequence_types):
             for item in value:
-                results.extend(_to_str(item))
+                results.extend(_to_candidates(item, forced_refusal=forced_refusal))
             return results
 
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
         ):
             for item in value:
-                results.extend(_to_str(item))
+                results.extend(_to_candidates(item, forced_refusal=forced_refusal))
             return results
 
         if isinstance(value, dict):
+            if "refusal" in value:
+                results.extend(_to_candidates(value["refusal"], forced_refusal=True))
             for key in ("text", "output", "content", "message", "value"):
                 if key in value:
-                    results.extend(_to_str(value[key]))
+                    results.extend(_to_candidates(value[key], forced_refusal=forced_refusal))
             return results
 
         # Generic object with attributes
@@ -1631,29 +1651,29 @@ def _extract_output_text(response: Any) -> str:
                     attr_val = getattr(value, key)
                 except Exception:
                     continue
-                results.extend(_to_str(attr_val))
+                results.extend(_to_candidates(attr_val, forced_refusal=forced_refusal))
 
         return results
 
     primary = getattr(response, "output_text", None)
     if isinstance(primary, str) and primary.strip():
-        return primary
+        return primary, False
 
-    candidates = _to_str(getattr(response, "output", None))
+    candidates = _to_candidates(getattr(response, "output", None))
     if not candidates:
-        candidates = _to_str(getattr(response, "content", None))
+        candidates = _to_candidates(getattr(response, "content", None))
 
-    for candidate in candidates:
+    for candidate, is_refusal in candidates:
         stripped = candidate.strip()
         if stripped:
-            return stripped
+            return stripped, is_refusal
 
     # Final fallback: stringify the response output for debugging value
     fallback = getattr(response, "output", "")
     if isinstance(fallback, str):
-        return fallback
+        return fallback, False
 
-    return ""
+    return "", False
 
 
 async def generate_text_completion(
@@ -1726,19 +1746,25 @@ async def generate_text_completion(
         
         response = await client.responses.create(**params)
 
-        text = _extract_output_text(response)
+        text, was_refusal = _extract_output_text(response)
         stripped_text = text.strip()
         if stripped_text:
+            if was_refusal:
+                logger.warning("LLM response contained a refusal: %s", stripped_text)
+                return RefusalText(stripped_text)
             return stripped_text
 
         logger.warning("Empty text extracted from LLM response; retrying once")
 
         retry_response = await client.responses.create(**params)
-        retry_text = _extract_output_text(retry_response)
+        retry_text, retry_was_refusal = _extract_output_text(retry_response)
         retry_stripped = retry_text.strip()
 
         if not retry_stripped:
             logger.error("LLM response empty after retry")
+        elif retry_was_refusal:
+            logger.warning("LLM retry response contained a refusal: %s", retry_stripped)
+            return RefusalText(retry_stripped)
 
         return retry_stripped
         
