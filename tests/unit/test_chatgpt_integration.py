@@ -67,7 +67,10 @@ def test_generate_text_completion_fallback(monkeypatch):
     assert result == "Successful fallback"
     assert dummy_client.responses.last_instructions == "system"
     assert dummy_client.responses.last_input == [
-        {"role": "user", "content": "user"}
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "user"}],
+        }
     ]
 
 
@@ -113,5 +116,8 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
     assert dummy_client.responses.calls == 2
     assert dummy_client.responses.last_instructions == "system"
     assert dummy_client.responses.last_input == [
-        {"role": "user", "content": "user"}
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "user"}],
+        }
     ]

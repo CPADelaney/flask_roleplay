@@ -1698,7 +1698,12 @@ async def generate_text_completion(
             "input": [
                 {
                     "role": "user",
-                    "content": user_prompt,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_prompt,
+                        }
+                    ],
                 }
             ],
             "max_output_tokens": max_tokens,
