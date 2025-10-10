@@ -31,6 +31,7 @@ import asyncio
 import threading
 import warnings
 import openai
+from collections.abc import Sequence
 from typing import Dict, List, Any, Optional, Union
 import numpy as np
 from openai._exceptions import APIStatusError
@@ -1592,7 +1593,27 @@ def _extract_output_text(response: Any) -> str:
 
         results: list[str] = []
 
-        if isinstance(value, (list, tuple)):
+        # OpenAI SDK collections often expose a `.data` attribute that holds the
+        # actual sequence contents. Recurse into it before any other handling so
+        # objects that merely wrap collections are traversed.
+        if hasattr(value, "data"):
+            try:
+                data_value = getattr(value, "data")
+            except Exception:
+                data_value = None
+            else:
+                results.extend(_to_str(data_value))
+
+        sequence_types = (list, tuple)
+
+        if isinstance(value, sequence_types):
+            for item in value:
+                results.extend(_to_str(item))
+            return results
+
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             for item in value:
                 results.extend(_to_str(item))
             return results
