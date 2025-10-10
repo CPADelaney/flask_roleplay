@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 def _load_chatgpt_module(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -123,6 +125,31 @@ def test_generate_text_completion_retries_when_empty(monkeypatch):
     ]
 
 
+def test_generate_text_completion_raises_on_double_empty(monkeypatch):
+    chatgpt_integration = _load_chatgpt_module(monkeypatch)
+
+    class DummyResponsesClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def create(self, **kwargs):  # noqa: ARG002 - interface parity
+            self.calls += 1
+            empty_output = SimpleNamespace(data=[])
+            return SimpleNamespace(output_text="", output=empty_output)
+
+    dummy_client = SimpleNamespace(responses=DummyResponsesClient())
+    chatgpt_integration._client_manager._async_client = dummy_client
+    monkeypatch.setattr(chatgpt_integration, "PREPARE_CONTEXT_AVAILABLE", False)
+
+    with pytest.raises(chatgpt_integration.EmptyLLMOutputError):
+        asyncio.run(
+            chatgpt_integration.generate_text_completion(
+                system_prompt="system",
+                user_prompt="user",
+            )
+        )
+
+
 def test_extract_output_text_surfaces_refusal(monkeypatch):
     chatgpt_integration = _load_chatgpt_module(monkeypatch)
 
@@ -135,3 +162,31 @@ def test_extract_output_text_surfaces_refusal(monkeypatch):
 
     assert text == "I can't help with that."
     assert is_refusal is True
+
+
+def test_extract_output_text_reads_model_dump(monkeypatch):
+    chatgpt_integration = _load_chatgpt_module(monkeypatch)
+
+    class DummyResponse:
+        output_text = ""
+        output = None
+
+        @staticmethod
+        def model_dump():
+            return {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Payload text",
+                            }
+                        ]
+                    }
+                ]
+            }
+
+    text, is_refusal = chatgpt_integration._extract_output_text(DummyResponse())
+
+    assert text == "Payload text"
+    assert is_refusal is False

@@ -1585,6 +1585,10 @@ class RefusalText(str):
         return True
 
 
+class EmptyLLMOutputError(RuntimeError):
+    """Raised when the LLM returns no textual content after retries."""
+
+
 def _extract_output_text(response: Any) -> tuple[str, bool]:
     """Best-effort extraction of text and refusal metadata from a Responses API result."""
 
@@ -1659,9 +1663,24 @@ def _extract_output_text(response: Any) -> tuple[str, bool]:
     if isinstance(primary, str) and primary.strip():
         return primary, False
 
+    model_dump: dict[str, Any] | None = None
+    try:
+        if hasattr(response, "model_dump"):
+            model_dump = response.model_dump()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.debug("Failed to dump LLM response model: %s", exc, exc_info=True)
+
     candidates = _to_candidates(getattr(response, "output", None))
     if not candidates:
         candidates = _to_candidates(getattr(response, "content", None))
+    if not candidates and model_dump:
+        for key in ("output", "content", "data"):
+            if key in model_dump:
+                candidates = _to_candidates(model_dump[key])
+                if candidates:
+                    break
+        if not candidates:
+            candidates = _to_candidates(model_dump)
 
     for candidate, is_refusal in candidates:
         stripped = candidate.strip()
@@ -1671,7 +1690,26 @@ def _extract_output_text(response: Any) -> tuple[str, bool]:
     # Final fallback: stringify the response output for debugging value
     fallback = getattr(response, "output", "")
     if isinstance(fallback, str):
+        if fallback.strip():
+            return fallback, False
+        if model_dump is not None:
+            try:
+                payload_repr = json.dumps(model_dump, ensure_ascii=False, sort_keys=True)
+            except TypeError:
+                payload_repr = repr(model_dump)
+            logger.warning("Empty string extracted from LLM response payload: %s", payload_repr)
+        else:
+            logger.warning("Empty string extracted from LLM response with no model_dump available")
         return fallback, False
+
+    if model_dump is not None:
+        try:
+            payload_repr = json.dumps(model_dump, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            payload_repr = repr(model_dump)
+        logger.warning("No text candidates found in LLM response payload: %s", payload_repr)
+    else:
+        logger.warning("No text candidates found in LLM response and no model_dump available")
 
     return "", False
 
@@ -1761,13 +1799,16 @@ async def generate_text_completion(
         retry_stripped = retry_text.strip()
 
         if not retry_stripped:
-            logger.error("LLM response empty after retry")
-        elif retry_was_refusal:
+            logger.error("LLM response empty after retry; raising EmptyLLMOutputError")
+            raise EmptyLLMOutputError("LLM response empty after retry")
+        if retry_was_refusal:
             logger.warning("LLM retry response contained a refusal: %s", retry_stripped)
             return RefusalText(retry_stripped)
 
         return retry_stripped
-        
+
+    except EmptyLLMOutputError:
+        raise
     except Exception as e:
         logger.error(f"Error in generate_text_completion: {e}")
         return "I'm having trouble processing your request right now."
