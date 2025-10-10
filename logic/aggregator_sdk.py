@@ -38,6 +38,7 @@ from db.connection import get_db_connection_context
 from story_templates.preset_manager import PresetStoryManager
 from openai_integration.conversations import (
     get_active_scene as get_openai_active_scene,
+    get_latest_chatkit_thread,
     get_latest_conversation as get_latest_openai_conversation,
 )
 
@@ -207,12 +208,28 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
         """, user_id, conversation_id)
         
         active_quests = [dict(row) for row in quest_rows]
-        
+
         openai_conversation = await get_latest_openai_conversation(
             conversation_id=conversation_id,
             user_id=user_id,
             conn=conn,
         )
+
+        chatkit_thread = await get_latest_chatkit_thread(
+            conversation_id=conversation_id,
+            conn=conn,
+        )
+
+        if chatkit_thread:
+            if not openai_conversation:
+                openai_conversation = {}
+            openai_conversation.setdefault("chatkit_thread", chatkit_thread)
+            chatkit_thread_id = chatkit_thread.get("chatkit_thread_id")
+            chatkit_run_id = chatkit_thread.get("chatkit_run_id")
+            if chatkit_thread_id:
+                openai_conversation["chatkit_thread_id"] = chatkit_thread_id
+            if chatkit_run_id:
+                openai_conversation["chatkit_run_id"] = chatkit_run_id
 
         active_scene = await get_openai_active_scene(
             conversation_id=conversation_id,
@@ -366,6 +383,9 @@ def _build_openai_integration_payload(
         thread_id = conversation.get("openai_thread_id")
         run_id = conversation.get("openai_run_id")
         response_id = conversation.get("openai_response_id")
+        chatkit_thread_id = conversation.get("chatkit_thread_id")
+        chatkit_run_id = conversation.get("chatkit_run_id")
+        chatkit_payload = conversation.get("chatkit_thread")
 
         if assistant_id:
             payload["assistant_id"] = assistant_id
@@ -375,6 +395,12 @@ def _build_openai_integration_payload(
             payload["run_id"] = run_id
         if response_id:
             payload["response_id"] = response_id
+        if chatkit_thread_id:
+            payload["chatkit_thread_id"] = chatkit_thread_id
+        if chatkit_run_id:
+            payload["chatkit_run_id"] = chatkit_run_id
+        if chatkit_payload:
+            payload["chatkit_thread"] = chatkit_payload
 
         metadata = _parse_openai_metadata(conversation.get("metadata"))
     else:

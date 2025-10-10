@@ -29,6 +29,19 @@ _RETURNING_COLUMNS = (
     "updated_at",
 )
 
+_CHATKIT_RETURNING_COLUMNS = (
+    "id",
+    "conversation_id",
+    "chatkit_assistant_id",
+    "chatkit_thread_id",
+    "chatkit_run_id",
+    "status",
+    "last_error",
+    "metadata",
+    "created_at",
+    "updated_at",
+)
+
 _SCENE_RETURNING_COLUMNS = (
     "id",
     "conversation_id",
@@ -115,6 +128,55 @@ async def _upsert_conversation(
     return dict(record) if record else None
 
 
+async def _upsert_chatkit_thread(
+    conn,
+    *,
+    conversation_id: int,
+    chatkit_assistant_id: str,
+    chatkit_thread_id: str,
+    chatkit_run_id: Optional[str] = None,
+    status: str = "pending",
+    last_error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Insert or update a ChatKit thread row and return the stored record."""
+
+    metadata = metadata or {}
+
+    record = await conn.fetchrow(
+        f"""
+        INSERT INTO chatkit_threads (
+            conversation_id,
+            chatkit_assistant_id,
+            chatkit_thread_id,
+            chatkit_run_id,
+            status,
+            last_error,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (conversation_id, chatkit_thread_id) DO UPDATE
+        SET
+            chatkit_assistant_id = EXCLUDED.chatkit_assistant_id,
+            chatkit_run_id = EXCLUDED.chatkit_run_id,
+            status = EXCLUDED.status,
+            last_error = EXCLUDED.last_error,
+            metadata = COALESCE(chatkit_threads.metadata, '{{}}'::jsonb) || EXCLUDED.metadata,
+            updated_at = NOW()
+        RETURNING {', '.join(_CHATKIT_RETURNING_COLUMNS)}
+        """,
+        conversation_id,
+        chatkit_assistant_id,
+        chatkit_thread_id,
+        chatkit_run_id,
+        status,
+        last_error,
+        metadata,
+    )
+
+    return dict(record) if record else None
+
+
 async def create_conversation(
     *,
     user_id: int,
@@ -153,6 +215,44 @@ async def create_conversation(
             openai_thread_id=openai_thread_id,
             openai_run_id=openai_run_id,
             openai_response_id=openai_response_id,
+            status=status,
+            last_error=last_error,
+            metadata=metadata,
+        )
+
+
+async def create_chatkit_thread(
+    *,
+    conversation_id: int,
+    chatkit_assistant_id: str,
+    chatkit_thread_id: str,
+    chatkit_run_id: Optional[str] = None,
+    status: str = "pending",
+    last_error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    conn=None,
+) -> Optional[Dict[str, Any]]:
+    """Create or update a ChatKit thread and return the stored row."""
+
+    if conn is not None:
+        return await _upsert_chatkit_thread(
+            conn,
+            conversation_id=conversation_id,
+            chatkit_assistant_id=chatkit_assistant_id,
+            chatkit_thread_id=chatkit_thread_id,
+            chatkit_run_id=chatkit_run_id,
+            status=status,
+            last_error=last_error,
+            metadata=metadata,
+        )
+
+    async with get_db_connection_context() as db_conn:
+        return await _upsert_chatkit_thread(
+            db_conn,
+            conversation_id=conversation_id,
+            chatkit_assistant_id=chatkit_assistant_id,
+            chatkit_thread_id=chatkit_thread_id,
+            chatkit_run_id=chatkit_run_id,
             status=status,
             last_error=last_error,
             metadata=metadata,
@@ -222,6 +322,66 @@ async def get_or_create_conversation(
         )
 
 
+async def get_or_create_chatkit_thread(
+    *,
+    conversation_id: int,
+    chatkit_assistant_id: str,
+    chatkit_thread_id: str,
+    chatkit_run_id: Optional[str] = None,
+    status: str = "pending",
+    last_error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    conn=None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch an existing ChatKit thread or create it if absent."""
+
+    async def _select_existing(connection) -> Optional[Mapping[str, Any]]:
+        record = await connection.fetchrow(
+            f"""
+            SELECT {', '.join(_CHATKIT_RETURNING_COLUMNS)}
+            FROM chatkit_threads
+            WHERE conversation_id = $1 AND chatkit_thread_id = $2
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            conversation_id,
+            chatkit_thread_id,
+        )
+        return dict(record) if record else None
+
+    if conn is not None:
+        existing = await _select_existing(conn)
+        if existing:
+            return existing
+
+        return await _upsert_chatkit_thread(
+            conn,
+            conversation_id=conversation_id,
+            chatkit_assistant_id=chatkit_assistant_id,
+            chatkit_thread_id=chatkit_thread_id,
+            chatkit_run_id=chatkit_run_id,
+            status=status,
+            last_error=last_error,
+            metadata=metadata,
+        )
+
+    async with get_db_connection_context() as db_conn:
+        existing = await _select_existing(db_conn)
+        if existing:
+            return existing
+
+        return await _upsert_chatkit_thread(
+            db_conn,
+            conversation_id=conversation_id,
+            chatkit_assistant_id=chatkit_assistant_id,
+            chatkit_thread_id=chatkit_thread_id,
+            chatkit_run_id=chatkit_run_id,
+            status=status,
+            last_error=last_error,
+            metadata=metadata,
+        )
+
+
 async def get_latest_conversation(
     *,
     conversation_id: int,
@@ -244,6 +404,33 @@ async def get_latest_conversation(
 
         query.append("ORDER BY updated_at DESC LIMIT 1")
         record = await connection.fetchrow("\n".join(query), *params)
+        return dict(record) if record else None
+
+    if conn is not None:
+        return await _get(conn)
+
+    async with get_db_connection_context() as db_conn:
+        return await _get(db_conn)
+
+
+async def get_latest_chatkit_thread(
+    *,
+    conversation_id: int,
+    conn=None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch the most recent ChatKit thread row for a conversation."""
+
+    async def _get(connection):
+        record = await connection.fetchrow(
+            f"""
+            SELECT {', '.join(_CHATKIT_RETURNING_COLUMNS)}
+            FROM chatkit_threads
+            WHERE conversation_id = $1
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            conversation_id,
+        )
         return dict(record) if record else None
 
     if conn is not None:
@@ -462,6 +649,26 @@ class ConversationManager:
         """Proxy to :func:`get_active_scene`."""
 
         return await get_active_scene(**kwargs)
+
+    async def create_chatkit_thread(self, **kwargs):
+        """Proxy to :func:`create_chatkit_thread`."""
+
+        return await create_chatkit_thread(**kwargs)
+
+    async def get_or_create_chatkit_thread(self, **kwargs):
+        """Proxy to :func:`get_or_create_chatkit_thread`."""
+
+        return await get_or_create_chatkit_thread(**kwargs)
+
+    async def get_latest_chatkit_thread(self, **kwargs):
+        """Proxy to :func:`get_latest_chatkit_thread`."""
+
+        return await get_latest_chatkit_thread(**kwargs)
+
+    def get_client(self):
+        """Expose the configured OpenAI client for downstream helpers."""
+
+        return self._get_client()
 
     async def send_message(
         self,
