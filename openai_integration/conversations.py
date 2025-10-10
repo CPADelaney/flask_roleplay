@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+import inspect
+from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional
+
+try:  # pragma: no cover - optional dependency guard
+    from openai import AsyncOpenAI
+except ImportError:  # pragma: no cover - openai is optional in some test envs
+    AsyncOpenAI = None  # type: ignore[assignment]
 
 from db.connection import get_db_connection_context
 
@@ -365,3 +371,118 @@ async def get_active_scene(
 
     async with get_db_connection_context() as db_conn:
         return await _get(db_conn)
+
+
+class ConversationStreamError(RuntimeError):
+    """Raised when streaming a conversation message fails."""
+
+
+class ConversationManager:
+    """High-level helper that manages OpenAI conversations and streaming."""
+
+    def __init__(
+        self,
+        *,
+        client=None,
+        client_factory: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        """Initialise the manager.
+
+        Parameters
+        ----------
+        client:
+            An optional AsyncOpenAI-compatible client. Mainly used for testing.
+        client_factory:
+            Callable that returns an AsyncOpenAI client when none is provided.
+            Defaults to :class:`openai.AsyncOpenAI` when available.
+        """
+
+        self._client = client
+        if client_factory is not None:
+            self._client_factory = client_factory
+        elif AsyncOpenAI is not None:
+            self._client_factory = AsyncOpenAI
+        else:  # pragma: no cover - only triggered if openai is missing
+            self._client_factory = None
+
+    def _get_client(self):
+        if self._client is None:
+            if self._client_factory is None:  # pragma: no cover
+                raise RuntimeError("No OpenAI client factory configured")
+            self._client = self._client_factory()
+        return self._client
+
+    async def create_conversation(self, **kwargs):
+        """Proxy to :func:`create_conversation`."""
+
+        return await create_conversation(**kwargs)
+
+    async def get_or_create_conversation(self, **kwargs):
+        """Proxy to :func:`get_or_create_conversation`."""
+
+        return await get_or_create_conversation(**kwargs)
+
+    async def rotate_conversation_scene(self, **kwargs):
+        """Proxy to :func:`rotate_conversation_scene`."""
+
+        return await rotate_conversation_scene(**kwargs)
+
+    async def get_active_scene(self, **kwargs):
+        """Proxy to :func:`get_active_scene`."""
+
+        return await get_active_scene(**kwargs)
+
+    async def send_message(
+        self,
+        *,
+        model: str,
+        input: Any,
+        **kwargs,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Stream a message through the OpenAI Responses client.
+
+        Yields dictionaries that normalise the most common event types from the
+        Responses streaming interface. Callers receive incremental deltas via
+        ``response.output_text.delta`` events and the final aggregated response
+        once ``response.completed`` fires.
+        """
+
+        client = self._get_client()
+        stream_ctx = client.responses.stream(model=model, input=input, **kwargs)
+        final_payload: Optional[Any] = None
+
+        async with stream_ctx as stream:
+            async for event in stream:
+                event_type = getattr(event, "type", None)
+
+                if event_type == "response.output_text.delta":
+                    yield {
+                        "type": event_type,
+                        "delta": getattr(event, "delta", None),
+                    }
+                elif event_type == "response.completed":
+                    final_payload = stream.get_final_response()
+                    if inspect.isawaitable(final_payload):
+                        final_payload = await final_payload
+                    yield {
+                        "type": event_type,
+                        "response": final_payload,
+                    }
+                elif event_type == "response.error":
+                    error = getattr(event, "error", None)
+                    raise ConversationStreamError(f"OpenAI streaming error: {error}")
+                else:
+                    yield {
+                        "type": event_type,
+                        "event": event,
+                    }
+
+            if final_payload is None:
+                final_payload = stream.get_final_response()
+                if inspect.isawaitable(final_payload):
+                    final_payload = await final_payload
+                if final_payload is not None:
+                    yield {
+                        "type": "response.completed",
+                        "response": final_payload,
+                    }
