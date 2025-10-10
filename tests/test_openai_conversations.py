@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from typing import Any, Dict, Iterable, List
 
 import pytest
 
@@ -7,7 +8,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from openai_integration import conversations
+from openai_integration import ConversationManager, conversations
+from openai_integration.conversations import ConversationStreamError
 
 
 @pytest.fixture
@@ -30,6 +32,56 @@ class StubConnection:
     async def execute(self, query, *args):
         self.execute_queries.append((query, args))
         return "EXECUTE"
+
+
+class DummyEvent:
+    def __init__(self, event_type: str, **payload: Any) -> None:
+        self.type = event_type
+        for key, value in payload.items():
+            setattr(self, key, value)
+
+
+class DummyResponsesStream:
+    def __init__(self, events: Iterable[DummyEvent], final_response: Dict[str, Any]):
+        self._events = list(events)
+        self._final_response = final_response
+        self._iter: Iterable[DummyEvent] | None = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def __aiter__(self):
+        self._iter = iter(self._events)
+        return self
+
+    async def __anext__(self):
+        assert self._iter is not None
+        try:
+            return next(self._iter)
+        except StopIteration as exc:  # pragma: no cover - defensive
+            raise StopAsyncIteration from exc
+
+    def get_final_response(self):
+        return self._final_response
+
+
+class DummyResponsesClient:
+    def __init__(self, events: Iterable[DummyEvent], final_response: Dict[str, Any]):
+        self._events = list(events)
+        self._final_response = final_response
+        self.calls: List[Dict[str, Any]] = []
+
+    def stream(self, **kwargs):
+        self.calls.append(kwargs)
+        return DummyResponsesStream(self._events, self._final_response)
+
+
+class DummyOpenAIClient:
+    def __init__(self, events: Iterable[DummyEvent], final_response: Dict[str, Any]):
+        self.responses = DummyResponsesClient(events, final_response)
 
 
 @pytest.mark.anyio("asyncio")
@@ -249,3 +301,77 @@ async def test_get_active_scene_filters_on_is_active():
     select_query, params = conn.queries[0]
     assert "is_active = TRUE" in select_query
     assert params == (7,)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_conversation_manager_proxies_crud_helpers():
+    manager = ConversationManager(client=DummyOpenAIClient([], {}))
+    expected_row = {
+        "id": 1,
+        "user_id": 5,
+        "conversation_id": 123,
+        "openai_assistant_id": "assistant",
+        "openai_thread_id": "thread",
+        "openai_run_id": None,
+        "openai_response_id": None,
+        "status": "pending",
+        "last_error": None,
+        "metadata": {},
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+    }
+    conn = StubConnection([expected_row])
+
+    row = await manager.create_conversation(
+        user_id=5,
+        conversation_id=123,
+        openai_assistant_id="assistant",
+        openai_thread_id="thread",
+        conn=conn,
+    )
+
+    assert row == expected_row
+
+
+@pytest.mark.anyio("asyncio")
+async def test_conversation_manager_streams_events_and_final_response():
+    events = [
+        DummyEvent("response.output_text.delta", delta="Hello"),
+        DummyEvent("response.output_text.delta", delta=" world"),
+        DummyEvent("response.completed"),
+    ]
+    final_response = {"output": "Hello world"}
+    dummy_client = DummyOpenAIClient(events, final_response)
+    manager = ConversationManager(client=dummy_client)
+
+    collected = []
+    async for chunk in manager.send_message(model="gpt-5-nano", input="Hi there"):
+        collected.append(chunk)
+
+    assert [c["type"] for c in collected] == [
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert collected[0]["delta"] == "Hello"
+    assert collected[1]["delta"] == " world"
+    assert collected[2]["response"] == final_response
+    assert dummy_client.responses.calls == [
+        {"model": "gpt-5-nano", "input": "Hi there"}
+    ]
+
+
+@pytest.mark.anyio("asyncio")
+async def test_conversation_manager_stream_raises_on_error_event():
+    events = [
+        DummyEvent("response.output_text.delta", delta="Hello"),
+        DummyEvent("response.error", error={"message": "boom"}),
+    ]
+    dummy_client = DummyOpenAIClient(events, {})
+    manager = ConversationManager(client=dummy_client)
+
+    with pytest.raises(ConversationStreamError) as exc_info:
+        async for _ in manager.send_message(model="gpt-4.1", input="Hello"):
+            pass
+
+    assert "boom" in str(exc_info.value)
