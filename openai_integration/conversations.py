@@ -222,6 +222,37 @@ async def get_or_create_conversation(
         )
 
 
+async def get_latest_conversation(
+    *,
+    conversation_id: int,
+    user_id: Optional[int] = None,
+    conn=None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch the most recent OpenAI conversation row for a conversation."""
+
+    async def _get(connection):
+        params = [conversation_id]
+        query = [
+            f"SELECT {', '.join(_RETURNING_COLUMNS)}",
+            "FROM openai_conversations",
+            "WHERE conversation_id = $1",
+        ]
+
+        if user_id is not None:
+            query.append("AND user_id = $2")
+            params.append(user_id)
+
+        query.append("ORDER BY updated_at DESC LIMIT 1")
+        record = await connection.fetchrow("\n".join(query), *params)
+        return dict(record) if record else None
+
+    if conn is not None:
+        return await _get(conn)
+
+    async with get_db_connection_context() as db_conn:
+        return await _get(db_conn)
+
+
 async def _rotate_scene(
     conn,
     *,

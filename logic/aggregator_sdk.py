@@ -36,6 +36,10 @@ from context.context_performance import PerformanceMonitor, track_performance
 # Using new async context manager for DB connections
 from db.connection import get_db_connection_context
 from story_templates.preset_manager import PresetStoryManager
+from openai_integration.conversations import (
+    get_active_scene as get_openai_active_scene,
+    get_latest_conversation as get_latest_openai_conversation,
+)
 
 # Import the new dynamic relationships system
 from logic.dynamic_relationships import (
@@ -204,6 +208,17 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
         
         active_quests = [dict(row) for row in quest_rows]
         
+        openai_conversation = await get_latest_openai_conversation(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            conn=conn,
+        )
+
+        active_scene = await get_openai_active_scene(
+            conversation_id=conversation_id,
+            conn=conn,
+        )
+
         # Build base context
         result = {
             'currentRoleplay': current_roleplay,
@@ -285,6 +300,14 @@ CRITICAL CONSTRAINTS FOR THIS STORY:
                 result['special_location_active'] = True
                 result['location_special_rules'] = get_location_special_rules(current_location)
         
+        # Attach OpenAI integration metadata if present
+        openai_payload = _build_openai_integration_payload(
+            openai_conversation,
+            active_scene,
+        )
+        if openai_payload:
+            result['openai_integration'] = openai_payload
+
         # Generate aggregator text
         aggregator_text = build_aggregator_text(result)
         
@@ -300,6 +323,83 @@ You MUST follow all consistency rules for this preset story.
         result['aggregatorText'] = aggregator_text
         
         return result
+
+
+def _parse_openai_metadata(metadata: Any) -> Dict[str, Any]:
+    if metadata is None:
+        return {}
+
+    if isinstance(metadata, dict):
+        return metadata
+
+    if isinstance(metadata, str):
+        try:
+            parsed = json.loads(metadata)
+            if isinstance(parsed, dict):
+                return parsed
+        except (TypeError, ValueError):
+            logger.debug("Failed to parse OpenAI metadata string", exc_info=True)
+            return {}
+
+    if hasattr(metadata, "items"):
+        try:
+            return dict(metadata)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Unable to coerce OpenAI metadata to dict", exc_info=True)
+
+    return {}
+
+
+def _build_openai_integration_payload(
+    conversation: Optional[Dict[str, Any]],
+    active_scene: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not conversation and not active_scene:
+        return None
+
+    payload: Dict[str, Any] = {}
+
+    if conversation:
+        payload["conversation"] = conversation
+
+        assistant_id = conversation.get("openai_assistant_id")
+        thread_id = conversation.get("openai_thread_id")
+        run_id = conversation.get("openai_run_id")
+        response_id = conversation.get("openai_response_id")
+
+        if assistant_id:
+            payload["assistant_id"] = assistant_id
+        if thread_id:
+            payload["thread_id"] = thread_id
+        if run_id:
+            payload["run_id"] = run_id
+        if response_id:
+            payload["response_id"] = response_id
+
+        metadata = _parse_openai_metadata(conversation.get("metadata"))
+    else:
+        metadata = {}
+
+    scene_rotation: Dict[str, Any] = {}
+
+    queued_scene = metadata.get("queued_scene") or metadata.get("pending_scene") or metadata.get("next_scene")
+    if queued_scene:
+        scene_rotation["new_scene"] = queued_scene
+
+    closing_scene = (
+        metadata.get("queued_scene_closing")
+        or metadata.get("closing_scene")
+        or metadata.get("previous_scene")
+    )
+    if closing_scene:
+        scene_rotation["closing_scene"] = closing_scene
+
+    if active_scene:
+        scene_rotation["active_scene"] = active_scene
+
+    payload["scene_rotation"] = scene_rotation
+
+    return payload
 
 
 async def get_location_specific_lore(

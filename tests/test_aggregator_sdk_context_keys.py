@@ -97,6 +97,23 @@ def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
         dummy_get_db_connection_context,
     )
 
+    async def fake_get_latest_conversation(*, conversation_id, user_id, conn):
+        return None
+
+    async def fake_get_active_scene(*, conversation_id, conn):
+        return None
+
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_latest_openai_conversation",
+        fake_get_latest_conversation,
+    )
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_openai_active_scene",
+        fake_get_active_scene,
+    )
+
     async def fake_check_preset_story(conversation_id):
         return None
 
@@ -116,3 +133,75 @@ def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
     assert context["currentLocation"] == context["current_location"]
     assert context["current_location"] == context["location"]
     assert context["currentRoleplay"]["CurrentLocation"] == "Chapel of Thorns"
+
+
+def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_db_connection_context",
+        dummy_get_db_connection_context,
+    )
+
+    async def fake_check_preset_story(conversation_id):
+        return None
+
+    monkeypatch.setattr(
+        aggregator_sdk.PresetStoryManager,
+        "check_preset_story",
+        staticmethod(fake_check_preset_story),
+    )
+
+    metadata = {
+        "queued_scene": {"scene_title": "Dramatic Entrance"},
+        "queued_scene_closing": {"scene_summary": "Fade to black"},
+    }
+
+    conversation_row = {
+        "id": 42,
+        "user_id": 1,
+        "conversation_id": 2,
+        "openai_assistant_id": "asst_123",
+        "openai_thread_id": "thread_abc",
+        "openai_run_id": "run_xyz",
+        "openai_response_id": "resp_456",
+        "status": "pending",
+        "last_error": None,
+        "metadata": metadata,
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+    }
+
+    active_scene = {"scene_number": 7, "scene_title": "Current Scene"}
+
+    async def fake_get_latest_conversation(*, conversation_id, user_id, conn):
+        return conversation_row
+
+    async def fake_get_active_scene(*, conversation_id, conn):
+        return active_scene
+
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_latest_openai_conversation",
+        fake_get_latest_conversation,
+    )
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_openai_active_scene",
+        fake_get_active_scene,
+    )
+
+    context = asyncio.run(
+        aggregator_sdk.get_aggregated_roleplay_context(1, 2, "Chase")
+    )
+
+    openai_payload = context.get("openai_integration")
+    assert openai_payload is not None
+    assert openai_payload["conversation"] == conversation_row
+    assert openai_payload["thread_id"] == "thread_abc"
+    assert openai_payload["run_id"] == "run_xyz"
+    assert openai_payload["response_id"] == "resp_456"
+
+    scene_rotation = openai_payload.get("scene_rotation")
+    assert scene_rotation["new_scene"] == metadata["queued_scene"]
+    assert scene_rotation["closing_scene"] == metadata["queued_scene_closing"]
+    assert scene_rotation["active_scene"] == active_scene
