@@ -1832,6 +1832,41 @@ async def generate_text_completion(
         
         response = await client.responses.create(**params)
 
+        def _is_max_token_incomplete(result: Any) -> bool:
+            """Return True when the Responses API result hit the max token ceiling."""
+
+            status = getattr(result, "status", None)
+            if status != "incomplete":
+                return False
+
+            details = getattr(result, "incomplete_details", None)
+            reason = None
+            if isinstance(details, dict):
+                reason = details.get("reason")
+            elif details is not None:
+                reason = getattr(details, "reason", None)
+            return reason == "max_output_tokens"
+
+        if _is_max_token_incomplete(response):
+            original_limit = params.get("max_output_tokens", max_tokens)
+            model_limit = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
+            headroom = max(original_limit, 512)
+            expanded_limit = min(original_limit + headroom, model_limit)
+
+            if expanded_limit > original_limit:
+                logger.info(
+                    "LLM response incomplete due to max_output_tokens; increasing allowance from %s to %s",
+                    original_limit,
+                    expanded_limit,
+                )
+                params["max_output_tokens"] = expanded_limit
+                response = await client.responses.create(**params)
+            else:
+                logger.info(
+                    "LLM response incomplete due to max_output_tokens but cannot increase allowance beyond %s",
+                    original_limit,
+                )
+
         text, was_refusal = _extract_output_text(response)
         stripped_text = text.strip()
         if stripped_text:
