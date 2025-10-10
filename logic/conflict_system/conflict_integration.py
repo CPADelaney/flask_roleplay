@@ -179,7 +179,7 @@ class ConflictSystemIntegration:
     
     async def _generate_conflict_name(self, conflict_type: str, context: Dict[str, Any]) -> str:
         """Generate a unique conflict name using LLM based on type and context."""
-        from logic.chatgpt_integration import generate_text_completion
+        from logic.chatgpt_integration import EmptyLLMOutputError, generate_text_completion
         
         # Build context information for the LLM
         context_details = []
@@ -279,9 +279,17 @@ class ConflictSystemIntegration:
             else:
                 logger.warning("✗ LLM returned None or empty response for conflict name")
             
+        except EmptyLLMOutputError as exc:
+            diagnostics = getattr(exc, "diagnostics", None)
+            if diagnostics:
+                logger.warning("✗ LLM returned empty response for conflict name; diagnostics: %s", diagnostics)
+            else:
+                logger.warning("✗ LLM returned empty response for conflict name; no diagnostics provided")
+            logger.warning("Using fallback template for conflict name")
+            return self._generate_conflict_name_fallback(conflict_type, context)
         except Exception as e:
             logger.error(f"✗ Exception generating conflict name via LLM: {e}", exc_info=True)
-        
+
         # Fallback to template-based generation
         logger.warning("Using fallback template for conflict name")
         return self._generate_conflict_name_fallback(conflict_type, context)

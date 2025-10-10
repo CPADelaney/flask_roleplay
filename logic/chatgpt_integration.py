@@ -1588,6 +1588,54 @@ class RefusalText(str):
 class EmptyLLMOutputError(RuntimeError):
     """Raised when the LLM returns no textual content after retries."""
 
+    def __init__(self, message: str, *, diagnostics: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics: dict[str, Any] = diagnostics or {}
+
+
+def _collect_response_diagnostics(response: Any) -> dict[str, Any]:
+    """Return a best-effort dictionary of diagnostic fields from a Responses API result."""
+
+    diagnostics: dict[str, Any] = {}
+    diagnostic_fields = (
+        "error",
+        "incomplete_details",
+        "status",
+        "status_code",
+        "usage",
+        "metadata",
+        "warnings",
+        "reason",
+    )
+
+    for field in diagnostic_fields:
+        if hasattr(response, field):
+            try:
+                value = getattr(response, field)
+            except Exception as exc:  # pragma: no cover - defensive collection
+                diagnostics[field] = f"<error retrieving {field}: {exc}>"
+            else:
+                diagnostics[field] = value
+
+    model_dump: dict[str, Any] | None = None
+    if hasattr(response, "model_dump"):
+        try:
+            model_dump = response.model_dump()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            diagnostics["model_dump_error"] = str(exc)
+        else:
+            if isinstance(model_dump, dict):
+                interesting: dict[str, Any] = {}
+                for key, value in model_dump.items():
+                    if key in diagnostic_fields or any(
+                        token in key for token in ("error", "detail", "reason", "warning", "status")
+                    ):
+                        interesting[key] = value
+                if interesting:
+                    diagnostics.setdefault("model_dump_fields", {}).update(interesting)
+
+    return diagnostics
+
 
 def _extract_output_text(response: Any) -> tuple[str, bool]:
     """Best-effort extraction of text and refusal metadata from a Responses API result."""
@@ -1792,15 +1840,35 @@ async def generate_text_completion(
                 return RefusalText(stripped_text)
             return stripped_text
 
-        logger.warning("Empty text extracted from LLM response; retrying once")
+        diagnostics = _collect_response_diagnostics(response)
+        if diagnostics:
+            logger.warning(
+                "Empty text extracted from LLM response; retrying once. Diagnostics: %s",
+                diagnostics,
+            )
+        else:
+            logger.warning("Empty text extracted from LLM response; retrying once. No diagnostics available")
 
         retry_response = await client.responses.create(**params)
         retry_text, retry_was_refusal = _extract_output_text(retry_response)
         retry_stripped = retry_text.strip()
 
         if not retry_stripped:
-            logger.error("LLM response empty after retry; raising EmptyLLMOutputError")
-            raise EmptyLLMOutputError("LLM response empty after retry")
+            retry_diagnostics = _collect_response_diagnostics(retry_response)
+            combined_diagnostics = {
+                "initial_attempt": diagnostics,
+                "retry_attempt": retry_diagnostics,
+            }
+            if retry_diagnostics:
+                logger.error(
+                    "LLM response empty after retry; raising EmptyLLMOutputError. Diagnostics: %s",
+                    combined_diagnostics,
+                )
+            else:
+                logger.error(
+                    "LLM response empty after retry; raising EmptyLLMOutputError. No diagnostics available from retry",
+                )
+            raise EmptyLLMOutputError("LLM response empty after retry", diagnostics=combined_diagnostics)
         if retry_was_refusal:
             logger.warning("LLM retry response contained a refusal: %s", retry_stripped)
             return RefusalText(retry_stripped)
