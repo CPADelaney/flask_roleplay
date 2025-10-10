@@ -158,7 +158,7 @@ def test_generate_text_completion_expands_token_limit(monkeypatch):
             self.calls = []
 
         async def create(self, **kwargs):
-            self.calls.append(kwargs)
+            self.calls.append(dict(kwargs))
             if len(self.calls) == 1:
                 incomplete_details = SimpleNamespace(reason="max_output_tokens")
                 return SimpleNamespace(
@@ -206,6 +206,63 @@ def test_generate_text_completion_expands_token_limit(monkeypatch):
         chatgpt_integration.MODEL_TOKEN_LIMITS["gpt-4o"],
     )
     assert second_call["max_output_tokens"] == expected_second
+
+
+def test_generate_text_completion_stops_after_model_ceiling(monkeypatch):
+    chatgpt_integration = _load_chatgpt_module(monkeypatch)
+
+    class DummyResponsesClient:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            call_number = len(self.calls)
+            if call_number <= 2:
+                incomplete_details = SimpleNamespace(reason="max_output_tokens")
+                return SimpleNamespace(
+                    status="incomplete",
+                    incomplete_details=incomplete_details,
+                    output_text="",
+                    output=SimpleNamespace(data=[]),
+                )
+
+            text_value = SimpleNamespace(value="Final response")
+            chunk = SimpleNamespace(
+                text=text_value,
+                type="output_text",
+                annotations=[],
+            )
+            content_collection = SimpleNamespace(data=[chunk])
+            message = SimpleNamespace(content=content_collection, role="assistant")
+            output_collection = SimpleNamespace(data=[message])
+            return SimpleNamespace(
+                status="completed",
+                incomplete_details=None,
+                output_text="",
+                output=output_collection,
+            )
+
+    dummy_client = SimpleNamespace(responses=DummyResponsesClient())
+    chatgpt_integration._client_manager._async_client = dummy_client
+    monkeypatch.setattr(chatgpt_integration, "PREPARE_CONTEXT_AVAILABLE", False)
+    monkeypatch.setitem(chatgpt_integration.MODEL_TOKEN_LIMITS, "gpt-test", 900)
+
+    result = asyncio.run(
+        chatgpt_integration.generate_text_completion(
+            system_prompt="system",
+            user_prompt="user",
+            max_tokens=200,
+            model="gpt-test",
+        )
+    )
+
+    assert result == "Final response"
+    assert len(dummy_client.responses.calls) == 3
+    first_call, second_call, third_call = dummy_client.responses.calls
+    assert first_call["max_output_tokens"] == 200
+    assert second_call["max_output_tokens"] == min(200 + max(200, 512), 900)
+    assert third_call["max_output_tokens"] == 900
 
 
 def test_extract_output_text_surfaces_refusal(monkeypatch):
