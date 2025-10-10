@@ -213,7 +213,56 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                
+                '''
+                CREATE TABLE IF NOT EXISTS openai_conversations (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    openai_assistant_id TEXT NOT NULL,
+                    openai_thread_id TEXT NOT NULL,
+                    openai_run_id TEXT,
+                    openai_response_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    last_error TEXT,
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_openai_conversations_lookup
+                ON openai_conversations (user_id, conversation_id, openai_thread_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS conversation_scenes (
+                    id SERIAL PRIMARY KEY,
+                    conversation_id INTEGER NOT NULL,
+                    scene_number INTEGER NOT NULL,
+                    scene_title TEXT,
+                    scene_summary TEXT,
+                    scene_state JSONB DEFAULT '{}'::jsonb,
+                    active_npc_ids INTEGER[] DEFAULT '{}',
+                    location_reference TEXT,
+                    tension_level INTEGER DEFAULT 0,
+                    tags TEXT[] DEFAULT '{}',
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    is_active BOOLEAN DEFAULT FALSE,
+                    started_at TIMESTAMPTZ DEFAULT NOW(),
+                    ended_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE(conversation_id, scene_number)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conversation_scenes_active
+                ON conversation_scenes (conversation_id, is_active)
+                WHERE is_active = TRUE;
+                ''',
+
                 # ======================================
                 # GAME STATE AND SETTINGS
                 # ======================================
