@@ -7,11 +7,18 @@ import logging.config  # <-- new
 import time
 import json
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from nyx.nyx_agent.utils import _extract_last_assistant_text
 from utils.conversation_history import fetch_recent_turns
 from openai_integration.scene_manager import SceneManager
 from openai_integration.conversations import ConversationManager
+from chatkit_server import (
+    RoleplayChatServer,
+    extract_response_text,
+    extract_thread_metadata,
+    format_messages_for_chatkit,
+    stream_chatkit_tokens,
+)
 
 # ---- Logging setup (flip with LOG_LEVEL env var) ---------------------
 def setup_logging(level: str | None = None) -> None:
@@ -118,7 +125,7 @@ from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
 from middleware.rate_limiting import rate_limit, async_ip_block_middleware
 from middleware.validation import validate_request
 
-from logic.aggregator_sdk import init_singletons
+from logic.aggregator_sdk import init_singletons, build_aggregator_text
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +135,15 @@ app_is_ready = asyncio.Event()
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
     logger.critical("DB_DSN environment variable not set!")
+
+CHATKIT_MODEL = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4o-mini")
+
+conversation_manager = ConversationManager()
+try:
+    chatkit_server = RoleplayChatServer(conversation_manager.get_client())
+except Exception as exc:  # pragma: no cover - defensive initialisation
+    logger.warning("Unable to initialise ChatKit server: %s", exc)
+    chatkit_server = None
 
 
 def ensure_int_ids(user_id=None, conversation_id=None):
@@ -251,7 +267,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
             if assistant_id and thread_id:
                 try:
-                    persisted_conversation = await ConversationManager().get_or_create_conversation(
+                    persisted_conversation = await conversation_manager.get_or_create_conversation(
                         user_id=user_id,
                         conversation_id=conversation_id,
                         openai_assistant_id=assistant_id,
@@ -388,43 +404,30 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
         # ENHANCED RESPONSE HANDLING - Extract the message content properly
         message_content = ""
-        
-        # Try multiple ways to get the response text
+
         if isinstance(response, dict):
-            # First try: direct response field
             message_content = response.get("response", "")
-            
-            # Second try: nested function_args
+
             if not message_content and "function_args" in response:
                 message_content = response["function_args"].get("narrative", "")
-            
-            # Third try: metadata field
+
             if not message_content and "metadata" in response:
                 message_content = response["metadata"].get("response", "")
-            
-            # Fourth try: message field
+
             if not message_content:
                 message_content = response.get("message", "")
 
-        # Fallback to a default message if still empty
         if not message_content:
-            message_content = "I'm processing your request... something went wrong with the response formatting."
-            logger.warning(f"[BG Task {conversation_id}] No message content found in response: {list(response.keys()) if isinstance(response, dict) else type(response)}")
+            message_content = (
+                "I'm processing your request... something went wrong with the response formatting."
+            )
+            logger.warning(
+                f"[BG Task {conversation_id}] No message content found in response: {list(response.keys()) if isinstance(response, dict) else type(response)}"
+            )
 
-        logger.debug(f"[BG Task {conversation_id}] Extracted message content: {message_content[:100]}...")
-
-        # Store the Nyx response in DB using asyncpg
-        try:
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """INSERT INTO messages (conversation_id, sender, content, created_at)
-                       VALUES ($1, $2, $3, NOW())""",
-                    conversation_id, "Nyx", message_content
-                )
-            logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
-        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-            logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
-            # Continue but log the error
+        logger.debug(
+            f"[BG Task {conversation_id}] Extracted message content: {message_content[:100]}..."
+        )
 
         # Check if we should generate an image
         should_generate = False
@@ -481,42 +484,176 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             except Exception as img_err:
                 logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
 
-        # ENHANCED STREAMING with proper text validation
-        if message_content and message_content.strip():
-            # Clean and validate the message content
-            stream_text = message_content.strip()
-            
-            # Log what we're actually sending (helps with debugging)
-            logger.debug(f"[BG Task {conversation_id}] Streaming text len={len(stream_text)} preview={stream_text[:80]!r}")
-            
-            # Stream the text tokens
-            chunk_size = 5
-            delay = 0.01
-            for i in range(0, len(stream_text), chunk_size):
-                token = stream_text[i:i+chunk_size]
-                await sio.emit('new_token', {'token': token}, room=str(conversation_id))
-                await asyncio.sleep(delay)
+        final_text = message_content or ""
+        chatkit_streamed = False
+        chatkit_final = None
+        chatkit_thread_info: Dict[str, Any] = {}
 
-            # Send final completion message with enhanced data
-            completion_data = {
-                'full_text': stream_text,
-                'request_id': request_id,
-                'success': True,
-                'metadata': response.get('metadata') if isinstance(response, dict) else None,
-                'openai_conversation_id': openai_conv_id,
+        aggregator_text = (
+            aggregator_data.get("aggregatorText")
+            if isinstance(aggregator_data, dict)
+            else None
+        )
+        if not aggregator_text and isinstance(aggregator_data, dict):
+            aggregator_text = aggregator_data.get("aggregator_text")
+        if not aggregator_text:
+            try:
+                aggregator_text = build_aggregator_text(aggregator_data)
+            except Exception:
+                aggregator_text = ""
+
+        chatkit_messages: List[Dict[str, Any]] = []
+        if aggregator_text:
+            try:
+                history = await build_message_history(conversation_id, aggregator_text, user_input)
+                chatkit_messages = format_messages_for_chatkit(history)
+            except Exception as history_err:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "[BG Task %s] Failed to build ChatKit history: %s",
+                    conversation_id,
+                    history_err,
+                    exc_info=True,
+                )
+
+        metadata_payload: Dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+        }
+        if request_id:
+            metadata_payload["request_id"] = request_id
+        if assistant_id:
+            metadata_payload["assistant_id"] = assistant_id
+        if openai_record and isinstance(openai_record, dict):
+            existing_thread_id = openai_record.get("chatkit_thread_id")
+            if existing_thread_id:
+                metadata_payload["thread_id"] = existing_thread_id
+
+        if chatkit_server and chatkit_messages:
+            async def emit_token(token: str) -> None:
+                payload = {"token": token}
+                if openai_conv_id is not None:
+                    payload["openai_conversation_id"] = openai_conv_id
+                await sio.emit('new_token', payload, room=str(conversation_id))
+
+            try:
+                streamed_text, chatkit_final = await stream_chatkit_tokens(
+                    chatkit_server,
+                    model=CHATKIT_MODEL,
+                    input_data=chatkit_messages,
+                    metadata=metadata_payload,
+                    on_delta=emit_token,
+                )
+                if streamed_text:
+                    final_text = streamed_text
+                    chatkit_streamed = True
+                elif chatkit_final is not None:
+                    extracted = extract_response_text(chatkit_final)
+                    if extracted:
+                        final_text = extracted
+                        chatkit_streamed = False
+            except Exception as chatkit_err:
+                logger.error(
+                    "[BG Task %s] ChatKit streaming failed: %s",
+                    conversation_id,
+                    chatkit_err,
+                    exc_info=True,
+                )
+
+        trimmed_text = final_text.strip()
+        success = True
+        error_message: Optional[str] = None
+
+        if not chatkit_streamed:
+            if trimmed_text:
+                logger.debug(
+                    f"[BG Task {conversation_id}] Streaming text len={len(trimmed_text)} preview={trimmed_text[:80]!r}"
+                )
+                chunk_size = 5
+                delay = 0.01
+                for i in range(0, len(trimmed_text), chunk_size):
+                    token = trimmed_text[i:i + chunk_size]
+                    payload = {"token": token}
+                    if openai_conv_id is not None:
+                        payload["openai_conversation_id"] = openai_conv_id
+                    await sio.emit('new_token', payload, room=str(conversation_id))
+                    await asyncio.sleep(delay)
+            else:
+                success = False
+                error_message = 'Empty response content'
+                final_text = 'I encountered an issue generating a response. Please try again.'
+                trimmed_text = final_text.strip()
+
+        stored_text = final_text
+        if stored_text:
+            try:
+                async with get_db_connection_context() as conn:
+                    await conn.execute(
+                        """INSERT INTO messages (conversation_id, sender, content, created_at)
+                           VALUES ($1, $2, $3, NOW())""",
+                        conversation_id,
+                        "Nyx",
+                        stored_text,
+                    )
+                logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
+            except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+                logger.error(
+                    f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}",
+                    exc_info=True,
+                )
+
+        if chatkit_final:
+            chatkit_thread_info = extract_thread_metadata(chatkit_final)
+            assistant_for_thread = assistant_id or chatkit_thread_info.get("assistant_id")
+            thread_identifier = chatkit_thread_info.get("thread_id")
+            if assistant_for_thread and thread_identifier:
+                metadata_for_thread = {
+                    key: value
+                    for key, value in chatkit_thread_info.items()
+                    if key in {"response_id", "model", "status"} and value
+                }
+                try:
+                    await conversation_manager.get_or_create_chatkit_thread(
+                        conversation_id=conversation_id,
+                        chatkit_assistant_id=assistant_for_thread,
+                        chatkit_thread_id=thread_identifier,
+                        chatkit_run_id=chatkit_thread_info.get("run_id"),
+                        status=chatkit_thread_info.get("status", "completed") or "completed",
+                        metadata=metadata_for_thread,
+                    )
+                except Exception as chatkit_db_err:  # pragma: no cover - defensive logging
+                    logger.error(
+                        "[BG Task %s] Failed to persist ChatKit thread: %s",
+                        conversation_id,
+                        chatkit_db_err,
+                        exc_info=True,
+                    )
+
+            if isinstance(context.get("openai_conversation"), dict) and thread_identifier:
+                context["openai_conversation"]["chatkit_thread_id"] = thread_identifier
+                context["openai_conversation"]["chatkit_run_id"] = chatkit_thread_info.get("run_id")
+
+        completion_data = {
+            'full_text': trimmed_text,
+            'request_id': request_id,
+            'success': success,
+            'metadata': response.get('metadata') if isinstance(response, dict) else None,
+            'openai_conversation_id': openai_conv_id,
+        }
+
+        if error_message:
+            completion_data['error'] = error_message
+
+        if chatkit_thread_info:
+            completion_data['chatkit'] = {
+                key: value
+                for key, value in chatkit_thread_info.items()
+                if value
             }
 
-            await sio.emit('done', completion_data, room=str(conversation_id))
-            logger.info(f"[BG Task {conversation_id}] Finished streaming response (len={len(stream_text)}).")
-        else:
-            logger.warning(f"[BG Task {conversation_id}] No message content to stream after processing.")
-            await sio.emit('done', {
-                'full_text': 'I encountered an issue generating a response. Please try again.',
-                'request_id': request_id,
-                'success': False,
-                'error': 'Empty response content',
-                'openai_conversation_id': openai_conv_id,
-            }, room=str(conversation_id))
+        await sio.emit('done', completion_data, room=str(conversation_id))
+        logger.info(
+            f"[BG Task {conversation_id}] Finished streaming response (len={len(trimmed_text)})."
+        )
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
