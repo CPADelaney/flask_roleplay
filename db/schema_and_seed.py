@@ -236,6 +236,26 @@ async def create_all_tables():
                 ON openai_conversations (user_id, conversation_id, openai_thread_id);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS chatkit_threads (
+                    id SERIAL PRIMARY KEY,
+                    conversation_id INTEGER NOT NULL,
+                    chatkit_assistant_id TEXT NOT NULL,
+                    chatkit_thread_id TEXT NOT NULL,
+                    chatkit_run_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    last_error TEXT,
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE (conversation_id, chatkit_thread_id)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_chatkit_threads_lookup
+                ON chatkit_threads (conversation_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS conversation_scenes (
                     id SERIAL PRIMARY KEY,
                     conversation_id INTEGER NOT NULL,
