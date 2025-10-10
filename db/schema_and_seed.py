@@ -236,6 +236,10 @@ async def create_all_tables():
                 ON openai_conversations (user_id, conversation_id, openai_thread_id);
                 ''',
                 '''
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_openai_conversations_conversation_id
+                ON openai_conversations (conversation_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS chatkit_threads (
                     id SERIAL PRIMARY KEY,
                     conversation_id INTEGER NOT NULL,
