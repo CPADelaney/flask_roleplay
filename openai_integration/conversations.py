@@ -23,6 +23,33 @@ _RETURNING_COLUMNS = (
     "updated_at",
 )
 
+_SCENE_RETURNING_COLUMNS = (
+    "id",
+    "conversation_id",
+    "scene_number",
+    "scene_title",
+    "scene_summary",
+    "scene_state",
+    "active_npc_ids",
+    "location_reference",
+    "tension_level",
+    "tags",
+    "metadata",
+    "is_active",
+    "started_at",
+    "ended_at",
+    "created_at",
+    "updated_at",
+)
+
+_SELECT_ACTIVE_SCENE_QUERY = f"""
+    SELECT {', '.join(_SCENE_RETURNING_COLUMNS)}
+    FROM conversation_scenes
+    WHERE conversation_id = $1 AND is_active = TRUE
+    ORDER BY scene_number DESC
+    LIMIT 1
+"""
+
 
 async def _upsert_conversation(
     conn,
@@ -187,3 +214,154 @@ async def get_or_create_conversation(
             last_error=last_error,
             metadata=metadata,
         )
+
+
+async def _rotate_scene(
+    conn,
+    *,
+    conversation_id: int,
+    new_scene: Mapping[str, Any],
+    closing_scene: Optional[Mapping[str, Any]] = None,
+):
+    closing_scene = closing_scene or {}
+
+    active_scene = await conn.fetchrow(
+        _SELECT_ACTIVE_SCENE_QUERY,
+        conversation_id,
+    )
+
+    if active_scene:
+        await conn.execute(
+            """
+            UPDATE conversation_scenes
+            SET
+                scene_summary = COALESCE($2, scene_summary),
+                scene_state = COALESCE($3::jsonb, scene_state),
+                metadata = COALESCE(metadata, '{}'::jsonb) || COALESCE($4::jsonb, '{}'::jsonb),
+                is_active = FALSE,
+                ended_at = COALESCE(ended_at, NOW()),
+                updated_at = NOW()
+            WHERE id = $1
+            """,
+            active_scene["id"],
+            closing_scene.get("scene_summary"),
+            closing_scene.get("scene_state"),
+            closing_scene.get("metadata"),
+        )
+
+    new_scene_data: Dict[str, Any] = dict(new_scene)
+
+    explicit_scene_number = new_scene_data.get("scene_number")
+    if explicit_scene_number is not None:
+        scene_number = explicit_scene_number
+    elif active_scene:
+        scene_number = (active_scene.get("scene_number") or 0) + 1
+    else:
+        scene_number = 1
+
+    active_npc_ids = new_scene_data.get("active_npc_ids")
+    tags = new_scene_data.get("tags")
+
+    if active_npc_ids is None:
+        active_npc_ids_param = []
+    elif isinstance(active_npc_ids, (str, bytes)):
+        active_npc_ids_param = [active_npc_ids]
+    else:
+        active_npc_ids_param = list(active_npc_ids)
+
+    if tags is None:
+        tags_param = []
+    elif isinstance(tags, (str, bytes)):
+        tags_param = [tags]
+    else:
+        tags_param = list(tags)
+
+    tension_level = new_scene_data.get("tension_level")
+    metadata = new_scene_data.get("metadata")
+
+    inserted_scene = await conn.fetchrow(
+        f"""
+        INSERT INTO conversation_scenes (
+            conversation_id,
+            scene_number,
+            scene_title,
+            scene_summary,
+            scene_state,
+            active_npc_ids,
+            location_reference,
+            tension_level,
+            tags,
+            metadata,
+            is_active
+        )
+        VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5::jsonb,
+            $6::int[],
+            $7,
+            $8,
+            $9::text[],
+            $10::jsonb,
+            TRUE
+        )
+        RETURNING {', '.join(_SCENE_RETURNING_COLUMNS)}
+        """,
+        conversation_id,
+        scene_number,
+        new_scene_data.get("scene_title"),
+        new_scene_data.get("scene_summary"),
+        new_scene_data.get("scene_state") or {},
+        active_npc_ids_param,
+        new_scene_data.get("location_reference"),
+        tension_level if tension_level is not None else 0,
+        tags_param,
+        metadata or {},
+    )
+
+    return dict(inserted_scene) if inserted_scene else None
+
+
+async def rotate_conversation_scene(
+    *,
+    conversation_id: int,
+    new_scene: Mapping[str, Any],
+    closing_scene: Optional[Mapping[str, Any]] = None,
+    conn=None,
+):
+    if conn is not None:
+        return await _rotate_scene(
+            conn,
+            conversation_id=conversation_id,
+            new_scene=new_scene,
+            closing_scene=closing_scene,
+        )
+
+    async with get_db_connection_context() as db_conn:
+        return await _rotate_scene(
+            db_conn,
+            conversation_id=conversation_id,
+            new_scene=new_scene,
+            closing_scene=closing_scene,
+        )
+
+
+async def get_active_scene(
+    *,
+    conversation_id: int,
+    conn=None,
+):
+    async def _get(connection):
+        record = await connection.fetchrow(
+            _SELECT_ACTIVE_SCENE_QUERY,
+            conversation_id,
+        )
+        return dict(record) if record else None
+
+    if conn is not None:
+        return await _get(conn)
+
+    async with get_db_connection_context() as db_conn:
+        return await _get(db_conn)
