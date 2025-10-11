@@ -248,6 +248,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 if not isinstance(openai_record, dict):
                     openai_record = None
 
+        assistant_id: Optional[str] = None
+        thread_id: Optional[str] = None
         if openai_record:
             context["openai_conversation"] = openai_record
             openai_conv_id = (
