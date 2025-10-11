@@ -155,18 +155,24 @@ def format_messages_for_chatkit(messages: Sequence[Mapping[str, Any]]) -> List[D
         role = message.get("role", "user")
         content = message.get("content", "")
 
+        # Responses API differentiates between user/system input and assistant output
+        if role == "assistant":
+            text_type = "output_text"
+        else:
+            text_type = "input_text"
+
         if isinstance(content, str):
             formatted.append({
                 "role": role,
-                "content": [{"type": "text", "text": content}],
+                "content": [{"type": text_type, "text": content}],
             })
-        elif isinstance(content, Sequence):
+        elif isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
             # Assume already formatted content list
             formatted.append({"role": role, "content": list(content)})
         else:
             formatted.append({
                 "role": role,
-                "content": [{"type": "text", "text": str(content)}],
+                "content": [{"type": text_type, "text": str(content)}],
             })
 
     return formatted

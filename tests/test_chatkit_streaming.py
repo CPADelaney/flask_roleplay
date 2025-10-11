@@ -104,6 +104,6 @@ def test_format_messages_for_chatkit_wraps_text():
     formatted = format_messages_for_chatkit(messages)
 
     assert formatted == [
-        {"role": "system", "content": [{"type": "text", "text": "Hello"}]},
-        {"role": "user", "content": [{"type": "text", "text": "World"}]},
+        {"role": "system", "content": [{"type": "input_text", "text": "Hello"}]},
+        {"role": "user", "content": [{"type": "input_text", "text": "World"}]},
     ]
