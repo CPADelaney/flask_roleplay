@@ -45,41 +45,39 @@ async def init_knowledge():
 async def create_knowledge_tables():
     """Create the knowledge tables if they don't exist."""
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute('''
+        async with conn.transaction():
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS PlotTriggers (
                     id SERIAL PRIMARY KEY,
-                    stage TEXT NOT NULL,            -- e.g. "Early Stage", "Mid-Stage Escalation", "Endgame"
-                    title TEXT NOT NULL,            -- e.g. "Collaborative Mockery", "Public Display of Marking"
-                    stat_requirements JSONB,        -- any numeric or threshold-based conditions
-                    description TEXT,               -- main narrative chunk
-                    examples JSONB                  -- list of example micro-narratives
+                    stage TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stat_requirements JSONB,
+                    description TEXT,
+                    examples JSONB
                 );
             ''')
 
-            await cursor.execute('''
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS IntensityTiers (
                     id SERIAL PRIMARY KEY,
-                    tier_name TEXT NOT NULL,        -- e.g. "Low Intensity (0–30)"
+                    tier_name TEXT NOT NULL,
                     range_min INT NOT NULL,
                     range_max INT NOT NULL,
-                    key_features JSONB,            -- bullet points from doc
-                    activity_examples JSONB,       -- short examples
-                    permanent_effects JSONB        -- for maximum intensity or major changes
+                    key_features JSONB,
+                    activity_examples JSONB,
+                    permanent_effects JSONB
                 );
             ''')
 
-            await cursor.execute('''
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS Interactions (
                     id SERIAL PRIMARY KEY,
-                    interaction_name TEXT NOT NULL,   -- e.g. "Weighted Success/Failure Rules"
-                    detailed_rules JSONB,            -- big chunk describing how you handle success/failure
-                    task_examples JSONB,             -- e.g. "non_npc_challenges", "npc_driven_tasks"
-                    agency_overrides JSONB           -- e.g. thresholds for Obedience, Corruption, etc.
+                    interaction_name TEXT NOT NULL,
+                    detailed_rules JSONB,
+                    task_examples JSONB,
+                    agency_overrides JSONB
                 );
             ''')
-
-        await conn.commit()
 
 
 async def insert_plot_triggers(ctx, conn):
@@ -88,17 +86,15 @@ async def insert_plot_triggers(ctx, conn):
     We break them up by stage (Early, Mid, Endgame, etc.)
     plus some stat-driven triggers like 'Trust-Based Betrayal', etc.
     """
-    async with conn.cursor() as cursor:
-        # Check if PlotTriggers table already has data
-        await cursor.execute("SELECT COUNT(*) FROM PlotTriggers")
-        result = await cursor.fetchone()
-        
-        # If table is not empty, exit the function early
-        if result and result[0] > 0:
-            return
+    # Check if PlotTriggers table already has data
+    existing = await conn.fetchval("SELECT COUNT(*) FROM PlotTriggers")
 
-        # Define all plot triggers
-        plot_triggers = [
+    # If table is not empty, exit the function early
+    if existing and existing > 0:
+        return
+
+    # Define all plot triggers
+    plot_triggers = [
             # Early Stage triggers
             {
                 "stage": "Early Stage",
@@ -195,18 +191,19 @@ async def insert_plot_triggers(ctx, conn):
             }
         ]
 
-        # Insert all plot triggers
-        for trigger in plot_triggers:
-            await cursor.execute('''
-                INSERT INTO PlotTriggers (stage, title, stat_requirements, description, examples)
-                VALUES (%s, %s, %s, %s, %s)
-            ''', (
-                trigger["stage"],
-                trigger["title"],
-                json.dumps(trigger["stat_requirements"]),
-                trigger["description"],
-                json.dumps(trigger["examples"])
-            ))
+    # Insert all plot triggers
+    for trigger in plot_triggers:
+        await conn.execute(
+            '''
+            INSERT INTO PlotTriggers (stage, title, stat_requirements, description, examples)
+            VALUES ($1, $2, $3, $4, $5)
+            ''',
+            trigger["stage"],
+            trigger["title"],
+            json.dumps(trigger["stat_requirements"]),
+            trigger["description"],
+            json.dumps(trigger["examples"]),
+        )
 
         # Log as canonical event
         await canon.log_canonical_event(
@@ -222,17 +219,15 @@ async def insert_intensity_tiers(ctx, conn):
     Insert your IntensityTiers.doc data (0–30 = Low, 30–60 = Moderate, etc.)
     Only run the insertions if the IntensityTiers table is empty.
     """
-    async with conn.cursor() as cursor:
-        # Check if the IntensityTiers table is empty
-        await cursor.execute("SELECT COUNT(*) FROM IntensityTiers")
-        result = await cursor.fetchone()
-        
-        # If table is not empty, exit the function early
-        if result and result[0] > 0:
-            return
+    # Check if the IntensityTiers table is empty
+    existing = await conn.fetchval("SELECT COUNT(*) FROM IntensityTiers")
 
-        # Define all intensity tiers
-        intensity_tiers = [
+    # If table is not empty, exit the function early
+    if existing and existing > 0:
+        return
+
+    # Define all intensity tiers
+    intensity_tiers = [
             {
                 "tier_name": "Low Intensity (0–30)",
                 "range_min": 0,
@@ -317,19 +312,20 @@ async def insert_intensity_tiers(ctx, conn):
             }
         ]
 
-        # Insert all intensity tiers
-        for tier in intensity_tiers:
-            await cursor.execute('''
-                INSERT INTO IntensityTiers (tier_name, range_min, range_max, key_features, activity_examples, permanent_effects)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (
-                tier["tier_name"],
-                tier["range_min"],
-                tier["range_max"],
-                json.dumps(tier["key_features"]),
-                json.dumps(tier["activity_examples"]),
-                json.dumps(tier["permanent_effects"]) if tier["permanent_effects"] else None
-            ))
+    # Insert all intensity tiers
+    for tier in intensity_tiers:
+        await conn.execute(
+            '''
+            INSERT INTO IntensityTiers (tier_name, range_min, range_max, key_features, activity_examples, permanent_effects)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ''',
+            tier["tier_name"],
+            tier["range_min"],
+            tier["range_max"],
+            json.dumps(tier["key_features"]),
+            json.dumps(tier["activity_examples"]),
+            json.dumps(tier["permanent_effects"]) if tier["permanent_effects"] else None,
+        )
 
         # Log as canonical event
         await canon.log_canonical_event(
@@ -345,17 +341,15 @@ async def insert_interactions_data(ctx, conn):
     Insert data from Interactions.doc describing success/failure rules,
     examples of tasks, and agency overrides.
     """
-    async with conn.cursor() as cursor:
-        # Check if the Interactions table is empty
-        await cursor.execute("SELECT COUNT(*) FROM Interactions")
-        result = await cursor.fetchone()
-        
-        # If table is not empty, exit the function early
-        if result and result[0] > 0:
-            return
+    # Check if the Interactions table is empty
+    existing = await conn.fetchval("SELECT COUNT(*) FROM Interactions")
 
-        # Define interaction rules
-        interactions = [
+    # If table is not empty, exit the function early
+    if existing and existing > 0:
+        return
+
+    # Define interaction rules
+    interactions = [
             {
                 "interaction_name": "Weighted Success/Failure",
                 "detailed_rules": {
@@ -445,17 +439,18 @@ async def insert_interactions_data(ctx, conn):
             }
         ]
 
-        # Insert all interactions
-        for interaction in interactions:
-            await cursor.execute('''
-                INSERT INTO Interactions (interaction_name, detailed_rules, task_examples, agency_overrides)
-                VALUES (%s, %s, %s, %s)
-            ''', (
-                interaction["interaction_name"],
-                json.dumps(interaction["detailed_rules"]),
-                json.dumps(interaction["task_examples"]),
-                json.dumps(interaction["agency_overrides"])
-            ))
+    # Insert all interactions
+    for interaction in interactions:
+        await conn.execute(
+            '''
+            INSERT INTO Interactions (interaction_name, detailed_rules, task_examples, agency_overrides)
+            VALUES ($1, $2, $3, $4)
+            ''',
+            interaction["interaction_name"],
+            json.dumps(interaction["detailed_rules"]),
+            json.dumps(interaction["task_examples"]),
+            json.dumps(interaction["agency_overrides"]),
+        )
 
         # Log as canonical event
         await canon.log_canonical_event(

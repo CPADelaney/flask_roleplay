@@ -56,22 +56,30 @@ async def get_npc_learning_status(npc_id):
     try:
         # Get NPC details
         async with get_db_connection_context() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    SELECT npc_name, dominance, cruelty, intensity, aggression, manipulativeness
-                    FROM NPCStats 
-                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                """, (npc_id, user_id, conversation_id))
-                row = await cursor.fetchone()
-        
+            row = await conn.fetchrow(
+                """
+                SELECT npc_name, dominance, cruelty, intensity, aggression, manipulativeness
+                FROM NPCStats
+                WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                """,
+                npc_id,
+                user_id,
+                conversation_id,
+            )
+
         if not row:
             return create_error_response(
-                f"NPC {npc_id} not found", 
-                "The requested NPC was not found.", 
+                f"NPC {npc_id} not found",
+                "The requested NPC was not found.",
                 404
             )
-        
-        npc_name, dominance, cruelty, intensity, aggression, manipulativeness = row
+
+        npc_name = row["npc_name"]
+        dominance = row["dominance"]
+        cruelty = row["cruelty"]
+        intensity = row["intensity"]
+        aggression = row["aggression"]
+        manipulativeness = row["manipulativeness"]
         
         # Get learning system
         learning_system = NPCLearningAdaptation(user_id, conversation_id, npc_id)
@@ -288,22 +296,19 @@ async def batch_process_npc_learning():
         valid_npc_ids = []
         
         async with get_db_connection_context() as conn:
-            # Get valid NPCs
-            async with conn.cursor() as cursor:
-                # Create placeholders for the IN clause
-                placeholder = ', '.join(['%s'] * len(npc_ids))
-                query = f"""
-                    SELECT npc_id 
-                    FROM NPCStats 
-                    WHERE user_id = %s 
-                    AND conversation_id = %s 
-                    AND npc_id IN ({placeholder})
+            rows = await conn.fetch(
                 """
-                params = [user_id, conversation_id] + npc_ids
-                await cursor.execute(query, tuple(params))
-                
-                rows = await cursor.fetchall()
-                valid_npc_ids = [row[0] for row in rows]
+                SELECT npc_id
+                FROM NPCStats
+                WHERE user_id=$1
+                  AND conversation_id=$2
+                  AND npc_id = ANY($3::text[])
+                """,
+                user_id,
+                conversation_id,
+                npc_ids,
+            )
+            valid_npc_ids = [row["npc_id"] for row in rows]
         
         # Check if any NPCs were invalid
         invalid_npc_ids = set(npc_ids) - set(valid_npc_ids)
@@ -395,28 +400,26 @@ async def get_all_npcs():
         npcs = []
         
         async with get_db_connection_context() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute(
-                    """
-                    SELECT n.npc_id, n.npc_name, s.dominance, s.cruelty, s.intensity
-                    FROM npcs n
-                    JOIN npc_stats s ON n.npc_id = s.npc_id
-                    WHERE n.user_id = %s AND n.conversation_id = %s
-                    ORDER BY n.npc_name
-                    """,
-                    (user_id, conversation_id)
-                )
-                
-                rows = await cursor.fetchall()
-                
-                for row in rows:
-                    npcs.append({
-                        "npc_id": row[0],
-                        "npc_name": row[1],
-                        "dominance": row[2],
-                        "cruelty": row[3],
-                        "intensity": row[4]
-                    })
+            rows = await conn.fetch(
+                """
+                SELECT n.npc_id, n.npc_name, s.dominance, s.cruelty, s.intensity
+                FROM npcs n
+                JOIN npc_stats s ON n.npc_id = s.npc_id
+                WHERE n.user_id=$1 AND n.conversation_id=$2
+                ORDER BY n.npc_name
+                """,
+                user_id,
+                conversation_id,
+            )
+
+            for row in rows:
+                npcs.append({
+                    "npc_id": row["npc_id"],
+                    "npc_name": row["npc_name"],
+                    "dominance": row["dominance"],
+                    "cruelty": row["cruelty"],
+                    "intensity": row["intensity"],
+                })
         
         return jsonify({"success": True, "npcs": npcs})
     except Exception as e:
