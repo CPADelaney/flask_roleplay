@@ -1830,7 +1830,15 @@ async def generate_text_completion(
         if response_format == "json":
             params["response_format"] = {"type": "json_object"}  # Responses JSON mode
         
-        response = await client.responses.create(**params)
+        model_limit = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
+        requested_limit = params.get("max_output_tokens")
+        if requested_limit is not None and requested_limit > model_limit:
+            logger.info(
+                "Requested max_output_tokens %s exceeds model limit %s; clamping to limit",
+                requested_limit,
+                model_limit,
+            )
+            params["max_output_tokens"] = model_limit
 
         def _is_max_token_incomplete(result: Any) -> bool:
             """Return True when the Responses API result hit the max token ceiling."""
@@ -1847,25 +1855,44 @@ async def generate_text_completion(
                 reason = getattr(details, "reason", None)
             return reason == "max_output_tokens"
 
-        if _is_max_token_incomplete(response):
-            original_limit = params.get("max_output_tokens", max_tokens)
-            model_limit = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
-            headroom = max(original_limit, 512)
-            expanded_limit = min(original_limit + headroom, model_limit)
+        async def _create_with_expanding_limit() -> Any:
+            """Call the Responses API, expanding max_output_tokens when truncated."""
 
-            if expanded_limit > original_limit:
+            while True:
+                response_inner = await client.responses.create(**params)
+
+                if not _is_max_token_incomplete(response_inner):
+                    return response_inner
+
+                current_limit = params.get("max_output_tokens", max_tokens)
+                headroom = max(current_limit, 512)
+                expanded_limit = min(current_limit + headroom, model_limit)
+
+                if expanded_limit <= current_limit:
+                    diagnostics = _collect_response_diagnostics(response_inner)
+                    diagnostics.update(
+                        {
+                            "max_output_tokens": current_limit,
+                            "model_limit": model_limit,
+                        }
+                    )
+                    logger.error(
+                        "LLM response incomplete due to max_output_tokens and cannot increase allowance beyond %s",
+                        current_limit,
+                    )
+                    raise EmptyLLMOutputError(
+                        "LLM response incomplete after reaching the model token limit",
+                        diagnostics=diagnostics,
+                    )
+
                 logger.info(
                     "LLM response incomplete due to max_output_tokens; increasing allowance from %s to %s",
-                    original_limit,
+                    current_limit,
                     expanded_limit,
                 )
                 params["max_output_tokens"] = expanded_limit
-                response = await client.responses.create(**params)
-            else:
-                logger.info(
-                    "LLM response incomplete due to max_output_tokens but cannot increase allowance beyond %s",
-                    original_limit,
-                )
+
+        response = await _create_with_expanding_limit()
 
         text, was_refusal = _extract_output_text(response)
         stripped_text = text.strip()
@@ -1884,7 +1911,7 @@ async def generate_text_completion(
         else:
             logger.warning("Empty text extracted from LLM response; retrying once. No diagnostics available")
 
-        retry_response = await client.responses.create(**params)
+        retry_response = await _create_with_expanding_limit()
         retry_text, retry_was_refusal = _extract_output_text(retry_response)
         retry_stripped = retry_text.strip()
 
