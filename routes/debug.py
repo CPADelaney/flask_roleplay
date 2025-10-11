@@ -10,10 +10,8 @@ async def debug_connections():
     """Debug endpoint to test database connections"""
     try:
         async with get_db_connection_context() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute("SELECT 1 as test")
-                row = await cursor.fetchone()
-                
+            row = await conn.fetchrow("SELECT 1 as test")
+
         return jsonify({
             "status": "success",
             "message": "Database connection is working",

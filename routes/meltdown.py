@@ -26,15 +26,15 @@ async def remove_meltdown_npc():
 
     async with get_db_connection_context() as conn:
         # Grab meltdown NPC(s)
-        async with conn.cursor() as cursor:
-            await cursor.execute("""
-                SELECT npc_id, npc_name, monica_level, memory
-                FROM NPCStats
-                WHERE monica_level > 0
-                    AND introduced = TRUE
-                ORDER BY monica_level DESC
-            """)
-            meltdown_npcs = await cursor.fetchall()
+        meltdown_npcs = await conn.fetch(
+            """
+            SELECT npc_id, npc_name, monica_level, memory
+            FROM NPCStats
+            WHERE monica_level > 0
+              AND introduced = TRUE
+            ORDER BY monica_level DESC
+            """
+        )
 
         if not meltdown_npcs:
             return jsonify({
@@ -43,7 +43,10 @@ async def remove_meltdown_npc():
 
         # We'll consider the top meltdown NPC (highest monica_level)
         top = meltdown_npcs[0]
-        npc_id, npc_name, monica_level, npc_memory = top
+        npc_id = top["npc_id"]
+        npc_name = top["npc_name"]
+        monica_level = top["monica_level"]
+        npc_memory = top["memory"]
 
         meltdown_response = ""
 
@@ -97,7 +100,7 @@ async def remove_meltdown_npc():
             lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
 
             for row in meltdown_npcs:
-                mid = row[0]
+                mid = row["npc_id"]
                 await lore_system.propose_and_enact_change(
                     ctx=ctx,
                     entity_type="NPCStats",
@@ -108,7 +111,7 @@ async def remove_meltdown_npc():
 
             await canon.log_canonical_event(
                 ctx, conn,
-                f"Meltdown NPCs deactivated: {[row[1] for row in meltdown_npcs]}",
+                f"Meltdown NPCs deactivated: {[row['npc_name'] for row in meltdown_npcs]}",
                 tags=["meltdown", "npc_removal"],
                 significance=7
             )
@@ -135,7 +138,7 @@ async def remove_meltdown_npc():
             lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
 
             for row in meltdown_npcs:
-                mid = row[0]
+                mid = row["npc_id"]
                 await lore_system.propose_and_enact_change(
                     ctx=ctx,
                     entity_type="NPCStats",
@@ -146,7 +149,7 @@ async def remove_meltdown_npc():
 
             await canon.log_canonical_event(
                 ctx, conn,
-                f"Meltdown NPCs prematurely deactivated: {[row[1] for row in meltdown_npcs]}",
+                f"Meltdown NPCs prematurely deactivated: {[row['npc_name'] for row in meltdown_npcs]}",
                 tags=["meltdown", "npc_removal"],
                 significance=6
             )
@@ -168,22 +171,22 @@ async def one_room_scenario():
     """
     async with get_db_connection_context() as conn:
         # 1. Find meltdown NPC with highest monica_level
-        async with conn.cursor() as cursor:
-            await cursor.execute(
-                """
-                SELECT npc_id, npc_name, monica_level
-                FROM NPCStats
-                WHERE monica_level > 0
-                ORDER BY monica_level DESC
-                LIMIT 1
-                """
-            )
-            row = await cursor.fetchone()
-            
+        row = await conn.fetchrow(
+            """
+            SELECT npc_id, npc_name, monica_level
+            FROM NPCStats
+            WHERE monica_level > 0
+            ORDER BY monica_level DESC
+            LIMIT 1
+            """
+        )
+
         if not row:
             return jsonify({"message": "No meltdown NPC found. Need meltdown to do the one-room scenario."}), 400
 
-        monica_id, monica_name, meltdown_level = row
+        monica_id = row["npc_id"]
+        monica_name = row["npc_name"]
+        meltdown_level = row["monica_level"]
 
         class MeltdownContext:
             def __init__(self):
@@ -208,21 +211,18 @@ async def one_room_scenario():
             )
 
         # 3. Clear out all settings and insert Blank Space
-        async with conn.cursor() as cursor:
-            await cursor.execute("DELETE FROM Settings;")
-            await cursor.execute(
-                '''
-                INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
-                VALUES (%s, %s, %s, %s, %s)
-                ''',
-                (
-                    "Blank Space",
-                    "An endless white void where only the meltdown NPC and the Player exist.",
-                    json.dumps(["No objects, no other NPCs, time stands still."]),
-                    json.dumps({}),
-                    json.dumps(["You can only speak with this meltdown NPC here."])
-                )
-            )
+        await conn.execute("DELETE FROM Settings;")
+        await conn.execute(
+            '''
+            INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+            VALUES ($1, $2, $3, $4, $5)
+            ''',
+            "Blank Space",
+            "An endless white void where only the meltdown NPC and the Player exist.",
+            json.dumps(["No objects, no other NPCs, time stands still."]),
+            json.dumps({}),
+            json.dumps(["You can only speak with this meltdown NPC here."]),
+        )
 
         await canon.log_canonical_event(
             ctx,
@@ -244,14 +244,16 @@ async def generate_meltdown_line(npc_id):
     optionally glitchify if meltdown_level is high.
     """
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute("SELECT npc_name, monica_level FROM NPCStats WHERE npc_id=%s", (npc_id,))
-            row = await cursor.fetchone()
-            
+        row = await conn.fetchrow(
+            "SELECT npc_name, monica_level FROM NPCStats WHERE npc_id=$1",
+            npc_id,
+        )
+
         if not row:
             return jsonify({"error": f"No NPC found with id={npc_id}"}), 404
 
-        npc_name, meltdown_level = row
+        npc_name = row["npc_name"]
+        meltdown_level = row["monica_level"]
         # call GPT - this part is commented out in the original
         # meltdown_line = meltdown_dialog_gpt(npc_name, meltdown_level)
 

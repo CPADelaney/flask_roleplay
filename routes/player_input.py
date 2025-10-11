@@ -29,12 +29,16 @@ async def start_chat():
         
         # Store user message in database
         async with get_db_connection_context() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("""
-                    INSERT INTO messages (conversation_id, sender, content) 
-                    VALUES (%s, %s, %s)
-                """, (conversation_id, "user", user_input))
-            await conn.commit()
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO messages (conversation_id, sender, content)
+                    VALUES ($1, $2, $3)
+                    """,
+                    conversation_id,
+                    "user",
+                    user_input,
+                )
         
         # The socketio object is imported and used in main.py
         # This route just returns success, and the actual processing happens via Socket.IO
@@ -77,19 +81,21 @@ async def handle_player_input():
     user_text = payload.get("text", "")
 
     async with get_db_connection_context() as conn:
-        # Query for any meltdown NPC(s), sorted by monica_level desc
-        async with conn.cursor() as cursor:
-            await cursor.execute("""
-                SELECT npc_id, npc_name, monica_level
-                FROM NPCStats
-                WHERE monica_level > 0
-                ORDER BY monica_level DESC
-            """)
-            meltdown_rows = await cursor.fetchall()
+        meltdown_rows = await conn.fetch(
+            """
+            SELECT npc_id, npc_name, monica_level
+            FROM NPCStats
+            WHERE monica_level > 0
+            ORDER BY monica_level DESC
+            """
+        )
 
     if meltdown_rows:
         # Take the top meltdown NPC (highest level)
-        npc_id, npc_name, mlevel = meltdown_rows[0]
+        top_row = meltdown_rows[0]
+        npc_id = top_row["npc_id"]
+        npc_name = top_row["npc_name"]
+        mlevel = top_row["monica_level"]
 
         # Construct a 'pseudo-script' showing user text being forcibly overwritten
         pseudo_script = f"""
