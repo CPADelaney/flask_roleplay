@@ -129,6 +129,13 @@ def extract_thread_metadata(response: Any) -> Dict[str, Optional[Any]]:
     if not assistant_id and run_map:
         assistant_id = run_map.get("assistant_id")
 
+    conversation_info = mapping.get("conversation")
+    conversation_map = _as_mapping(conversation_info) if conversation_info else None
+
+    conversation_id = mapping.get("conversation_id")
+    if not conversation_id and conversation_map:
+        conversation_id = conversation_map.get("id")
+
     return {
         "thread_id": thread_id,
         "run_id": run_id,
@@ -136,6 +143,7 @@ def extract_thread_metadata(response: Any) -> Dict[str, Optional[Any]]:
         "status": mapping.get("status"),
         "response_id": mapping.get("id") or mapping.get("response_id"),
         "model": mapping.get("model"),
+        "conversation_id": conversation_id,
     }
 
 

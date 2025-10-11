@@ -96,7 +96,8 @@ async def test_create_conversation_uses_defined_columns():
         "openai_response_id": "resp-1",
         "status": "active",
         "last_error": None,
-        "metadata": {"foo": "bar"},
+        "metadata": {"foo": "bar", "openai_conversation_id": "conv-remote-1"},
+        "openai_conversation_id": "conv-remote-1",
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z",
     }
@@ -111,6 +112,7 @@ async def test_create_conversation_uses_defined_columns():
         openai_response_id="resp-1",
         status="active",
         metadata={"foo": "bar"},
+        openai_conversation_id="conv-remote-1",
         conn=conn,
     )
 
@@ -130,7 +132,7 @@ async def test_create_conversation_uses_defined_columns():
         "resp-1",
         "active",
         None,
-        {"foo": "bar"},
+        {"foo": "bar", "openai_conversation_id": "conv-remote-1"},
     )
 
 
@@ -146,7 +148,8 @@ async def test_get_or_create_returns_existing_row_without_insert():
         "openai_response_id": None,
         "status": "ready",
         "last_error": None,
-        "metadata": {},
+        "metadata": {"openai_conversation_id": "existing-remote"},
+        "openai_conversation_id": "existing-remote",
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z",
     }
@@ -179,7 +182,8 @@ async def test_get_or_create_inserts_when_missing():
         "openai_response_id": None,
         "status": "pending",
         "last_error": None,
-        "metadata": {},
+        "metadata": {"openai_conversation_id": "conv-new"},
+        "openai_conversation_id": "conv-new",
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z",
     }
@@ -190,6 +194,7 @@ async def test_get_or_create_inserts_when_missing():
         conversation_id=77,
         openai_assistant_id="new",
         openai_thread_id="thread-new",
+        openai_conversation_id="conv-new",
         conn=conn,
     )
 
@@ -201,7 +206,7 @@ async def test_get_or_create_inserts_when_missing():
     assert insert_query.strip().startswith("INSERT INTO openai_conversations")
     assert insert_params[0] == 4
     assert insert_params[1] == 77
-    assert insert_params[-1] == {}
+    assert insert_params[-1] == {"openai_conversation_id": "conv-new"}
 
 
 @pytest.mark.anyio("asyncio")

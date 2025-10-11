@@ -38,11 +38,22 @@ class RoleplayChatServer:
         receive the actual stream before iterating.
         """
 
+        conversation_ref = None
+        if metadata is not None:
+            conversation_ref = (
+                metadata.get("openai_conversation_id")
+                or metadata.get("conversation")
+            )
+
+        stream_kwargs = dict(kwargs)
+        if conversation_ref and "conversation" not in stream_kwargs:
+            stream_kwargs["conversation"] = conversation_ref
+
         async with self._client.responses.stream(  # type: ignore[call-arg]
             model=model,
             input=input,
             metadata=metadata,
-            **kwargs,
+            **stream_kwargs,
         ) as stream:
             async for event in stream:
                 yield event

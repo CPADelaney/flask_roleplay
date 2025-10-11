@@ -386,6 +386,7 @@ def _build_openai_integration_payload(
         chatkit_thread_id = conversation.get("chatkit_thread_id")
         chatkit_run_id = conversation.get("chatkit_run_id")
         chatkit_payload = conversation.get("chatkit_thread")
+        openai_conversation_id = conversation.get("openai_conversation_id")
 
         if assistant_id:
             payload["assistant_id"] = assistant_id
@@ -395,6 +396,8 @@ def _build_openai_integration_payload(
             payload["run_id"] = run_id
         if response_id:
             payload["response_id"] = response_id
+        if openai_conversation_id:
+            payload["openai_conversation_id"] = openai_conversation_id
         if chatkit_thread_id:
             payload["chatkit_thread_id"] = chatkit_thread_id
         if chatkit_run_id:
