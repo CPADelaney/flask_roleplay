@@ -60,6 +60,7 @@ async def test_stream_chatkit_tokens_orders_events_before_completion():
                 "status": "completed",
                 "id": "resp-1",
                 "model": "gpt-test",
+                "conversation": {"id": "conv-1"},
             },
         },
     ]
@@ -89,6 +90,7 @@ async def test_stream_chatkit_tokens_orders_events_before_completion():
     assert metadata["thread_id"] == "thread-1"
     assert metadata["run_id"] == "run-1"
     assert metadata["assistant_id"] == "assistant-1"
+    assert metadata["conversation_id"] == "conv-1"
 
     assert extract_response_text(final_payload) == "Hello world"
 

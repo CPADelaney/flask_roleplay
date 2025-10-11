@@ -70,6 +70,45 @@ _SELECT_ACTIVE_SCENE_QUERY = f"""
 """
 
 
+def _merge_metadata(
+    base: Optional[Mapping[str, Any]],
+    *,
+    openai_conversation_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a mutable metadata dictionary with the OpenAI conversation id."""
+
+    metadata: Dict[str, Any] = dict(base) if isinstance(base, Mapping) else {}
+    if openai_conversation_id:
+        metadata["openai_conversation_id"] = openai_conversation_id
+    return metadata
+
+
+def _normalise_openai_record(record: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Ensure conversation rows surface metadata and the remote conversation id."""
+
+    if not record:
+        return None
+
+    normalised: Dict[str, Any] = dict(record)
+
+    metadata = normalised.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata_dict: Dict[str, Any] = {}
+    else:
+        metadata_dict = dict(metadata)
+
+    openai_conversation_id = normalised.get("openai_conversation_id") or metadata_dict.get(
+        "openai_conversation_id"
+    )
+
+    if openai_conversation_id:
+        normalised["openai_conversation_id"] = openai_conversation_id
+        metadata_dict["openai_conversation_id"] = openai_conversation_id
+
+    normalised["metadata"] = metadata_dict
+    return normalised
+
+
 async def _upsert_conversation(
     conn,
     *,
@@ -79,13 +118,14 @@ async def _upsert_conversation(
     openai_thread_id: str,
     openai_run_id: Optional[str] = None,
     openai_response_id: Optional[str] = None,
+    openai_conversation_id: Optional[str] = None,
     status: str = "pending",
     last_error: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Insert or update a conversation row and return the stored record."""
 
-    metadata = metadata or {}
+    metadata = _merge_metadata(metadata, openai_conversation_id=openai_conversation_id)
 
     record = await conn.fetchrow(
         f"""
@@ -125,7 +165,7 @@ async def _upsert_conversation(
         metadata,
     )
 
-    return dict(record) if record else None
+    return _normalise_openai_record(record)
 
 
 async def _upsert_chatkit_thread(
@@ -185,6 +225,7 @@ async def create_conversation(
     openai_thread_id: str,
     openai_run_id: Optional[str] = None,
     openai_response_id: Optional[str] = None,
+    openai_conversation_id: Optional[str] = None,
     status: str = "pending",
     last_error: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -201,6 +242,7 @@ async def create_conversation(
             openai_thread_id=openai_thread_id,
             openai_run_id=openai_run_id,
             openai_response_id=openai_response_id,
+            openai_conversation_id=openai_conversation_id,
             status=status,
             last_error=last_error,
             metadata=metadata,
@@ -215,6 +257,7 @@ async def create_conversation(
             openai_thread_id=openai_thread_id,
             openai_run_id=openai_run_id,
             openai_response_id=openai_response_id,
+            openai_conversation_id=openai_conversation_id,
             status=status,
             last_error=last_error,
             metadata=metadata,
@@ -267,6 +310,7 @@ async def get_or_create_conversation(
     openai_thread_id: str,
     openai_run_id: Optional[str] = None,
     openai_response_id: Optional[str] = None,
+    openai_conversation_id: Optional[str] = None,
     status: str = "pending",
     last_error: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -283,12 +327,12 @@ async def get_or_create_conversation(
             """,
             conversation_id,
         )
-        return record
+        return _normalise_openai_record(record)
 
     if conn is not None:
         existing = await _select_existing(conn)
         if existing:
-            return dict(existing)
+            return _normalise_openai_record(existing)
 
         return await _upsert_conversation(
             conn,
@@ -298,6 +342,7 @@ async def get_or_create_conversation(
             openai_thread_id=openai_thread_id,
             openai_run_id=openai_run_id,
             openai_response_id=openai_response_id,
+            openai_conversation_id=openai_conversation_id,
             status=status,
             last_error=last_error,
             metadata=metadata,
@@ -306,7 +351,7 @@ async def get_or_create_conversation(
     async with get_db_connection_context() as db_conn:
         existing = await _select_existing(db_conn)
         if existing:
-            return dict(existing)
+            return existing
 
         return await _upsert_conversation(
             db_conn,
@@ -316,6 +361,7 @@ async def get_or_create_conversation(
             openai_thread_id=openai_thread_id,
             openai_run_id=openai_run_id,
             openai_response_id=openai_response_id,
+            openai_conversation_id=openai_conversation_id,
             status=status,
             last_error=last_error,
             metadata=metadata,
@@ -404,7 +450,7 @@ async def get_latest_conversation(
 
         query.append("ORDER BY updated_at DESC LIMIT 1")
         record = await connection.fetchrow("\n".join(query), *params)
-        return dict(record) if record else None
+        return _normalise_openai_record(record)
 
     if conn is not None:
         return await _get(conn)
