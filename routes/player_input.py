@@ -16,7 +16,7 @@ async def start_chat():
         if "user_id" not in session:
             return jsonify({"error": "Not authenticated"}), 401
         
-        data = request.get_json()
+        data = await request.get_json()
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
         
@@ -73,7 +73,7 @@ async def handle_player_input():
         you may call record_meltdown_dialog(...) or similar to track these events.
     """
 
-    payload = request.get_json() or {}
+    payload = await request.get_json() or {}
     user_text = payload.get("text", "")
 
     async with get_db_connection_context() as conn:

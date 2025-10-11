@@ -74,7 +74,7 @@ npc_bp = Blueprint('npc_bp', __name__)
 async def create_npc():
     """Create a new NPC."""
     try:
-        data = request.get_json()
+        data = await request.get_json()
         handler = NPCCreationHandler()
         npc = await handler.create_npc(data)
         

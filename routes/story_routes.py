@@ -1404,7 +1404,7 @@ async def modify_player_resources():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
             
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         player_name = data.get("player_name", "Chase")
         
@@ -1459,7 +1459,7 @@ async def process_daily_income():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
             
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         
         if not conversation_id:
@@ -1537,7 +1537,7 @@ async def analyze_activity_endpoint():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
             
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         activity_text = data.get("activity_text")
         
@@ -1574,7 +1574,7 @@ async def perform_activity_endpoint():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
             
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         activity_text = data.get("activity_text")
         
@@ -1670,7 +1670,7 @@ async def next_storybeat():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         user_input = data.get("user_input", "").strip()
         conv_id = data.get("conversation_id")
         player_name = data.get("player_name", "Chase")
@@ -2384,7 +2384,7 @@ async def apply_choice():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
             
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         link_id = data.get("link_id")
         crossroads_name = data.get("crossroads_name")
@@ -2416,7 +2416,7 @@ async def apply_choice():
 async def generate_scene():
     """Generate a multi-NPC scene with enhanced integration."""
     try:
-        data = request.get_json()
+        data = await request.get_json()
         user_id = data.get('user_id')
         conv_id = data.get('conversation_id')
         location = data.get('location')
@@ -2467,7 +2467,7 @@ async def generate_scene():
 async def generate_conversation():
     """Generate overheard conversation with enhanced integration."""
     try:
-        data = request.get_json()
+        data = await request.get_json()
         user_id = data.get('user_id')
         conv_id = data.get('conversation_id')
         npc_ids = data.get('npc_ids', [])
@@ -2664,7 +2664,7 @@ async def end_of_day():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conv_id = data.get("conversation_id")
         if not conv_id:
             return jsonify({"error": "Missing conversation_id"}), 400
