@@ -1,5 +1,6 @@
 """Utilities for integrating the OpenAI ChatKit-style Responses API."""
 
+from .metadata import build_metadata_payload
 from .server import RoleplayChatServer
 from .streaming import (
     extract_delta_text,
@@ -11,6 +12,7 @@ from .streaming import (
 
 __all__ = [
     "RoleplayChatServer",
+    "build_metadata_payload",
     "extract_delta_text",
     "extract_response_text",
     "extract_thread_metadata",

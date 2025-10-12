@@ -14,6 +14,7 @@ from openai_integration.scene_manager import SceneManager
 from openai_integration.conversations import ConversationManager
 from chatkit_server import (
     RoleplayChatServer,
+    build_metadata_payload,
     extract_response_text,
     extract_thread_metadata,
     format_messages_for_chatkit,
@@ -562,20 +563,18 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     exc_info=True,
                 )
 
-        metadata_payload: Dict[str, Any] = {
-            "conversation_id": conversation_id,
-            "user_id": user_id,
-        }
-        if request_id:
-            metadata_payload["request_id"] = request_id
-        if assistant_id:
-            metadata_payload["assistant_id"] = assistant_id
-        if openai_remote_conversation_id:
-            metadata_payload["openai_conversation_id"] = openai_remote_conversation_id
+        existing_thread_id: Optional[Any] = None
         if openai_record and isinstance(openai_record, dict):
             existing_thread_id = openai_record.get("chatkit_thread_id")
-            if existing_thread_id:
-                metadata_payload["thread_id"] = existing_thread_id
+
+        metadata_payload = build_metadata_payload(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            request_id=request_id,
+            assistant_id=assistant_id,
+            openai_conversation_id=openai_remote_conversation_id,
+            thread_id=existing_thread_id,
+        )
 
         if chatkit_server and chatkit_messages:
             async def emit_token(token: str) -> None:
