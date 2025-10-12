@@ -380,3 +380,66 @@ async def test_conversation_manager_stream_raises_on_error_event():
             pass
 
     assert "boom" in str(exc_info.value)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_metadata_payload_passed_to_roleplay_chat_server():
+    from chatkit_server.metadata import build_metadata_payload
+    from chatkit_server.server import RoleplayChatServer
+    from chatkit_server.streaming import stream_chatkit_tokens
+
+    class DummyStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class DummyResponsesClient:
+        def __init__(self) -> None:
+            self.calls: List[Dict[str, Any]] = []
+
+        def stream(self, **kwargs):
+            self.calls.append(kwargs)
+            return DummyStream()
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.responses = DummyResponsesClient()
+
+    async def noop(_: str) -> None:
+        return None
+
+    client = DummyClient()
+    server = RoleplayChatServer(client)
+
+    metadata = build_metadata_payload(
+        conversation_id=321,
+        user_id=654,
+        request_id=789,
+        assistant_id="asst-1",
+        openai_conversation_id="conv-remote",
+        thread_id="thread-1",
+    )
+
+    await stream_chatkit_tokens(
+        server,
+        model="gpt-test",
+        input_data=[],
+        metadata=metadata,
+        on_delta=noop,
+    )
+
+    assert client.responses.calls, "RoleplayChatServer.respond should invoke the responses client"
+    call = client.responses.calls[0]
+    recorded_metadata = call["metadata"]
+    assert recorded_metadata["conversation_id"] == "321"
+    assert isinstance(recorded_metadata["conversation_id"], str)
+    assert recorded_metadata["user_id"] == "654"
+    assert isinstance(recorded_metadata["user_id"], str)
