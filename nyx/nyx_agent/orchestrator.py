@@ -647,6 +647,9 @@ async def process_user_input(
             logger.info(f"[{trace_id}] Processing time: {out['processing_time']:.2f}s")
             return out
 
+    except asyncio.CancelledError:
+        logger.info(f"[{trace_id}] ========== PROCESS CANCELLED ==========")
+        raise
     except Exception as e:
         logger.error(f"[{trace_id}] ========== PROCESS FAILED ==========", exc_info=True)
         return {
