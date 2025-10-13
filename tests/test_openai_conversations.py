@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 import pytest
 
@@ -9,6 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai_integration import ConversationManager, conversations
+from logic.universal_updater_agent import apply_universal_updates_async
 from openai_integration.conversations import ConversationStreamError
 
 
@@ -32,6 +33,35 @@ class StubConnection:
     async def execute(self, query, *args):
         self.execute_queries.append((query, args))
         return "EXECUTE"
+
+
+class _SealTransaction:
+    def __init__(self):
+        self.entered = False
+        self.exited = False
+
+    async def __aenter__(self):
+        self.entered = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.exited = True
+        return False
+
+
+class SealAwareConnection:
+    def __init__(self, result):
+        self._result = result
+        self.calls = []
+        self.transaction_manager = _SealTransaction()
+
+    def transaction(self):
+        self.calls.append("transaction")
+        return self.transaction_manager
+
+    async def fetchrow(self, query, payload):
+        self.calls.append((query, payload))
+        return {"result": self._result}
 
 
 class DummyEvent:
@@ -264,13 +294,94 @@ async def test_rotate_scene_updates_previous_scene_and_inserts_active_scene():
     assert update_params[2] == closing_scene["scene_state"]
     assert update_params[3] == closing_scene["metadata"]
 
-    assert len(conn.queries) == 2
+    assert len(conn.queries) == 3
     insert_query, insert_params = conn.queries[1]
     assert "is_active" in insert_query
     assert insert_params[1] == 6
     assert insert_params[3] == "Sunrise breaks"
     assert insert_params[4] == {"weather": "clear"}
     assert insert_params[9] == {"music": "calm"}
+
+    seal_query, seal_params = conn.queries[2]
+    assert "conversations.items" in seal_query
+    assert seal_params[0] == 123
+
+
+@pytest.mark.anyio("asyncio")
+async def test_rotate_scene_persists_scene_seal_system_message():
+    new_scene_row = {
+        "id": 44,
+        "conversation_id": 321,
+        "scene_number": 1,
+        "scene_title": "Opening Night",
+        "scene_summary": "Curtains part",
+        "scene_state": {},
+        "active_npc_ids": [],
+        "location_reference": None,
+        "tension_level": 0,
+        "tags": [],
+        "metadata": {},
+        "is_active": True,
+        "started_at": "2024-01-01T00:00:00Z",
+        "ended_at": None,
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+    }
+
+    conn = StubConnection([
+        None,
+        new_scene_row,
+        {
+            "id": 999,
+            "conversation_id": 321,
+            "role": "system",
+            "item_type": "scene_seal",
+            "content": {},
+            "metadata": {},
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+    ])
+
+    new_scene = {
+        "scene_title": "Opening Night",
+        "metadata": {
+            "scene_seal": {
+                "venue": "Velvet Sanctum",
+                "date": "2177-03-07",
+                "non_negotiables": [
+                    "Obey her whispered command",
+                    "No safe word tonight",
+                ],
+            }
+        },
+    }
+
+    await conversations.rotate_conversation_scene(
+        conversation_id=321,
+        new_scene=new_scene,
+        conn=conn,
+    )
+
+    assert len(conn.queries) == 3
+    seal_query, seal_params = conn.queries[2]
+    assert "conversations.items" in seal_query
+
+    payload = seal_params[1]
+    metadata = seal_params[2]
+
+    assert payload["role"] == "system"
+    assert payload["content"][0]["type"] == "input_text"
+    text = payload["content"][0]["text"]
+    assert "Velvet Sanctum" in text
+    assert "2177-03-07" in text
+    assert "Obey her whispered command" in text
+    assert metadata["venue"] == "Velvet Sanctum"
+    assert metadata["date"] == "2177-03-07"
+    assert metadata["non_negotiables"] == [
+        "Obey her whispered command",
+        "No safe word tonight",
+    ]
 
 
 @pytest.mark.anyio("asyncio")
@@ -443,3 +554,119 @@ async def test_metadata_payload_passed_to_roleplay_chat_server():
     assert isinstance(recorded_metadata["conversation_id"], str)
     assert recorded_metadata["user_id"] == "654"
     assert isinstance(recorded_metadata["user_id"], str)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_slow_path_scene_seal_updates_on_location_change(monkeypatch):
+    conn = SealAwareConnection({"event_id": 10, "applied": True, "replayed": False})
+    captured = []
+
+    async def _capture_scene_seal(
+        _conn,
+        *,
+        conversation_id: int,
+        venue: Optional[str],
+        date: Optional[str],
+        non_negotiables,
+        source: str,
+    ):
+        captured.append(
+            {
+                "conversation_id": conversation_id,
+                "venue": venue,
+                "date": date,
+                "non_negotiables": list(non_negotiables or []),
+                "source": source,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(
+        "logic.universal_updater_agent.ensure_scene_seal_item",
+        _capture_scene_seal,
+    )
+
+    updates = {
+        "npc_updates": [{"npc_id": 7, "current_location": "Velvet Sanctum"}],
+        "roleplay_updates": {
+            "CurrentLocation": "Velvet Sanctum",
+            "CurrentTime": "Dawn",
+        },
+        "session_constraints": {"non_negotiables": ["Obey", "Trust"]},
+    }
+
+    result = await apply_universal_updates_async(
+        ctx=None,
+        user_id=5,
+        conversation_id=9,
+        updates=updates,
+        conn=conn,
+    )
+
+    assert result["success"] is True
+    assert captured
+    call = captured[0]
+    assert call["conversation_id"] == 9
+    assert call["venue"] == "Velvet Sanctum"
+    assert call["date"] == "Dawn"
+    assert call["non_negotiables"] == ["Obey", "Trust"]
+    assert call["source"] == "universal_updates"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_slow_path_scene_seal_updates_on_time_jump(monkeypatch):
+    conn = SealAwareConnection({"event_id": 11, "applied": True, "replayed": False})
+    captured = []
+
+    async def _capture_scene_seal(
+        _conn,
+        *,
+        conversation_id: int,
+        venue: Optional[str],
+        date: Optional[str],
+        non_negotiables,
+        source: str,
+    ):
+        captured.append(
+            {
+                "conversation_id": conversation_id,
+                "venue": venue,
+                "date": date,
+                "non_negotiables": list(non_negotiables or []),
+                "source": source,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(
+        "logic.universal_updater_agent.ensure_scene_seal_item",
+        _capture_scene_seal,
+    )
+
+    updates = {
+        "npc_updates": [{"npc_id": 3, "current_location": "Velvet Sanctum"}],
+        "roleplay_updates": {"CurrentTime": "Midnight"},
+        "metadata": {
+            "scene_seal": {
+                "venue": "Velvet Sanctum",
+                "non_negotiables": ["No safe word"],
+            }
+        },
+    }
+
+    result = await apply_universal_updates_async(
+        ctx=None,
+        user_id=2,
+        conversation_id=6,
+        updates=updates,
+        conn=conn,
+    )
+
+    assert result["success"] is True
+    assert captured
+    call = captured[0]
+    assert call["conversation_id"] == 6
+    assert call["venue"] == "Velvet Sanctum"
+    assert call["date"] == "Midnight"
+    assert call["non_negotiables"] == ["No safe word"]
+    assert call["source"] == "universal_updates"

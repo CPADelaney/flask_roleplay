@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
 try:  # pragma: no cover - optional dependency guard
     from openai import AsyncOpenAI
@@ -68,6 +68,284 @@ _SELECT_ACTIVE_SCENE_QUERY = f"""
     ORDER BY scene_number DESC
     LIMIT 1
 """
+
+
+def _as_optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, bytes):  # pragma: no cover - defensive
+        try:
+            return value.decode("utf-8").strip() or None
+        except UnicodeDecodeError:
+            return None
+    text = str(value).strip()
+    return text or None
+
+
+def _flatten_non_negotiables(value: Any) -> Sequence[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, (str, bytes)):
+        text = _as_optional_str(value)
+        return [text] if text else []
+
+    flattened: list[str] = []
+
+    if isinstance(value, Mapping):
+        for item in value.values():
+            flattened.extend(_flatten_non_negotiables(item))
+        return flattened
+
+    if isinstance(value, Iterable):  # type: ignore[redundant-expr]
+        for item in value:
+            flattened.extend(_flatten_non_negotiables(item))
+        return flattened
+
+    text = _as_optional_str(value)
+    return [text] if text else []
+
+
+def _normalise_scene_seal_payload(data: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(data, Mapping):
+        return None
+
+    def _first_present(keys: Sequence[str]) -> Optional[str]:
+        for key in keys:
+            if key in data:
+                value = _as_optional_str(data.get(key))
+                if value:
+                    return value
+        return None
+
+    venue = _first_present(
+        (
+            "venue",
+            "current_venue",
+            "currentVenue",
+            "CurrentVenue",
+            "location",
+            "location_name",
+            "locationName",
+            "CurrentLocation",
+            "current_location",
+            "currentLocation",
+        )
+    )
+
+    date = _first_present(
+        (
+            "date",
+            "current_date",
+            "currentDate",
+            "CurrentDate",
+            "time",
+            "time_of_day",
+            "timeOfDay",
+            "CurrentTime",
+            "current_time",
+            "currentTime",
+            "day",
+        )
+    )
+
+    non_negotiables_source: Any = None
+    for key in (
+        "non_negotiables",
+        "nonNegotiables",
+        "NonNegotiables",
+        "non_negotiable_rules",
+        "nonNegotiableRules",
+        "rules",
+    ):
+        if key in data:
+            non_negotiables_source = data.get(key)
+            break
+
+    if non_negotiables_source is None:
+        constraints = data.get("constraints")
+        if isinstance(constraints, Mapping):
+            non_negotiables_source = constraints.get("non_negotiables") or constraints.get(
+                "nonNegotiables"
+            )
+
+    non_negotiables = list(_flatten_non_negotiables(non_negotiables_source))
+
+    if not venue and not date and not non_negotiables:
+        return None
+
+    return {
+        "venue": venue,
+        "date": date,
+        "non_negotiables": non_negotiables,
+    }
+
+
+def extract_scene_seal_from_scene(scene: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(scene, Mapping):
+        return None
+
+    metadata = scene.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in ("scene_seal", "sceneSeal", "seal", "sceneSealData"):
+            seal = _normalise_scene_seal_payload(metadata.get(key))
+            if seal:
+                return seal
+
+        merged_candidate = dict(metadata)
+        if "location_reference" not in merged_candidate and scene.get("location_reference"):
+            merged_candidate["location_reference"] = scene.get("location_reference")
+        seal = _normalise_scene_seal_payload(merged_candidate)
+        if seal:
+            return seal
+
+    scene_state = scene.get("scene_state")
+    seal = _normalise_scene_seal_payload(scene_state if isinstance(scene_state, Mapping) else None)
+    if seal:
+        return seal
+
+    fallback_payload: Dict[str, Any] = {}
+    if scene.get("location_reference"):
+        fallback_payload["venue"] = scene.get("location_reference")
+    for key in ("venue", "date", "non_negotiables", "nonNegotiables"):
+        if key in scene:
+            fallback_payload[key] = scene[key]
+
+    seal = _normalise_scene_seal_payload(fallback_payload)
+    if seal:
+        return seal
+
+    return None
+
+
+def extract_scene_seal_from_updates(updates: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(updates, Mapping):
+        return None
+
+    for key in ("scene_seal", "sceneSeal", "sceneSealData"):
+        seal = _normalise_scene_seal_payload(updates.get(key))
+        if seal:
+            return seal
+
+    roleplay_updates = updates.get("roleplay_updates")
+    base_payload: Dict[str, Any] = {}
+    if isinstance(roleplay_updates, Mapping):
+        base_payload.update(roleplay_updates)
+
+    if not base_payload:
+        for key in (
+            "CurrentLocation",
+            "current_location",
+            "currentLocation",
+            "venue",
+            "location",
+        ):
+            if key in updates:
+                base_payload[key] = updates[key]
+
+    metadata = updates.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in ("scene_seal", "sceneSeal", "seal"):
+            candidate = metadata.get(key)
+            if isinstance(candidate, Mapping):
+                if "venue" not in base_payload and "venue" in candidate:
+                    base_payload["venue"] = candidate.get("venue")
+                if "date" not in base_payload and "date" in candidate:
+                    base_payload["date"] = candidate.get("date")
+                if "non_negotiables" not in base_payload and (
+                    "non_negotiables" in candidate or "nonNegotiables" in candidate
+                ):
+                    base_payload["non_negotiables"] = candidate.get("non_negotiables") or candidate.get(
+                        "nonNegotiables"
+                    )
+
+    constraints = updates.get("session_constraints") or updates.get("constraints")
+    if isinstance(constraints, Mapping):
+        if "non_negotiables" not in base_payload:
+            base_payload["non_negotiables"] = constraints.get("non_negotiables") or constraints.get(
+                "nonNegotiables"
+            )
+
+    seal = _normalise_scene_seal_payload(base_payload)
+    if seal:
+        return seal
+
+    return None
+
+
+def _build_scene_seal_text(venue: Optional[str], date: Optional[str], non_negotiables: Sequence[str]) -> str:
+    lines = ["Scene Seal"]
+    if venue:
+        lines.append(f"Venue: {venue}")
+    if date:
+        lines.append(f"Date: {date}")
+
+    lines.append("Non-Negotiables:")
+    if non_negotiables:
+        lines.extend(f"- {rule}" for rule in non_negotiables)
+    else:
+        lines.append("- None recorded")
+
+    return "\n".join(lines)
+
+
+async def ensure_scene_seal_item(
+    conn,
+    *,
+    conversation_id: int,
+    venue: Optional[str],
+    date: Optional[str],
+    non_negotiables: Optional[Iterable[str]] = None,
+    source: str = "unknown",
+) -> Optional[Dict[str, Any]]:
+    non_negotiables_list = list(_flatten_non_negotiables(non_negotiables))
+    if not venue and not date and not non_negotiables_list:
+        return None
+
+    content = {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": _build_scene_seal_text(venue, date, non_negotiables_list),
+            }
+        ],
+    }
+
+    metadata = {
+        "venue": venue,
+        "date": date,
+        "non_negotiables": non_negotiables_list,
+        "source": source,
+    }
+
+    record = await conn.fetchrow(
+        """
+        INSERT INTO conversations.items (
+            conversation_id,
+            role,
+            item_type,
+            content,
+            metadata
+        )
+        VALUES ($1, 'system', 'scene_seal', $2::jsonb, $3::jsonb)
+        ON CONFLICT (conversation_id, role, item_type) DO UPDATE
+        SET
+            content = EXCLUDED.content,
+            metadata = EXCLUDED.metadata,
+            updated_at = NOW()
+        RETURNING id, conversation_id, role, item_type, content, metadata, created_at, updated_at
+        """,
+        conversation_id,
+        content,
+        metadata,
+    )
+
+    return dict(record) if record else None
 
 
 def _merge_metadata(
@@ -590,6 +868,17 @@ async def _rotate_scene(
         tags_param,
         metadata or {},
     )
+
+    seal = extract_scene_seal_from_scene(new_scene_data)
+    if seal:
+        await ensure_scene_seal_item(
+            conn,
+            conversation_id=conversation_id,
+            venue=seal.get("venue"),
+            date=seal.get("date"),
+            non_negotiables=seal.get("non_negotiables"),
+            source="scene_rotation",
+        )
 
     return dict(inserted_scene) if inserted_scene else None
 

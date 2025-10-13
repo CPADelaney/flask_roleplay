@@ -51,6 +51,10 @@ from nyx.nyx_governance import (
 from nyx.integrate import get_central_governance
 
 from logic.universal_delta import build_delta_from_legacy_payload, DeltaBuildError
+from openai_integration.conversations import (
+    ensure_scene_seal_item,
+    extract_scene_seal_from_updates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -848,11 +852,14 @@ async def apply_universal_updates_async(
 
     del ctx  # retained for call compatibility
 
+    payload = dict(updates or {})
+    seal_from_updates = extract_scene_seal_from_updates(payload)
+
     try:
         delta = build_delta_from_legacy_payload(
             user_id=user_id,
             conversation_id=conversation_id,
-            payload=dict(updates or {}),
+            payload=payload,
         )
     except (DeltaBuildError, ValidationError) as exc:
         logger.error("Failed to construct canonical delta: %s", exc)
@@ -863,6 +870,16 @@ async def apply_universal_updates_async(
     except db_rpc.CanonEventError as exc:
         logger.error("canon.apply_event failed: %s", exc)
         return {"success": False, "error": str(exc)}
+
+    if seal_from_updates and db_result.get("applied"):
+        await ensure_scene_seal_item(
+            conn,
+            conversation_id=conversation_id,
+            venue=seal_from_updates.get("venue"),
+            date=seal_from_updates.get("date"),
+            non_negotiables=seal_from_updates.get("non_negotiables"),
+            source="universal_updates",
+        )
 
     return {
         "success": True,
