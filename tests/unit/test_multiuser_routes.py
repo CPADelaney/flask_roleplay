@@ -92,6 +92,9 @@ async def test_get_messages_allows_string_user_id(monkeypatch, app):
     assert payload["messages"] == [
         {"sender": "user", "content": "Hello", "created_at": message_time.isoformat()}
     ]
+    assert payload["has_more"] is False
+    # Default pagination should request offset 0 and default limit + 1 for the sentinel row
+    assert connection.fetch_calls[0][1] == (77, 0, 51)
 
 
 @pytest.mark.anyio
@@ -151,3 +154,58 @@ async def test_move_folder_auto_create_uses_normalized_user_id(monkeypatch, app)
     # Conversation update should write the folder id from the lookup
     assert connection.execute_calls
     assert connection.execute_calls[-1][1][0] == 9
+
+
+@pytest.mark.anyio
+async def test_get_messages_paginates_results(monkeypatch, app):
+    times = [
+        datetime(2024, 1, 1, 12, 0, 0),
+        datetime(2024, 1, 1, 12, 1, 0),
+        datetime(2024, 1, 1, 12, 2, 0),
+    ]
+    connection = StubConnection(
+        fetchrow_results=deque([
+            {"user_id": 123},
+            {"user_id": 123},
+        ]),
+        fetch_results=deque([
+            [
+                {"sender": "user", "content": "Hello", "created_at": times[0]},
+                {"sender": "npc", "content": "Hi there", "created_at": times[1]},
+                {"sender": "user", "content": "Follow-up", "created_at": times[2]},
+            ],
+            [
+                {"sender": "user", "content": "Follow-up", "created_at": times[2]},
+            ],
+        ]),
+    )
+
+    monkeypatch.setattr(
+        multiuser_routes,
+        "get_db_connection_context",
+        lambda: StubConnectionContext(connection),
+    )
+
+    test_client = app.test_client()
+    async with test_client.session_transaction() as session:
+        session["user_id"] = 123
+
+    first_response = await test_client.get(
+        "/multiuser/conversations/77/messages",
+        query_string={"limit": 2},
+    )
+    assert first_response.status_code == 200
+    first_payload = await first_response.get_json()
+    assert [m["content"] for m in first_payload["messages"]] == ["Hello", "Hi there"]
+    assert first_payload["has_more"] is True
+    assert connection.fetch_calls[0][1] == (77, 0, 3)
+
+    second_response = await test_client.get(
+        "/multiuser/conversations/77/messages",
+        query_string={"offset": 2, "limit": 2},
+    )
+    assert second_response.status_code == 200
+    second_payload = await second_response.get_json()
+    assert [m["content"] for m in second_payload["messages"]] == ["Follow-up"]
+    assert second_payload["has_more"] is False
+    assert connection.fetch_calls[1][1] == (77, 2, 3)
