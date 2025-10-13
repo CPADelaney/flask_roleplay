@@ -126,7 +126,7 @@ class MemoryRetrieverAgent:
             if not openai_api_key:
                 raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI")
             
-            model_name = self.config.get("openai_model_name", "gpt-4o-mini")
+            model_name = self.config.get("openai_model_name", "gpt-5-nano")
             temp = self.config.get("temperature")
 
             # Updated ChatOpenAI import and initialization
