@@ -1,18 +1,32 @@
 # routes/multiuser_routes.py
 
 from quart import Blueprint, request, jsonify, session
-from db.connection import get_db_connection_context
 import logging
 import asyncpg
-from db.connection import get_db_dsn, get_db_connection_context
+from db.connection import get_db_connection_context, get_db_dsn
+
+
+def _normalize_session_user_id():
+    """Return the authenticated user id as an int or an error response tuple."""
+    user_id = session.get("user_id")
+    if user_id is None:
+        return None, (jsonify({"error": "Not logged in"}), 401)
+
+    try:
+        normalized_user_id = int(user_id)
+    except (TypeError, ValueError):
+        logging.warning("Invalid user_id in session: %s", user_id)
+        return None, (jsonify({"error": "Invalid user session"}), 400)
+
+    return normalized_user_id, None
 
 multiuser_bp = Blueprint("multiuser_bp", __name__)
 
 @multiuser_bp.route("/folders", methods=["POST"])
 async def create_folder():
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     data = await request.get_json() or {}
     folder_name = data.get("folder_name", "").strip()
@@ -32,9 +46,9 @@ async def create_folder():
 
 @multiuser_bp.route("/folders", methods=["GET"])
 async def list_folders():
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     async with get_db_connection_context() as conn:
         rows = await conn.fetch("""
@@ -55,9 +69,9 @@ async def list_folders():
 
 @multiuser_bp.route("/folders/<int:folder_id>", methods=["PUT"])
 async def rename_folder(folder_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     data = await request.get_json() or {}
     new_name = data.get("folder_name", "").strip()
@@ -82,9 +96,9 @@ async def move_folder_auto_create(conv_id):
     """
     Creates folder if needed, then moves conversation to folder_id
     """
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     data = await request.get_json() or {}
     folder_name = data.get("folder_name", "").strip()
@@ -127,9 +141,9 @@ async def move_folder_auto_create(conv_id):
 
 @multiuser_bp.route("/folders/<int:folder_id>", methods=["DELETE"])
 async def delete_folder(folder_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     async with get_db_connection_context() as conn:
         # check ownership
@@ -146,17 +160,10 @@ async def delete_folder(folder_id):
 
 @multiuser_bp.route("/conversations", methods=["GET"])
 async def list_conversations():
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    # FIX: Ensure user_id is int
-    try:
-        user_id = int(user_id) if isinstance(user_id, str) else user_id
-    except (ValueError, TypeError):
-        logging.error(f"Invalid user_id in session: {user_id}")
-        return jsonify({"error": "Invalid user session"}), 400
-    
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
+
     try:
         # Use a fresh connection with statement_cache_size=0 for pgbouncer compatibility
         dsn = get_db_dsn()
@@ -187,9 +194,9 @@ async def list_conversations():
 
 @multiuser_bp.route("/conversations", methods=["POST"])
 async def create_conversation():
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     data = await request.get_json()
     name = data.get("conversation_name", "Untitled Session")
@@ -205,9 +212,9 @@ async def create_conversation():
 
 @multiuser_bp.route("/conversations/<int:conv_id>/messages", methods=["GET"])
 async def get_messages(conv_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     async with get_db_connection_context() as conn:
         # Check conversation ownership
@@ -233,9 +240,9 @@ async def get_messages(conv_id):
 
 @multiuser_bp.route("/conversations/<int:conv_id>/messages", methods=["POST"])
 async def add_message(conv_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     async with get_db_connection_context() as conn:
         # Check ownership again
@@ -260,9 +267,9 @@ async def add_message(conv_id):
 # RENAME
 @multiuser_bp.route("/conversations/<int:conv_id>", methods=["PUT"])
 async def rename_conversation(conv_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     data = await request.get_json()
     new_name = data.get("conversation_name", "New Chat")
@@ -287,9 +294,9 @@ async def rename_conversation(conv_id):
 # Move
 @multiuser_bp.route("/conversations/<int:conv_id>/folder", methods=["POST"])
 async def move_conversation_to_folder(conv_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     data = await request.get_json() or {}
     new_folder_id = data.get("folder_id")
@@ -325,9 +332,9 @@ async def move_conversation_to_folder(conv_id):
 # DELETE
 @multiuser_bp.route("/conversations/<int:conv_id>", methods=["DELETE"])
 async def delete_conversation(conv_id):
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error":"Not logged in"}), 401
+    user_id, error = _normalize_session_user_id()
+    if error:
+        return error
 
     async with get_db_connection_context() as conn:
         row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id=$1", conv_id)
