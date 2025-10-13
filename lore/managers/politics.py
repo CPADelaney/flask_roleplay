@@ -64,7 +64,7 @@ distribution_agent = Agent(
 # -------------------------------------------------------------------------
 class DiplomaticNegotiation:
     """Class to handle diplomatic negotiations between nations."""
-    
+
     def __init__(self, nation1_agent, nation2_agent, mediator_agent, nations_data, issue, max_rounds=5):
         self.nation1_agent = nation1_agent
         self.nation2_agent = nation2_agent
@@ -73,7 +73,7 @@ class DiplomaticNegotiation:
         self.issue = issue
         self.max_rounds = max_rounds
         self.conversation_history = []
-        
+
     async def run(self, ctx) -> Dict[str, Any]:
         """Run the negotiation process."""
         with trace(
@@ -87,7 +87,7 @@ class DiplomaticNegotiation:
             # Initial positions
             nation1_position = await self._get_initial_position(ctx, self.nation1_agent, self.nations_data['nation1'])
             nation2_position = await self._get_initial_position(ctx, self.nation2_agent, self.nations_data['nation2'])
-            
+
             self.conversation_history.append({
                 "role": self.nations_data['nation1']['name'],
                 "content": nation1_position
@@ -96,20 +96,20 @@ class DiplomaticNegotiation:
                 "role": self.nations_data['nation2']['name'],
                 "content": nation2_position
             })
-            
+
             # Negotiation rounds
             agreement = None
             round_num = 0
             while round_num < self.max_rounds and agreement is None:
                 round_num += 1
-                
+
                 # Mediator summarizes and proposes
                 mediator_proposal = await self._get_mediator_proposal(ctx, round_num)
                 self.conversation_history.append({
                     "role": "Mediator",
                     "content": mediator_proposal
                 })
-                
+
                 # Nations respond
                 nation1_response = await self._get_nation_response(
                     ctx, self.nation1_agent, self.nations_data['nation1'], mediator_proposal, round_num)
@@ -117,17 +117,17 @@ class DiplomaticNegotiation:
                     "role": self.nations_data['nation1']['name'],
                     "content": nation1_response
                 })
-                
+
                 nation2_response = await self._get_nation_response(
                     ctx, self.nation2_agent, self.nations_data['nation2'], mediator_proposal, round_num)
                 self.conversation_history.append({
                     "role": self.nations_data['nation2']['name'],
                     "content": nation2_response
                 })
-                
+
                 # Check for agreement
                 agreement = await self._check_for_agreement(ctx, round_num)
-            
+
             # Final result
             agreement_reached = agreement is not None
             result = {
@@ -142,89 +142,89 @@ class DiplomaticNegotiation:
                 "final_outcome": agreement if agreement_reached else "No agreement reached",
                 "relationship_change": random.randint(-2, 3) if agreement_reached else random.randint(-5, 0)
             }
-            
+
             return result
-            
+
     async def _get_initial_position(self, ctx, agent, nation_data):
         """Get the initial position from a nation."""
         prompt = f"""
         You are representing {nation_data['name']} in diplomatic negotiations about: {self.issue}
-        
+
         Express your nation's initial position and demands.
-        
+
         NATION DATA:
         {json.dumps(nation_data, indent=2)}
-        
+
         Return your nation's position in a clear, diplomatic manner.
         """
-        
+
         result = await Runner.run(agent, prompt, context=ctx.context)
         return result.final_output
-    
+
     async def _get_mediator_proposal(self, ctx, round_num):
         """Get a proposal from the mediator."""
         history_text = "\n\n".join([f"{item['role']}: {item['content']}" for item in self.conversation_history])
-        
+
         prompt = f"""
         You are mediating a diplomatic negotiation about: {self.issue}
-        
+
         This is round {round_num} of negotiations. Review the positions and provide a balanced proposal.
-        
+
         CONVERSATION HISTORY:
         {history_text}
-        
+
         Analyze both sides' positions and suggest a compromise that addresses key concerns.
         If this is the final round, push harder for resolution.
         """
-        
+
         result = await Runner.run(self.mediator_agent, prompt, context=ctx.context)
         return result.final_output
-    
+
     async def _get_nation_response(self, ctx, agent, nation_data, mediator_proposal, round_num):
         """Get a response from a nation to the mediator's proposal."""
         history_text = "\n\n".join([f"{item['role']}: {item['content']}" for item in self.conversation_history])
-        
+
         prompt = f"""
         You are representing {nation_data['name']} in diplomatic negotiations about: {self.issue}
-        
+
         This is round {round_num}. The mediator has proposed:
-        
+
         MEDIATOR PROPOSAL:
         {mediator_proposal}
-        
+
         PREVIOUS CONVERSATION:
         {history_text}
-        
+
         Respond to this proposal from your nation's perspective. Consider:
         1. What aspects are acceptable?
         2. What remains problematic?
         3. What concessions might you offer if needed?
-        
+
         {"This is the FINAL round. Consider accepting a reasonable compromise." if round_num >= self.max_rounds - 1 else ""}
         """
-        
+
         result = await Runner.run(agent, prompt, context=ctx.context)
         return result.final_output
-    
+
     async def _check_for_agreement(self, ctx, round_num):
         """Check if an agreement has been reached."""
         history_text = "\n\n".join([f"{item['role']}: {item['content']}" for item in self.conversation_history])
-        
+
         prompt = f"""
         As the mediator, analyze if an agreement has been reached after round {round_num}.
-        
+
         CONVERSATION HISTORY:
         {history_text}
-        
+
         Return a JSON response with:
         - "agreement_reached": true or false
         - "agreement_terms": summary of the terms (if reached)
         - "key_concessions": what each side gave up
         - "notes": any additional observations
-        
+
         If no agreement has been reached, return null for agreement_terms.
         """
-        
+
         result = await Runner.run(self.mediator_agent, prompt, context=ctx.context)
         try:
             agreement_data = json.loads(result.final_output)
@@ -258,7 +258,7 @@ class FactionAgentProxy:
         You represent {self.faction_data['name']}, a {self.faction_data.get('type', 'faction')} in a matriarchal world.
         Traits: {self.faction_data.get('cultural_traits', [])}
         Values: {self.faction_data.get('values', [])}
-        
+
         Your purpose is to pursue your faction's goals while reacting realistically to world events.
         Always consider how your actions will affect your standing in the matriarchal power structure.
         """
@@ -278,10 +278,10 @@ class FactionAgentProxy:
         prompt = f"""
         Your faction ({self.faction_data['name']}) is reacting to this event:
         {json.dumps(event, indent=2)}
-        
+
         Your faction's goals are: {self.goals}
         Your recent actions: {self.actions_history[-3:] if self.actions_history else 'None'}
-        
+
         How do you react? Consider:
         1. Public statements
         2. Private actions
@@ -348,8 +348,8 @@ class WorldPoliticsManager(BaseLoreManager):
                     neighboring_nations TEXT[],
                     embedding VECTOR(1536)
                 );
-                
-                CREATE INDEX IF NOT EXISTS idx_nations_embedding 
+
+                CREATE INDEX IF NOT EXISTS idx_nations_embedding
                 ON Nations USING ivfflat (embedding vector_cosine_ops);
             """,
             "InternationalRelations": """
@@ -393,8 +393,8 @@ class WorldPoliticsManager(BaseLoreManager):
                     potential_resolution TEXT,
                     embedding VECTOR(1536)
                 );
-                
-                CREATE INDEX IF NOT EXISTS idx_nationalconflicts_embedding 
+
+                CREATE INDEX IF NOT EXISTS idx_nationalconflicts_embedding
                 ON NationalConflicts USING ivfflat (embedding vector_cosine_ops);
             """,
             "ConflictNews": """
@@ -409,8 +409,8 @@ class WorldPoliticsManager(BaseLoreManager):
                     embedding VECTOR(1536),
                     FOREIGN KEY (conflict_id) REFERENCES NationalConflicts(id) ON DELETE CASCADE
                 );
-                
-                CREATE INDEX IF NOT EXISTS idx_conflictnews_embedding 
+
+                CREATE INDEX IF NOT EXISTS idx_conflictnews_embedding
                 ON ConflictNews USING ivfflat (embedding vector_cosine_ops);
             """,
             "DomesticIssues": """
@@ -438,10 +438,10 @@ class WorldPoliticsManager(BaseLoreManager):
                     embedding VECTOR(1536),
                     FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
                 );
-                
-                CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding 
+
+                CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding
                 ON DomesticIssues USING ivfflat (embedding vector_cosine_ops);
-                
+
                 CREATE INDEX IF NOT EXISTS idx_domesticissues_nation
                 ON DomesticIssues(nation_id);
             """,
@@ -457,8 +457,8 @@ class WorldPoliticsManager(BaseLoreManager):
                     embedding VECTOR(1536),
                     FOREIGN KEY (issue_id) REFERENCES DomesticIssues(id) ON DELETE CASCADE
                 );
-                
-                CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding 
+
+                CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding
                 ON DomesticNews USING ivfflat (embedding vector_cosine_ops);
             """
         }
@@ -550,30 +550,29 @@ class WorldPoliticsManager(BaseLoreManager):
             major_cities = major_cities or []
             cultural_traits = cultural_traits or []
             neighboring_nations = neighboring_nations or []
-        
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    nation_id = await conn.fetchval("""
-                        INSERT INTO Nations (
-                            name, government_type, description, relative_power,
-                            matriarchy_level, population_scale, major_resources,
-                            major_cities, cultural_traits, notable_features,
-                            neighboring_nations
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        RETURNING id
-                    """,
+
+            async with self.db_connection() as conn:
+                nation_id = await conn.fetchval("""
+                    INSERT INTO Nations (
                         name, government_type, description, relative_power,
                         matriarchy_level, population_scale, major_resources,
                         major_cities, cultural_traits, notable_features,
                         neighboring_nations
                     )
-        
-                    # Generate and store embedding
-                    embedding_text = f"{name} {government_type} {description}"
-                    await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
-                    return nation_id
-    
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    RETURNING id
+                """,
+                    name, government_type, description, relative_power,
+                    matriarchy_level, population_scale, major_resources,
+                    major_cities, cultural_traits, notable_features,
+                    neighboring_nations
+                )
+
+                # Generate and store embedding
+                embedding_text = f"{name} {government_type} {description}"
+                await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
+                return nation_id
+
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -600,50 +599,49 @@ class WorldPoliticsManager(BaseLoreManager):
         Add a nation to the database using canon establishment.
         """
         await self.ensure_initialized()
-        
+
         # Prepare data
         major_resources = major_resources or []
         major_cities = major_cities or []
         cultural_traits = cultural_traits or []
         neighboring_nations = neighboring_nations or []
-        
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Use canon system to check for duplicates
-                embedding_text = f"{name} {government_type} {description}"
-                
-                create_data = {
-                    'name': name,
-                    'government_type': government_type,
-                    'description': description,
-                    'relative_power': relative_power,
-                    'matriarchy_level': matriarchy_level,
-                    'population_scale': population_scale,
-                    'major_resources': major_resources,
-                    'major_cities': major_cities,
-                    'cultural_traits': cultural_traits,
-                    'notable_features': notable_features,
-                    'neighboring_nations': neighboring_nations
-                }
-                
-                search_fields = {
-                    'name': name,
-                    'name_field': 'name'  # Tell the function which field contains the name
-                }
-                
-                nation_id = await canon.find_or_create_entity(
-                    ctx=ctx,
-                    conn=conn,
-                    entity_type="nation",
-                    entity_name=name,
-                    search_fields=search_fields,
-                    create_data=create_data,
-                    table_name="Nations",
-                    embedding_text=embedding_text,
-                    similarity_threshold=0.85
-                )
-                
-                return nation_id
+
+        async with self.db_connection() as conn:
+            # Use canon system to check for duplicates
+            embedding_text = f"{name} {government_type} {description}"
+
+            create_data = {
+                'name': name,
+                'government_type': government_type,
+                'description': description,
+                'relative_power': relative_power,
+                'matriarchy_level': matriarchy_level,
+                'population_scale': population_scale,
+                'major_resources': major_resources,
+                'major_cities': major_cities,
+                'cultural_traits': cultural_traits,
+                'notable_features': notable_features,
+                'neighboring_nations': neighboring_nations
+            }
+
+            search_fields = {
+                'name': name,
+                'name_field': 'name'  # Tell the function which field contains the name
+            }
+
+            nation_id = await canon.find_or_create_entity(
+                ctx=ctx,
+                conn=conn,
+                entity_type="nation",
+                entity_name=name,
+                search_fields=search_fields,
+                create_data=create_data,
+                table_name="Nations",
+                embedding_text=embedding_text,
+                similarity_threshold=0.85
+            )
+
+            return nation_id
 
     async def _add_international_relation_impl(
         self,
@@ -671,32 +669,31 @@ class WorldPoliticsManager(BaseLoreManager):
             await self.ensure_initialized()
             notable_conflicts = notable_conflicts or []
             notable_alliances = notable_alliances or []
-        
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    relation_id = await conn.fetchval("""
-                        INSERT INTO InternationalRelations (
-                            nation1_id, nation2_id, relationship_type,
-                            relationship_quality, description, notable_conflicts,
-                            notable_alliances, trade_relations, cultural_exchanges
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                        ON CONFLICT (nation1_id, nation2_id) DO UPDATE
-                        SET relationship_type = EXCLUDED.relationship_type,
-                            relationship_quality = EXCLUDED.relationship_quality,
-                            description = EXCLUDED.description,
-                            notable_conflicts = EXCLUDED.notable_conflicts,
-                            notable_alliances = EXCLUDED.notable_alliances,
-                            trade_relations = EXCLUDED.trade_relations,
-                            cultural_exchanges = EXCLUDED.cultural_exchanges
-                        RETURNING id
-                    """,
+
+            async with self.db_connection() as conn:
+                relation_id = await conn.fetchval("""
+                    INSERT INTO InternationalRelations (
                         nation1_id, nation2_id, relationship_type,
                         relationship_quality, description, notable_conflicts,
                         notable_alliances, trade_relations, cultural_exchanges
                     )
-                    return relation_id
-    
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (nation1_id, nation2_id) DO UPDATE
+                    SET relationship_type = EXCLUDED.relationship_type,
+                        relationship_quality = EXCLUDED.relationship_quality,
+                        description = EXCLUDED.description,
+                        notable_conflicts = EXCLUDED.notable_conflicts,
+                        notable_alliances = EXCLUDED.notable_alliances,
+                        trade_relations = EXCLUDED.trade_relations,
+                        cultural_exchanges = EXCLUDED.cultural_exchanges
+                    RETURNING id
+                """,
+                    nation1_id, nation2_id, relationship_type,
+                    relationship_quality, description, notable_conflicts,
+                    notable_alliances, trade_relations, cultural_exchanges
+                )
+                return relation_id
+
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -719,7 +716,7 @@ class WorldPoliticsManager(BaseLoreManager):
     ) -> int:
         """
         Add or update a relationship between two nations.
-        
+
         Args:
             nation1_id: ID of the first nation
             nation2_id: ID of the second nation
@@ -730,7 +727,7 @@ class WorldPoliticsManager(BaseLoreManager):
             notable_alliances: List of notable alliances
             trade_relations: Description of trade relations
             cultural_exchanges: Description of cultural exchanges
-            
+
         Returns:
             ID of the created/updated relationship
         """
@@ -749,7 +746,7 @@ class WorldPoliticsManager(BaseLoreManager):
     async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
         """
         Get all nations in the world.
-        
+
         Returns:
             List of nation dictionaries
         """
@@ -759,19 +756,18 @@ class WorldPoliticsManager(BaseLoreManager):
             return cached
 
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                nations = await conn.fetch("""
-                    SELECT id, name, government_type, description, relative_power,
-                           matriarchy_level, population_scale, major_resources,
-                           major_cities, cultural_traits, notable_features, 
-                           neighboring_nations
-                    FROM Nations
-                    ORDER BY relative_power DESC
-                """)
-                result = [dict(n) for n in nations]
-                self.set_cache(cache_key, result, ttl=3600)
-                return result
+        async with self.db_connection() as conn:
+            nations = await conn.fetch("""
+                SELECT id, name, government_type, description, relative_power,
+                       matriarchy_level, population_scale, major_resources,
+                       major_cities, cultural_traits, notable_features,
+                       neighboring_nations
+                FROM Nations
+                ORDER BY relative_power DESC
+            """)
+            result = [dict(n) for n in nations]
+            self.set_cache(cache_key, result, ttl=3600)
+            return result
 
     # ------------------------------------------------------------------------
     #   CONFLICT HANDLING
@@ -796,118 +792,117 @@ class WorldPoliticsManager(BaseLoreManager):
                 proper_ctx = self.create_run_context()
             else:
                 proper_ctx = ctx
-            
+
             nations = await self.get_all_nations(proper_ctx)
             if len(nations) < 2:
                 return []
-            
+
             conflicts = []
             conflict_agent = Agent(
                 name="NationalConflictAgent",
                 instructions="You create realistic international conflicts for a fantasy world with matriarchal structures.",
                 model="gpt-5-nano",
             )
-            
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    from lore.core import canon
-                    
-                    for _ in range(count):
-                        # Pick random nations
-                        available_nations = [n for n in nations if not any(
-                            n["id"] in c.get("involved_nations", []) for c in conflicts
-                        )]
-                        if len(available_nations) < 2:
-                            available_nations = nations
-                        
-                        nation_pair = random.sample(available_nations, 2)
-                        
-                        # Generate conflict details
-                        chosen_conflict_type = random.choice([
-                            "territorial_dispute", "trade_war", "ideological_dispute", "resource_conflict"
-                        ])
-                        
-                        prompt = f"""
-                        Generate a detailed international conflict between these two nations:
-                        
-                        NATION 1: {json.dumps(nation_pair[0], indent=2)}
-                        NATION 2: {json.dumps(nation_pair[1], indent=2)}
-                        
-                        Create a {chosen_conflict_type} that makes sense given the nations' characteristics.
-                        
-                        Return JSON with fields:
-                        - name
-                        - conflict_type: "{chosen_conflict_type}"
-                        - description
-                        - severity (1-10)
-                        - status (active, escalating, etc.)
-                        - start_date
-                        - involved_nations (list of IDs)
-                        - primary_aggressor
-                        - primary_defender
-                        - current_casualties
-                        - economic_impact
-                        - diplomatic_consequences
-                        - public_opinion (object)
-                        - recent_developments (list)
-                        - potential_resolution
-                        """
-                        
-                        # Use proper context for Runner.run
-                        result = await Runner.run(
-                            conflict_agent, 
-                            prompt, 
-                            context=proper_ctx.context
+
+            async with self.db_connection() as conn:
+                from lore.core import canon
+
+                for _ in range(count):
+                    # Pick random nations
+                    available_nations = [n for n in nations if not any(
+                        n["id"] in c.get("involved_nations", []) for c in conflicts
+                    )]
+                    if len(available_nations) < 2:
+                        available_nations = nations
+
+                    nation_pair = random.sample(available_nations, 2)
+
+                    # Generate conflict details
+                    chosen_conflict_type = random.choice([
+                        "territorial_dispute", "trade_war", "ideological_dispute", "resource_conflict"
+                    ])
+
+                    prompt = f"""
+                    Generate a detailed international conflict between these two nations:
+
+                    NATION 1: {json.dumps(nation_pair[0], indent=2)}
+                    NATION 2: {json.dumps(nation_pair[1], indent=2)}
+
+                    Create a {chosen_conflict_type} that makes sense given the nations' characteristics.
+
+                    Return JSON with fields:
+                    - name
+                    - conflict_type: "{chosen_conflict_type}"
+                    - description
+                    - severity (1-10)
+                    - status (active, escalating, etc.)
+                    - start_date
+                    - involved_nations (list of IDs)
+                    - primary_aggressor
+                    - primary_defender
+                    - current_casualties
+                    - economic_impact
+                    - diplomatic_consequences
+                    - public_opinion (object)
+                    - recent_developments (list)
+                    - potential_resolution
+                    """
+
+                    # Use proper context for Runner.run
+                    result = await Runner.run(
+                        conflict_agent,
+                        prompt,
+                        context=proper_ctx.context
+                    )
+
+                    try:
+                        conflict_data = json.loads(result.final_output)
+
+                        # Prepare data for canon
+                        conflict_data_package = {
+                            "name": conflict_data.get('name', 'Unnamed Conflict'),
+                            "conflict_type": conflict_data.get("conflict_type", chosen_conflict_type),
+                            "description": conflict_data.get("description", ""),
+                            "severity": conflict_data.get("severity", 5),
+                            "status": conflict_data.get("status", "active"),
+                            "start_date": conflict_data.get("start_date", "Recently"),
+                            "involved_nations": conflict_data.get("involved_nations", [nation_pair[0]["id"], nation_pair[1]["id"]]),
+                            "primary_aggressor": conflict_data.get("primary_aggressor", nation_pair[0]["id"]),
+                            "primary_defender": conflict_data.get("primary_defender", nation_pair[1]["id"]),
+                            "current_casualties": conflict_data.get("current_casualties", "Unknown"),
+                            "economic_impact": conflict_data.get("economic_impact", "Unknown"),
+                            "diplomatic_consequences": conflict_data.get("diplomatic_consequences", "Unknown"),
+                            "public_opinion": json.dumps(conflict_data.get("public_opinion", {})),
+                            "recent_developments": conflict_data.get("recent_developments", []),
+                            "potential_resolution": conflict_data.get("potential_resolution", "TBD")
+                        }
+
+                        # Use canon to create conflict with proper context
+                        conflict_id = await canon.find_or_create_conflict(
+                            proper_ctx, conn, **conflict_data_package
                         )
-                        
-                        try:
-                            conflict_data = json.loads(result.final_output)
-                            
-                            # Prepare data for canon
-                            conflict_data_package = {
-                                "name": conflict_data.get('name', 'Unnamed Conflict'),
-                                "conflict_type": conflict_data.get("conflict_type", chosen_conflict_type),
-                                "description": conflict_data.get("description", ""),
-                                "severity": conflict_data.get("severity", 5),
-                                "status": conflict_data.get("status", "active"),
-                                "start_date": conflict_data.get("start_date", "Recently"),
-                                "involved_nations": conflict_data.get("involved_nations", [nation_pair[0]["id"], nation_pair[1]["id"]]),
-                                "primary_aggressor": conflict_data.get("primary_aggressor", nation_pair[0]["id"]),
-                                "primary_defender": conflict_data.get("primary_defender", nation_pair[1]["id"]),
-                                "current_casualties": conflict_data.get("current_casualties", "Unknown"),
-                                "economic_impact": conflict_data.get("economic_impact", "Unknown"),
-                                "diplomatic_consequences": conflict_data.get("diplomatic_consequences", "Unknown"),
-                                "public_opinion": json.dumps(conflict_data.get("public_opinion", {})),
-                                "recent_developments": conflict_data.get("recent_developments", []),
-                                "potential_resolution": conflict_data.get("potential_resolution", "TBD")
-                            }
-                            
-                            # Use canon to create conflict with proper context
-                            conflict_id = await canon.find_or_create_conflict(
-                                proper_ctx, conn, **conflict_data_package
-                            )
-                            
-                            conflict_data["id"] = conflict_id
-                            conflicts.append(conflict_data)
-                            
-                            # Generate initial news with proper context
-                            await self._generate_conflict_news(proper_ctx, conflict_id, conflict_data, nation_pair)
-                            
-                        except Exception as e:
-                            logger.error(f"Error generating conflict: {e}")
-            
+
+                        conflict_data["id"] = conflict_id
+                        conflicts.append(conflict_data)
+
+                        # Generate initial news with proper context
+                        await self._generate_conflict_news(proper_ctx, conflict_id, conflict_data, nation_pair)
+
+                    except Exception as e:
+                        logger.error(f"Error generating conflict: {e}")
+
             # After conflicts are generated, update international relations
             # This is where the original code had RunContextWrapper(context=None)
             for conflict in conflicts:
                 if "involved_nations" in conflict and len(conflict["involved_nations"]) >= 2:
                     nation1_id = conflict["involved_nations"][0]
                     nation2_id = conflict["involved_nations"][1]
-                    
+
                     # Determine relationship based on conflict
                     relation_type = "hostile" if conflict.get("severity", 5) > 6 else "tense"
                     quality = max(1, 5 - conflict.get("severity", 5) // 2)
                     description = f"Relations affected by {conflict.get('name', 'ongoing conflict')}: {conflict.get('description', '')[:200]}..."
-                    
+
                     # Use proper context instead of RunContextWrapper(context=None)
                     await self.add_international_relation(
                         proper_ctx,  # Use the proper context we created/validated at the start
@@ -918,7 +913,7 @@ class WorldPoliticsManager(BaseLoreManager):
                         description=description,
                         notable_conflicts=[conflict.get('name', 'Unnamed Conflict')]
                     )
-            
+
             return conflicts
 
     async def _generate_conflict_news(
@@ -945,80 +940,78 @@ class WorldPoliticsManager(BaseLoreManager):
                 instructions="You create realistic news articles about new conflicts in a matriarchal fantasy world.",
                 model="gpt-5-nano",
             )
-    
+
             # We'll produce a single news article from each nation's perspective
             for nation in nations[:2]:
                 bias = "pro_aggressor" if nation["id"] == conflict_data.get("primary_aggressor") else "pro_defender"
                 prompt = f"""
                 Generate a news article about this new conflict from {nation['name']}'s perspective:
-    
+
                 CONFLICT:
                 {json.dumps(conflict_data, indent=2)}
-    
+
                 The coverage is {bias} biased. Must reflect matriarchal power structures, quoting female leaders, etc.
-    
+
                 Return JSON:
                 - headline
                 - content
                 """
-    
+
                 run_config = RunConfig(workflow_name="ConflictNewsGeneration")
                 result = await Runner.run(news_agent, prompt, context=ctx.context, run_config=run_config)
-    
+
                 try:
                     news_data = json.loads(result.final_output)
                     # Theming
                     if "content" in news_data:
                         news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], emphasis_level=1)
-    
+
                     embed_text = f"{news_data.get('headline','No Headline')} {news_data.get('content','')[:200]}"
                     emb = await get_embedding(embed_text)
                     if not isinstance(emb, list):
                         emb = emb.tolist()
-    
-                    async with await self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
-                            await conn.execute("""
-                                INSERT INTO ConflictNews (
-                                    conflict_id, headline, content, source_nation, bias, embedding
-                                )
-                                VALUES ($1, $2, $3, $4, $5, $6)
-                            """,
-                                conflict_id,
-                                news_data.get("headline","No Headline"),
-                                news_data.get("content",""),
-                                nation["id"],
-                                bias,
-                                emb
+
+                    async with self.db_connection() as conn:
+                        await conn.execute("""
+                            INSERT INTO ConflictNews (
+                                conflict_id, headline, content, source_nation, bias, embedding
                             )
-    
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                            conflict_id,
+                            news_data.get("headline","No Headline"),
+                            news_data.get("content",""),
+                            nation["id"],
+                            bias,
+                            emb
+                        )
+
                 except Exception as e:
                     logger.error(f"Error generating conflict news: {e}")
-    
+
     async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str):
         """Execute a coup using the canon system."""
         from lore.core.lore_system import LoreSystem
-        
+
         # Get LoreSystem instance
         lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
-        
+
         # Verify the new leader exists
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                leader = await conn.fetchrow("""
-                    SELECT id, name FROM NPCStats WHERE id = $1
-                """, new_leader_id)
-                
-                if not leader:
-                    # Create the NPC if doesn't exist
-                    from lore.core import canon
-                    new_leader_id = await canon.find_or_create_npc(
-                        ctx, conn, f"New Leader {new_leader_id}", role="Nation Leader"
-                    )
-        
+        async with self.db_connection() as conn:
+            leader = await conn.fetchrow("""
+                SELECT id, name FROM NPCStats WHERE id = $1
+            """, new_leader_id)
+
+            if not leader:
+                # Create the NPC if doesn't exist
+                from lore.core import canon
+                new_leader_id = await canon.find_or_create_npc(
+                    ctx, conn, f"New Leader {new_leader_id}", role="Nation Leader"
+                )
+
         # Use LoreSystem to execute the coup
         result = await lore_system.execute_coup(ctx, nation_id, new_leader_id, reason)
-        
+
         return result
 
     @function_tool
@@ -1031,10 +1024,10 @@ class WorldPoliticsManager(BaseLoreManager):
     async def stream_crisis_events(self, ctx, conflict_id: int) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream real-time updates about an evolving crisis, yielding events as they occur.
-        
+
         Args:
             conflict_id: ID of the conflict to stream events for
-            
+
         Yields:
             Event dictionaries with real-time updates
         """
@@ -1047,17 +1040,17 @@ class WorldPoliticsManager(BaseLoreManager):
             if not conflict:
                 yield {"error": "Conflict not found"}
                 return
-    
+
             crisis_streaming_agent = Agent(
                 name="CrisisStreamingAgent",
                 instructions="Generate a stream of real-time developments in an ongoing crisis.",
                 model="gpt-5-nano",
             )
-    
+
             prompt = f"""
             Generate a series of real-time updates for this ongoing conflict:
             {json.dumps(conflict, indent=2)}
-            
+
             Each update should include:
             - timestamp
             - location
@@ -1065,13 +1058,13 @@ class WorldPoliticsManager(BaseLoreManager):
             - severity level (1-10)
             - parties involved
             - immediate consequences
-            
+
             Provide updates as they might occur over a day of conflict.
             """
-    
+
             run_ctx = RunContextWrapper(context=ctx.context)
             result = await Runner.run(crisis_streaming_agent, prompt, context=run_ctx.context)
-    
+
             # Since this is not a streaming API, we'll parse the result and yield events one by one
             try:
                 all_events = json.loads(result.final_output)
@@ -1099,12 +1092,12 @@ class WorldPoliticsManager(BaseLoreManager):
     async def simulate_diplomatic_negotiation(self, ctx, nation1_id: int, nation2_id: int, issue: str) -> Dict[str, Any]:
         """
         Simulate diplomatic negotiations between two nations over a specific issue.
-        
+
         Args:
             nation1_id: ID of the first nation
             nation2_id: ID of the second nation
             issue: Description of the issue being negotiated
-            
+
         Returns:
             Dictionary with negotiation results
         """
@@ -1112,8 +1105,8 @@ class WorldPoliticsManager(BaseLoreManager):
             "SimulateDiplomaticNegotiation",
             group_id=self.trace_group_id,
             metadata={
-                **self.trace_metadata, 
-                "nation1_id": nation1_id, 
+                **self.trace_metadata,
+                "nation1_id": nation1_id,
                 "nation2_id": nation2_id,
                 "issue": issue
             }
@@ -1122,7 +1115,7 @@ class WorldPoliticsManager(BaseLoreManager):
             nations = await self._load_negotiating_nations(nation1_id, nation2_id)
             if "error" in nations:
                 return nations
-    
+
             # Create agents for each nation with competing goals
             nation1_agent = Agent(
                 name=f"{nations['nation1']['name']}Agent",
@@ -1133,7 +1126,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 ),
                 model="gpt-5-nano",
             )
-            
+
             nation2_agent = Agent(
                 name=f"{nations['nation2']['name']}Agent",
                 instructions=(
@@ -1143,7 +1136,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 ),
                 model="gpt-5-nano",
             )
-    
+
             # Create a mediator agent
             mediator_agent = Agent(
                 name="DiplomaticMediatorAgent",
@@ -1153,24 +1146,24 @@ class WorldPoliticsManager(BaseLoreManager):
                 ),
                 model="gpt-5-nano",
             )
-    
+
             # Set up the negotiation simulation
             negotiation = DiplomaticNegotiation(
-                nation1_agent, 
-                nation2_agent, 
+                nation1_agent,
+                nation2_agent,
                 mediator_agent,
                 nations,
                 issue,
                 max_rounds=5
             )
-            
+
             # Run the simulation
             run_ctx = RunContextWrapper(context=ctx.context)
             results = await negotiation.run(run_ctx)
-    
+
             # Update relations based on outcome
             await self._update_international_relations(nations, results)
-            
+
             return results
 
     @function_tool
@@ -1183,10 +1176,10 @@ class WorldPoliticsManager(BaseLoreManager):
     async def simulate_media_coverage(self, ctx, event_id: int) -> Dict[str, Any]:
         """
         Simulate media coverage of a political event from different perspectives.
-        
+
         Args:
             event_id: ID of the event to cover
-            
+
         Returns:
             Dictionary with simulated media coverage from different outlets
         """
@@ -1196,12 +1189,12 @@ class WorldPoliticsManager(BaseLoreManager):
             metadata={**self.trace_metadata, "event_id": event_id}
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
-            
+
             # Load event details
             event = await self._load_event_details(event_id)
             if "error" in event:
                 return event
-            
+
             # Create media outlet agents with different biases
             media_types = [
                 {"name": "State Official", "bias": "pro_government", "reliability": 0.7},
@@ -1209,7 +1202,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 {"name": "Noble Herald", "bias": "aristocratic", "reliability": 0.8},
                 {"name": "Foreign Observer", "bias": "neutral", "reliability": 0.9}
             ]
-            
+
             coverage = []
             for media in media_types:
                 media_agent = Agent(
@@ -1220,42 +1213,42 @@ class WorldPoliticsManager(BaseLoreManager):
                     ),
                     model="gpt-5-nano",
                 )
-                
+
                 prompt = f"""
                 Write a news article covering this event:
                 {json.dumps(event, indent=2)}
-                
+
                 Your outlet has a {media['bias']} bias.
-                
+
                 Return JSON with:
                 - headline
                 - content (article body)
                 - emphasis (aspect of the event you highlight)
                 - bias_indicators (how your bias shows)
                 """
-    
+
                 result = await Runner.run(media_agent, prompt, context=run_ctx.context)
                 try:
                     article = json.loads(result.final_output)
                     article["media_name"] = media["name"]
                     article["bias"] = media["bias"]
-                    
+
                     # Add matriarchal theming to the content
                     if "content" in article:
                         article["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", article["content"])
-                    
+
                     coverage.append(article)
-                    
+
                     # Store in database
                     await self._store_media_coverage(event_id, article)
-                    
+
                 except json.JSONDecodeError:
                     coverage.append({
                         "media_name": media["name"],
                         "error": "Failed to parse media coverage",
                         "raw_output": result.final_output
                     })
-            
+
             return {"event": event, "coverage": coverage}
 
     # ------------------------------------------------------------------------
@@ -1277,45 +1270,44 @@ class WorldPoliticsManager(BaseLoreManager):
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
             await self.ensure_initialized()
-    
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    from lore.core import canon
-                    
-                    nation = await conn.fetchrow("""
-                        SELECT id, name, government_type, matriarchy_level, cultural_traits
-                        FROM Nations
-                        WHERE id = $1
-                    """, nation_id)
-                    if not nation:
-                        return []
-    
-                    nation_data = dict(nation)
-    
-                    factions = await conn.fetch("""
-                        SELECT id, name, type, description, values, goals, cultural_traits
-                        FROM Factions
-                        WHERE $1 = ANY(territory)
-                    """, nation_data.get("name"))
-                    faction_data = [dict(f) for f in factions]
-    
+
+            async with self.db_connection() as conn:
+                from lore.core import canon
+
+                nation = await conn.fetchrow("""
+                    SELECT id, name, government_type, matriarchy_level, cultural_traits
+                    FROM Nations
+                    WHERE id = $1
+                """, nation_id)
+                if not nation:
+                    return []
+
+                nation_data = dict(nation)
+
+                factions = await conn.fetch("""
+                    SELECT id, name, type, description, values, goals, cultural_traits
+                    FROM Factions
+                    WHERE $1 = ANY(territory)
+                """, nation_data.get("name"))
+                faction_data = [dict(f) for f in factions]
+
             issue_agent = Agent(
                 name="DomesticIssueAgent",
                 instructions="You create realistic domestic political and social issues in a matriarchal society.",
                 model="gpt-5-nano",
             )
-    
+
             issues = []
             for _ in range(count):
                 prompt = f"""
                 Generate a domestic issue for the following nation:
-                
+
                 NATION:
                 {json.dumps(nation_data, indent=2)}
-                
+
                 FACTIONS:
                 {json.dumps(faction_data, indent=2)}
-                
+
                 Include in the JSON:
                 - name
                 - issue_type
@@ -1337,50 +1329,49 @@ class WorldPoliticsManager(BaseLoreManager):
                 """
                 run_config = RunConfig(workflow_name="DomesticIssueGeneration")
                 result = await Runner.run(issue_agent, prompt, context=run_ctx.context, run_config=run_config)
-    
+
                 try:
                     issue_data = json.loads(result.final_output)
                     if not all(k in issue_data for k in ["name","description","issue_type"]):
                         continue
-    
-                    async with await self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
-                            # Prepare data for canon
-                            issue_data_package = {
-                                "nation_id": nation_id,
-                                "name": issue_data.get("name"),
-                                "issue_type": issue_data.get("issue_type"),
-                                "description": issue_data.get("description"),
-                                "severity": issue_data.get("severity", 5),
-                                "status": issue_data.get("status", "active"),
-                                "start_date": issue_data.get("start_date", "Recently"),
-                                "supporting_factions": issue_data.get("supporting_factions", []),
-                                "opposing_factions": issue_data.get("opposing_factions", []),
-                                "neutral_factions": issue_data.get("neutral_factions", []),
-                                "affected_demographics": issue_data.get("affected_demographics", []),
-                                "public_opinion": json.dumps(issue_data.get("public_opinion", {})),
-                                "government_response": issue_data.get("government_response", ""),
-                                "recent_developments": issue_data.get("recent_developments", []),
-                                "political_impact": issue_data.get("political_impact", ""),
-                                "social_impact": issue_data.get("social_impact", ""),
-                                "economic_impact": issue_data.get("economic_impact", ""),
-                                "potential_resolution": issue_data.get("potential_resolution", "")
-                            }
-                            
-                            # Use canon to create domestic issue
-                            issue_id = await canon.create_domestic_issue(
-                                ctx, conn, **issue_data_package
-                            )
-    
-                            issue_data["id"] = issue_id
-                            issues.append(issue_data)
-    
-                            # Generate initial news
-                            await self._generate_domestic_news(run_ctx, issue_id, issue_data, nation_data)
-    
+
+                    async with self.db_connection() as conn:
+                        # Prepare data for canon
+                        issue_data_package = {
+                            "nation_id": nation_id,
+                            "name": issue_data.get("name"),
+                            "issue_type": issue_data.get("issue_type"),
+                            "description": issue_data.get("description"),
+                            "severity": issue_data.get("severity", 5),
+                            "status": issue_data.get("status", "active"),
+                            "start_date": issue_data.get("start_date", "Recently"),
+                            "supporting_factions": issue_data.get("supporting_factions", []),
+                            "opposing_factions": issue_data.get("opposing_factions", []),
+                            "neutral_factions": issue_data.get("neutral_factions", []),
+                            "affected_demographics": issue_data.get("affected_demographics", []),
+                            "public_opinion": json.dumps(issue_data.get("public_opinion", {})),
+                            "government_response": issue_data.get("government_response", ""),
+                            "recent_developments": issue_data.get("recent_developments", []),
+                            "political_impact": issue_data.get("political_impact", ""),
+                            "social_impact": issue_data.get("social_impact", ""),
+                            "economic_impact": issue_data.get("economic_impact", ""),
+                            "potential_resolution": issue_data.get("potential_resolution", "")
+                        }
+
+                        # Use canon to create domestic issue
+                        issue_id = await canon.create_domestic_issue(
+                            ctx, conn, **issue_data_package
+                        )
+
+                        issue_data["id"] = issue_id
+                        issues.append(issue_data)
+
+                        # Generate initial news
+                        await self._generate_domestic_news(run_ctx, issue_id, issue_data, nation_data)
+
                 except Exception as e:
                     logger.error(f"Error generating domestic issue: {e}")
-    
+
             return issues
 
 
@@ -1408,18 +1399,18 @@ class WorldPoliticsManager(BaseLoreManager):
                 instructions="You create realistic news articles about domestic issues in a matriarchal society.",
                 model="gpt-5-nano",
             )
-    
+
             biases = ["supporting", "opposing", "neutral"]
             for bias in biases:
                 prompt = f"""
                 Generate a news article about this domestic issue from a {bias} perspective:
-    
+
                 ISSUE:
                 {json.dumps(issue_data, indent=2)}
-    
+
                 NATION:
                 {json.dumps(nation_data, indent=2)}
-    
+
                 Return JSON:
                 - headline
                 - content
@@ -1427,37 +1418,36 @@ class WorldPoliticsManager(BaseLoreManager):
                 """
                 run_config = RunConfig(workflow_name="DomesticNewsGeneration")
                 result = await Runner.run(news_agent, prompt, context=ctx.context, run_config=run_config)
-    
+
                 try:
                     news_data = json.loads(result.final_output)
                     if not all(k in news_data for k in ["headline","content"]):
                         continue
-    
+
                     # Theming
                     news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], emphasis_level=1)
-    
+
                     embed_text = f"{news_data.get('headline','No Headline')} {news_data.get('content','')[:200]}"
                     emb = await get_embedding(embed_text)
                     if not isinstance(emb, list):
                         emb = emb.tolist()
-    
-                    async with await self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
-                            await conn.fetchval("""
-                                INSERT INTO DomesticNews (
-                                    issue_id, headline, content, source_faction, bias, embedding
-                                )
-                                VALUES ($1, $2, $3, $4, $5, $6)
-                                RETURNING id
-                            """,
-                                issue_id,
-                                news_data.get("headline","No Headline"),
-                                news_data.get("content",""),
-                                news_data.get("source_faction","Unknown Source"),
-                                bias,
-                                emb
+
+                    async with self.db_connection() as conn:
+                        await conn.fetchval("""
+                            INSERT INTO DomesticNews (
+                                issue_id, headline, content, source_faction, bias, embedding
                             )
-    
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING id
+                        """,
+                            issue_id,
+                            news_data.get("headline","No Headline"),
+                            news_data.get("content",""),
+                            news_data.get("source_faction","Unknown Source"),
+                            bias,
+                            emb
+                        )
+
                 except Exception as e:
                     logger.error(f"Error generating domestic news: {e}")
 
@@ -1474,7 +1464,7 @@ class WorldPoliticsManager(BaseLoreManager):
     async def get_active_conflicts(self, ctx) -> List[Dict[str, Any]]:
         """
         Get all active conflicts from the DB.
-        
+
         Returns:
             List of active conflict dictionaries
         """
@@ -1484,25 +1474,24 @@ class WorldPoliticsManager(BaseLoreManager):
             return cached
 
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                conflicts = await conn.fetch("""
-                    SELECT * FROM NationalConflicts
-                    WHERE status != 'resolved'
-                    ORDER BY severity DESC
-                """)
-                result = [dict(c) for c in conflicts]
+        async with self.db_connection() as conn:
+            conflicts = await conn.fetch("""
+                SELECT * FROM NationalConflicts
+                WHERE status != 'resolved'
+                ORDER BY severity DESC
+            """)
+            result = [dict(c) for c in conflicts]
 
-                # parse JSON fields
-                for c in result:
-                    if "public_opinion" in c and c["public_opinion"]:
-                        try:
-                            c["public_opinion"] = json.loads(c["public_opinion"])
-                        except:
-                            pass
+            # parse JSON fields
+            for c in result:
+                if "public_opinion" in c and c["public_opinion"]:
+                    try:
+                        c["public_opinion"] = json.loads(c["public_opinion"])
+                    except:
+                        pass
 
-                self.set_cache(cache_key, result, ttl=3600)
-                return result
+            self.set_cache(cache_key, result, ttl=3600)
+            return result
 
     # ------------------------------------------------------------------------
     #  GET NATION POLITICS (comprehensive)
@@ -1518,10 +1507,10 @@ class WorldPoliticsManager(BaseLoreManager):
         """
         Get comprehensive political information about a nation:
         details, international relations, conflicts, domestic issues, relevant news, etc.
-        
+
         Args:
             nation_id: ID of the nation
-            
+
         Returns:
             Dictionary with comprehensive nation political information
         """
@@ -1531,85 +1520,84 @@ class WorldPoliticsManager(BaseLoreManager):
             return cached
 
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                nation = await conn.fetchrow("""
-                    SELECT * FROM Nations WHERE id = $1
-                """, nation_id)
-                if not nation:
-                    return {"error": "Nation not found"}
+        async with self.db_connection() as conn:
+            nation = await conn.fetchrow("""
+                SELECT * FROM Nations WHERE id = $1
+            """, nation_id)
+            if not nation:
+                return {"error": "Nation not found"}
 
-                relations = await conn.fetch("""
-                    SELECT r.*,
-                           CASE WHEN r.nation1_id = $1 THEN r.nation2_id ELSE r.nation1_id END AS other_nation_id,
-                           n.name AS other_nation_name, n.government_type AS other_government_type
-                    FROM InternationalRelations r
-                    JOIN Nations n ON (
-                        CASE WHEN r.nation1_id = $1 THEN r.nation2_id ELSE r.nation1_id END = n.id
-                    )
-                    WHERE r.nation1_id = $1 OR r.nation2_id = $1
-                """, nation_id)
+            relations = await conn.fetch("""
+                SELECT r.*,
+                       CASE WHEN r.nation1_id = $1 THEN r.nation2_id ELSE r.nation1_id END AS other_nation_id,
+                       n.name AS other_nation_name, n.government_type AS other_government_type
+                FROM InternationalRelations r
+                JOIN Nations n ON (
+                    CASE WHEN r.nation1_id = $1 THEN r.nation2_id ELSE r.nation1_id END = n.id
+                )
+                WHERE r.nation1_id = $1 OR r.nation2_id = $1
+            """, nation_id)
 
-                conflicts = await conn.fetch("""
-                    SELECT c.*
-                    FROM NationalConflicts c
-                    WHERE $1 = ANY(c.involved_nations)
-                    ORDER BY c.severity DESC
-                """, nation_id)
+            conflicts = await conn.fetch("""
+                SELECT c.*
+                FROM NationalConflicts c
+                WHERE $1 = ANY(c.involved_nations)
+                ORDER BY c.severity DESC
+            """, nation_id)
 
-                issues = await conn.fetch("""
-                    SELECT *
-                    FROM DomesticIssues
-                    WHERE nation_id = $1
-                    ORDER BY severity DESC
-                """, nation_id)
+            issues = await conn.fetch("""
+                SELECT *
+                FROM DomesticIssues
+                WHERE nation_id = $1
+                ORDER BY severity DESC
+            """, nation_id)
 
-                conflict_news = await conn.fetch("""
-                    SELECT n.*
-                    FROM ConflictNews n
-                    JOIN NationalConflicts c ON n.conflict_id = c.id
-                    WHERE $1 = ANY(c.involved_nations)
-                      AND n.source_nation = $1
-                    ORDER BY n.publication_date DESC
-                    LIMIT 5
-                """, nation_id)
+            conflict_news = await conn.fetch("""
+                SELECT n.*
+                FROM ConflictNews n
+                JOIN NationalConflicts c ON n.conflict_id = c.id
+                WHERE $1 = ANY(c.involved_nations)
+                  AND n.source_nation = $1
+                ORDER BY n.publication_date DESC
+                LIMIT 5
+            """, nation_id)
 
-                domestic_news = await conn.fetch("""
-                    SELECT n.*
-                    FROM DomesticNews n
-                    JOIN DomesticIssues i ON n.issue_id = i.id
-                    WHERE i.nation_id = $1
-                    ORDER BY n.publication_date DESC
-                    LIMIT 5
-                """, nation_id)
+            domestic_news = await conn.fetch("""
+                SELECT n.*
+                FROM DomesticNews n
+                JOIN DomesticIssues i ON n.issue_id = i.id
+                WHERE i.nation_id = $1
+                ORDER BY n.publication_date DESC
+                LIMIT 5
+            """, nation_id)
 
-                result = {
-                    "nation": dict(nation),
-                    "international_relations": [dict(r) for r in relations],
-                    "conflicts": [dict(c) for c in conflicts],
-                    "domestic_issues": [dict(i) for i in issues],
-                    "news": {
-                        "international": [dict(x) for x in conflict_news],
-                        "domestic": [dict(x) for x in domestic_news]
-                    }
+            result = {
+                "nation": dict(nation),
+                "international_relations": [dict(r) for r in relations],
+                "conflicts": [dict(c) for c in conflicts],
+                "domestic_issues": [dict(i) for i in issues],
+                "news": {
+                    "international": [dict(x) for x in conflict_news],
+                    "domestic": [dict(x) for x in domestic_news]
                 }
+            }
 
-                # parse JSON fields
-                for item in result["domestic_issues"]:
-                    if "public_opinion" in item and item["public_opinion"]:
-                        try:
-                            item["public_opinion"] = json.loads(item["public_opinion"])
-                        except:
-                            pass
-                for c in result["conflicts"]:
-                    if "public_opinion" in c and c["public_opinion"]:
-                        try:
-                            c["public_opinion"] = json.loads(c["public_opinion"])
-                        except:
-                            pass
+            # parse JSON fields
+            for item in result["domestic_issues"]:
+                if "public_opinion" in item and item["public_opinion"]:
+                    try:
+                        item["public_opinion"] = json.loads(item["public_opinion"])
+                    except:
+                        pass
+            for c in result["conflicts"]:
+                if "public_opinion" in c and c["public_opinion"]:
+                    try:
+                        c["public_opinion"] = json.loads(c["public_opinion"])
+                    except:
+                        pass
 
-                self.set_cache(cache_key, result, ttl=3600)
-                return result
+            self.set_cache(cache_key, result, ttl=3600)
+            return result
 
     # ------------------------------------------------------------------------
     #  EVOLVE ALL CONFLICTS
@@ -1632,19 +1620,19 @@ class WorldPoliticsManager(BaseLoreManager):
             active_conflicts = await self.get_active_conflicts(run_ctx)
             all_nations = await self.get_all_nations(run_ctx)
             nations_by_id = {n["id"]: n for n in all_nations}
-            
+
             from lore.core.lore_system import LoreSystem
             from lore.core import canon
-            
+
             lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
-            
+
             evolution_agent = Agent(
                 name="ConflictEvolutionAgent",
                 instructions="""You evolve international conflicts over time in a matriarchal fantasy world.
                 Consider realistic progression, diplomatic efforts, and power dynamics.""",
                 model="gpt-5-nano",
             )
-            
+
             evolution_results = {
                 "days_passed": days_passed,
                 "evolved_conflicts": [],
@@ -1654,137 +1642,136 @@ class WorldPoliticsManager(BaseLoreManager):
                 "territorial_changes": [],
                 "leadership_changes": []
             }
-            
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    for conflict in active_conflicts:
-                        conflict_id = conflict["id"]
-                        involved_nation_ids = conflict.get("involved_nations", [])
-                        involved_nations = [
-                            nations_by_id.get(nid, {"id": nid, "name": "Unknown"})
-                            for nid in involved_nation_ids
-                        ]
-                        
-                        # Get conflict history
-                        conflict_history = await conn.fetch("""
-                            SELECT * FROM ConflictNews
-                            WHERE conflict_id = $1
-                            ORDER BY publication_date DESC
-                            LIMIT 10
-                        """, conflict_id)
-                        
-                        prompt = f"""
-                        Evolve this conflict over {days_passed} days:
-                        
-                        CONFLICT:
-                        {json.dumps(conflict, indent=2)}
-                        
-                        INVOLVED NATIONS:
-                        {json.dumps(involved_nations, indent=2)}
-                        
-                        RECENT HISTORY:
-                        {json.dumps([dict(h) for h in conflict_history[:5]], indent=2)}
-                        
-                        Consider:
-                        - Current severity: {conflict.get('severity', 5)}/10
-                        - Matriarchal power structures in involved nations
-                        - Realistic progression based on the conflict type
-                        - Possibility of escalation, stalemate, or resolution
-                        - Territorial changes if applicable
-                        - Leadership challenges or changes
-                        - Third-party interventions
-                        
-                        Return JSON with:
-                        - conflict_id: {conflict_id}
-                        - new_status: (active, escalating, de-escalating, stalemate, resolved)
-                        - severity_change: integer from -3 to +3
-                        - new_developments: array of significant events
-                        - casualties_update: description
-                        - economic_impact_update: description
-                        - diplomatic_consequences_update: description
-                        - territorial_changes: array of {from_nation, to_nation, territory}
-                        - leadership_challenges: array of {nation_id, description}
-                        - third_party_involvement: array of {nation_id, role}
-                        - resolution_details: (if resolved)
-                        - peace_terms: (if resolved)
-                        """
-                        
-                        run_config = RunConfig(workflow_name="ConflictEvolution")
-                        result = await Runner.run(evolution_agent, prompt, context=run_ctx.context, run_config=run_config)
-                        
-                        try:
-                            evo_data = json.loads(result.final_output)
-                            
-                            # Prepare update data for canon
-                            update_data = {
-                                "status": evo_data.get("new_status", conflict.get("status")),
-                                "severity": max(1, min(10, conflict.get("severity", 5) + evo_data.get("severity_change", 0))),
-                                "current_casualties": evo_data.get("casualties_update", conflict.get("current_casualties")),
-                                "economic_impact": evo_data.get("economic_impact_update", conflict.get("economic_impact")),
-                                "diplomatic_consequences": evo_data.get("diplomatic_consequences_update", conflict.get("diplomatic_consequences")),
-                                "recent_developments": conflict.get("recent_developments", []) + evo_data.get("new_developments", [])[-20:],
-                                "end_date": datetime.now().strftime("%Y-%m-%d") if evo_data.get("new_status") == "resolved" else None,
-                                "potential_resolution": evo_data.get("resolution_details", conflict.get("potential_resolution"))
-                            }
-                            
-                            # Use canon to update conflict
-                            await canon.update_conflict(ctx, conn, conflict_id, update_data)
-                            
-                            # Handle territorial changes through LoreSystem
-                            territorial_changes = evo_data.get("territorial_changes", [])
-                            for change in territorial_changes:
-                                if all(k in change for k in ["from_nation", "to_nation", "territory"]):
-                                    change_result = await lore_system.propose_and_enact_change(
-                                        ctx=ctx,
-                                        entity_type="TerritorialControl",
-                                        entity_identifier={
-                                            "territory_name": change["territory"],
-                                            "controlling_nation": change["from_nation"]
-                                        },
-                                        updates={"controlling_nation": change["to_nation"]},
-                                        reason=f"Territory changed hands due to conflict: {conflict.get('name')}"
-                                    )
-                                    
-                                    evolution_results["territorial_changes"].append({
-                                        "conflict_id": conflict_id,
-                                        "change": change,
-                                        "result": change_result
-                                    })
-                            
-                            # Track results
-                            if evo_data.get("new_status") == "resolved":
-                                evolution_results["resolved_conflicts"].append({
+
+            async with self.db_connection() as conn:
+                for conflict in active_conflicts:
+                    conflict_id = conflict["id"]
+                    involved_nation_ids = conflict.get("involved_nations", [])
+                    involved_nations = [
+                        nations_by_id.get(nid, {"id": nid, "name": "Unknown"})
+                        for nid in involved_nation_ids
+                    ]
+
+                    # Get conflict history
+                    conflict_history = await conn.fetch("""
+                        SELECT * FROM ConflictNews
+                        WHERE conflict_id = $1
+                        ORDER BY publication_date DESC
+                        LIMIT 10
+                    """, conflict_id)
+
+                    prompt = f"""
+                    Evolve this conflict over {days_passed} days:
+
+                    CONFLICT:
+                    {json.dumps(conflict, indent=2)}
+
+                    INVOLVED NATIONS:
+                    {json.dumps(involved_nations, indent=2)}
+
+                    RECENT HISTORY:
+                    {json.dumps([dict(h) for h in conflict_history[:5]], indent=2)}
+
+                    Consider:
+                    - Current severity: {conflict.get('severity', 5)}/10
+                    - Matriarchal power structures in involved nations
+                    - Realistic progression based on the conflict type
+                    - Possibility of escalation, stalemate, or resolution
+                    - Territorial changes if applicable
+                    - Leadership challenges or changes
+                    - Third-party interventions
+
+                    Return JSON with:
+                    - conflict_id: {conflict_id}
+                    - new_status: (active, escalating, de-escalating, stalemate, resolved)
+                    - severity_change: integer from -3 to +3
+                    - new_developments: array of significant events
+                    - casualties_update: description
+                    - economic_impact_update: description
+                    - diplomatic_consequences_update: description
+                    - territorial_changes: array of {from_nation, to_nation, territory}
+                    - leadership_challenges: array of {nation_id, description}
+                    - third_party_involvement: array of {nation_id, role}
+                    - resolution_details: (if resolved)
+                    - peace_terms: (if resolved)
+                    """
+
+                    run_config = RunConfig(workflow_name="ConflictEvolution")
+                    result = await Runner.run(evolution_agent, prompt, context=run_ctx.context, run_config=run_config)
+
+                    try:
+                        evo_data = json.loads(result.final_output)
+
+                        # Prepare update data for canon
+                        update_data = {
+                            "status": evo_data.get("new_status", conflict.get("status")),
+                            "severity": max(1, min(10, conflict.get("severity", 5) + evo_data.get("severity_change", 0))),
+                            "current_casualties": evo_data.get("casualties_update", conflict.get("current_casualties")),
+                            "economic_impact": evo_data.get("economic_impact_update", conflict.get("economic_impact")),
+                            "diplomatic_consequences": evo_data.get("diplomatic_consequences_update", conflict.get("diplomatic_consequences")),
+                            "recent_developments": conflict.get("recent_developments", []) + evo_data.get("new_developments", [])[-20:],
+                            "end_date": datetime.now().strftime("%Y-%m-%d") if evo_data.get("new_status") == "resolved" else None,
+                            "potential_resolution": evo_data.get("resolution_details", conflict.get("potential_resolution"))
+                        }
+
+                        # Use canon to update conflict
+                        await canon.update_conflict(ctx, conn, conflict_id, update_data)
+
+                        # Handle territorial changes through LoreSystem
+                        territorial_changes = evo_data.get("territorial_changes", [])
+                        for change in territorial_changes:
+                            if all(k in change for k in ["from_nation", "to_nation", "territory"]):
+                                change_result = await lore_system.propose_and_enact_change(
+                                    ctx=ctx,
+                                    entity_type="TerritorialControl",
+                                    entity_identifier={
+                                        "territory_name": change["territory"],
+                                        "controlling_nation": change["from_nation"]
+                                    },
+                                    updates={"controlling_nation": change["to_nation"]},
+                                    reason=f"Territory changed hands due to conflict: {conflict.get('name')}"
+                                )
+
+                                evolution_results["territorial_changes"].append({
                                     "conflict_id": conflict_id,
-                                    "conflict_name": conflict.get("name", "Unnamed"),
-                                    "resolution_details": evo_data.get("resolution_details"),
-                                    "peace_terms": evo_data.get("peace_terms", [])
+                                    "change": change,
+                                    "result": change_result
                                 })
-                            else:
-                                evolution_results["evolved_conflicts"].append({
-                                    **conflict,
-                                    **update_data
-                                })
-                            
-                            # Generate news about major developments
-                            if evo_data.get("new_developments") and involved_nations:
-                                for i, dev in enumerate(evo_data.get("new_developments", [])[:3]):
-                                    news_nation = involved_nations[i % len(involved_nations)]
-                                    await self._generate_conflict_update_news(
-                                        run_ctx, conflict_id, 
-                                        {**conflict, "new_development": dev},
-                                        evo_data, news_nation
-                                    )
-                            
-                        except Exception as e:
-                            logger.error(f"Error evolving conflict {conflict_id}: {e}")
-            
+
+                        # Track results
+                        if evo_data.get("new_status") == "resolved":
+                            evolution_results["resolved_conflicts"].append({
+                                "conflict_id": conflict_id,
+                                "conflict_name": conflict.get("name", "Unnamed"),
+                                "resolution_details": evo_data.get("resolution_details"),
+                                "peace_terms": evo_data.get("peace_terms", [])
+                            })
+                        else:
+                            evolution_results["evolved_conflicts"].append({
+                                **conflict,
+                                **update_data
+                            })
+
+                        # Generate news about major developments
+                        if evo_data.get("new_developments") and involved_nations:
+                            for i, dev in enumerate(evo_data.get("new_developments", [])[:3]):
+                                news_nation = involved_nations[i % len(involved_nations)]
+                                await self._generate_conflict_update_news(
+                                    run_ctx, conflict_id,
+                                    {**conflict, "new_development": dev},
+                                    evo_data, news_nation
+                                )
+
+                    except Exception as e:
+                        logger.error(f"Error evolving conflict {conflict_id}: {e}")
+
             # Invalidate caches
             self.invalidate_cache("active_conflicts")
-            for nation_id in set(n["id"] for c in evolution_results["evolved_conflicts"] 
-                               for n in nations_by_id.values() 
+            for nation_id in set(n["id"] for c in evolution_results["evolved_conflicts"]
+                               for n in nations_by_id.values()
                                if n["id"] in c.get("involved_nations", [])):
                 self.invalidate_cache(f"nation_politics_{nation_id}")
-            
+
             return evolution_results
 
     async def _update_post_conflict_relations(
@@ -1795,56 +1782,55 @@ class WorldPoliticsManager(BaseLoreManager):
         resolution_data: Dict[str, Any]
     ) -> None:
         """Update relations between nations after conflict resolution."""
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get existing relation
-                relation = await conn.fetchrow("""
-                    SELECT * FROM InternationalRelations
-                    WHERE (nation1_id = $1 AND nation2_id = $2)
-                       OR (nation1_id = $2 AND nation2_id = $1)
-                """, nation1_id, nation2_id)
-                
-                # Calculate relationship change based on resolution
-                base_quality = relation["relationship_quality"] if relation else 5
-                
-                # Determine change based on conflict outcome
-                if resolution_data.get("peace_terms"):
-                    # Negotiated peace
-                    quality_change = 1
-                else:
-                    # One-sided victory
-                    quality_change = -2
-                
-                new_quality = max(1, min(10, base_quality + quality_change))
-                
-                # Update or create relation
-                if relation:
-                    await conn.execute("""
-                        UPDATE InternationalRelations
-                        SET relationship_quality = $1,
-                            notable_conflicts = array_append(notable_conflicts, $2),
-                            description = description || E'\n\n' || $3
-                        WHERE id = $4
-                    """,
-                        new_quality,
-                        conflict.get("name", "Unnamed conflict"),
-                        f"Relationship affected by resolution of {conflict.get('name')}: {resolution_data.get('resolution_details', 'Conflict ended')}",
-                        relation["id"]
+        async with self.db_connection() as conn:
+            # Get existing relation
+            relation = await conn.fetchrow("""
+                SELECT * FROM InternationalRelations
+                WHERE (nation1_id = $1 AND nation2_id = $2)
+                   OR (nation1_id = $2 AND nation2_id = $1)
+            """, nation1_id, nation2_id)
+
+            # Calculate relationship change based on resolution
+            base_quality = relation["relationship_quality"] if relation else 5
+
+            # Determine change based on conflict outcome
+            if resolution_data.get("peace_terms"):
+                # Negotiated peace
+                quality_change = 1
+            else:
+                # One-sided victory
+                quality_change = -2
+
+            new_quality = max(1, min(10, base_quality + quality_change))
+
+            # Update or create relation
+            if relation:
+                await conn.execute("""
+                    UPDATE InternationalRelations
+                    SET relationship_quality = $1,
+                        notable_conflicts = array_append(notable_conflicts, $2),
+                        description = description || E'\n\n' || $3
+                    WHERE id = $4
+                """,
+                    new_quality,
+                    conflict.get("name", "Unnamed conflict"),
+                    f"Relationship affected by resolution of {conflict.get('name')}: {resolution_data.get('resolution_details', 'Conflict ended')}",
+                    relation["id"]
+                )
+            else:
+                await conn.execute("""
+                    INSERT INTO InternationalRelations (
+                        nation1_id, nation2_id, relationship_type,
+                        relationship_quality, description, notable_conflicts
                     )
-                else:
-                    await conn.execute("""
-                        INSERT INTO InternationalRelations (
-                            nation1_id, nation2_id, relationship_type,
-                            relationship_quality, description, notable_conflicts
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                    """,
-                        nation1_id, nation2_id,
-                        "post-conflict",
-                        new_quality,
-                        f"Relationship established after {conflict.get('name')}",
-                        [conflict.get("name", "Unnamed conflict")]
-                    )
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                    nation1_id, nation2_id,
+                    "post-conflict",
+                    new_quality,
+                    f"Relationship established after {conflict.get('name')}",
+                    [conflict.get("name", "Unnamed conflict")]
+                )
 
     async def _generate_conflict_update_news(
         self,
@@ -1871,59 +1857,58 @@ class WorldPoliticsManager(BaseLoreManager):
                 instructions="You create news updates about evolving international conflicts in a matriarchal world.",
                 model="gpt-5-nano",
             )
-    
+
             devs = "\n".join([f"- {d}" for d in evo_data.get("new_developments",[])])
             prompt = f"""
             Generate a news article about these developments in an ongoing conflict:
-    
+
             CONFLICT:
             {json.dumps(conflict, indent=2)}
-    
+
             NEW DEVELOPMENTS:
             {devs}
-    
+
             REPORTING NATION:
             {json.dumps(nation, indent=2)}
-    
+
             Return JSON:
             - headline
             - content
             """
-    
+
             run_config = RunConfig(workflow_name="ConflictUpdateNews")
             result = await Runner.run(news_agent, prompt, context=ctx.context, run_config=run_config)
-    
+
             try:
                 news_data = json.loads(result.final_output)
                 if not all(k in news_data for k in ["headline","content"]):
                     return
-    
+
                 # Theming
                 news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], 1)
-    
+
                 embed_text = f"{news_data.get('headline','No Headline')} {news_data.get('content','')[:200]}"
                 emb = await get_embedding(embed_text)
                 if not isinstance(emb, list):
                     emb = emb.tolist()
-    
+
                 bias = "pro_aggressor" if nation["id"] == conflict.get("primary_aggressor") else "pro_defender"
-    
-                async with await self.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        await conn.execute("""
-                            INSERT INTO ConflictNews (
-                                conflict_id, headline, content, source_nation, bias, embedding
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """,
-                            conflict_id,
-                            news_data.get("headline","No Headline"),
-                            news_data.get("content",""),
-                            nation["id"],
-                            bias,
-                            emb
+
+                async with self.db_connection() as conn:
+                    await conn.execute("""
+                        INSERT INTO ConflictNews (
+                            conflict_id, headline, content, source_nation, bias, embedding
                         )
-    
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                        conflict_id,
+                        news_data.get("headline","No Headline"),
+                        news_data.get("content",""),
+                        nation["id"],
+                        bias,
+                        emb
+                    )
+
             except Exception as e:
                 logger.error(f"Error generating conflict update news: {e}")
 
@@ -1945,65 +1930,63 @@ class WorldPoliticsManager(BaseLoreManager):
             metadata={**self.trace_metadata, "nation_id": nation_id}
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
-            
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    from lore.core import canon
-                    
-                    nation = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation_id)
-                    if not nation:
-                        return {"error": "Nation not found"}
-    
+
+            async with self.db_connection() as conn:
+                from lore.core import canon
+
+                nation = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation_id)
+                if not nation:
+                    return {"error": "Nation not found"}
+
             nation_data = dict(nation)
-            
+
             agent = Agent(
                 name="PoliticalReformAgent",
                 instructions="Consider internal and external pressures to propose feasible political reforms.",
                 model="gpt-5-nano",
             )
-    
+
             prompt = f"""
-            The nation below might undergo political reforms due to recent pressures. 
+            The nation below might undergo political reforms due to recent pressures.
             Suggest possible reforms (e.g. government structure changes, new laws, shifting matriarchy level, etc.):
-    
+
             NATION DATA:
             {json.dumps(nation_data, indent=2)}
-    
+
             Return JSON with:
             - new_government_type
             - matriarchy_level_change
             - major_reforms (list)
             - rationale
             """
-    
+
             result = await Runner.run(agent, prompt, context=run_ctx.context)
             try:
                 reforms = json.loads(result.final_output)
             except json.JSONDecodeError:
                 return {"error": "Could not parse reforms", "raw_output": result.final_output}
-    
+
             # Prepare reform data for canon
             new_govt_type = reforms.get("new_government_type") or nation_data["government_type"]
             new_matriarchy = max(1, min(10, nation_data["matriarchy_level"] + reforms.get("matriarchy_level_change", 0)))
-            
+
             reform_data = {
                 "government_type": new_govt_type,
                 "matriarchy_level": new_matriarchy
             }
-    
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    # Use canon to update nation
-                    await canon.update_nation_politics(ctx, conn, nation_id, reform_data)
-                    
-                    # Log the reform as a canonical event
-                    await canon.log_canonical_event(
-                        ctx, conn,
-                        f"Political reforms in {nation_data['name']}: {', '.join(reforms.get('major_reforms', []))}",
-                        tags=['political_reform', 'nation_change'],
-                        significance=7
-                    )
-    
+
+            async with self.db_connection() as conn:
+                # Use canon to update nation
+                await canon.update_nation_politics(ctx, conn, nation_id, reform_data)
+
+                # Log the reform as a canonical event
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Political reforms in {nation_data['name']}: {', '.join(reforms.get('major_reforms', []))}",
+                    tags=['political_reform', 'nation_change'],
+                    significance=7
+                )
+
             reforms["updated_nation"] = {
                 "id": nation_id,
                 "government_type": new_govt_type,
@@ -2032,34 +2015,33 @@ class WorldPoliticsManager(BaseLoreManager):
             "TrackDynastyLineage",
             group_id=self.trace_group_id,
             metadata={
-                **self.trace_metadata, 
+                **self.trace_metadata,
                 "dynasty_id": dynasty_id,
                 "generations": generations_to_advance
             }
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
-            
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    from lore.core import canon
-                    
-                    dynasty = await conn.fetchrow("SELECT * FROM Dynasties WHERE id=$1", dynasty_id)
-                    if not dynasty:
-                        return {"error": "Dynasty not found"}
-    
+
+            async with self.db_connection() as conn:
+                from lore.core import canon
+
+                dynasty = await conn.fetchrow("SELECT * FROM Dynasties WHERE id=$1", dynasty_id)
+                if not dynasty:
+                    return {"error": "Dynasty not found"}
+
             dynasty_data = dict(dynasty)
-            
+
             agent = Agent(
                 name="DynastyAgent",
                 instructions="You simulate how a dynasty evolves over multiple generations in a matriarchal fantasy world.",
                 model="gpt-5-nano",
             )
-    
+
             prompt = f"""
             The dynasty:
             {json.dumps(dynasty_data, indent=2)}
-    
-            Advance it by {generations_to_advance} generation(s). 
+
+            Advance it by {generations_to_advance} generation(s).
             Return JSON:
             {{
               "new_members": [...],  # each with name, birth_date, mother_name, father_name, is_ruler, notes
@@ -2068,53 +2050,52 @@ class WorldPoliticsManager(BaseLoreManager):
               "summary": "..."
             }}
             """
-    
+
             result = await Runner.run(agent, prompt, context=run_ctx.context)
             try:
                 lineage_updates = json.loads(result.final_output)
             except json.JSONDecodeError:
                 return {"error": "Could not parse lineage data", "raw_output": result.final_output}
-    
+
             # Insert new members into DynastyLineages using canon
             new_members = lineage_updates.get("new_members", [])
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    for member in new_members:
-                        member_data = {
-                            "dynasty_id": dynasty_id,
-                            "member_name": member.get("name"),
-                            "birth_date": member.get("birth_date"),
-                            "death_date": member.get("death_date"),
-                            "mother_name": member.get("mother_name"),
-                            "father_name": member.get("father_name"),
-                            "inheritor_of": member.get("inheritor_of"),
-                            "is_ruler": member.get("is_ruler", False),
-                            "notes": member.get("notes", "")
-                        }
-                        
-                        # Use canon to create dynasty member
-                        await canon.create_dynasty_member(ctx, conn, **member_data)
-                    
-                    # Update nation ruler if needed
-                    if "update_nation_ruler" in lineage_updates:
-                        info = lineage_updates["update_nation_ruler"]
-                        new_ruler = info.get("new_ruler")
-                        if new_ruler and info.get("nation_id"):
-                            # Use canon to update nation ruler
-                            await canon.update_nation_ruler(
-                                ctx, conn, 
-                                info["nation_id"], 
-                                new_ruler
-                            )
-                            
-                            # Log succession event
-                            await canon.log_canonical_event(
-                                ctx, conn,
-                                f"Succession in dynasty {dynasty_data['name']}: {new_ruler} becomes ruler",
-                                tags=['dynasty', 'succession', 'leadership_change'],
-                                significance=8
-                            )
-    
+            async with self.db_connection() as conn:
+                for member in new_members:
+                    member_data = {
+                        "dynasty_id": dynasty_id,
+                        "member_name": member.get("name"),
+                        "birth_date": member.get("birth_date"),
+                        "death_date": member.get("death_date"),
+                        "mother_name": member.get("mother_name"),
+                        "father_name": member.get("father_name"),
+                        "inheritor_of": member.get("inheritor_of"),
+                        "is_ruler": member.get("is_ruler", False),
+                        "notes": member.get("notes", "")
+                    }
+
+                    # Use canon to create dynasty member
+                    await canon.create_dynasty_member(ctx, conn, **member_data)
+
+                # Update nation ruler if needed
+                if "update_nation_ruler" in lineage_updates:
+                    info = lineage_updates["update_nation_ruler"]
+                    new_ruler = info.get("new_ruler")
+                    if new_ruler and info.get("nation_id"):
+                        # Use canon to update nation ruler
+                        await canon.update_nation_ruler(
+                            ctx, conn,
+                            info["nation_id"],
+                            new_ruler
+                        )
+
+                        # Log succession event
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            f"Succession in dynasty {dynasty_data['name']}: {new_ruler} becomes ruler",
+                            tags=['dynasty', 'succession', 'leadership_change'],
+                            significance=8
+                        )
+
             return {
                 "dynasty_id": dynasty_id,
                 "updates": lineage_updates
@@ -2133,7 +2114,7 @@ class WorldPoliticsManager(BaseLoreManager):
     async def initialize_faction_proxies(self, ctx) -> Dict[str, Any]:
         """
         Initialize agent proxies for all factions in the world.
-        
+
         Returns:
             Dictionary with initialization status
         """
@@ -2143,21 +2124,20 @@ class WorldPoliticsManager(BaseLoreManager):
             metadata=self.trace_metadata
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
-    
+
             await self.ensure_initialized()
-            async with await self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    factions = await conn.fetch("""
-                        SELECT id, name, type, description, values, goals, cultural_traits, territory
-                        FROM Factions
-                    """)
-    
+            async with self.db_connection() as conn:
+                factions = await conn.fetch("""
+                    SELECT id, name, type, description, values, goals, cultural_traits, territory
+                    FROM Factions
+                """)
+
             self.faction_proxies = {}
             for faction in factions:
                 faction_data = dict(faction)
                 proxy = FactionAgentProxy(faction_data)
                 self.faction_proxies[faction_data['id']] = proxy
-    
+
             return {"status": "success", "factions_initialized": len(self.faction_proxies)}
 
     # ------------------------------------------------------------------------
@@ -2166,84 +2146,81 @@ class WorldPoliticsManager(BaseLoreManager):
     async def _get_conflict_details(self, conflict_id: int) -> Optional[Dict[str, Any]]:
         """Load conflict details from DB."""
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow("SELECT * FROM NationalConflicts WHERE id=$1", conflict_id)
-                if row:
-                    conflict_data = dict(row)
-                    if "public_opinion" in conflict_data and conflict_data["public_opinion"]:
-                        try:
-                            conflict_data["public_opinion"] = json.loads(conflict_data["public_opinion"])
-                        except json.JSONDecodeError:
-                            pass
-                    return conflict_data
+        async with self.db_connection() as conn:
+            row = await conn.fetchrow("SELECT * FROM NationalConflicts WHERE id=$1", conflict_id)
+            if row:
+                conflict_data = dict(row)
+                if "public_opinion" in conflict_data and conflict_data["public_opinion"]:
+                    try:
+                        conflict_data["public_opinion"] = json.loads(conflict_data["public_opinion"])
+                    except json.JSONDecodeError:
+                        pass
+                return conflict_data
         return None
 
     async def _load_negotiating_nations(self, nation1_id: int, nation2_id: int) -> Dict[str, Any]:
         """Helper to load two nations for negotiation."""
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                n1 = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation1_id)
-                n2 = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation2_id)
-                if not n1 or not n2:
-                    return {"error": "One or both nations not found"}
-                return {"nation1": dict(n1), "nation2": dict(n2)}
+        async with self.db_connection() as conn:
+            n1 = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation1_id)
+            n2 = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation2_id)
+            if not n1 or not n2:
+                return {"error": "One or both nations not found"}
+            return {"nation1": dict(n1), "nation2": dict(n2)}
 
     async def _update_international_relations(self, nations: Dict[str, Any], negotiation_results: Dict[str, Any]):
         """Update international relations after negotiations."""
         if "relationship_change" not in negotiation_results:
             return
-            
+
         relationship_change = negotiation_results.get("relationship_change", 0)
         if relationship_change == 0:
             return
-            
+
         nation1_id = nations["nation1"]["id"]
         nation2_id = nations["nation2"]["id"]
-        
+
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if relation exists
-                relation = await conn.fetchrow("""
-                    SELECT * FROM InternationalRelations
-                    WHERE (nation1_id = $1 AND nation2_id = $2)
-                       OR (nation1_id = $2 AND nation2_id = $1)
-                """, nation1_id, nation2_id)
-                
-                if relation:
-                    # Update existing relation
-                    new_quality = max(1, min(10, relation["relationship_quality"] + relationship_change))
-                    
-                    # Add negotiation outcome to description
-                    agreement_reached = negotiation_results.get("agreement_reached", False)
-                    agreement_desc = f"\nNegotiation on {negotiation_results.get('issue', 'an issue')} "
-                    agreement_desc += "resulted in agreement. " if agreement_reached else "failed to reach agreement. "
-                    
-                    await conn.execute("""
-                        UPDATE InternationalRelations
-                        SET relationship_quality = $3,
-                            description = description || $4
-                        WHERE id = $5
-                    """, new_quality, agreement_desc, relation["id"])
-                else:
-                    # Create new relation with default values plus negotiation results
-                    relation_type = "friendly" if relationship_change > 0 else "neutral" if relationship_change == 0 else "tense"
-                    quality = 5 + relationship_change  # Base of 5 plus change
-                    quality = max(1, min(10, quality))  # Clamp to 1-10
-                    
-                    description = f"Relationship established following negotiations on {negotiation_results.get('issue', 'an issue')}. "
-                    description += "Agreement was reached. " if negotiation_results.get("agreement_reached", False) else "No agreement was reached. "
-                    
-                    await self.add_international_relation(
-                        self.create_run_context(),  # Use the base manager's context creation method
-                        nation1_id=nation1_id,
-                        nation2_id=nation2_id,
-                        relationship_type=relation_type,
-                        relationship_quality=quality,
-                        description=description
-                    )
+        async with self.db_connection() as conn:
+            # Check if relation exists
+            relation = await conn.fetchrow("""
+                SELECT * FROM InternationalRelations
+                WHERE (nation1_id = $1 AND nation2_id = $2)
+                   OR (nation1_id = $2 AND nation2_id = $1)
+            """, nation1_id, nation2_id)
+
+            if relation:
+                # Update existing relation
+                new_quality = max(1, min(10, relation["relationship_quality"] + relationship_change))
+
+                # Add negotiation outcome to description
+                agreement_reached = negotiation_results.get("agreement_reached", False)
+                agreement_desc = f"\nNegotiation on {negotiation_results.get('issue', 'an issue')} "
+                agreement_desc += "resulted in agreement. " if agreement_reached else "failed to reach agreement. "
+
+                await conn.execute("""
+                    UPDATE InternationalRelations
+                    SET relationship_quality = $3,
+                        description = description || $4
+                    WHERE id = $5
+                """, new_quality, agreement_desc, relation["id"])
+            else:
+                # Create new relation with default values plus negotiation results
+                relation_type = "friendly" if relationship_change > 0 else "neutral" if relationship_change == 0 else "tense"
+                quality = 5 + relationship_change  # Base of 5 plus change
+                quality = max(1, min(10, quality))  # Clamp to 1-10
+
+                description = f"Relationship established following negotiations on {negotiation_results.get('issue', 'an issue')}. "
+                description += "Agreement was reached. " if negotiation_results.get("agreement_reached", False) else "No agreement was reached. "
+
+                await self.add_international_relation(
+                    self.create_run_context(),  # Use the base manager's context creation method
+                    nation1_id=nation1_id,
+                    nation2_id=nation2_id,
+                    relationship_type=relation_type,
+                    relationship_quality=quality,
+                    description=description
+                )
 
     async def _load_event_details(self, event_id: int) -> Dict[str, Any]:
         """
@@ -2251,22 +2228,21 @@ class WorldPoliticsManager(BaseLoreManager):
         then domestic issues, falling back to a generic event schema.
         """
         await self.ensure_initialized()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Try to load as a national conflict
-                conflict = await conn.fetchrow("SELECT * FROM NationalConflicts WHERE id=$1", event_id)
-                if conflict:
-                    event_data = dict(conflict)
-                    event_data["event_type"] = "national_conflict"
-                    return event_data
-                    
-                # Try to load as a domestic issue
-                issue = await conn.fetchrow("SELECT * FROM DomesticIssues WHERE id=$1", event_id)
-                if issue:
-                    event_data = dict(issue)
-                    event_data["event_type"] = "domestic_issue"
-                    return event_data
-                    
+        async with self.db_connection() as conn:
+            # Try to load as a national conflict
+            conflict = await conn.fetchrow("SELECT * FROM NationalConflicts WHERE id=$1", event_id)
+            if conflict:
+                event_data = dict(conflict)
+                event_data["event_type"] = "national_conflict"
+                return event_data
+
+            # Try to load as a domestic issue
+            issue = await conn.fetchrow("SELECT * FROM DomesticIssues WHERE id=$1", event_id)
+            if issue:
+                event_data = dict(issue)
+                event_data["event_type"] = "domestic_issue"
+                return event_data
+
         # Not found in either table
         return {"error": "Event not found", "event_id": event_id}
 
@@ -2274,49 +2250,48 @@ class WorldPoliticsManager(BaseLoreManager):
         """Store coverage for a given event into DB."""
         await self.ensure_initialized()
         event = await self._load_event_details(event_id)
-        
+
         if "error" in event:
             return
-            
+
         event_type = event.get("event_type")
-        
+
         # Prepare embedding
         embed_text = f"{article.get('headline','')} {article.get('content','')[:200]}"
         emb = await get_embedding(embed_text)
         if not isinstance(emb, list):
             emb = emb.tolist()
-            
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                if event_type == "national_conflict":
-                    # Store as conflict news
-                    await conn.execute("""
-                        INSERT INTO ConflictNews (
-                            conflict_id, headline, content, bias, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5)
-                    """,
-                        event_id,
-                        article.get("headline", "No headline"),
-                        article.get("content", "No content"),
-                        article.get("bias", "neutral"),
-                        emb
+
+        async with self.db_connection() as conn:
+            if event_type == "national_conflict":
+                # Store as conflict news
+                await conn.execute("""
+                    INSERT INTO ConflictNews (
+                        conflict_id, headline, content, bias, embedding
                     )
-                elif event_type == "domestic_issue":
-                    # Store as domestic news
-                    await conn.execute("""
-                        INSERT INTO DomesticNews (
-                            issue_id, headline, content, source_faction, bias, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                    """,
-                        event_id,
-                        article.get("headline", "No headline"),
-                        article.get("content", "No content"),
-                        article.get("media_name", "Unknown"),
-                        article.get("bias", "neutral"),
-                        emb
+                    VALUES ($1, $2, $3, $4, $5)
+                """,
+                    event_id,
+                    article.get("headline", "No headline"),
+                    article.get("content", "No content"),
+                    article.get("bias", "neutral"),
+                    emb
+                )
+            elif event_type == "domestic_issue":
+                # Store as domestic news
+                await conn.execute("""
+                    INSERT INTO DomesticNews (
+                        issue_id, headline, content, source_faction, bias, embedding
                     )
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                    event_id,
+                    article.get("headline", "No headline"),
+                    article.get("content", "No content"),
+                    article.get("media_name", "Unknown"),
+                    article.get("bias", "neutral"),
+                    emb
+                )
 
     async def generate_and_store_embedding(self, text: str, conn, table_name: str, key_name: str, key_value: int):
         """
