@@ -244,7 +244,7 @@ class NyxAgentSDK:
                     prompt,
                     max_turns=2,
                 ),
-                timeout=_orchestrator.DEFER_RUN_TIMEOUT_SECONDS,
+                timeout=_orchestrator.get_defer_run_timeout_seconds(self.config),
             )
         except asyncio.TimeoutError:
             logger.debug(
