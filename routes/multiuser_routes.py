@@ -216,6 +216,24 @@ async def get_messages(conv_id):
     if error:
         return error
 
+    # Parse pagination parameters with safe defaults and bounds
+    DEFAULT_LIMIT = 50
+    MAX_LIMIT = 100
+
+    try:
+        offset = int(request.args.get("offset", 0))
+        if offset < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        offset = 0
+
+    try:
+        limit = int(request.args.get("limit", DEFAULT_LIMIT))
+    except (TypeError, ValueError):
+        limit = DEFAULT_LIMIT
+
+    limit = max(1, min(limit, MAX_LIMIT))
+
     async with get_db_connection_context() as conn:
         # Check conversation ownership
         row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id = $1", conv_id)
@@ -230,13 +248,22 @@ async def get_messages(conv_id):
             FROM messages
             WHERE conversation_id = $1
             ORDER BY id ASC
-        """, conv_id)
+            OFFSET $2
+            LIMIT $3
+        """, conv_id, offset, limit + 1)
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
 
     messages = [
-        {"sender": r['sender'], "content": r['content'], "created_at": r['created_at'].isoformat()}
-        for r in rows
+        {
+            "sender": r['sender'],
+            "content": r['content'],
+            "created_at": r['created_at'].isoformat() if r['created_at'] else None,
+        }
+        for r in page_rows
     ]
-    return jsonify({"messages": messages})
+    return jsonify({"messages": messages, "has_more": has_more})
 
 @multiuser_bp.route("/conversations/<int:conv_id>/messages", methods=["POST"])
 async def add_message(conv_id):
