@@ -1126,7 +1126,7 @@ class LocalLoreManager(BaseLoreManager):
                 myth = await conn.fetchrow("SELECT * FROM UrbanMyths WHERE id=$1", myth_id)
                 history = await conn.fetchrow("SELECT * FROM LocalHistories WHERE id=$1", history_id)
                 if not myth or not history:
-                raise ValueError("Myth or history not found")
+                    raise ValueError("Myth or history not found")
 
             # Create connection prompt
             connection_prompt = f"""
@@ -1176,14 +1176,14 @@ Be specific and compelling in your connection.
                 history = await conn.fetchrow("SELECT * FROM LocalHistories WHERE id=$1", history_id)
                 landmark = await conn.fetchrow("SELECT * FROM Landmarks WHERE id=$1", landmark_id)
                 if not history or not landmark:
-                raise ValueError("History or landmark not found")
+                    raise ValueError("History or landmark not found")
 
                 # Verify same location
                 if history["location_id"] != landmark["location_id"]:
-                logger.warning(
-                    f"History and landmark in different locations: "
-                    f"{history['location_id']} vs {landmark['location_id']}"
-                )
+                    logger.warning(
+                        f"History and landmark in different locations: "
+                        f"{history['location_id']} vs {landmark['location_id']}"
+                    )
 
             # Create connection prompt
             connection_prompt = f"""
@@ -1381,7 +1381,7 @@ Be historically plausible and culturally sensitive.
             """, location_id)
 
             if not location:
-            raise ValueError(f"Location with ID {location_id} not found")
+                raise ValueError(f"Location with ID {location_id} not found")
 
             location_data = dict(location)
 
@@ -1753,7 +1753,7 @@ Return a JSON object with your analysis and specific recommendations.
                 "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
                 )
                 if not myth:
-                raise ValueError(f"Myth with ID {myth_id} not found")
+                    raise ValueError(f"Myth with ID {myth_id} not found")
 
             myth_data = dict(myth)
 
@@ -1788,13 +1788,13 @@ different antagonists, different outcomes, etc.
             async with self.db_connection() as conn:
                 versions_json = myth_data.get('versions_json') or {}
                 if 'contradictory_variants' not in versions_json:
-                versions_json['contradictory_variants'] = []
+                    versions_json['contradictory_variants'] = []
 
                 # Add new variants
                 for variant in variants:
-                versions_json['contradictory_variants'].append(
-                    variant.model_dump()
-                )
+                    versions_json['contradictory_variants'].append(
+                        variant.model_dump()
+                    )
 
                 await conn.execute("""
                 UPDATE UrbanMyths
@@ -1828,7 +1828,7 @@ different antagonists, different outcomes, etc.
                 "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
                 )
                 if not myth:
-                raise ValueError(f"Myth with ID {myth_id} not found")
+                    raise ValueError(f"Myth with ID {myth_id} not found")
 
             myth_data = dict(myth)
 
@@ -1894,7 +1894,7 @@ Balance commercialization with cultural preservation.
                 "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
                 )
                 if not myth:
-                raise ValueError(f"Myth with ID {myth_id} not found")
+                    raise ValueError(f"Myth with ID {myth_id} not found")
 
             myth_data = dict(myth)
 
@@ -1964,7 +1964,7 @@ Show specific differences in language, detail, and emphasis.
                 )
 
                 if not myth:
-                raise ValueError(f"Myth with ID {myth_id} not found")
+                    raise ValueError(f"Myth with ID {myth_id} not found")
 
                 # Get cultural context
                 cultural_elements = await conn.fetch("""
@@ -2070,13 +2070,13 @@ Show specific differences in language, detail, and emphasis.
 
             # Create regional variants if specified
             for i, transformation in enumerate(
-            transmission_result.transformation_details[:transmission_result.variants_created]
+                transmission_result.transformation_details[:transmission_result.variants_created]
             ):
-            if 'variant_description' in transformation:
-                variant_name = (
-                    f"{original_myth['name']} "
-                    f"({transmission_result.new_regions[i % len(transmission_result.new_regions)]} Variant)"
-                )
+                if 'variant_description' in transformation:
+                    variant_name = (
+                        f"{original_myth['name']} "
+                        f"({transmission_result.new_regions[i % len(transmission_result.new_regions)]} Variant)"
+                    )
 
                 # Create variant as a new myth
                 variant_input = MythCreationInput(
@@ -2465,14 +2465,14 @@ Show specific differences in language, detail, and emphasis.
 
             # Fetch connections for each type
             for element_type, ids in [
-            ("myth", myth_ids),
-            ("history", history_ids),
-            ("landmark", landmark_ids)
+                ("myth", myth_ids),
+                ("history", history_ids),
+                ("landmark", landmark_ids)
             ]:
-            if ids:
-                connections = await conn.fetch("""
-                    SELECT * FROM NarrativeConnections
-                    WHERE (element1_type = $1 AND element1_id = ANY($2::int[]))
+                if ids:
+                    connections = await conn.fetch("""
+                        SELECT * FROM NarrativeConnections
+                        WHERE (element1_type = $1 AND element1_id = ANY($2::int[]))
                        OR (element2_type = $1 AND element2_id = ANY($2::int[]))
                 """, element_type, ids)
 
@@ -2482,9 +2482,9 @@ Show specific differences in language, detail, and emphasis.
             seen = set()
             unique_connections = []
             for conn in all_connections:
-            if conn['id'] not in seen:
-                seen.add(conn['id'])
-                unique_connections.append(conn)
+                if conn['id'] not in seen:
+                    seen.add(conn['id'])
+                    unique_connections.append(conn)
 
             return unique_connections
 
@@ -2543,27 +2543,27 @@ Show specific differences in language, detail, and emphasis.
 
         async with self.db_connection() as conn:
             for connection in suggested_connections:
-            try:
-                connection_id = await self._create_narrative_connection(
-                    conn,
-                    connection.element1_type,
-                    connection.element1_id,
-                    connection.element2_type,
-                    connection.element2_id,
-                    connection.connection_type,
-                    connection.connection_description,
-                    connection.connection_strength
-                )
+                try:
+                    connection_id = await self._create_narrative_connection(
+                        conn,
+                        connection.element1_type,
+                        connection.element1_id,
+                        connection.element2_type,
+                        connection.element2_id,
+                        connection.connection_type,
+                        connection.connection_description,
+                        connection.connection_strength
+                    )
 
-                created_ids.append(connection_id)
-                logger.info(
-                    f"Created suggested connection #{connection_id} between "
-                    f"{connection.element1_type} #{connection.element1_id} and "
-                    f"{connection.element2_type} #{connection.element2_id}"
-                )
+                    created_ids.append(connection_id)
+                    logger.info(
+                        f"Created suggested connection #{connection_id} between "
+                        f"{connection.element1_type} #{connection.element1_id} and "
+                        f"{connection.element2_type} #{connection.element2_id}"
+                    )
 
-            except Exception as e:
-                logger.error(f"Error creating suggested connection: {e}")
+                except Exception as e:
+                    logger.error(f"Error creating suggested connection: {e}")
 
         return created_ids
 
