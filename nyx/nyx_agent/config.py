@@ -20,6 +20,9 @@ class Config:
     HIGH_RESPONSE_TIME_THRESHOLD = 2.0
     MIN_SUCCESS_RATE = 0.8
     HIGH_ERROR_COUNT = 100
+
+    # Timeout ceilings
+    DEFER_RUN_TIMEOUT_SECONDS = 45.0
     
     # Relationship thresholds
     INTIMATE_TRUST_THRESHOLD = 0.8

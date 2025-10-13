@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Dict, List, Any, Optional, Iterable
+from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING
 from contextlib import asynccontextmanager
 
 from agents import Agent, Runner, RunConfig, RunContextWrapper, ModelSettings
@@ -22,6 +22,9 @@ from nyx.nyx_agent.feasibility import (
 )
 
 from .config import Config
+
+if TYPE_CHECKING:
+    from nyx.nyx_agent_sdk import NyxSDKConfig
 from .context import NyxContext, PackedContext
 from ._feasibility_helpers import (
     DeferPromptContext,
@@ -56,7 +59,24 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
-DEFER_RUN_TIMEOUT_SECONDS: float = 8.0
+DEFAULT_DEFER_RUN_TIMEOUT_SECONDS: float = getattr(
+    Config, "DEFER_RUN_TIMEOUT_SECONDS", 45.0
+)
+DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
+
+
+def get_defer_run_timeout_seconds(config: Optional["NyxSDKConfig"] = None) -> float:
+    """Return the defer agent timeout, preferring SDK configuration when provided."""
+
+    if config is not None:
+        timeout = getattr(config, "request_timeout_seconds", None)
+        try:
+            parsed = float(timeout)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        if parsed > 0:
+            return parsed
+    return DEFER_RUN_TIMEOUT_SECONDS
 
 
 async def _generate_defer_taunt(
@@ -87,7 +107,7 @@ async def _generate_defer_taunt(
                 prompt,
                 **run_kwargs,
             ),
-            timeout=DEFER_RUN_TIMEOUT_SECONDS,
+            timeout=get_defer_run_timeout_seconds(),
         )
     except asyncio.TimeoutError:
         logger.debug(
