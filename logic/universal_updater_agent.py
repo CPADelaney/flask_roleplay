@@ -30,10 +30,11 @@ from agents import (
     trace,
     handoff
 )
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
 # DB connection
 from db.connection import get_db_connection_context
+from db import rpc as db_rpc
 import asyncpg
 
 # Import canon and lore system
@@ -48,6 +49,8 @@ from nyx.nyx_governance import (
     DirectivePriority
 )
 from nyx.integrate import get_central_governance
+
+from logic.universal_delta import build_delta_from_legacy_payload, DeltaBuildError
 
 logger = logging.getLogger(__name__)
 
@@ -841,379 +844,33 @@ async def apply_universal_updates_async(
     updates: Dict[str, Any],
     conn: asyncpg.Connection
 ) -> Dict[str, Any]:
-    """
-    Apply universal updates using canon and LoreSystem.
-    Expects updates in dict format (after conversion from array format).
-    """
+    """Apply universal updates by emitting a typed canonical delta."""
+
+    del ctx  # retained for call compatibility
+
     try:
-        results = {
-            "success": True,
-            "updates_applied": 0,
-            "details": {}
-        }
-        
-        # Process NPC creations
-        if "npc_creations" in updates and updates["npc_creations"]:
-            npc_creation_count = await process_npc_creations_canonical(
-                ctx, user_id, conversation_id, updates["npc_creations"], conn
-            )
-            results["details"]["npc_creations"] = npc_creation_count
-            results["updates_applied"] += npc_creation_count
-        
-        # Process NPC updates
-        if "npc_updates" in updates and updates["npc_updates"]:
-            npc_update_count = await process_npc_updates_canonical(
-                ctx, user_id, conversation_id, updates["npc_updates"], conn
-            )
-            results["details"]["npc_updates"] = npc_update_count
-            results["updates_applied"] += npc_update_count
-        
-        # Process character stat updates
-        if "character_stat_updates" in updates and updates["character_stat_updates"]:
-            stat_update_count = await process_character_stats_canonical(
-                ctx, user_id, conversation_id, updates["character_stat_updates"], conn
-            )
-            results["details"]["stat_updates"] = stat_update_count
-            results["updates_applied"] += stat_update_count
-        
-        # Process social links
-        if "social_links" in updates and updates["social_links"]:
-            social_link_count = await process_social_links_canonical(
-                ctx, user_id, conversation_id, updates["social_links"], conn
-            )
-            results["details"]["social_links"] = social_link_count
-            results["updates_applied"] += social_link_count
-        
-        # Process roleplay updates
-        if "roleplay_updates" in updates and updates["roleplay_updates"]:
-            roleplay_update_count = await process_roleplay_updates_canonical(
-                ctx, user_id, conversation_id, updates["roleplay_updates"], conn
-            )
-            results["details"]["roleplay_updates"] = roleplay_update_count
-            results["updates_applied"] += roleplay_update_count
-        
-        return results
-    except Exception as e:
-        logger.error(f"Error applying universal updates: {e}")
-        return {"success": False, "error": str(e)}
-
-async def process_npc_creations_canonical(
-    ctx: UniversalUpdaterContext,
-    user_id: int,
-    conversation_id: int,
-    npc_creations: List[Dict[str, Any]],
-    conn: asyncpg.Connection
-) -> int:
-    """Process NPC creations using canon. Expects dict format for database."""
-    count = 0
-    canon_ctx = RunContextWrapper(context={'user_id': user_id, 'conversation_id': conversation_id})
-    
-    for npc in npc_creations:
-        # Prepare JSON fields
-        archetypes_json = json.dumps(npc.get('archetypes', [])) if npc.get('archetypes') else None
-        schedule_json = json.dumps(npc.get('schedule', {})) if npc.get('schedule') else None
-        hobbies_json = json.dumps(npc.get('hobbies', [])) if npc.get('hobbies') else None
-        personality_json = json.dumps(npc.get('personality_traits', [])) if npc.get('personality_traits') else None
-        likes_json = json.dumps(npc.get('likes', [])) if npc.get('likes') else None
-        dislikes_json = json.dumps(npc.get('dislikes', [])) if npc.get('dislikes') else None
-        affiliations_json = json.dumps(npc.get('affiliations', [])) if npc.get('affiliations') else None
-        memory_json = json.dumps(npc.get('memory')) if npc.get('memory') else None
-        
-        # Prepare NPC data
-        npc_data = {
-            'npc_name': npc['npc_name'],
-            'introduced': npc.get('introduced', False),
-            'sex': npc.get('sex', 'female'),
-            'dominance': npc.get('dominance'),
-            'cruelty': npc.get('cruelty'),
-            'closeness': npc.get('closeness'),
-            'trust': npc.get('trust'),
-            'respect': npc.get('respect'),
-            'intensity': npc.get('intensity'),
-            'archetypes': archetypes_json,
-            'archetype_summary': npc.get('archetype_summary'),
-            'archetype_extras_summary': npc.get('archetype_extras_summary'),
-            'physical_description': npc.get('physical_description'),
-            'hobbies': hobbies_json,
-            'personality_traits': personality_json,
-            'likes': likes_json,
-            'dislikes': dislikes_json,
-            'affiliations': affiliations_json,
-            'schedule': schedule_json,
-            'memory': memory_json,
-            'monica_level': npc.get('monica_level'),
-            'age': npc.get('age'),
-            'birthdate': npc.get('birthdate')
-        }
-        
-        # Remove None values
-        npc_data = {k: v for k, v in npc_data.items() if v is not None}
-        
-        # Use canon to create NPC
-        npc_id = await canon.find_or_create_npc(canon_ctx, conn, **npc_data)
-        if npc_id:
-            count += 1
-    
-    return count
-
-async def process_npc_updates_canonical(
-    ctx: UniversalUpdaterContext,
-    user_id: int,
-    conversation_id: int,
-    npc_updates: List[Dict[str, Any]],
-    conn: asyncpg.Connection
-) -> int:
-    """Process NPC updates using LoreSystem. Expects dict format for database."""
-    count = 0
-    
-    for npc in npc_updates:
-        if "npc_id" not in npc:
-            continue
-        
-        # Build update dictionary
-        updates = {}
-        
-        # Simple fields
-        simple_fields = [
-            "npc_name", "introduced", "archetype_summary", "archetype_extras_summary",
-            "physical_description", "dominance", "cruelty", "closeness", "trust",
-            "respect", "intensity", "sex", "current_location"
-        ]
-        
-        for field in simple_fields:
-            if field in npc and npc[field] is not None:
-                updates[field] = npc[field]
-        
-        # JSON fields
-        json_fields = ["hobbies", "personality_traits", "likes", "dislikes", 
-                       "affiliations", "memory", "schedule", "schedule_updates"]
-        
-        for field in json_fields:
-            if field in npc and npc[field] is not None:
-                updates[field] = json.dumps(npc[field]) if isinstance(npc[field], (list, dict)) else npc[field]
-        
-        if not updates:
-            continue
-        
-        # Use LoreSystem to update
-        result = await ctx.lore_system.propose_and_enact_change(
-            ctx=ctx,
-            entity_type="NPCStats",
-            entity_identifier={"npc_id": npc["npc_id"], "user_id": user_id, "conversation_id": conversation_id},
-            updates=updates,
-            reason=f"Narrative update for NPC {npc.get('npc_name', npc['npc_id'])}"
+        delta = build_delta_from_legacy_payload(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            payload=dict(updates or {}),
         )
-        
-        if result.get("status") in ["committed", "conflict_generated"]:
-            count += 1
-    
-    return count
+    except (DeltaBuildError, ValidationError) as exc:
+        logger.error("Failed to construct canonical delta: %s", exc)
+        return {"success": False, "error": str(exc)}
 
-async def process_character_stats_canonical(
-    ctx: UniversalUpdaterContext,
-    user_id: int,
-    conversation_id: int,
-    stat_updates: Dict[str, Any],
-    conn: asyncpg.Connection
-) -> int:
-    """Process character stat updates. Expects dict format for stats."""
-    if not stat_updates or "stats" not in stat_updates:
-        return 0
-    
-    player_name = stat_updates.get("player_name", "Chase")
-    stats = stat_updates["stats"]
-    
-    # Stats should be in dict format after conversion
-    if not stats or not isinstance(stats, dict):
-        return 0
-    
-    # First, check if player exists
-    player_exists = await conn.fetchval("""
-        SELECT COUNT(*) FROM PlayerStats
-        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-    """, user_id, conversation_id, player_name)
-    
-    if not player_exists:
-        # Create player using canon
-        canon_ctx = RunContextWrapper(context={
-            'user_id': user_id,
-            'conversation_id': conversation_id
-        })
-        await find_or_create_player_stats(
-            canon_ctx, conn, player_name,
-            corruption=0, confidence=0, willpower=0, obedience=0,
-            dependency=0, lust=0, mental_resilience=0, physical_endurance=0
-        )
-    
-    update_count = 0
-    
-    # Update each stat
-    for stat, value in stats.items():
-        if value is not None:
-            # Get current value
-            current_value = await conn.fetchval(f"""
-                SELECT {stat} FROM PlayerStats
-                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-            """, user_id, conversation_id, player_name)
-            
-            if current_value is not None:
-                # Calculate new value
-                new_value = max(0, min(100, current_value + value))
-                
-                # Use LoreSystem to update
-                result = await ctx.lore_system.propose_and_enact_change(
-                    ctx=ctx,
-                    entity_type="PlayerStats",
-                    entity_identifier={
-                        "user_id": user_id,
-                        "conversation_id": conversation_id,
-                        "player_name": player_name
-                    },
-                    updates={stat: new_value},
-                    reason=f"Narrative update: {stat} changed by {value}"
-                )
-                
-                if result.get("status") in ["committed", "conflict_generated"]:
-                    # Log stat change
-                    await log_stat_change(
-                        ctx, conn, player_name, stat,
-                        current_value, new_value, "Narrative update"
-                    )
-                    update_count += 1
-    
-    return update_count
+    try:
+        db_result = await db_rpc.write_event(conn, delta)
+    except db_rpc.CanonEventError as exc:
+        logger.error("canon.apply_event failed: %s", exc)
+        return {"success": False, "error": str(exc)}
 
-async def process_social_links_canonical(
-    ctx: UniversalUpdaterContext,
-    user_id: int,
-    conversation_id: int,
-    social_links: List[Dict[str, Any]],
-    conn: asyncpg.Connection
-) -> int:
-    """Process relationship updates using the new dynamic system."""
-    from logic.dynamic_relationships import OptimizedRelationshipManager
-    
-    count = 0
-    manager = OptimizedRelationshipManager(user_id, conversation_id)
-    
-    for link in social_links:
-        # Map link events to interaction types
-        interaction_type = None
-        
-        if link.get('new_event'):
-            event_text = link['new_event'].lower()
-            if 'help' in event_text or 'support' in event_text:
-                interaction_type = 'helpful_action'
-            elif 'betray' in event_text:
-                interaction_type = 'betrayal'
-            elif 'praise' in event_text or 'compliment' in event_text:
-                interaction_type = 'genuine_compliment'
-            else:
-                interaction_type = 'social_interaction'
-        
-        # Process the interaction
-        if interaction_type:
-            result = await manager.process_interaction(
-                entity1_type=link['entity1_type'],
-                entity1_id=link['entity1_id'],
-                entity2_type=link['entity2_type'],
-                entity2_id=link['entity2_id'],
-                interaction={
-                    'type': interaction_type,
-                    'context': link.get('group_context', 'casual'),
-                    'description': link.get('new_event', '')
-                }
-            )
-            
-            if result.get('success'):
-                count += 1
-        
-        # Handle direct level changes
-        elif link.get('level_change'):
-            level_change = link['level_change']
-            dimension_changes = {
-                'affection': level_change * 0.5,
-                'trust': level_change * 0.3,
-                'closeness': level_change * 0.2
-            }
-            
-            # Get current state
-            state = await manager.get_relationship_state(
-                entity1_type=link['entity1_type'],
-                entity1_id=link['entity1_id'],
-                entity2_type=link['entity2_type'],
-                entity2_id=link['entity2_id']
-            )
-            
-            # Apply changes
-            for dim, change in dimension_changes.items():
-                current = getattr(state.dimensions, dim)
-                setattr(state.dimensions, dim, current + change)
-            
-            state.dimensions.clamp()
-            await manager._queue_update(state)
-            count += 1
-    
-    # Flush all updates
-    await manager._flush_updates()
-    
-    return count
+    return {
+        "success": True,
+        "updates_applied": delta.operation_count,
+        "details": db_result,
+        "request_id": str(delta.request_id),
+    }
 
-async def process_roleplay_updates_canonical(
-    ctx: UniversalUpdaterContext,
-    user_id: int,
-    conversation_id: int,
-    roleplay_updates: Union[Dict[str, Any], List[Dict[str, Any]]],
-    conn: asyncpg.Connection
-) -> int:
-    """Process roleplay updates. Can handle both dict and array format."""
-    count = 0
-    canon_ctx = RunContextWrapper(context={'user_id': user_id, 'conversation_id': conversation_id})
-    
-    # Convert to dict format if needed
-    if isinstance(roleplay_updates, list):
-        roleplay_updates = array_to_dict(roleplay_updates)
-    
-    for key, value in roleplay_updates.items():
-        if value is not None:
-            await canon.update_current_roleplay(canon_ctx, conn, key, str(value))
-            count += 1
-    
-    return count
-
-# ===============================================================================
-# Helper Functions for Canon Integration
-# ===============================================================================
-
-async def find_or_create_player_stats(ctx, conn, player_name: str, **kwargs) -> None:
-    """Helper function to create player stats if they don't exist."""
-    await conn.execute("""
-        INSERT INTO PlayerStats (
-            user_id, conversation_id, player_name,
-            corruption, confidence, willpower, obedience,
-            dependency, lust, mental_resilience, physical_endurance
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-    """, ctx.context.user_id if hasattr(ctx, 'context') else ctx.user_id,
-    ctx.context.conversation_id if hasattr(ctx, 'context') else ctx.conversation_id,
-    player_name,
-    kwargs.get('corruption', 0), kwargs.get('confidence', 0),
-    kwargs.get('willpower', 0), kwargs.get('obedience', 0),
-    kwargs.get('dependency', 0), kwargs.get('lust', 0),
-    kwargs.get('mental_resilience', 0), kwargs.get('physical_endurance', 0))
-
-async def log_stat_change(ctx, conn, player_name: str, stat_name: str, old_value: int, new_value: int, cause: str) -> None:
-    """Helper function to log stat changes."""
-    user_id = ctx.context.user_id if hasattr(ctx, 'context') else ctx.user_id
-    conversation_id = ctx.context.conversation_id if hasattr(ctx, 'context') else ctx.conversation_id
-    
-    await conn.execute("""
-        INSERT INTO StatsHistory (
-            user_id, conversation_id, player_name, stat_name,
-            old_value, new_value, cause, changed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-    """, user_id, conversation_id, player_name, stat_name,
-    old_value, new_value, cause)
 
 # ===============================================================================
 # Guardrail Functions
