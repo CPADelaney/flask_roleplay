@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import types
@@ -432,6 +433,86 @@ def test_location_refresh_persists_canonical_location():
 
     assert context.current_location == "Frostpeak Tavern"
     assert broker.last_scope is not None
+
+
+def test_collect_and_apply_location_updates(monkeypatch):
+    context = NyxContext(user_id=101, conversation_id=202)
+    broker = ContextBroker(context)
+    context.current_location = "Old Port"
+    context.current_context = {
+        "currentRoleplay": {
+            "CurrentLocation": {"id": "old_port", "name": "Old Port"}
+        },
+        "location_name": "Old Port",
+        "location_id": "old_port",
+    }
+
+    scope = SceneScope(location_id="radiant_bazaar", location_name="Radiant Bazaar")
+    bundle = ContextBundle(
+        scene_scope=scope,
+        npcs=BundleSection(data={}, canonical=True),
+        memories=BundleSection(data={}, canonical=True),
+        lore=BundleSection(data={}, canonical=True),
+        conflicts=BundleSection(data={}, canonical=True),
+        world=BundleSection(data={}, canonical=True),
+        narrative=BundleSection(data={}, canonical=True),
+        metadata={},
+    )
+
+    updates = asyncio.run(broker.collect_universal_updates(bundle))
+    assert updates
+    assert updates["roleplay_updates"]["CurrentLocation"] == "Radiant Bazaar"
+    scene_payload = json.loads(updates["roleplay_updates"]["CurrentScene"])
+    assert scene_payload["location"]["name"] == "Radiant Bazaar"
+    assert scene_payload["location"]["id"] == "radiant_bazaar"
+
+    recorded: dict[str, typing.Any] = {}
+
+    async def fake_apply(ctx_obj, user_id, conversation_id, db_updates, conn):
+        recorded["user_id"] = user_id
+        recorded["conversation_id"] = conversation_id
+        recorded["updates"] = db_updates
+        return {"success": True, "updates_applied": 1}
+
+    class _StubUpdaterContext:
+        def __init__(self, user_id: int, conversation_id: int) -> None:
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+
+        async def initialize(self) -> None:  # pragma: no cover - simple stub
+            return None
+
+    monkeypatch.setattr(
+        sys.modules["nyx.nyx_agent.context"],
+        "_APPLY_UNIVERSAL_UPDATES_ASYNC",
+        fake_apply,
+    )
+    monkeypatch.setattr(
+        sys.modules["nyx.nyx_agent.context"],
+        "UniversalUpdaterContext",
+        _StubUpdaterContext,
+    )
+
+    user_key = str(context.user_id)
+    convo_key = str(context.conversation_id)
+    _SNAPSHOT_STORE.put(user_key, convo_key, {})
+
+    result = asyncio.run(broker.apply_updates_async(updates))
+
+    assert recorded["user_id"] == context.user_id
+    assert recorded["conversation_id"] == context.conversation_id
+    roleplay_applied = recorded["updates"]["roleplay_updates"]
+    assert roleplay_applied["CurrentLocation"] == "Radiant Bazaar"
+    assert json.loads(roleplay_applied["CurrentScene"])["location"]["name"] == "Radiant Bazaar"
+    assert result["success"] is True
+
+    assert context.current_location == "Radiant Bazaar"
+    assert context.current_context["location_name"] == "Radiant Bazaar"
+    assert context.current_context["location_id"] == "radiant_bazaar"
+
+    snapshot = _SNAPSHOT_STORE.get(user_key, convo_key)
+    assert snapshot["location_name"] == "Radiant Bazaar"
+    assert snapshot["scene_id"] == "radiant_bazaar"
 
 
 def test_process_user_input_persists_location(monkeypatch):
