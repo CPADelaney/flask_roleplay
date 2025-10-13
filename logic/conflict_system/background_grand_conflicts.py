@@ -144,7 +144,7 @@ class BackgroundConflictOrchestrator:
                 
                 Make them feel real and consequential without dominating gameplay.
                 """,
-                model="gpt-4o",
+                model="gpt-5-nano",
             )
         return self._conflict_generator
     
@@ -167,7 +167,7 @@ class BackgroundConflictOrchestrator:
                 
                 Keep progression realistic and engaging.
                 """,
-                model="gpt-4o",
+                model="gpt-5-nano",
             )
         return self._evolution_agent
     
@@ -459,7 +459,7 @@ class BackgroundNewsGenerator:
                 
                 Match tone to source. Include bias and spin.
                 """,
-                model="gpt-4o",
+                model="gpt-5-nano",
             )
         return self._news_generator
     
@@ -578,7 +578,7 @@ class BackgroundConflictRipples:
                 
                 Keep effects indirect but noticeable to observant players.
                 """,
-                model="gpt-4o",
+                model="gpt-5-nano",
             )
         return self._ripple_generator
     
@@ -599,7 +599,7 @@ class BackgroundConflictRipples:
                 
                 Players should feel these are bonuses, not obligations.
                 """,
-                model="gpt-4o",
+                model="gpt-5-nano",
             )
         return self._opportunity_creator
     
