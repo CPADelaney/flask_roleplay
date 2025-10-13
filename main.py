@@ -137,7 +137,7 @@ DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
     logger.critical("DB_DSN environment variable not set!")
 
-CHATKIT_MODEL = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4o-mini")
+CHATKIT_MODEL = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-5-nano")
 
 conversation_manager = ConversationManager()
 try:
