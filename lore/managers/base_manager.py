@@ -2,9 +2,8 @@
 
 import logging
 import json
-import os
-import asyncpg
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Type, Set, Callable, Protocol, runtime_checkable, Union, Tuple
 
@@ -35,8 +34,6 @@ from embedding.vector_store import generate_embedding, compute_similarity
 from lore.core.cache import GLOBAL_LORE_CACHE
 
 logger = logging.getLogger(__name__)
-
-DB_DSN = os.getenv("DB_DSN")
 
 # ------------------------------------------------------------------------
 # Pydantic Models for Agent SDK Integration
@@ -164,7 +161,7 @@ class BaseLoreManager:
     """
     Consolidated base class for all lore managers providing common functionality.
     Integrates agent capabilities, database access, caching, and governance oversight.
-    
+
     IMPORTANT: Governance initialization has been removed from ensure_initialized()
     to prevent circular dependencies. Governance should be set externally via
     set_governor() and registered after all components are initialized.
@@ -173,7 +170,7 @@ class BaseLoreManager:
     def __init__(self, user_id: int, conversation_id: int, cache_size: int = 100, ttl: int = 3600):
         """
         Initialize the base lore manager.
-        
+
         Args:
             user_id: ID of the user
             conversation_id: ID of the conversation
@@ -188,11 +185,11 @@ class BaseLoreManager:
         self.initialized = False
         self._initializing = False  # Re-entry guard
         self.cache_namespace = self.__class__.__name__.lower()
-        
+
         # Governance integration
         self.governor = None
         self.directive_handler = None
-        
+
         # Define standard table columns for common operations
         self._standard_columns = {
             'id': 'SERIAL PRIMARY KEY',
@@ -201,16 +198,16 @@ class BaseLoreManager:
             'timestamp': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
             'embedding': 'VECTOR(1536)'
         }
-        
+
         # Set up tracing
         self._setup_tracing()
-        
+
         # Initialize agent definitions
         self.agents = {}
-        
+
         # Maintenance task
         self.maintenance_task: Optional[asyncio.Task] = None
-        
+
         # Cache statistics
         self._cache_stats = {
             'hits': 0,
@@ -245,16 +242,12 @@ class BaseLoreManager:
                 self._get_agent_id()
             )
 
-    async def get_connection_pool(self) -> "asyncpg.Pool":
-        """
-        Shared connection pool across managers.
-        """
-        if not hasattr(self, "_pool") or self._pool is None:
-            if not DB_DSN:
-                raise RuntimeError("DB_DSN is not configured")
-            self._pool = await asyncpg.create_pool(dsn=DB_DSN)
-        return self._pool
-    
+    @asynccontextmanager
+    async def db_connection(self):
+        """Provide a database connection scoped to the calling context."""
+        async with get_db_connection_context() as conn:
+            yield conn
+
     async def get_cached_data(self, namespace: str, key: str, fetch_func=None):
         """
         Generic cached fetch helper. If fetch_func is provided and the key
@@ -266,14 +259,14 @@ class BaseLoreManager:
             if val is not None:
                 GLOBAL_LORE_CACHE.set(namespace, key, val, self._default_ttl, self.user_id, self.conversation_id)
         return val
-    
+
     async def set_cached_data(self, namespace: str, key: str, value, tags: Optional[Set[str]] = None) -> bool:
         """
         Generic cached set helper.
         """
         GLOBAL_LORE_CACHE.set(namespace, key, value, self._default_ttl, self.user_id, self.conversation_id)
         return True
-    
+
     async def invalidate_cached_data(self, namespace: str, key: Optional[str] = None, recursive: bool = True) -> None:
         """
         Generic cache invalidation helper. If key is None, clears the namespace
@@ -283,11 +276,11 @@ class BaseLoreManager:
             GLOBAL_LORE_CACHE.invalidate(namespace, key, self.user_id, self.conversation_id)
         else:
             await GLOBAL_LORE_CACHE.invalidate_pattern(namespace, "*", self.user_id, self.conversation_id)
-    
+
     # Lifecycle no-ops so child managers can call start/stop safely
     async def start(self):
         return None
-    
+
     async def stop(self):
         return None
 
@@ -298,12 +291,12 @@ class BaseLoreManager:
         """
         if self.initialized:
             return True
-            
+
         # Re-entry guard
         if self._initializing:
             logger.warning(f"Re-entry into {self.__class__.__name__}.ensure_initialized()")
             return True
-            
+
         self._initializing = True
         try:
             await self.initialize_agents()
@@ -329,33 +322,33 @@ class BaseLoreManager:
     ) -> bool:
         """
         Register with Nyx governance system.
-        
+
         Args:
             agent_type: Type of agent
             agent_id: Unique ID for this agent
             directive_text: Directive text describing agent's purpose
             scope: Scope of operations
             priority: Priority level
-            
+
         Returns:
             True if registration successful
         """
         if not self.governor:
             logger.warning(f"Cannot register {self.__class__.__name__} - no governor set")
             return False
-            
+
         try:
             # Store the agent type and ID for later use
             self._agent_type = agent_type
             self._agent_id = agent_id
-            
+
             # Register with the governor
             result = await self.governor.register_agent(
                 agent_type=agent_type,
                 agent_instance=self,
                 agent_id=agent_id
             )
-            
+
             if result.get("success", False):
                 # Also register the directive
                 await self.governor.issue_directive(
@@ -369,13 +362,13 @@ class BaseLoreManager:
                     priority=priority,
                     duration_minutes=60 * 24 * 365  # 1 year
                 )
-                
+
                 logger.info(f"{self.__class__.__name__} registered with governance as {agent_type}/{agent_id}")
                 return True
             else:
                 logger.error(f"Failed to register {self.__class__.__name__} with governance")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error registering {self.__class__.__name__} with governance: {e}")
             return False
@@ -391,7 +384,7 @@ class BaseLoreManager:
                 instructions="You are a general-purpose agent for lore management.",
                 model="gpt-5-nano",
             )
-            
+
             logger.info(f"Agents initialized for {self.__class__.__name__} user {self.user_id}")
         except Exception as e:
             logger.error(f"Error initializing agents: {str(e)}")
@@ -406,7 +399,7 @@ class BaseLoreManager:
     async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
         """
         Initialize tables using a dictionary of table definitions.
-        
+
         Args:
             table_definitions: Dictionary mapping table names to CREATE TABLE statements
         """
@@ -416,11 +409,11 @@ class BaseLoreManager:
                     # Check if table exists
                     table_exists = await conn.fetchval(f"""
                         SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
+                            SELECT FROM information_schema.tables
                             WHERE table_name = '{table_name.lower()}'
                         );
                     """)
-                    
+
                     if not table_exists:
                         # Create the table
                         await conn.execute(create_statement)
@@ -436,7 +429,7 @@ class BaseLoreManager:
         if not self.governor:
             logger.warning(f"Cannot register {self.__class__.__name__} - no governor set")
             return False
-            
+
         try:
             await self.governor.register_agent(
                 agent_type=self._get_agent_type(),
@@ -455,7 +448,7 @@ class BaseLoreManager:
         Override in subclasses to provide specific agent type.
         """
         return getattr(self, '_agent_type', AgentType.NARRATIVE_CRAFTER)
-    
+
     def _get_agent_id(self) -> str:
         """
         Get the agent ID for this manager.
@@ -470,22 +463,22 @@ class BaseLoreManager:
     def _dict_to_table_record(self, data: Dict[str, Any]) -> TableRecord:
         """
         Convert a dictionary to a TableRecord, handling extra fields.
-        
+
         Args:
             data: Dictionary of record data
-            
+
         Returns:
             TableRecord instance
         """
         # Extract known fields
         known_fields = {'id', 'name', 'description', 'timestamp', 'embedding'}
         record_data = {k: v for k, v in data.items() if k in known_fields}
-        
+
         # Put remaining fields in extra_fields
         extra = {k: v for k, v in data.items() if k not in known_fields and k != 'similarity'}
         if extra:
             record_data['extra_fields'] = extra
-            
+
         return TableRecord(**record_data)
 
     # ---------------------------
@@ -496,10 +489,10 @@ class BaseLoreManager:
     async def create_record(self, input_data: CreateRecordInput) -> int:
         """
         Create a record with governance oversight.
-        
+
         Args:
             input_data: CreateRecordInput model with table name and data
-            
+
         Returns:
             ID of the created record
         """
@@ -509,7 +502,7 @@ class BaseLoreManager:
             'description': input_data.description,
             **input_data.extra_fields
         }
-        
+
         return await self._create_record_internal(input_data.table_name, data)
 
     async def _create_record_internal(self, table_name: str, data: Dict[str, Any]) -> int:
@@ -518,17 +511,17 @@ class BaseLoreManager:
             columns = list(data.keys())
             values = list(data.values())
             placeholders = [f"${i+1}" for i in range(len(values))]
-            
+
             query = f"""
-                INSERT INTO {table_name} 
+                INSERT INTO {table_name}
                 ({', '.join(columns)})
                 VALUES ({', '.join(placeholders)})
                 RETURNING id
             """
-            
+
             async with get_db_connection_context() as conn:
                 record_id = await conn.fetchval(query, *values)
-                
+
                 # Generate embedding if text data is provided
                 if 'name' in data and 'description' in data and 'embedding' not in data:
                     embedding_text = f"{data['name']} {data['description']}"
@@ -539,7 +532,7 @@ class BaseLoreManager:
                         "id",
                         record_id
                     )
-                
+
                 return record_id
         except Exception as e:
             logging.error(f"Error creating record in {table_name}: {e}")
@@ -549,11 +542,11 @@ class BaseLoreManager:
     async def get_record(self, table_name: str, record_id: int) -> Optional[TableRecord]:
         """
         Get a record by ID with governance oversight.
-        
+
         Args:
             table_name: Name of the table to query
             record_id: ID of the record to retrieve
-            
+
         Returns:
             TableRecord model or None if not found
         """
@@ -563,16 +556,16 @@ class BaseLoreManager:
         if cached:
             self._cache_stats['hits'] += 1
             return self._dict_to_table_record(cached)
-        
+
         self._cache_stats['misses'] += 1
-        
+
         try:
             async with get_db_connection_context() as conn:
                 record = await conn.fetchrow(f"""
                     SELECT * FROM {table_name}
                     WHERE id = $1
                 """, record_id)
-                
+
                 if record:
                     result = dict(record)
                     self.set_cache(cache_key, result)
@@ -586,10 +579,10 @@ class BaseLoreManager:
     async def update_record(self, input_data: UpdateRecordInput) -> bool:
         """
         Update a record with governance oversight.
-        
+
         Args:
             input_data: UpdateRecordInput model with table name, record id and data
-            
+
         Returns:
             True if update succeeded, False otherwise
         """
@@ -601,13 +594,13 @@ class BaseLoreManager:
             data['description'] = input_data.description
         if input_data.extra_fields:
             data.update(input_data.extra_fields)
-            
+
         if not data:
             return False
-            
+
         return await self._update_record_internal(
-            input_data.table_name, 
-            input_data.record_id, 
+            input_data.table_name,
+            input_data.record_id,
             data
         )
 
@@ -617,16 +610,16 @@ class BaseLoreManager:
             columns = list(data.keys())
             values = list(data.values())
             set_clause = ", ".join([f"{col} = ${i+1}" for i, col in enumerate(columns)])
-            
+
             query = f"""
                 UPDATE {table_name}
                 SET {set_clause}
                 WHERE id = ${len(values) + 1}
             """
-            
+
             async with get_db_connection_context() as conn:
                 result = await conn.execute(query, *values, record_id)
-                
+
                 # Update embedding if text content changed
                 if ('name' in data or 'description' in data):
                     record = await conn.fetchrow(
@@ -643,10 +636,10 @@ class BaseLoreManager:
                             "id",
                             record_id
                         )
-                
+
                 # Invalidate cache
                 self.invalidate_cache(f"{table_name}_{record_id}")
-                
+
                 return result != "UPDATE 0"
         except Exception as e:
             logging.error(f"Error updating record {record_id} in {table_name}: {e}")
@@ -656,11 +649,11 @@ class BaseLoreManager:
     async def delete_record(self, table_name: str, record_id: int) -> bool:
         """
         Delete a record with governance oversight.
-        
+
         Args:
             table_name: Name of the table to delete from
             record_id: ID of the record to delete
-            
+
         Returns:
             True if deletion succeeded, False otherwise
         """
@@ -670,7 +663,7 @@ class BaseLoreManager:
                     DELETE FROM {table_name}
                     WHERE id = $1
                 """, record_id)
-                
+
                 self.invalidate_cache(f"{table_name}_{record_id}")
                 self._cache_stats['deletes'] += 1
                 return result != "DELETE 0"
@@ -682,17 +675,17 @@ class BaseLoreManager:
     async def query_records(self, input_data: QueryRecordsInput) -> List[TableRecord]:
         """
         Query records with conditions and governance oversight.
-        
+
         Args:
             input_data: QueryRecordsInput model with query parameters
-            
+
         Returns:
             List of TableRecord models
         """
         try:
             query = f"SELECT * FROM {input_data.table_name}"
             values = []
-            
+
             if input_data.conditions:
                 where_clauses = []
                 for i, cond in enumerate(input_data.conditions):
@@ -705,12 +698,12 @@ class BaseLoreManager:
                         where_clauses.append(f"{cond.field_name} {cond.operator} ${len(values)+1}")
                         values.append(cond.field_value)
                 query += f" WHERE {' AND '.join(where_clauses)}"
-            
+
             if input_data.order_by:
                 query += f" ORDER BY {input_data.order_by}"
-                
+
             query += f" LIMIT {input_data.limit}"
-            
+
             async with get_db_connection_context() as conn:
                 records = await conn.fetch(query, *values)
                 return [self._dict_to_table_record(dict(record)) for record in records]
@@ -721,32 +714,32 @@ class BaseLoreManager:
     async def search_by_similarity(self, table_name: str, text: str, limit: int = 5) -> List[TableRecord]:
         """
         Search records by semantic similarity to the provided text.
-        
+
         Args:
             table_name: Name of the table to search
             text: Query text to find similar content
             limit: Maximum number of results to return
-            
+
         Returns:
             List of TableRecord models sorted by similarity
         """
         try:
             # Generate embedding for the query text
             embedding = await generate_embedding(text)
-            
+
             async with get_db_connection_context() as conn:
                 # Check if the table has an embedding column
                 has_embedding = await conn.fetchval(f"""
                     SELECT EXISTS (
-                        SELECT FROM information_schema.columns 
-                        WHERE table_name = '{table_name.lower()}' 
+                        SELECT FROM information_schema.columns
+                        WHERE table_name = '{table_name.lower()}'
                           AND column_name = 'embedding'
                     );
                 """)
-                
+
                 if not has_embedding:
                     return []
-                
+
                 # Perform similarity search
                 records = await conn.fetch(f"""
                     SELECT *, 1 - (embedding <=> $1) as similarity
@@ -755,7 +748,7 @@ class BaseLoreManager:
                     ORDER BY embedding <=> $1
                     LIMIT $2
                 """, embedding, limit)
-                
+
                 results = []
                 for record in records:
                     record_dict = dict(record)
@@ -781,7 +774,7 @@ class BaseLoreManager:
     ):
         """
         Generate an embedding for text and store it in the database.
-        
+
         Args:
             text: Text to generate embedding for
             conn: Database connection
@@ -810,11 +803,11 @@ class BaseLoreManager:
     async def create_record_tool(ctx: RunContextWrapper, input_data: CreateRecordInput) -> int:
         """
         Agent-callable tool to create a record.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             input_data: CreateRecordInput model
-            
+
         Returns:
             ID of created record
         """
@@ -826,12 +819,12 @@ class BaseLoreManager:
     async def get_record_tool(ctx: RunContextWrapper, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
         """
         Agent-callable tool to get a record.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             table_name: Name of the table
             record_id: ID of the record
-            
+
         Returns:
             Record data or None
         """
@@ -850,11 +843,11 @@ class BaseLoreManager:
     async def update_record_tool(ctx: RunContextWrapper, input_data: UpdateRecordInput) -> bool:
         """
         Agent-callable tool to update a record.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             input_data: UpdateRecordInput model
-            
+
         Returns:
             True if successful
         """
@@ -866,11 +859,11 @@ class BaseLoreManager:
     async def query_records_tool(ctx: RunContextWrapper, input_data: QueryRecordsInput) -> List[Dict[str, Any]]:
         """
         Agent-callable tool to query records.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             input_data: QueryRecordsInput model
-            
+
         Returns:
             List of records
         """
@@ -890,13 +883,13 @@ class BaseLoreManager:
     async def search_similarity_tool(ctx: RunContextWrapper, table_name: str, text: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         Agent-callable tool to search by similarity.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             table_name: Name of the table
             text: Query text
             limit: Maximum results
-            
+
         Returns:
             List of similar records
         """
@@ -916,10 +909,10 @@ class BaseLoreManager:
     async def get_cache_stats_tool(ctx: RunContextWrapper) -> CacheStats:
         """
         Agent-callable tool to get cache statistics.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
-            
+
         Returns:
             CacheStats model
         """
@@ -933,12 +926,12 @@ class BaseLoreManager:
         """
         Agent-callable tool to execute raw SQL queries.
         Use with caution - only for advanced operations.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             query: SQL query
             params: Query parameters
-            
+
         Returns:
             Query results
         """
@@ -950,12 +943,12 @@ class BaseLoreManager:
     async def batch_update_tool(ctx: RunContextWrapper, table_name: str, updates: List[BatchUpdateItem]) -> int:
         """
         Agent-callable tool to perform batch updates.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             table_name: Name of the table
             updates: List of BatchUpdateItem models
-            
+
         Returns:
             Number of updated rows
         """
@@ -968,12 +961,12 @@ class BaseLoreManager:
     async def validate_data_tool(ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str) -> ValidationResult:
         """
         Agent-callable tool to validate data.
-        
+
         Args:
             ctx: Run context wrapper containing manager reference
             data: Data to validate
             schema_type: Type of schema
-            
+
         Returns:
             ValidationResult model
         """
@@ -988,10 +981,10 @@ class BaseLoreManager:
     def get_cache(self, key: str) -> Any:
         """
         Get an item from the global cache.
-        
+
         Args:
             key: Cache key to retrieve
-            
+
         Returns:
             Cached value or None if not found
         """
@@ -1001,11 +994,11 @@ class BaseLoreManager:
             self.user_id,
             self.conversation_id
         )
-    
+
     def set_cache(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """
         Set an item in the global cache.
-        
+
         Args:
             key: Cache key to set
             value: Value to cache
@@ -1020,11 +1013,11 @@ class BaseLoreManager:
             self.conversation_id
         )
         self._cache_stats['sets'] += 1
-    
+
     def invalidate_cache(self, key: str) -> None:
         """
         Invalidate a specific cache key.
-        
+
         Args:
             key: Cache key to invalidate
         """
@@ -1034,11 +1027,11 @@ class BaseLoreManager:
             self.user_id,
             self.conversation_id
         )
-    
+
     async def invalidate_cache_pattern(self, pattern: str) -> None:
         """
         Invalidate cache keys matching a pattern.
-        
+
         Args:
             pattern: Pattern to match cache keys
         """
@@ -1048,7 +1041,7 @@ class BaseLoreManager:
             self.user_id,
             self.conversation_id
         )
-    
+
     def clear_cache(self) -> None:
         """Clear all cache entries for this manager."""
         GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
@@ -1061,11 +1054,11 @@ class BaseLoreManager:
     async def _execute_query_internal(self, query: str, *args) -> List[Dict[str, Any]]:
         """
         Execute a database query and return results.
-        
+
         Args:
             query: SQL query
             *args: Query parameters
-            
+
         Returns:
             List of result dictionaries
         """
@@ -1080,17 +1073,17 @@ class BaseLoreManager:
     async def _batch_update_internal(self, table: str, updates: List[Dict[str, Any]]) -> int:
         """
         Perform batch updates on a table.
-        
+
         Args:
             table: Table name
             updates: List of update dictionaries with 'column', 'value', 'id'
-            
+
         Returns:
             Number of updated rows
         """
         if not updates:
             return 0
-        
+
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
@@ -1108,11 +1101,11 @@ class BaseLoreManager:
     async def _validate_data_internal(self, data: Dict[str, Any], schema_type: str) -> Dict[str, Any]:
         """
         Validate data against a schema type.
-        
+
         Args:
             data: Data to validate
             schema_type: Type of schema
-            
+
         Returns:
             Validation results
         """
@@ -1122,9 +1115,9 @@ class BaseLoreManager:
             "faction": ["name", "type"],
             "character": ["name", "role"]
         }.get(schema_type, [])
-        
+
         missing = [field for field in required_fields if field not in data]
-        
+
         return {
             "is_valid": len(missing) == 0,
             "issues": missing,
@@ -1134,7 +1127,7 @@ class BaseLoreManager:
     def _get_cache_stats_dict(self) -> Dict[str, Any]:
         """
         Get cache statistics as a dictionary.
-        
+
         Returns:
             Cache statistics
         """
@@ -1168,7 +1161,7 @@ class BaseLoreManager:
         Run a single maintenance pass.
         """
         stats = self._get_cache_stats_dict()
-        
+
         with trace(
             workflow_name="MaintenanceCheck",
             group_id=self.trace_group_id,
@@ -1179,27 +1172,27 @@ class BaseLoreManager:
                 "conversation_id": self.conversation_id,
                 "manager": self
             })
-            
+
             prompt = (
                 f"Cache statistics:\n{json.dumps(stats, indent=2)}\n\n"
                 "Analyze and decide if action is needed. Return JSON response."
             )
-            
+
             run_config = RunConfig(
                 workflow_name="MaintenanceAgent",
                 trace_metadata=self.trace_metadata
             )
-            
+
             result = await Runner.run(
                 starting_agent=maintenance_agent,
                 input=prompt,
                 context=run_ctx.context,
                 run_config=run_config
             )
-            
+
             try:
                 decision = json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
-                
+
                 if decision.get("action") == "log_warning":
                     logger.warning(decision.get("message", "Maintenance warning"))
                 elif decision.get("action") == "clear_cache":
@@ -1216,10 +1209,10 @@ class BaseLoreManager:
     def create_run_context(self, additional_context: Optional[Union[Dict[str, Any], RunContextWrapper]] = None) -> RunContextWrapper:
         """
         Create a run context for agent execution.
-        
+
         Args:
             additional_context: Additional context to include (can be dict or RunContextWrapper)
-            
+
         Returns:
             RunContextWrapper instance
         """
@@ -1228,7 +1221,7 @@ class BaseLoreManager:
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         }
-        
+
         if additional_context:
             # Handle case where additional_context is already a RunContextWrapper
             if isinstance(additional_context, RunContextWrapper):
@@ -1241,24 +1234,24 @@ class BaseLoreManager:
             else:
                 # Log warning for unexpected type but don't crash
                 logger.warning(f"Unexpected type for additional_context: {type(additional_context)}")
-                
+
         return RunContextWrapper(context=context)
 
     async def execute_llm_prompt(
-        self, 
-        prompt: str, 
-        agent_name: Optional[str] = None, 
+        self,
+        prompt: str,
+        agent_name: Optional[str] = None,
         model: str = "gpt-5-nano",
     ) -> str:
         """
         Execute a prompt with an LLM agent.
-        
+
         Args:
             prompt: Prompt text
             agent_name: Optional agent name
             model: Model to use
             temperature: Temperature setting
-            
+
         Returns:
             Response text
         """
@@ -1281,19 +1274,19 @@ class BaseLoreManager:
                     instructions=f"You help with {self.__class__.__name__} management.",
                     model=model,
                 )
-            
+
             run_config = RunConfig(
                 workflow_name=f"{self.__class__.__name__}Prompt",
                 trace_metadata=self.trace_metadata
             )
-            
+
             result = await Runner.run(
                 starting_agent=agent,
                 input=prompt,
                 context=self.create_run_context().context,
                 run_config=run_config
             )
-            
+
             return result.final_output
 
     async def create_table_definition(
@@ -1305,45 +1298,45 @@ class BaseLoreManager:
     ) -> str:
         """
         Create a standardized table definition.
-        
+
         Args:
             table_name: Name of the table
             extra_columns: Additional columns beyond standard
             include_standard: Whether to include standard columns
             foreign_keys: Foreign key constraints
-            
+
         Returns:
             SQL CREATE TABLE statement
         """
         all_columns = {}
-        
+
         if include_standard:
             all_columns.update(self._standard_columns)
-        
+
         if extra_columns:
             all_columns.update(extra_columns)
-        
+
         column_defs = [f"{col} {definition}" for col, definition in all_columns.items()]
-        
+
         if foreign_keys:
             for column, reference in foreign_keys.items():
                 column_defs.append(
                     f"FOREIGN KEY ({column}) REFERENCES {reference} ON DELETE CASCADE"
                 )
-        
+
         sql = f"""
             CREATE TABLE IF NOT EXISTS {table_name} (
                 {', '.join(column_defs)}
             );
         """
-        
+
         # Add index for embeddings if included
         if 'embedding' in all_columns:
             sql += f"""
             CREATE INDEX IF NOT EXISTS idx_{table_name.lower()}_embedding
             ON {table_name} USING ivfflat (embedding vector_cosine_ops);
             """
-        
+
         return sql
 
     # ---------------------------
@@ -1361,11 +1354,11 @@ class BaseLoreManager:
                 await self.maintenance_task
             except asyncio.CancelledError:
                 pass
-        
+
         # Clear caches
         self._local_cache.clear()
         self.clear_cache()
-        
+
         logger.info(f"{self.__class__.__name__} for user {self.user_id} closed")
 
     def __del__(self):
