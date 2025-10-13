@@ -11,7 +11,7 @@ import random
 import unicodedata
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from agents import Agent, Runner
 from db.connection import get_db_connection_context
@@ -85,6 +85,92 @@ LOCATION_REFERENCE_KEYWORDS: Set[str] = {
     "where we are",
     "our location",
 }
+
+LOCATION_MOVE_CATEGORY_HINTS: Set[str] = {
+    "movement",
+    "travel",
+    "navigation",
+    "exploration",
+    "relocation",
+    "journey",
+}
+
+LOCATION_MOVE_TEXT_MARKERS: Tuple[str, ...] = (
+    "go to",
+    "head to",
+    "head for",
+    "move to",
+    "move toward",
+    "travel to",
+    "travel toward",
+    "walk to",
+    "walk towards",
+    "run to",
+    "run toward",
+    "sprint to",
+    "dash to",
+    "dash into",
+    "drive to",
+    "ride to",
+    "sail to",
+    "fly to",
+    "step into",
+    "step inside",
+    "step toward",
+    "enter the",
+    "enter a",
+    "enter an",
+    "enter into",
+    "venture to",
+    "venture into",
+    "sneak to",
+    "sneak into",
+    "make my way to",
+    "make our way to",
+    "make his way to",
+    "make her way to",
+    "make their way to",
+    "leave for",
+    "leave to",
+)
+
+LOCATION_MOVE_PLACEHOLDER_TOKENS: Set[str] = {
+    "there",
+    "here",
+    "somewhere",
+    "anywhere",
+    "everywhere",
+    "outside",
+    "inside",
+    "upstairs",
+    "downstairs",
+    "away",
+    "back",
+    "forward",
+    "nearby",
+    "around",
+}
+
+LOCATION_INTENT_KEYS: Tuple[str, ...] = (
+    "destination",
+    "location",
+    "direct_object",
+    "prepositional_object",
+    "indirect_object",
+    "targets",
+)
+
+SCENE_LOCATION_KEYS: Tuple[str, ...] = (
+    "nearby_locations",
+    "adjacent_locations",
+    "connected_locations",
+    "reachable_locations",
+    "available_locations",
+    "locations",
+    "rooms",
+    "areas",
+    "wings",
+)
 
 MUNDANE_SEARCH_TOKEN_SYNONYMS: Dict[str, Set[str]] = {
     "coin": {"coin", "coins", "penny", "pennies", "small coin", "loose coin"},
@@ -360,6 +446,127 @@ def _collect_location_context_tokens(
             tokens.add(normalized)
 
     return {token for token in tokens if token}
+
+
+def _format_missing_names(tokens: Iterable[str]) -> str:
+    unique = sorted({str(token).strip() for token in tokens if str(token).strip()})
+    if not unique:
+        return ""
+    if len(unique) == 1:
+        return unique[0]
+    if len(unique) == 2:
+        return f"{unique[0]} and {unique[1]}"
+    return ", ".join(unique[:-1]) + f", and {unique[-1]}"
+
+
+def _intent_requests_location_move(intent: Dict[str, Any], text_l: str, candidate_tokens: Set[str]) -> bool:
+    if not candidate_tokens:
+        return False
+
+    categories = {
+        str(cat).strip().lower()
+        for cat in intent.get("categories", [])
+        if str(cat).strip()
+    }
+    if categories & LOCATION_MOVE_CATEGORY_HINTS:
+        return True
+
+    for key in ("destination", "location"):
+        if intent.get(key):
+            return True
+
+    text_l = text_l or ""
+    return any(marker in text_l for marker in LOCATION_MOVE_TEXT_MARKERS)
+
+
+def _extract_candidate_location_tokens(intent: Dict[str, Any]) -> Set[str]:
+    tokens: Set[str] = set()
+    for key in LOCATION_INTENT_KEYS:
+        tokens |= _tokenize_scene_values(intent.get(key))
+    return {token for token in tokens if token}
+
+
+def _build_known_location_tokens(
+    location_aliases: Set[str],
+    location_context_tokens: Set[str],
+    known_location_names: Iterable[str],
+    scene: Any,
+) -> Set[str]:
+    tokens: Set[str] = set()
+
+    def _ingest(value: Any) -> None:
+        if value is None:
+            return
+        raw = str(value).strip().lower()
+        if raw:
+            tokens.add(raw)
+        normalized = _normalize_location_phrase(value)
+        if normalized:
+            tokens.add(normalized)
+            for part in normalized.split():
+                if len(part) > 2:
+                    tokens.add(part)
+
+    for alias in location_aliases:
+        _ingest(alias)
+
+    for ctx_token in location_context_tokens:
+        _ingest(ctx_token)
+
+    for name in known_location_names or []:
+        _ingest(name)
+
+    if isinstance(scene, dict):
+        for key in SCENE_LOCATION_KEYS:
+            _values = scene.get(key)
+            for token in _tokenize_scene_values(_values):
+                _ingest(token)
+
+    return {token for token in tokens if token}
+
+
+def _find_unresolved_location_targets(
+    intent: Dict[str, Any],
+    text_l: str,
+    location_aliases: Set[str],
+    location_context_tokens: Set[str],
+    known_location_tokens: Set[str],
+    scene_npc_tokens: Set[str],
+    scene_item_tokens: Set[str],
+) -> List[str]:
+    candidate_tokens = _extract_candidate_location_tokens(intent)
+    if not _intent_requests_location_move(intent, text_l, candidate_tokens):
+        return []
+
+    unresolved: List[str] = []
+    for token in candidate_tokens:
+        raw = str(token).strip().lower()
+        normalized = _normalize_location_phrase(token)
+        if not raw and not normalized:
+            continue
+        if raw in LOCATION_MOVE_PLACEHOLDER_TOKENS or normalized in LOCATION_MOVE_PLACEHOLDER_TOKENS:
+            continue
+        if _canonicalize_self_reference_token(token):
+            continue
+        if normalized and _canonicalize_self_reference_token(normalized):
+            continue
+        if raw in scene_npc_tokens or normalized in scene_npc_tokens:
+            continue
+        if raw in scene_item_tokens or normalized in scene_item_tokens:
+            continue
+        if _is_location_reference_token(raw, location_aliases):
+            continue
+        if normalized and _is_location_reference_token(normalized, location_aliases):
+            continue
+
+        candidate_forms = {raw, normalized}
+        matches_known = any(
+            form in known_location_tokens for form in candidate_forms if form
+        )
+        if not matches_known:
+            unresolved.append(normalized or raw or str(token))
+
+    return unresolved
 
 
 def _matches_ambient_debris_token(token: str) -> bool:
@@ -1190,6 +1397,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     """
     # Parse the intended actions
     intents = await parse_action_intents(user_input)
+    text_l = (user_input or "").lower()
     
     # Load comprehensive setting context
     setting_context = await _load_comprehensive_context(nyx_ctx)
@@ -1215,6 +1423,116 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             "[FEASIBILITY] impossible_categories=%s",
             sorted(impossible_logged),
         )
+
+    # Early guard: fabricated location changes
+    scene = setting_context.get("scene") if isinstance(setting_context.get("scene"), dict) else {}
+    location_payload = setting_context.get("location") or {}
+    location_name: Optional[str]
+    if isinstance(location_payload, dict):
+        location_name = (
+            location_payload.get("name")
+            or location_payload.get("label")
+            or location_payload.get("display_name")
+            or location_payload.get("location_name")
+        )
+    else:
+        location_name = str(location_payload).strip() if location_payload else None
+
+    scene_npcs = setting_context.get("present_entities") or []
+    scene_items = setting_context.get("available_items") or []
+    location_features = setting_context.get("location_features") or []
+    if isinstance(location_features, str):
+        location_features = [location_features]
+    time_phase_value = setting_context.get("current_time") or "day"
+    time_phase = str(time_phase_value).lower() if isinstance(time_phase_value, str) else "day"
+
+    location_token = str(location_name).strip().lower() if location_name else ""
+    location_aliases = _location_reference_aliases(location_token, scene)
+    location_context_tokens = _collect_location_context_tokens(
+        scene,
+        location_features,
+        location_token,
+    )
+    known_location_tokens = _build_known_location_tokens(
+        location_aliases,
+        location_context_tokens,
+        setting_context.get("known_location_names") or [],
+        scene,
+    )
+    scene_npc_tokens = _tokenize_scene_values(scene_npcs)
+    scene_item_tokens = _tokenize_scene_values(scene_items)
+
+    intents_sequence = intents or [{}]
+    inferred_categories: List[Set[str]] = []
+    location_blocks: Dict[int, Dict[str, Any]] = {}
+
+    for idx, intent in enumerate(intents_sequence):
+        cats = set(intent.get("categories") or [])
+        if not cats:
+            inferred = _infer_categories_from_text(text_l)
+            if inferred:
+                cats = inferred
+        inferred_categories.append(cats)
+
+        missing_location_tokens = _find_unresolved_location_targets(
+            intent,
+            text_l,
+            location_aliases,
+            location_context_tokens,
+            known_location_tokens,
+            scene_npc_tokens,
+            scene_item_tokens,
+        )
+        if not missing_location_tokens:
+            continue
+
+        missing_location_phrase = _format_missing_names(missing_location_tokens)
+        violation_reason = (
+            f"{missing_location_phrase} isn't an established location right now."
+        )
+        lead_candidates = _scene_alternatives(
+            _display_scene_values(scene_npcs),
+            _display_scene_values(scene_items),
+            _display_scene_values(location_features),
+            time_phase,
+        )
+        logger.info(
+            "[FEASIBILITY] Hard deny - fabricated location -> %s",
+            missing_location_tokens,
+        )
+        location_blocks[idx] = {
+            "feasible": False,
+            "strategy": "deny",
+            "violations": [
+                {
+                    "rule": "location_absent",
+                    "reason": violation_reason,
+                }
+            ],
+            "narrator_guidance": (
+                f"I can't route you to {missing_location_phrase}; stick to known "
+                "locations or work with the narrator to introduce it first."
+            ),
+            "suggested_alternatives": lead_candidates,
+            "leads": lead_candidates,
+            "categories": sorted(cats),
+        }
+
+    if location_blocks:
+        per_intent = []
+        for idx, cats in enumerate(inferred_categories):
+            if idx in location_blocks:
+                per_intent.append(location_blocks[idx])
+            else:
+                per_intent.append(
+                    {
+                        "feasible": True,
+                        "strategy": "allow",
+                        "categories": sorted(cats),
+                    }
+                )
+
+        return {"overall": {"feasible": False, "strategy": "deny"}, "per_intent": per_intent}
 
     # Quick check against hard rules
     quick_check = await _quick_feasibility_check(setting_context, intents)
@@ -1353,12 +1671,15 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         "economy_flags": {},
         "physics_caps": {},
         "location": {},
+        "location_features": [],
+        "scene": {},
         "established_impossibilities": [],
         "established_possibilities": [],
         "narrative_history": [],
         "environment_desc": "",
         "setting_name": "",
-        "stat_modifiers": {}
+        "stat_modifiers": {},
+        "known_location_names": [],
     }
     
     async with get_db_connection_context() as conn:
@@ -1547,9 +1868,11 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         
         if scene and scene["value"]:
             scene_data = json.loads(scene["value"])
+            context["scene"] = scene_data
             context["location"].update(scene_data.get("location", {}))
             context["available_items"] = scene_data.get("items", [])
             context["present_entities"] = scene_data.get("npcs", [])
+            context["location_features"] = scene_data.get("location_features", [])
             
         # Get game rules with categorization
         rules = await conn.fetch("""
@@ -1588,8 +1911,22 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             SELECT item_name, equipped FROM PlayerInventory
             WHERE user_id=$1 AND conversation_id=$2
         """, nyx_ctx.user_id, nyx_ctx.conversation_id)
-        
+
         context["available_items"].extend([item["item_name"] for item in inventory])
+
+        known_locations_rows = await conn.fetch(
+            """
+            SELECT location_name FROM Locations
+            WHERE user_id=$1 AND conversation_id=$2
+            """,
+            nyx_ctx.user_id,
+            nyx_ctx.conversation_id,
+        )
+        context["known_location_names"] = [
+            row["location_name"]
+            for row in known_locations_rows
+            if row["location_name"]
+        ]
         
         # Get active NPCs in current location
         if context["location"].get("name"):
@@ -2671,6 +3008,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     location_name: Optional[str] = None
     established_impossibilities: List[Dict[str, Any]] = []
     rules: List[Dict[str, Any]] = []
+    known_location_names: List[str] = []
     caps_loaded_flag = False
     world_type: Optional[str] = None
     infra_flags: Dict[str, Any] = {}
@@ -2754,6 +3092,20 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 user_id,
                 conversation_id,
             )
+
+            known_location_rows = await conn.fetch(
+                """
+                SELECT location_name FROM Locations
+                WHERE user_id=$1 AND conversation_id=$2
+                """,
+                user_id,
+                conversation_id,
+            )
+            known_location_names = [
+                row["location_name"]
+                for row in known_location_rows
+                if row["location_name"]
+            ]
     except Exception as e:
         logger.error(f"[FEASIBILITY] DB read failed (soft): {e}", exc_info=True)
         # Keep defaults; remain permissive
@@ -2866,6 +3218,12 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         location_features,
         location_token,
     )
+    known_location_tokens = _build_known_location_tokens(
+        location_aliases,
+        location_context_tokens,
+        known_location_names,
+        scene,
+    )
     sterile_environment = _looks_like_sterile_environment(
         location_token, location_context_tokens
     )
@@ -2897,22 +3255,57 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 reasons.append({"rule": f"unavailable:{c}", "reason": "Unavailable here"})
         return reasons
 
-    def _format_missing_names(tokens):
-        unique = sorted({token for token in tokens if token})
-        if not unique:
-            return ""
-        if len(unique) == 1:
-            return unique[0]
-        if len(unique) == 2:
-            return f"{unique[0]} and {unique[1]}"
-        return ", ".join(unique[:-1]) + f", and {unique[-1]}"
-
     for intent in intents or [{}]:
         cats = set(intent.get("categories") or [])
         if not cats:
             inferred = _infer_categories_from_text(text_l)
             if inferred:
                 cats = inferred
+
+        missing_location_tokens = _find_unresolved_location_targets(
+            intent,
+            text_l,
+            location_aliases,
+            location_context_tokens,
+            known_location_tokens,
+            scene_npc_tokens,
+            scene_item_tokens,
+        )
+        if missing_location_tokens:
+            missing_location_phrase = _format_missing_names(missing_location_tokens)
+            lead_candidates = _scene_alternatives(
+                _display_scene_values(scene_npcs),
+                _display_scene_values(scene_items),
+                _display_scene_values(location_features),
+                time_phase,
+            )
+            logger.info(
+                "[FEASIBILITY] Hard deny - fabricated location -> %s",
+                missing_location_tokens,
+            )
+            per_intent.append(
+                {
+                    "feasible": False,
+                    "strategy": "deny",
+                    "violations": [
+                        {
+                            "rule": "location_absent",
+                            "reason": (
+                                f"{missing_location_phrase} isn't an established location right now."
+                            ),
+                        }
+                    ],
+                    "narrator_guidance": (
+                        f"I can't route you to {missing_location_phrase}; stick to known "
+                        "locations or introduce it in-scene first."
+                    ),
+                    "suggested_alternatives": lead_candidates,
+                    "leads": lead_candidates,
+                    "categories": sorted(cats),
+                }
+            )
+            any_hard_block = True
+            continue
 
         referenced_targets = _tokenize_scene_values(intent.get("direct_object"))
         referenced_items = _tokenize_scene_values(intent.get("instruments"))
@@ -3024,14 +3417,14 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
             per_intent.append({
                 "feasible": False,
-                "strategy": "defer",
+                "strategy": "deny",
                 "violations": violations,
                 "narrator_guidance": narrator_guidance,
                 "leads": lead_candidates,
                 "suggested_alternatives": lead_candidates,
                 "categories": sorted(cats),
             })
-            any_defer = True
+            any_hard_block = True
             continue
 
         # (A) Established Impossibilities (hard deny if categories overlap)
