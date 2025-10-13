@@ -945,7 +945,7 @@ class LocalLoreManager(BaseLoreManager):
                 """, myth_id)
 
                 if not myth:
-                raise ValueError(f"Myth with ID {myth_id} not found")
+                    raise ValueError(f"Myth with ID {myth_id} not found")
 
             myth_data = dict(myth)
 
