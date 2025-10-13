@@ -5,6 +5,7 @@ import logging
 import time
 import hashlib
 import math
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional, Union, Tuple
 import numpy as np
 
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from context.unified_cache import context_cache
 from context.context_config import get_config
+from db.connection import get_db_connection_context
 
 from context.models import (
     EntityMetadata, NPCMetadata, LocationMetadata,
@@ -31,6 +33,7 @@ class VectorSearchResultItem(BaseModel):
     score: float
     entity_type: str
     metadata: Union[NPCMetadata, LocationMetadata, MemoryMetadata, EntityMetadata]
+    card: Optional[Dict[str, Any]] = None
     
     class Config:
         extra = "forbid"
@@ -416,80 +419,268 @@ class VectorService:
             except Exception as e:
                 logger.error(f"Error in batch processor: {e}")
                 await asyncio.sleep(0.1)  # avoid tight error loop
-    
+
+    @staticmethod
+    def _sanitize_score(value: Optional[float]) -> float:
+        """Clamp scores into [0, 1] and guard against None/NaN."""
+        if value is None:
+            return 0.0
+        try:
+            if math.isnan(value):  # type: ignore[arg-type]
+                return 0.0
+        except TypeError:
+            pass
+        return float(max(0.0, min(1.0, value)))
+
+    def _compute_recency_boost(
+        self,
+        updated_at: Optional[datetime],
+        decay: timedelta = timedelta(days=3)
+    ) -> float:
+        """Compute a recency boost (0-1) favouring fresher rows."""
+        if not updated_at:
+            return 0.0
+
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        age_seconds = max((now - updated_at).total_seconds(), 0.0)
+        decay_seconds = max(decay.total_seconds(), 1.0)
+        return math.exp(-age_seconds / decay_seconds)
+
+    def _compute_hybrid_score(
+        self,
+        vector_score: Optional[float],
+        text_score: Optional[float],
+        updated_at: Optional[datetime],
+        decay: timedelta = timedelta(days=3)
+    ) -> float:
+        """Combine vector, text, and recency scores with fixed weights."""
+        vector_component = self._sanitize_score(vector_score)
+        text_component = self._sanitize_score(text_score)
+        recency_component = self._compute_recency_boost(updated_at, decay)
+        return (0.6 * vector_component) + (0.3 * text_component) + (0.1 * recency_component)
+
+    def _score_entity_rows(
+        self,
+        rows: List[Dict[str, Any]],
+        decay: timedelta = timedelta(days=3)
+    ) -> List[Dict[str, Any]]:
+        """Attach hybrid scores to raw rows and sort descending."""
+        scored_rows: List[Dict[str, Any]] = []
+        for row in rows:
+            updated_at = row.get("updated_at")
+            if isinstance(updated_at, str):
+                try:
+                    updated_at = datetime.fromisoformat(updated_at)
+                except ValueError:
+                    updated_at = None
+            score = self._compute_hybrid_score(
+                row.get("vector_score"),
+                row.get("text_score"),
+                updated_at,
+                decay,
+            )
+            enriched = dict(row)
+            enriched["score"] = score
+            enriched["updated_at"] = updated_at
+            scored_rows.append(enriched)
+
+        scored_rows.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+        return scored_rows
+
+    async def _query_entity_cards(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        entity_types: List[str],
+        top_k: int
+    ) -> List[Dict[str, Any]]:
+        """Fetch entity cards scored via pgvector + text search."""
+
+        if not entity_types:
+            entity_types = ["npc", "location", "memory"]
+
+        limit = max(top_k * 4, top_k)
+        ts_query = query_text.strip()
+
+        embedding_array = list(query_embedding)
+
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        entity_type,
+                        entity_id,
+                        user_id,
+                        conversation_id,
+                        card,
+                        updated_at,
+                        CASE
+                            WHEN embedding IS NULL THEN NULL
+                            ELSE 1 - (embedding <=> $1::vector)
+                        END AS vector_score,
+                        CASE
+                            WHEN $2::text IS NULL OR $2 = '' THEN 0
+                            ELSE ts_rank_cd(search_vector, websearch_to_tsquery('english', $2))
+                        END AS text_score
+                    FROM public.v_entity_cards
+                    WHERE user_id = $3
+                      AND conversation_id = $4
+                      AND entity_type = ANY($5::text[])
+                    ORDER BY
+                        COALESCE(CASE WHEN embedding IS NULL THEN NULL ELSE 1 - (embedding <=> $1::vector) END, 0) DESC
+                    LIMIT $6
+                    """,
+                    embedding_array,
+                    ts_query or None,
+                    self.user_id,
+                    self.conversation_id,
+                    entity_types,
+                    limit,
+                )
+        except Exception as exc:  # pragma: no cover - safety for missing DB
+            logger.debug("Hybrid entity card query failed: %s", exc)
+            return []
+
+        scored = self._score_entity_rows([dict(row) for row in rows])
+        return scored[:top_k]
+
+    async def _query_recent_chunks(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Fetch recent episodic chunks for the conversation."""
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT chunk_id, chunk, occurred_at
+                    FROM public.v_recent_chunks
+                    WHERE user_id = $1
+                      AND conversation_id = $2
+                    ORDER BY occurred_at DESC NULLS LAST
+                    LIMIT $3
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                    limit,
+                )
+        except Exception as exc:  # pragma: no cover - safety for missing DB
+            logger.debug("Recent chunk query failed: %s", exc)
+            return []
+
+        return [dict(row) for row in rows]
+
+    async def get_entity_cards(
+        self,
+        query_text: str,
+        entity_types: Optional[List[str]] = None,
+        top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Public helper returning hybrid-ranked entity cards."""
+
+        if entity_types is None:
+            entity_types = ["npc", "location", "memory"]
+
+        query_embedding = await self._get_embedding(query_text)
+        return await self._query_entity_cards(query_embedding, query_text, entity_types, top_k)
+
+    async def fetch_recent_chunks(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Public helper returning recent episodic chunks."""
+
+        return await self._query_recent_chunks(limit)
+
     async def _perform_search(self, data) -> List[VectorSearchResultItem]:
         """Perform a vector search operation."""
-        if not self.entity_manager:
-            await self.initialize()
-            if not self.entity_manager:
-                return []
-        
         query_text = data.get("query_text", "")
         entity_types = data.get("entity_types", ["npc", "location", "memory"])
         top_k = data.get("top_k", 5)
-        
+
         # Get embedding for query
         query_embedding = await self._get_embedding(query_text)
-        
-        # Perform search
-        raw_results = await self.entity_manager.search_entities(
-            query_text="",  # Not used when embedding is provided
-            top_k=top_k,
+
+        hybrid_rows = await self._query_entity_cards(
+            query_embedding=query_embedding,
+            query_text=query_text,
             entity_types=entity_types,
-            query_embedding=query_embedding
+            top_k=top_k,
         )
-        
+
+        raw_results: List[Dict[str, Any]] = []
+
+        if hybrid_rows:
+            raw_results = hybrid_rows
+        elif self.entity_manager:
+            # Fallback to legacy vector service if available
+            raw_results = await self.entity_manager.search_entities(
+                query_text="",
+                top_k=top_k,
+                entity_types=entity_types,
+                query_embedding=query_embedding
+            )
+        else:
+            return []
+
         # Convert to typed results
         typed_results = []
         for result in raw_results:
-            metadata_dict = result.get("metadata", {})
-            entity_type = metadata_dict.get("entity_type", "")
-            
+            metadata_source: Dict[str, Any] = {}
+            card = None
+            entity_type: str = ""
+
+            if isinstance(result, dict):
+                card = result.get("card")
+                entity_type = result.get("entity_type", "")
+                metadata_source = result.get("metadata", {}) if isinstance(result.get("metadata"), dict) else {}
+                if not entity_type and metadata_source:
+                    entity_type = metadata_source.get("entity_type", "")
+            else:
+                try:
+                    metadata_source = result.get("metadata", {})  # type: ignore[assignment]
+                except AttributeError:
+                    metadata_source = {}
+                entity_type = metadata_source.get("entity_type", "") if isinstance(metadata_source, dict) else ""
+
             # FIX: Filter metadata_dict to only include fields relevant to each metadata type
             if entity_type == "npc":
-                # Filter to NPCMetadata fields
-                filtered_metadata = {
-                    k: v for k, v in metadata_dict.items()
-                    if k in ['personality', 'occupation', 'faction', 'mood', 'location',
-                            'entity_class', 'relationships', 'attributes', 'status', 'tags',
-                            'timestamp', 'source', 'version']
-                }
-                metadata = NPCMetadata(**filtered_metadata)
+                card_data = card or metadata_source.get("card", {}) if isinstance(metadata_source, dict) else {}
+                personality_traits = card_data.get("personality_traits") if isinstance(card_data, dict) else None
+                relationships = card_data.get("relationships") if isinstance(card_data, dict) else None
+                metadata = NPCMetadata(
+                    personality=", ".join(personality_traits) if isinstance(personality_traits, list) else personality_traits,
+                    location=card_data.get("location") if isinstance(card_data, dict) else None,
+                    tags=relationships if isinstance(relationships, list) else None,
+                )
             elif entity_type == "location":
-                # Filter to LocationMetadata fields
-                filtered_metadata = {
-                    k: v for k, v in metadata_dict.items()
-                    if k in ['location_type', 'population', 'danger_level', 'resources', 
-                            'quests_available', 'entity_class', 'relationships', 'attributes', 
-                            'status', 'tags', 'timestamp', 'source', 'version']
-                }
-                metadata = LocationMetadata(**filtered_metadata)
+                card_data = card or metadata_source.get("card", {}) if isinstance(metadata_source, dict) else {}
+                metadata = LocationMetadata(
+                    location_type=card_data.get("location_type") if isinstance(card_data, dict) else None,
+                    attributes=card_data.get("notable_features") if isinstance(card_data, dict) else None,
+                )
             elif entity_type == "memory":
-                # Filter to MemoryMetadata fields
-                filtered_metadata = {
-                    k: v for k, v in metadata_dict.items()
-                    if k in ['npc_id', 'location_id', 'quest_id', 'emotion', 'context_type',
-                            'related_memories', 'conflict_id', 'conflict_name', 'conflict_type',
-                            'phase', 'location', 'conflict_identifier', 'timestamp', 'source', 'version']
-                }
-                # Handle special mappings for memory metadata
-                if 'location' not in filtered_metadata and 'location_id' in metadata_dict:
-                    filtered_metadata['location'] = metadata_dict['location_id']
-                metadata = MemoryMetadata(**filtered_metadata)
+                card_data = card or metadata_source.get("card", {}) if isinstance(metadata_source, dict) else {}
+                metadata = MemoryMetadata(
+                    context_type=card_data.get("memory_type") if isinstance(card_data, dict) else None,
+                    tags=card_data.get("tags") if isinstance(card_data, dict) else None,
+                )
             else:
-                # Filter to EntityMetadata fields
-                filtered_metadata = {
-                    k: v for k, v in metadata_dict.items()
-                    if k in ['entity_class', 'relationships', 'attributes', 'status', 'tags',
-                            'timestamp', 'source', 'version']
-                }
-                metadata = EntityMetadata(**filtered_metadata)
-            
+                metadata = EntityMetadata()
+
+            if isinstance(result, dict):
+                score = result.get("score", result.get("vector_score", 0.0))
+                entity_id = result.get("entity_id", "")
+                card_payload = result.get("card")
+            else:
+                score = result.get("score", 0.0)
+                entity_id = result.get("id", "")
+                card_payload = metadata_source.get("card") if isinstance(metadata_source, dict) else None
+
             typed_results.append(VectorSearchResultItem(
-                id=result.get("id", ""),
-                score=result.get("score", 0.0),
+                id=str(entity_id),
+                score=float(score or 0.0),
                 entity_type=entity_type,
-                metadata=metadata
+                metadata=metadata,
+                card=card_payload
             ))
         
         # Apply hybrid ranking if requested
@@ -891,39 +1082,55 @@ class VectorService:
                 return VectorContextResult()
             
             context = VectorContextResult()
-            
+
             for result in results:
                 if isinstance(result, VectorSearchResultItem):
-                    metadata = result.metadata
+                    metadata_model = result.metadata
                     entity_type = result.entity_type
+                    card_payload = result.card or {}
+                    if hasattr(metadata_model, "model_dump"):
+                        metadata = metadata_model.model_dump()
+                    elif hasattr(metadata_model, "dict"):
+                        metadata = metadata_model.dict()
+                    else:
+                        metadata = dict(metadata_model) if isinstance(metadata_model, dict) else {}
                 else:
                     # Handle raw dict results from entity manager
                     metadata = result.get("metadata", {})
                     entity_type = metadata.get("entity_type")
-                
+                    card_payload = result.get("card", {})
+
                 if entity_type == "npc":
+                    card_data = card_payload if isinstance(card_payload, dict) else {}
+                    personality = metadata.get("personality") or \
+                        (", ".join(card_data.get("personality_traits", []))
+                         if isinstance(card_data.get("personality_traits"), list) else card_data.get("personality"))
                     context.npcs.append(NPCContextItem(
-                        npc_id=metadata.get("npc_id") or metadata.get("entity_id", ""),
-                        npc_name=metadata.get("npc_name") or metadata.get("name", ""),
-                        description=metadata.get("description"),
-                        personality=metadata.get("personality"),
-                        location=metadata.get("location"),
+                        npc_id=str(card_data.get("npc_id") or metadata.get("npc_id") or metadata.get("entity_id", "")),
+                        npc_name=card_data.get("npc_name") or metadata.get("npc_name") or metadata.get("name", ""),
+                        description=card_data.get("description") or metadata.get("description"),
+                        personality=personality,
+                        location=card_data.get("location") or metadata.get("location"),
                         relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
                     ))
                 elif entity_type == "location":
+                    card_data = card_payload if isinstance(card_payload, dict) else {}
                     context.locations.append(LocationContextItem(
-                        location_id=metadata.get("location_id") or metadata.get("entity_id", ""),
-                        location_name=metadata.get("location_name") or metadata.get("name", ""),
-                        description=metadata.get("description"),
-                        connected_locations=metadata.get("connected_locations", []),
+                        location_id=str(card_data.get("location_id") or metadata.get("location_id") or metadata.get("entity_id", "")),
+                        location_name=card_data.get("location_name") or metadata.get("location_name") or metadata.get("name", ""),
+                        description=card_data.get("description") or metadata.get("description"),
+                        connected_locations=card_data.get("notable_features")
+                        if isinstance(card_data.get("notable_features"), list)
+                        else metadata.get("connected_locations", []),
                         relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
                     ))
                 elif entity_type == "memory":
+                    card_data = card_payload if isinstance(card_payload, dict) else {}
                     context.memories.append(MemoryContextItem(
-                        memory_id=metadata.get("memory_id") or metadata.get("entity_id", ""),
-                        content=metadata.get("content", ""),
-                        memory_type=metadata.get("memory_type", ""),
-                        importance=metadata.get("importance", 0.5),
+                        memory_id=str(card_data.get("memory_id") or metadata.get("memory_id") or metadata.get("entity_id", "")),
+                        content=card_data.get("content") or metadata.get("content", ""),
+                        memory_type=card_data.get("memory_type") or metadata.get("memory_type", ""),
+                        importance=float(card_data.get("importance") or metadata.get("importance", 0.5)),
                         relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
                     ))
                 elif entity_type == "narrative":
