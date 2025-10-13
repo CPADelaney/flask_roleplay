@@ -64,7 +64,7 @@ class NyxResponseAssembler:
         
         # Only initialize validation agents if enabled (adds latency)
         if self.config.enable_live_validation:
-            llm_model = llm_model or "gpt-4o-mini"
+            llm_model = llm_model or "gpt-5-nano"
             
             # Canon validation agent for narrative consistency
             self._canon_validator = self._create_canon_validation_agent(llm_model)
