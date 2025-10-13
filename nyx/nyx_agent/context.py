@@ -46,6 +46,11 @@ import lore.core.canon as canon
 
 from logic.conflict_system.conflict_synthesizer import get_synthesizer
 from logic.conflict_system.background_processor import get_conflict_scheduler
+from logic.universal_updater_agent import (
+    UniversalUpdaterContext,
+    apply_universal_updates_async as _APPLY_UNIVERSAL_UPDATES_ASYNC,
+    convert_updates_for_database,
+)
 
 # Try to use faster JSON library
 try:
@@ -1169,11 +1174,146 @@ class ContextBroker:
             if related_tags:
                 scope.lore_tags.update(related_tags[:5])
                 scope.link_hints['related_tags'] = related_tags[:5]
-    
+
+    async def collect_universal_updates(self, bundle: ContextBundle) -> Dict[str, Any]:
+        """Collect deltas from the bundle that should be persisted via the universal updater."""
+
+        if not isinstance(bundle, ContextBundle):
+            return {}
+
+        scope = getattr(bundle, "scene_scope", None)
+        if not isinstance(scope, SceneScope):
+            return {}
+
+        candidate_location: Optional[str] = None
+        if scope.location_name:
+            candidate_location = self.ctx._normalize_location_value(scope.location_name)
+        if not candidate_location and scope.location_id:
+            candidate_location = self.ctx._normalize_location_value(scope.location_id)
+
+        if not candidate_location:
+            return {}
+
+        current_location = self.ctx._normalize_location_value(self.ctx.current_location)
+        if current_location == candidate_location:
+            return {}
+
+        roleplay_updates: Dict[str, Any] = {"CurrentLocation": candidate_location}
+
+        normalized_location_id = self.ctx._normalize_location_value(scope.location_id)
+        scene_payload: Dict[str, Any] = {}
+        if normalized_location_id:
+            scene_payload["id"] = normalized_location_id
+        scene_payload["name"] = candidate_location
+
+        roleplay_updates["CurrentScene"] = json.dumps({"location": scene_payload})
+
+        return {"roleplay_updates": roleplay_updates}
+
+    async def apply_updates_async(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist collected updates using the universal updater pipeline."""
+
+        if not isinstance(updates, dict) or not updates:
+            return {}
+
+        try:
+            db_ready_updates = convert_updates_for_database(dict(updates))
+        except Exception:
+            logger.warning("Failed to normalize universal updates payload", exc_info=True)
+            return {}
+
+        roleplay_updates = db_ready_updates.get("roleplay_updates")
+        if isinstance(roleplay_updates, list):
+            coerced: Dict[str, Any] = {}
+            for item in roleplay_updates:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("key")
+                if not key:
+                    continue
+                coerced[key] = item.get("value")
+            roleplay_updates = coerced
+            db_ready_updates["roleplay_updates"] = coerced
+        elif not isinstance(roleplay_updates, dict):
+            roleplay_updates = {}
+
+        if not roleplay_updates:
+            return {}
+
+        try:
+            updater_context = UniversalUpdaterContext(self.ctx.user_id, self.ctx.conversation_id)
+            await updater_context.initialize()
+        except Exception:
+            logger.warning("Failed to initialize UniversalUpdaterContext", exc_info=True)
+            return {}
+
+        try:
+            async with get_db_connection_context() as conn:
+                result = await _APPLY_UNIVERSAL_UPDATES_ASYNC(
+                    updater_context,
+                    self.ctx.user_id,
+                    self.ctx.conversation_id,
+                    db_ready_updates,
+                    conn,
+                )
+        except Exception:
+            logger.error("Failed to apply universal updates", exc_info=True)
+            return {}
+
+        new_location = self.ctx._normalize_location_value(roleplay_updates.get("CurrentLocation"))
+        scene_location_id: Optional[str] = None
+        raw_scene = roleplay_updates.get("CurrentScene")
+        if isinstance(raw_scene, str):
+            try:
+                parsed_scene = json.loads(raw_scene)
+            except json.JSONDecodeError:
+                parsed_scene = None
+            if isinstance(parsed_scene, dict):
+                location_payload = parsed_scene.get("location")
+                if isinstance(location_payload, dict):
+                    scene_location_id = self.ctx._normalize_location_value(
+                        location_payload.get("id") or location_payload.get("location_id")
+                    )
+                    if not new_location:
+                        new_location = self.ctx._normalize_location_value(location_payload.get("name"))
+
+        if new_location:
+            self.ctx.current_location = new_location
+            self.ctx.current_context["location_name"] = new_location
+            self.ctx.current_context["current_location"] = new_location
+            self.ctx.current_context["location"] = new_location
+            if scene_location_id:
+                self.ctx.current_context["location_id"] = scene_location_id
+            else:
+                self.ctx.current_context["location_id"] = new_location
+
+            for key in ("currentRoleplay", "current_roleplay"):
+                existing = self.ctx.current_context.get(key)
+                payload = {
+                    "id": scene_location_id or new_location,
+                    "name": new_location,
+                }
+                if isinstance(existing, dict):
+                    existing["CurrentLocation"] = payload
+                else:
+                    self.ctx.current_context[key] = {"CurrentLocation": payload}
+
+            try:
+                user_key = str(self.ctx.user_id)
+                conversation_key = str(self.ctx.conversation_id)
+                snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
+                snapshot["location_name"] = new_location
+                snapshot["scene_id"] = scene_location_id or new_location
+                _SNAPSHOT_STORE.put(user_key, conversation_key, snapshot)
+            except Exception:
+                logger.debug("Failed to update snapshot store after universal updates", exc_info=True)
+
+        return result if isinstance(result, dict) else {}
+
     async def load_or_fetch_bundle(self, scene_scope: SceneScope) -> ContextBundle:
         """Load bundle from cache or fetch if needed, with per-section refresh"""
         scene_key = scene_scope.to_key()
-        
+
         # Opportunistic Redis reconnect if needed
         if self.redis_client is None and time.time() >= self._redis_backoff_until:
             await self._try_connect_redis()
