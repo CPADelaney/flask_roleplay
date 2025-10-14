@@ -13,6 +13,7 @@ from typing_extensions import TypedDict as _CompatTypedDict
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
+os.environ.setdefault("DB_DSN", "postgresql://user:pass@localhost/testdb")
 typing.TypedDict = _CompatTypedDict  # type: ignore[attr-defined]
 
 
@@ -315,6 +316,7 @@ from context.context_service import (
     RoleplayData,
     TimeInfo,
 )
+from context.projection_helpers import SceneProjection
 
 
 class _StubContextBroker(ContextBroker):
@@ -807,39 +809,35 @@ def test_location_persist_falls_back_when_canon_update_fails(monkeypatch):
 
 
 def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
-    calls: dict[str, tuple[str, tuple]] = {}
+    calls: dict[str, object] = {}
 
-    class _StubConnection:
-        async def fetch(self, query, *params):
-            calls["query"] = query
-            calls["params"] = params
-            return [
-                {
-                    "npc_id": "npc-1",
-                    "npc_name": "Aria",
-                    "dominance": 0.1,
-                    "cruelty": 0.2,
-                    "closeness": 0.9,
-                    "trust": 0.8,
-                    "respect": 0.7,
-                    "intensity": 0.6,
-                    "current_location": "Frostpeak Tavern",
-                    "physical_description": "A bard with a quick smile.",
-                }
-            ]
-
-    class _StubDBContext:
-        async def __aenter__(self):
-            return _StubConnection()
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(
-        sys.modules["db.connection"],
-        "get_db_connection_context",
-        lambda: _StubDBContext(),
+    projection = SceneProjection(
+        current_roleplay={},
+        player_stats={},
+        npcs=[
+            {
+                "npc_id": "npc-1",
+                "npc_name": "Aria",
+                "dominance": 0.1,
+                "cruelty": 0.2,
+                "closeness": 0.9,
+                "trust": 0.8,
+                "respect": 0.7,
+                "intensity": 0.6,
+                "current_location": "Frostpeak Tavern",
+                "physical_description": "A bard with a quick smile.",
+                "introduced": True,
+            }
+        ],
+        events=[],
+        quests=[],
     )
+
+    async def fake_ensure_projection(self):
+        calls["projection"] = True
+        return projection
+
+    monkeypatch.setattr(ContextService, "_ensure_projection", fake_ensure_projection)
 
     base_context = BaseContextData(
         time_info=TimeInfo(year="1040", month="6", day="15", time_of_day="Morning"),
@@ -876,7 +874,7 @@ def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
 
     result = asyncio.run(service.get_context(input_text="hello there"))
 
-    assert calls["params"][2] == "Frostpeak Tavern"
+    assert calls.get("projection") is True
     assert result["npcs"]
     assert result["npcs"][0]["npc_name"] == "Aria"
     assert result["npcs"][0]["current_location"] == "Frostpeak Tavern"
