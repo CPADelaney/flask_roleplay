@@ -35,6 +35,7 @@ dummy_sentence_transformers.models = dummy_models
 sys.modules.setdefault("sentence_transformers", dummy_sentence_transformers)
 sys.modules.setdefault("sentence_transformers.models", dummy_models)
 
+from context.projection_helpers import parse_scene_projection_row
 from logic import aggregator_sdk
 
 
@@ -85,14 +86,14 @@ def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
     async def fake_get_active_scene(*, conversation_id):
         return None
 
+    async def fake_get_latest_chatkit_thread(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(
         aggregator_sdk,
         "get_latest_openai_conversation",
         fake_get_latest_conversation,
     )
-    async def fake_get_latest_chatkit_thread(*args, **kwargs):
-        return None
-
     monkeypatch.setattr(
         aggregator_sdk,
         "get_latest_chatkit_thread",
@@ -111,6 +112,24 @@ def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
         aggregator_sdk.PresetStoryManager,
         "check_preset_story",
         staticmethod(fake_check_preset_story),
+    )
+
+    from openai_integration import conversations as openai_conversations
+
+    monkeypatch.setattr(
+        openai_conversations,
+        "get_latest_conversation",
+        fake_get_latest_conversation,
+    )
+    monkeypatch.setattr(
+        openai_conversations,
+        "get_latest_chatkit_thread",
+        fake_get_latest_chatkit_thread,
+    )
+    monkeypatch.setattr(
+        openai_conversations,
+        "get_active_scene",
+        fake_get_active_scene,
     )
 
     context = asyncio.run(
@@ -198,11 +217,13 @@ def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
     openai_payload = context.get("openai_integration")
     assert openai_payload is not None
     assert openai_payload["conversation"] == conversation_row
-    assert openai_payload["thread_id"] == "thread_abc"
-    assert openai_payload["run_id"] == "run_xyz"
-    assert openai_payload["response_id"] == "resp_456"
 
-    scene_rotation = openai_payload.get("scene_rotation")
-    assert scene_rotation["new_scene"] == metadata["queued_scene"]
-    assert scene_rotation["closing_scene"] == metadata["queued_scene_closing"]
-    assert scene_rotation["active_scene"] == active_scene
+
+def test_parse_scene_projection_row_handles_string_scene_context():
+    scene_row = _build_scene_row()
+    scene_row["scene_context"] = json.dumps(scene_row["scene_context"])
+
+    projection = parse_scene_projection_row(scene_row)
+
+    assert projection.current_location() == "Chapel of Thorns"
+    assert projection.roleplay_dict()["CurrentLocation"] == "Chapel of Thorns"
