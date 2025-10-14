@@ -1,4 +1,6 @@
+import os
 import sys
+import types
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -7,6 +9,29 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+if "nyx.core.memory.vector_store" not in sys.modules:
+    vector_store_stub = types.ModuleType("nyx.core.memory.vector_store")
+
+    async def _stub_add(text: str, meta: Dict[str, Any]) -> str:
+        return "stub"
+
+    async def _stub_query(query_text: str, k: int = 5):
+        return []
+
+    async def _stub_save(path: str = ""):
+        return None
+
+    async def _stub_load(path: str = ""):
+        return None
+
+    vector_store_stub.add = _stub_add  # type: ignore[attr-defined]
+    vector_store_stub.query = _stub_query  # type: ignore[attr-defined]
+    vector_store_stub.save = _stub_save  # type: ignore[attr-defined]
+    vector_store_stub.load = _stub_load  # type: ignore[attr-defined]
+    sys.modules["nyx.core.memory.vector_store"] = vector_store_stub
 
 from openai_integration import ConversationManager, conversations
 from logic.universal_updater_agent import apply_universal_updates_async
@@ -670,3 +695,63 @@ async def test_slow_path_scene_seal_updates_on_time_jump(monkeypatch):
     assert call["date"] == "Midnight"
     assert call["non_negotiables"] == ["No safe word"]
     assert call["source"] == "universal_updates"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_location_only_roleplay_updates_emit_player_move(monkeypatch):
+    conn = SealAwareConnection({"event_id": 12, "applied": True, "replayed": False})
+    captured = []
+
+    async def _capture_scene_seal(
+        _conn,
+        *,
+        conversation_id: int,
+        venue: Optional[str],
+        date: Optional[str],
+        non_negotiables,
+        source: str,
+    ):
+        captured.append(
+            {
+                "conversation_id": conversation_id,
+                "venue": venue,
+                "date": date,
+                "non_negotiables": list(non_negotiables or []),
+                "source": source,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(
+        "logic.universal_updater_agent.ensure_scene_seal_item",
+        _capture_scene_seal,
+    )
+
+    updates = {"roleplay_updates": {"CurrentLocation": "Velvet Sanctum"}}
+
+    result = await apply_universal_updates_async(
+        ctx=None,
+        user_id=5,
+        conversation_id=9,
+        updates=updates,
+        conn=conn,
+    )
+
+    assert result["success"] is True
+    assert result["updates_applied"] == 1
+
+    canon_calls = [call for call in conn.calls if isinstance(call, tuple)]
+    assert canon_calls
+    _, payload = canon_calls[0]
+    operations = payload.get("operations")
+    assert operations and operations[0]["type"] == "player.move"
+    assert operations[0]["location_slug"] == "Velvet Sanctum"
+    assert operations[0]["player_id"] == 5
+
+    assert captured
+    seal_call = captured[0]
+    assert seal_call["conversation_id"] == 9
+    assert seal_call["venue"] == "Velvet Sanctum"
+    assert seal_call["date"] is None
+    assert seal_call["non_negotiables"] == []
+    assert seal_call["source"] == "universal_updates"

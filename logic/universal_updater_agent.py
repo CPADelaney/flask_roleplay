@@ -78,6 +78,12 @@ def _summarize_operations(delta: Any) -> List[str]:
             summaries.append(
                 f"npc.move#{getattr(op, 'npc_id', 'unknown')}->{destination}"
             )
+        elif op_type == "player.move":
+            destination = op.location_slug or (
+                f"id={op.location_id}" if getattr(op, "location_id", None) else "unknown"
+            )
+            subject = getattr(op, "player_id", None) or "player"
+            summaries.append(f"player.move#{subject}->{destination}")
         elif op_type == "relationship.bump":
             summaries.append(
                 "relationship.bump#"
