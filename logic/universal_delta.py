@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -221,6 +222,49 @@ def _extract_location_from_mapping(mapping: Mapping[str, Any]) -> Tuple[Optional
     return location_slug, location_id
 
 
+def _extract_location_from_current_scene(value: Any) -> Tuple[Optional[str], Optional[int]]:
+    """Derive location details from a ``CurrentScene`` payload."""
+
+    if value is None:
+        return None, None
+
+    scene_mapping: Optional[Mapping[str, Any]] = None
+
+    if isinstance(value, Mapping):
+        scene_mapping = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None, None
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return _clean_location_slug(stripped), _coerce_location_id(stripped)
+        if isinstance(parsed, Mapping):
+            scene_mapping = parsed
+        else:
+            return _clean_location_slug(parsed), _coerce_location_id(parsed)
+    else:
+        return _clean_location_slug(value), _coerce_location_id(value)
+
+    slug: Optional[str] = None
+    location_id: Optional[int] = None
+
+    location_payload = scene_mapping.get("location") if scene_mapping else None
+    if location_payload is not None:
+        slug = _clean_location_slug(location_payload)
+        location_id = _coerce_location_id(location_payload)
+
+    if slug is None or location_id is None:
+        extra_slug, extra_id = _extract_location_from_mapping(scene_mapping or {})
+        if slug is None:
+            slug = extra_slug
+        if location_id is None:
+            location_id = extra_id
+
+    return slug, location_id
+
+
 def _extract_player_location(payload: Mapping[str, Any]) -> Tuple[Optional[str], Optional[int]]:
     location_slug: Optional[str] = None
     location_id: Optional[int] = None
@@ -230,6 +274,16 @@ def _extract_player_location(payload: Mapping[str, Any]) -> Tuple[Optional[str],
         slug, loc_id = _extract_location_from_mapping(roleplay_updates)
         location_slug = location_slug or slug
         location_id = location_id or loc_id
+        if not any(key in roleplay_updates for key in _LOCATION_KEYS):
+            for scene_key in ("CurrentScene", "currentScene"):
+                if scene_key in roleplay_updates:
+                    scene_slug, scene_id = _extract_location_from_current_scene(
+                        roleplay_updates.get(scene_key)
+                    )
+                    if location_slug is None and scene_slug:
+                        location_slug = scene_slug
+                    if location_id is None and scene_id is not None:
+                        location_id = scene_id
     elif isinstance(roleplay_updates, Sequence):
         flattened: Dict[str, Any] = {}
         for item in roleplay_updates:
@@ -243,6 +297,16 @@ def _extract_player_location(payload: Mapping[str, Any]) -> Tuple[Optional[str],
             slug, loc_id = _extract_location_from_mapping(flattened)
             location_slug = location_slug or slug
             location_id = location_id or loc_id
+            if not any(key in flattened for key in _LOCATION_KEYS):
+                for scene_key in ("CurrentScene", "currentScene"):
+                    if scene_key in flattened:
+                        scene_slug, scene_id = _extract_location_from_current_scene(
+                            flattened.get(scene_key)
+                        )
+                        if location_slug is None and scene_slug:
+                            location_slug = scene_slug
+                        if location_id is None and scene_id is not None:
+                            location_id = scene_id
 
     if location_slug is None or location_id is None:
         slug, loc_id = _extract_location_from_mapping(payload)
@@ -250,6 +314,16 @@ def _extract_player_location(payload: Mapping[str, Any]) -> Tuple[Optional[str],
             location_slug = slug
         if location_id is None:
             location_id = loc_id
+        if not any(key in payload for key in _LOCATION_KEYS):
+            for scene_key in ("CurrentScene", "currentScene"):
+                if scene_key in payload:
+                    scene_slug, scene_id = _extract_location_from_current_scene(
+                        payload.get(scene_key)
+                    )
+                    if location_slug is None and scene_slug:
+                        location_slug = scene_slug
+                    if location_id is None and scene_id is not None:
+                        location_id = scene_id
 
     return location_slug, location_id
 
