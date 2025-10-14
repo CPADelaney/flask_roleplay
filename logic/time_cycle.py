@@ -26,6 +26,7 @@ import logging
 import random
 import json
 import asyncio
+from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 from enum import Enum
@@ -51,6 +52,62 @@ logger = logging.getLogger(__name__)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # PYDANTIC MODELS
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+@dataclass(frozen=True)
+class VitalsChangeSummary:
+    """Structured summary describing a vitals mutation."""
+
+    player_name: str
+    source: str
+    periods: Optional[int]
+    old: Dict[str, int]
+    new: Dict[str, int]
+    delta: Dict[str, int]
+    context: Dict[str, Any] = field(default_factory=dict)
+
+
+def build_vitals_change_summary(
+    *,
+    player_name: str,
+    source: str,
+    old: Dict[str, int],
+    new: Dict[str, int],
+    periods: Optional[int] = None,
+    context: Optional[Dict[str, Any]] = None,
+) -> VitalsChangeSummary:
+    """Create a reusable summary describing how vitals changed."""
+
+    normalized_old = {k: int(old.get(k, 0)) for k in ["energy", "hunger", "thirst", "fatigue"]}
+    normalized_new = {
+        k: int(new.get(k, normalized_old.get(k, 0)))
+        for k in ["energy", "hunger", "thirst", "fatigue"]
+    }
+    delta = {k: normalized_new[k] - normalized_old[k] for k in normalized_new}
+    return VitalsChangeSummary(
+        player_name=player_name,
+        source=source,
+        periods=periods,
+        old=normalized_old,
+        new=normalized_new,
+        delta=delta,
+        context=context or {},
+    )
+
+
+def log_vitals_change(summary: VitalsChangeSummary) -> None:
+    """Emit a structured log entry for vitals mutations."""
+
+    logger.info(
+        "Vitals update | source=%s | player=%s | periods=%s | old=%s | delta=%s | new=%s | context=%s",
+        summary.source,
+        summary.player_name,
+        summary.periods if summary.periods is not None else "n/a",
+        summary.old,
+        summary.delta,
+        summary.new,
+        summary.context,
+    )
 
 class VitalsData(BaseModel):
     """Player vitals data matching PlayerVitals table"""
@@ -2086,20 +2143,45 @@ async def update_vitals_from_time(
                 fatigue=min(100, current_vitals.fatigue + fatigue_gain)
             )
             
+            summary = build_vitals_change_summary(
+                player_name=player_name,
+                source="time_cycle:update_vitals_from_time",
+                old=current_vitals.to_dict(),
+                new=new_vitals.to_dict(),
+                periods=periods_advanced,
+                context={
+                    "time_of_day": time_of_day,
+                    "drains": {
+                        "hunger": hunger_drain,
+                        "thirst": thirst_drain,
+                        "fatigue": fatigue_gain,
+                    },
+                },
+            )
+            log_vitals_change(summary)
+
             # Update vitals
-            await conn.execute("""
+            await conn.execute(
+                """
                 INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger, thirst, fatigue)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (user_id, conversation_id, player_name)
-                DO UPDATE SET 
+                DO UPDATE SET
                     energy = $4,
-                    hunger = $5, 
-                    thirst = $6, 
+                    hunger = $5,
+                    thirst = $6,
                     fatigue = $7,
                     last_update = CURRENT_TIMESTAMP
-            """, user_id, conversation_id, player_name, 
-                new_vitals.energy, new_vitals.hunger, new_vitals.thirst, new_vitals.fatigue)
-            
+                """,
+                user_id,
+                conversation_id,
+                player_name,
+                new_vitals.energy,
+                new_vitals.hunger,
+                new_vitals.thirst,
+                new_vitals.fatigue,
+            )
+
             # Apply stat penalties based on vital thresholds
             stat_changes = await calculate_vital_stat_effects(
                 new_vitals.hunger, new_vitals.thirst, new_vitals.fatigue
@@ -2130,13 +2212,9 @@ async def update_vitals_from_time(
             
             return {
                 "success": True,
-                "old_vitals": current_vitals.to_dict(),
-                "new_vitals": new_vitals.to_dict(),
-                "drains": {
-                    "hunger": hunger_drain,
-                    "thirst": thirst_drain,
-                    "fatigue": fatigue_gain
-                },
+                "old_vitals": summary.old,
+                "new_vitals": summary.new,
+                "drains": summary.context.get("drains", {}),
                 "stat_effects": stat_changes,
                 "crises": crises,
                 "forced_sleep": new_vitals.fatigue >= 100
@@ -2230,34 +2308,49 @@ async def process_activity_vitals(
                 current = {"energy": 100, "hunger": 100, "thirst": 100, "fatigue": 0}
             
             # Apply effects with intensity modifier
-            new_vitals = {}
+            new_vitals_partial = {}
             for vital, change in vital_effects.items():
                 if vital in ["hunger", "thirst", "fatigue", "energy"]:
                     current_value = current[vital]
                     modified_change = int(change * intensity)
                     new_value = max(0, min(100, current_value + modified_change))
-                    new_vitals[vital] = new_value
-            
+                    new_vitals_partial[vital] = new_value
+
+            baseline = {k: int(current[k]) for k in ["energy", "hunger", "thirst", "fatigue"]}
+            merged_vitals = {**baseline, **new_vitals_partial}
+            summary = build_vitals_change_summary(
+                player_name=player_name,
+                source="time_cycle:process_activity_vitals",
+                old=baseline,
+                new=merged_vitals,
+                context={
+                    "activity_type": activity_type,
+                    "intensity": intensity,
+                    "raw_effects": vital_effects,
+                },
+            )
+            log_vitals_change(summary)
+
             # Update vitals
-            await conn.execute("""
+            await conn.execute(
+                """
                 UPDATE PlayerVitals
                 SET energy = $1, hunger = $2, thirst = $3, fatigue = $4, last_update = CURRENT_TIMESTAMP
                 WHERE user_id = $5 AND conversation_id = $6 AND player_name = $7
-            """, 
-                new_vitals.get("energy", current["energy"]),
-                new_vitals.get("hunger", current["hunger"]),
-                new_vitals.get("thirst", current["thirst"]),
-                new_vitals.get("fatigue", current["fatigue"]),
-                user_id, conversation_id, player_name
+                """,
+                summary.new["energy"],
+                summary.new["hunger"],
+                summary.new["thirst"],
+                summary.new["fatigue"],
+                user_id,
+                conversation_id,
+                player_name,
             )
-            
+
             return {
                 "success": True,
-                "vital_changes": {
-                    vital: new_vitals.get(vital, current[vital]) - current[vital]
-                    for vital in ["energy", "hunger", "thirst", "fatigue"]
-                },
-                "new_vitals": new_vitals
+                "vital_changes": summary.delta,
+                "new_vitals": summary.new,
             }
             
     except Exception as e:
@@ -2566,13 +2659,48 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
             npc_ids = [row["npc_id"] for row in rows]
             
             # Also do vital adjustments for sleep
-            await conn.execute("""
-                UPDATE PlayerVitals
-                SET fatigue = GREATEST(0, fatigue - 50),
-                    hunger = GREATEST(0, hunger - 5),
-                    thirst = GREATEST(0, thirst - 5)
+            vitals_row = await conn.fetchrow(
+                """
+                SELECT energy, hunger, thirst, fatigue
+                FROM PlayerVitals
                 WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
-            """, user_id, conversation_id)
+                """,
+                user_id,
+                conversation_id,
+            )
+
+            if vitals_row:
+                baseline = {k: int(vitals_row[k]) for k in ["energy", "hunger", "thirst", "fatigue"]}
+                new_values = {
+                    "energy": baseline["energy"],
+                    "hunger": max(0, baseline["hunger"] - 5),
+                    "thirst": max(0, baseline["thirst"] - 5),
+                    "fatigue": max(0, baseline["fatigue"] - 50),
+                }
+                summary = build_vitals_change_summary(
+                    player_name="Chase",
+                    source="time_cycle:nightly_maintenance",
+                    old=baseline,
+                    new=new_values,
+                    context={"operation": "sleep_adjustment"},
+                )
+                log_vitals_change(summary)
+
+                await conn.execute(
+                    """
+                    UPDATE PlayerVitals
+                    SET fatigue = $1,
+                        hunger = $2,
+                        thirst = $3,
+                        last_update = CURRENT_TIMESTAMP
+                    WHERE user_id=$4 AND conversation_id=$5 AND player_name='Chase'
+                    """,
+                    summary.new["fatigue"],
+                    summary.new["hunger"],
+                    summary.new["thirst"],
+                    user_id,
+                    conversation_id,
+                )
             
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
         logger.error(f"Database error in nightly maintenance: {e}", exc_info=True)
@@ -3213,36 +3341,67 @@ async def tool_consume_vital_resource(ctx: RunContextWrapper[TimeCycleContext], 
     try:
         async with get_db_connection_context() as conn:
             current = await conn.fetchrow("""
-                SELECT energy, hunger, thirst FROM PlayerVitals
+                SELECT energy, hunger, thirst, fatigue FROM PlayerVitals
                 WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
             """, user_id, conv_id)
-            
+
             if not current:
                 return json.dumps({"error": "No vitals found"})
-            
+
+            baseline = {k: int(current[k]) for k in ["energy", "hunger", "thirst", "fatigue"]}
+            context = {"resource_type": resource_type, "amount": amount}
+
             if resource_type == "food":
-                new_hunger = min(100, current['hunger'] + amount)
-                await conn.execute("""
-                    UPDATE PlayerVitals SET hunger = $1
+                new_hunger = min(100, baseline['hunger'] + amount)
+                new_values = {**baseline, "hunger": new_hunger}
+                summary = build_vitals_change_summary(
+                    player_name="Chase",
+                    source="time_cycle:tool_consume_vital_resource",
+                    old=baseline,
+                    new=new_values,
+                    context=context,
+                )
+                log_vitals_change(summary)
+                await conn.execute(
+                    """
+                    UPDATE PlayerVitals SET hunger = $1, last_update = CURRENT_TIMESTAMP
                     WHERE user_id = $2 AND conversation_id = $3 AND player_name = 'Chase'
-                """, new_hunger, user_id, conv_id)
+                    """,
+                    summary.new["hunger"],
+                    user_id,
+                    conv_id,
+                )
                 result = {
                     "consumed": "food",
                     "amount": amount,
-                    "old_hunger": current['hunger'],
-                    "new_hunger": new_hunger
+                    "old_hunger": baseline['hunger'],
+                    "new_hunger": summary.new['hunger'],
                 }
             elif resource_type == "water":
-                new_thirst = min(100, current['thirst'] + amount)
-                await conn.execute("""
-                    UPDATE PlayerVitals SET thirst = $1
+                new_thirst = min(100, baseline['thirst'] + amount)
+                new_values = {**baseline, "thirst": new_thirst}
+                summary = build_vitals_change_summary(
+                    player_name="Chase",
+                    source="time_cycle:tool_consume_vital_resource",
+                    old=baseline,
+                    new=new_values,
+                    context=context,
+                )
+                log_vitals_change(summary)
+                await conn.execute(
+                    """
+                    UPDATE PlayerVitals SET thirst = $1, last_update = CURRENT_TIMESTAMP
                     WHERE user_id = $2 AND conversation_id = $3 AND player_name = 'Chase'
-                """, new_thirst, user_id, conv_id)
+                    """,
+                    summary.new["thirst"],
+                    user_id,
+                    conv_id,
+                )
                 result = {
                     "consumed": "water",
                     "amount": amount,
-                    "old_thirst": current['thirst'],
-                    "new_thirst": new_thirst
+                    "old_thirst": baseline['thirst'],
+                    "new_thirst": summary.new['thirst'],
                 }
             else:
                 result = {"error": "Unknown resource type"}
