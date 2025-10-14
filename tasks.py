@@ -10,6 +10,7 @@ import asyncpg
 import datetime
 import time
 import traceback
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from celery_config import celery_app
@@ -1963,22 +1964,320 @@ def process_universal_updates_task(params):
                             return {"status": "error", "error": "Conversation not found"}
                         user_id = result['user_id']
                 
-                # Build universal update structure
-                updates_to_apply = {}
-                
-                # Extract relevant updates from response
-                if 'world_state' in response_data:
-                    updates_to_apply['world_state'] = response_data['world_state']
-                
-                if 'emergent_events' in response_data:
-                    updates_to_apply['emergent_events'] = response_data['emergent_events']
-                
-                if 'npc_dialogue' in response_data:
-                    updates_to_apply['npc_updates'] = response_data['npc_dialogue']
-                
+                def _coerce_int(value: Any) -> Optional[int]:
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
+
+                def _extract_int_from_string(value: Any) -> Optional[int]:
+                    if not isinstance(value, str):
+                        return None
+                    match = re.search(r"-?\d+", value)
+                    if not match:
+                        return None
+                    try:
+                        return int(match.group(0))
+                    except ValueError:
+                        return None
+
+                def _ensure_dict(value: Any) -> Dict[str, Any]:
+                    if isinstance(value, dict):
+                        return value
+                    if isinstance(value, str):
+                        try:
+                            parsed = json.loads(value)
+                            if isinstance(parsed, dict):
+                                return parsed
+                        except Exception:
+                            return {}
+                    return {}
+
+                def _extract_location_fields(record: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
+                    location_name: Optional[str] = None
+                    location_id: Optional[int] = None
+
+                    def _update_from_payload(payload: Any) -> None:
+                        nonlocal location_name, location_id
+                        if isinstance(payload, dict):
+                            location_name = location_name or payload.get("name") or payload.get("value") or payload.get("slug") or payload.get("location")
+                            location_id = location_id or _coerce_int(payload.get("id") or payload.get("location_id") or payload.get("scene_id"))
+                        elif isinstance(payload, (int, float)):
+                            location_id = location_id or _coerce_int(payload)
+                        elif isinstance(payload, str):
+                            if payload.strip():
+                                location_name = location_name or payload.strip()
+
+                    for key in (
+                        "current_location",
+                        "location",
+                        "scene_location",
+                        "venue",
+                        "currentVenue",
+                    ):
+                        if key in record:
+                            _update_from_payload(record.get(key))
+
+                    if not location_name:
+                        for key in ("current_location_name", "location_name", "scene_name"):
+                            value = record.get(key)
+                            if isinstance(value, str) and value.strip():
+                                location_name = value.strip()
+                                break
+
+                    for key in ("current_location_id", "location_id", "scene_id"):
+                        if location_id is None and key in record:
+                            location_id = _coerce_int(record.get(key))
+
+                    return location_name, location_id
+
+                def _merge_npc_update(
+                    npc_updates: Dict[int, Dict[str, Any]],
+                    npc_id: Optional[int],
+                    location_name: Optional[str],
+                    location_id: Optional[int],
+                ) -> None:
+                    if npc_id is None:
+                        return
+                    entry = npc_updates.setdefault(npc_id, {"npc_id": npc_id})
+                    if location_name and not entry.get("current_location"):
+                        entry["current_location"] = location_name
+                    if location_id is not None and entry.get("location_id") is None:
+                        entry["location_id"] = location_id
+
+                def _collect_npc_updates_from_value(value: Any, npc_updates: Dict[int, Dict[str, Any]]) -> None:
+                    if isinstance(value, list):
+                        for item in value:
+                            _collect_npc_updates_from_value(item, npc_updates)
+                        return
+                    if isinstance(value, dict):
+                        candidate = value.get("value") if isinstance(value.get("value"), dict) else value
+                        candidate = candidate or {}
+
+                        possible_npc_id = (
+                            _coerce_int(value.get("npc_id"))
+                            or _coerce_int(candidate.get("npc_id"))
+                            or _coerce_int(candidate.get("id"))
+                            or _coerce_int(candidate.get("npcId"))
+                        )
+                        if possible_npc_id is None:
+                            possible_npc_id = _extract_int_from_string(value.get("key"))
+
+                        loc_name, loc_id = _extract_location_fields(candidate)
+                        if loc_name is None and loc_id is None and isinstance(candidate.get("npc"), dict):
+                            loc_name, loc_id = _extract_location_fields(candidate["npc"])
+
+                        if possible_npc_id is not None and (loc_name or loc_id is not None):
+                            _merge_npc_update(npc_updates, possible_npc_id, loc_name, loc_id)
+
+                        for nested in candidate.values():
+                            if isinstance(nested, (dict, list)):
+                                _collect_npc_updates_from_value(nested, npc_updates)
+
+                def _coerce_level_change(value: Any) -> Optional[int]:
+                    if value is None:
+                        return None
+                    if isinstance(value, (int,)):
+                        return value if value != 0 else None
+                    try:
+                        parsed = float(value)
+                    except (TypeError, ValueError):
+                        return None
+                    if abs(parsed) < 1e-6:
+                        return None
+                    return int(round(parsed))
+
+                def _extract_level_delta(candidate: Dict[str, Any]) -> Optional[int]:
+                    for key in ("level_change", "delta", "change", "relationship_delta"):
+                        delta = _coerce_level_change(candidate.get(key))
+                        if delta is not None:
+                            return delta
+
+                    aggregate = 0
+                    found = False
+                    for key in (
+                        "trust_change",
+                        "respect_change",
+                        "attraction_change",
+                        "bond_change",
+                        "power_change",
+                        "power_dynamic_change",
+                        "affection_change",
+                    ):
+                        val = _coerce_level_change(candidate.get(key))
+                        if val is not None:
+                            aggregate += val
+                            found = True
+                    if found and aggregate != 0:
+                        return aggregate
+                    return None
+
+                def _collect_social_links_from_value(value: Any, social_link_map: Dict[Tuple[str, int, str, int], Dict[str, Any]]) -> None:
+                    if isinstance(value, list):
+                        for item in value:
+                            _collect_social_links_from_value(item, social_link_map)
+                        return
+                    if not isinstance(value, dict):
+                        return
+
+                    candidate = value.get("value") if isinstance(value.get("value"), dict) else value
+                    candidate = candidate or {}
+
+                    delta = _extract_level_delta(candidate)
+                    if delta is None:
+                        for nested in candidate.values():
+                            if isinstance(nested, (dict, list)):
+                                _collect_social_links_from_value(nested, social_link_map)
+                        return
+
+                    entity1_id = (
+                        _coerce_int(candidate.get("entity1_id"))
+                        or _coerce_int(candidate.get("source_id"))
+                        or _coerce_int(candidate.get("from_id"))
+                        or _coerce_int(candidate.get("npc_id"))
+                        or _extract_int_from_string(candidate.get("key"))
+                    )
+                    entity2_id = (
+                        _coerce_int(candidate.get("entity2_id"))
+                        or _coerce_int(candidate.get("target_id"))
+                        or _coerce_int(candidate.get("to_id"))
+                        or _coerce_int(candidate.get("player_id"))
+                    )
+                    entity1_type = candidate.get("entity1_type") or candidate.get("source_type") or candidate.get("from_type")
+                    entity2_type = candidate.get("entity2_type") or candidate.get("target_type") or candidate.get("to_type")
+
+                    if entity1_id is None:
+                        return
+                    if entity2_id is None:
+                        entity2_id = _coerce_int(user_id)
+                    if entity2_id is None:
+                        return
+
+                    entity1_type = str(entity1_type or "npc")
+                    entity2_type = str(entity2_type or "player")
+
+                    key = (entity1_type, entity1_id, entity2_type, entity2_id)
+                    entry = social_link_map.setdefault(
+                        key,
+                        {
+                            "entity1_type": entity1_type,
+                            "entity1_id": entity1_id,
+                            "entity2_type": entity2_type,
+                            "entity2_id": entity2_id,
+                            "level_change": 0,
+                        },
+                    )
+                    entry["level_change"] += delta
+                    if "group_context" not in entry:
+                        context = candidate.get("group_context") or candidate.get("context")
+                        if context:
+                            entry["group_context"] = context
+                    if "new_event" not in entry:
+                        new_event = candidate.get("new_event") or candidate.get("event") or candidate.get("description")
+                        if new_event:
+                            entry["new_event"] = new_event
+
+                updates_to_apply: Dict[str, Any] = {}
+
+                narrative = response_data.get("narrative")
+                if isinstance(narrative, str) and narrative.strip():
+                    updates_to_apply["narrative"] = narrative.strip()
+
+                metadata = response_data.get("metadata") if isinstance(response_data.get("metadata"), dict) else {}
+                world_state = response_data.get("world_state") if isinstance(response_data.get("world_state"), dict) else {}
+
+                scene_scope = _ensure_dict(metadata.get("scene_scope"))
+                roleplay_updates: Dict[str, Any] = {}
+
+                location_name = scene_scope.get("location_name") or scene_scope.get("location")
+                location_id = scene_scope.get("location_id") or scene_scope.get("scene_id")
+
+                if not location_name or location_id is None:
+                    world_location = world_state.get("location") or world_state.get("current_location")
+                    if isinstance(world_location, dict):
+                        location_name = location_name or world_location.get("name") or world_location.get("value")
+                        location_id = location_id or _coerce_int(world_location.get("id") or world_location.get("location_id"))
+                    elif isinstance(world_location, str):
+                        location_name = location_name or world_location.strip()
+
+                if not location_name and isinstance(world_state.get("location_data"), str):
+                    candidate_location = world_state["location_data"].strip()
+                    if candidate_location:
+                        location_name = candidate_location
+
+                if location_name:
+                    roleplay_updates["CurrentLocation"] = location_name
+
+                scene_payload: Dict[str, Any] = {}
+                if location_id is not None:
+                    scene_payload["id"] = location_id
+                if location_name:
+                    scene_payload["name"] = location_name
+                if scene_payload:
+                    try:
+                        roleplay_updates["CurrentScene"] = json.dumps({"location": scene_payload})
+                    except Exception:
+                        pass
+
+                current_time = world_state.get("current_time")
+                if isinstance(current_time, dict):
+                    time_of_day = current_time.get("time_of_day")
+                    if isinstance(time_of_day, dict):
+                        time_of_day = time_of_day.get("value") or time_of_day.get("name")
+                    if isinstance(time_of_day, str) and time_of_day.strip():
+                        roleplay_updates["CurrentTime"] = time_of_day.strip()
+
+                if roleplay_updates:
+                    updates_to_apply["roleplay_updates"] = roleplay_updates
+
+                npc_update_map: Dict[int, Dict[str, Any]] = {}
+                for key, value in metadata.items():
+                    if isinstance(value, (list, dict)) and "npc" in key.lower():
+                        _collect_npc_updates_from_value(value, npc_update_map)
+
+                _collect_npc_updates_from_value(world_state.get("active_npcs"), npc_update_map)
+                _collect_npc_updates_from_value(world_state.get("npc_updates"), npc_update_map)
+                _collect_npc_updates_from_value(world_state.get("npc_schedules"), npc_update_map)
+
+                npc_updates = [entry for entry in npc_update_map.values() if any(k in entry for k in ("current_location", "location_id"))]
+                if npc_updates:
+                    updates_to_apply["npc_updates"] = npc_updates
+
+                social_link_map: Dict[Tuple[str, int, str, int], Dict[str, Any]] = {}
+                for key, value in metadata.items():
+                    if isinstance(value, (list, dict)) and ("relationship" in key.lower() or "social" in key.lower()):
+                        _collect_social_links_from_value(value, social_link_map)
+
+                _collect_social_links_from_value(world_state.get("relationship_updates"), social_link_map)
+                _collect_social_links_from_value(world_state.get("relationship_states"), social_link_map)
+                _collect_social_links_from_value(world_state.get("pending_relationship_events"), social_link_map)
+
+                social_links = [entry for entry in social_link_map.values() if entry.get("level_change")]
+                if social_links:
+                    updates_to_apply["social_links"] = social_links
+
+                has_narrative = bool(updates_to_apply.get("narrative"))
+                has_npc = bool(updates_to_apply.get("npc_updates"))
+                has_social = bool(updates_to_apply.get("social_links"))
+                player_location = updates_to_apply.get("roleplay_updates", {}) if isinstance(updates_to_apply.get("roleplay_updates"), dict) else {}
+                has_player_location = any(
+                    key in player_location for key in ("CurrentLocation", "current_location", "CurrentScene")
+                )
+
+                if not any((has_narrative, has_npc, has_social, has_player_location)):
+                    logger.info(
+                        "Skipping universal updates for conversation %s: no canonical fields derived",
+                        conversation_id,
+                    )
+                    return {
+                        "status": "skipped",
+                        "conversation_id": conversation_id,
+                        "reason": "no canonical updates",
+                    }
+
                 # The actual implementation uses UniversalUpdaterContext
                 from logic.universal_updater_agent import UniversalUpdaterContext, apply_universal_updates_async
-                
+
                 try:
                     updater_context = UniversalUpdaterContext(user_id, conversation_id)
                     await updater_context.initialize()
