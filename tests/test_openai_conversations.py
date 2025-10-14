@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import types
@@ -755,3 +756,51 @@ async def test_location_only_roleplay_updates_emit_player_move(monkeypatch):
     assert seal_call["date"] is None
     assert seal_call["non_negotiables"] == []
     assert seal_call["source"] == "universal_updates"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_scene_only_roleplay_updates_emit_player_move(monkeypatch):
+    conn = SealAwareConnection({"event_id": 13, "applied": True, "replayed": False})
+
+    async def _capture_scene_seal(
+        _conn,
+        *,
+        conversation_id: int,
+        venue: Optional[str],
+        date: Optional[str],
+        non_negotiables,
+        source: str,
+    ):
+        return None
+
+    monkeypatch.setattr(
+        "logic.universal_updater_agent.ensure_scene_seal_item",
+        _capture_scene_seal,
+    )
+
+    updates = {
+        "roleplay_updates": {
+            "CurrentScene": json.dumps({"location": {"name": "Velvet Sanctum", "id": 42}})
+        }
+    }
+
+    result = await apply_universal_updates_async(
+        ctx=None,
+        user_id=7,
+        conversation_id=11,
+        updates=updates,
+        conn=conn,
+    )
+
+    assert result["success"] is True
+    assert result["updates_applied"] == 1
+
+    canon_calls = [call for call in conn.calls if isinstance(call, tuple)]
+    assert canon_calls
+    _, payload = canon_calls[0]
+    operations = payload.get("operations")
+    assert operations and operations[0]["type"] == "player.move"
+    assert operations[0]["location_slug"] == "Velvet Sanctum"
+    assert operations[0]["location_id"] == 42
+    assert operations[0]["player_id"] == 7
+
