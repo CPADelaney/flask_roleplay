@@ -2657,7 +2657,6 @@ class NyxContext:
                         "CurrentLocation",
                         canonical_location,
                     )
-                    return
                 except Exception as canon_exc:
                     fallback_required = True
                     logger.warning(
@@ -2667,6 +2666,15 @@ class NyxContext:
                         canon_exc,
                         exc_info=True,
                     )
+                else:
+                    logger.info(
+                        "CurrentLocation persisted for user_id=%s conversation_id=%s location=%s (fallback=%s)",
+                        self.user_id,
+                        self.conversation_id,
+                        canonical_location,
+                        False,
+                    )
+                    return
         except Exception as exc:  # pragma: no cover - best effort persistence
             logger.warning(
                 "Failed to persist CurrentLocation for user_id=%s conversation_id=%s: %s",
@@ -2693,6 +2701,13 @@ class NyxContext:
                     self.conversation_id,
                     "CurrentLocation",
                     canonical_location,
+                )
+                logger.info(
+                    "CurrentLocation persisted for user_id=%s conversation_id=%s location=%s (fallback=%s)",
+                    self.user_id,
+                    self.conversation_id,
+                    canonical_location,
+                    True,
                 )
         except Exception as fallback_exc:  # pragma: no cover - log and continue
             logger.error(
