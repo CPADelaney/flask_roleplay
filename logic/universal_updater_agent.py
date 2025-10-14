@@ -232,10 +232,45 @@ def array_to_dict(array_data: List[Dict[str, Any]], key_name: str = "key", value
     """Convert array of key-value pairs back to dict."""
     if not isinstance(array_data, list):
         return {}
-    result = {}
+
+    def _resolve_field(item: Dict[str, Any], candidates: List[str]) -> Optional[str]:
+        for candidate in candidates:
+            if candidate in item:
+                return candidate
+        lowered_map = {
+            str(actual_key).lower(): actual_key
+            for actual_key in item.keys()
+            if isinstance(actual_key, str)
+        }
+        for candidate in candidates:
+            lowered_candidate = candidate.lower()
+            if lowered_candidate in lowered_map:
+                return lowered_map[lowered_candidate]
+        return None
+
+    result: Dict[Any, Any] = {}
+    key_candidates = []
+    for candidate in (key_name, "key", "field", "name"):
+        if isinstance(candidate, str) and candidate not in key_candidates:
+            key_candidates.append(candidate)
+
+    value_candidates = []
+    for candidate in (value_name, "value"):
+        if isinstance(candidate, str) and candidate not in value_candidates:
+            value_candidates.append(candidate)
+
     for item in array_data:
-        if isinstance(item, dict) and key_name in item and value_name in item:
-            result[item[key_name]] = item[value_name]
+        if not isinstance(item, dict):
+            continue
+
+        key_field = _resolve_field(item, key_candidates)
+        value_field = _resolve_field(item, value_candidates)
+
+        if key_field is None or value_field is None:
+            continue
+
+        result[item[key_field]] = item[value_field]
+
     return result
 
 def dict_to_array(obj_data: Dict[str, Any], key_name: str = "key", value_name: str = "value") -> List[Dict[str, Any]]:

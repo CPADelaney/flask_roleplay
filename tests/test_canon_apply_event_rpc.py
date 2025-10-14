@@ -1,9 +1,11 @@
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 import pytest
 
 from db.rpc import CanonEventError, write_event
 from logic.universal_delta import DeltaBuildError, build_delta_from_legacy_payload
+from logic import universal_updater_agent
 
 
 pytestmark = pytest.mark.anyio("asyncio")
@@ -142,3 +144,80 @@ def test_build_delta_handles_roleplay_updates_array_payload():
     assert op.type == "player.move"
     assert op.location_slug == "Obsidian Parlor"
     assert op.location_id == 77
+
+
+def test_build_delta_handles_roleplay_updates_array_field_payload():
+    delta = build_delta_from_legacy_payload(
+        user_id=9,
+        conversation_id=10,
+        payload={
+            "roleplay_updates": [
+                {"field": "CurrentLocation", "value": "New Scene"},
+            ]
+        },
+    )
+
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "player.move"
+    assert op.location_slug == "New Scene"
+    assert op.player_id == 9
+
+
+async def test_apply_universal_updates_impl_handles_field_payload(monkeypatch):
+    class _Governor:
+        async def check_action_permission(self, *args, **kwargs):
+            return {"approved": True}
+
+        async def process_agent_action_report(self, *args, **kwargs):
+            return None
+
+    class _Ctx:
+        def __init__(self):
+            self.user_id = 1
+            self.conversation_id = 2
+            self.governor = _Governor()
+
+    class _RunCtx:
+        def __init__(self):
+            self.context = _Ctx()
+
+    captured_delta = {}
+
+    async def _fake_write_event(conn, delta):
+        captured_delta["delta"] = delta
+        return {"applied": True, "event_id": 5, "messages": []}
+
+    @asynccontextmanager
+    async def _fake_connection_ctx():
+        yield object()
+
+    async def _fake_ensure_scene_seal(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(universal_updater_agent.db_rpc, "write_event", _fake_write_event)
+    monkeypatch.setattr(
+        universal_updater_agent,
+        "get_db_connection_context",
+        _fake_connection_ctx,
+    )
+    monkeypatch.setattr(
+        universal_updater_agent,
+        "ensure_scene_seal_item",
+        _fake_ensure_scene_seal,
+    )
+
+    result = await universal_updater_agent._apply_universal_updates_impl(
+        _RunCtx(),
+        {"roleplay_updates": [{"field": "CurrentLocation", "value": "New Scene"}]},
+    )
+
+    assert result["success"] is True
+    assert result["updates_applied"] == 1
+    assert "delta" in captured_delta
+    delta = captured_delta["delta"]
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "player.move"
+    assert op.location_slug == "New Scene"
+    assert op.player_id == 1
