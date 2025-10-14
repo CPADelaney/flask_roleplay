@@ -258,7 +258,10 @@ class SceneProjection:
 
 
 def parse_scene_projection_row(row: Dict[str, Any]) -> SceneProjection:
-    scene_context = row.get("scene_context") or {}
+    raw_scene_context = row.get("scene_context") or {}
+    scene_context = _decode_value(raw_scene_context)
+    if not isinstance(scene_context, dict):
+        scene_context = {}
     current_roleplay = _decode_mapping(scene_context.get("current_roleplay") or {})
     player_stats = _decode_mapping(scene_context.get("player_stats") or {})
     npcs = [_decode_mapping(npc or {}) for npc in scene_context.get("npcs_present") or []]
