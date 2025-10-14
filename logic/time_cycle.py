@@ -2376,6 +2376,15 @@ async def set_current_time(user_id, conversation_id, new_year, new_month, new_da
     try:
         async with get_db_connection_context() as conn:
             canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+            logger.info(
+                "Current time upsert for user_id=%s conversation_id=%s -> (%s, %s, %s, %s)",
+                user_id,
+                conversation_id,
+                new_year,
+                new_month,
+                new_day,
+                new_phase,
+            )
             for key, val in [
                 ("CurrentYear", str(new_year)),
                 ("CurrentMonth", str(new_month)),

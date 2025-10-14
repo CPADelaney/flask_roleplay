@@ -2544,6 +2544,31 @@ async def create_message(ctx, conn, conversation_id: int, sender: str, content: 
     
     return message_id
 
+def _build_value_preview(value: Any) -> str:
+    """Generate a sanitized, human-readable preview for logging."""
+    try:
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            candidate = value
+        else:
+            candidate = json.dumps(value, default=str)
+
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, ValueError):
+            compact = candidate
+        else:
+            compact = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+        compact = compact.replace("\n", " ").strip()
+        if len(compact) > 256:
+            compact = f"{compact[:253]}..."
+        return compact
+    except Exception:  # pragma: no cover - defensive logging helper
+        return "<unavailable>"
+
+
 async def update_current_roleplay(ctx, conn, key: str, value: str) -> None:
     """
     Update a CurrentRoleplay value canonically.
@@ -2551,6 +2576,14 @@ async def update_current_roleplay(ctx, conn, key: str, value: str) -> None:
     # Ensure we have a proper context
     ctx = ensure_canonical_context(ctx)
     
+    logger.info(
+        "CurrentRoleplay upsert pending for user_id=%s conversation_id=%s key=%s value_preview=%s",
+        ctx.user_id,
+        ctx.conversation_id,
+        key,
+        _build_value_preview(value),
+    )
+
     await conn.execute("""
         INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
         VALUES ($1, $2, $3, $4)
