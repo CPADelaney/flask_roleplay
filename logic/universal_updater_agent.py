@@ -58,6 +58,41 @@ from openai_integration.conversations import (
 
 logger = logging.getLogger(__name__)
 
+
+def _truncate_for_log(value: Any, limit: int = 120) -> str:
+    text = str(value)
+    text = text.replace("\n", " ")
+    if len(text) > limit:
+        return text[: limit - 1] + "\u2026"
+    return text
+
+
+def _summarize_operations(delta: Any) -> List[str]:
+    summaries: List[str] = []
+    for op in getattr(delta, "operations", []) or []:
+        op_type = getattr(op, "type", None) or "unknown"
+        if op_type == "npc.move":
+            destination = op.location_slug or (
+                f"id={op.location_id}" if getattr(op, "location_id", None) else "unknown"
+            )
+            summaries.append(
+                f"npc.move#{getattr(op, 'npc_id', 'unknown')}->{destination}"
+            )
+        elif op_type == "relationship.bump":
+            summaries.append(
+                "relationship.bump#"
+                f"{getattr(op, 'source_type', '?')}:{getattr(op, 'source_id', '?')}->"
+                f"{getattr(op, 'target_type', '?')}:{getattr(op, 'target_id', '?')}"
+                f" (\u0394{getattr(op, 'delta', '?')})"
+            )
+        elif op_type == "narrative.append":
+            summaries.append(
+                "narrative.append:" + _truncate_for_log(getattr(op, "text", ""), 40)
+            )
+        else:
+            summaries.append(op_type)
+    return summaries
+
 # -------------------------------------------------------------------------------
 # Helper functions for robust JSON handling
 # -------------------------------------------------------------------------------
@@ -865,13 +900,44 @@ async def apply_universal_updates_async(
         logger.error("Failed to construct canonical delta: %s", exc)
         return {"success": False, "error": str(exc)}
 
+    operation_summaries = _summarize_operations(delta)
+    logger.info(
+        "Emitting canon delta request_id=%s operations=%d summary=%s",
+        delta.request_id,
+        delta.operation_count,
+        operation_summaries,
+    )
+
     try:
         db_result = await db_rpc.write_event(conn, delta)
     except db_rpc.CanonEventError as exc:
         logger.error("canon.apply_event failed: %s", exc)
         return {"success": False, "error": str(exc)}
 
+    applied_flag = db_result.get("applied") if isinstance(db_result, dict) else None
+    raw_messages = db_result.get("messages") if isinstance(db_result, dict) else None
+    if isinstance(raw_messages, (list, tuple)):
+        truncated_messages = [_truncate_for_log(msg, 200) for msg in raw_messages]
+    elif raw_messages is None:
+        truncated_messages = None
+    else:
+        truncated_messages = _truncate_for_log(raw_messages, 200)
+
+    logger.info(
+        "canon.apply_event response for request_id=%s: applied=%s messages=%s",
+        delta.request_id,
+        applied_flag,
+        truncated_messages,
+    )
+
     if seal_from_updates and db_result.get("applied"):
+        logger.info(
+            "Ensuring scene seal for conversation=%s venue=%s date=%s request_id=%s",
+            conversation_id,
+            seal_from_updates.get("venue"),
+            seal_from_updates.get("date"),
+            delta.request_id,
+        )
         await ensure_scene_seal_item(
             conn,
             conversation_id=conversation_id,
