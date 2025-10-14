@@ -1,13 +1,15 @@
 import asyncio
+import json
 import os
 import sys
-import json
 import types
 
 import pytest
 
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
+os.environ.setdefault("DB_DSN", "postgresql://user:pass@localhost/testdb")
 
 dummy_models = types.ModuleType("sentence_transformers.models")
 
@@ -36,35 +38,19 @@ sys.modules.setdefault("sentence_transformers.models", dummy_models)
 from logic import aggregator_sdk
 
 
-class DummyConnection:
-    async def fetch(self, query, *args):
-        query_str = " ".join(query.split()) if isinstance(query, str) else str(query)
-
-        if "FROM CurrentRoleplay" in query_str and "NPCStats" not in query_str:
-            return [
-                {"key": "CurrentLocation", "value": json.dumps("Chapel of Thorns")},
-                {"key": "TimeOfDay", "value": json.dumps("Dawn")},
-                {"key": "CurrentDay", "value": json.dumps(2)},
-                {"key": "CurrentYear", "value": json.dumps(2025)},
-                {"key": "CurrentMonth", "value": json.dumps("May")},
-            ]
-
-        if "FROM NPCStats" in query_str:
-            return []
-
-        if "FROM Events" in query_str:
-            return []
-
-        if "FROM Quests" in query_str:
-            return []
-
-        return []
-
-    async def fetchrow(self, query, *args):
-        query_str = " ".join(query.split()) if isinstance(query, str) else str(query)
-
-        if "FROM PlayerStats" in query_str:
-            return {
+def _build_scene_row():
+    return {
+        "user_id": 1,
+        "conversation_id": 2,
+        "scene_context": {
+            "current_roleplay": {
+                "CurrentLocation": json.dumps("Chapel of Thorns"),
+                "TimeOfDay": json.dumps("Dawn"),
+                "CurrentDay": json.dumps(2),
+                "CurrentYear": json.dumps(2025),
+                "CurrentMonth": json.dumps("May"),
+            },
+            "player_stats": {
                 "corruption": 1,
                 "confidence": 2,
                 "willpower": 3,
@@ -73,40 +59,44 @@ class DummyConnection:
                 "lust": 6,
                 "mental_resilience": 7,
                 "physical_endurance": 8,
-            }
-
-        return None
-
-
-class DummyConnectionContext:
-    async def __aenter__(self):
-        return DummyConnection()
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
-def dummy_get_db_connection_context():
-    return DummyConnectionContext()
+            },
+            "npcs_present": [],
+            "events": [],
+            "quests": [],
+        },
+    }
 
 
 def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
+    async def fake_read_scene_context(user_id, conversation_id, limit=None):
+        assert user_id == 1
+        assert conversation_id == 2
+        return [_build_scene_row()]
+
     monkeypatch.setattr(
         aggregator_sdk,
-        "get_db_connection_context",
-        dummy_get_db_connection_context,
+        "read_scene_context",
+        fake_read_scene_context,
     )
 
-    async def fake_get_latest_conversation(*, conversation_id, user_id, conn):
+    async def fake_get_latest_conversation(*, conversation_id, user_id):
         return None
 
-    async def fake_get_active_scene(*, conversation_id, conn):
+    async def fake_get_active_scene(*, conversation_id):
         return None
 
     monkeypatch.setattr(
         aggregator_sdk,
         "get_latest_openai_conversation",
         fake_get_latest_conversation,
+    )
+    async def fake_get_latest_chatkit_thread(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_latest_chatkit_thread",
+        fake_get_latest_chatkit_thread,
     )
     monkeypatch.setattr(
         aggregator_sdk,
@@ -136,10 +126,13 @@ def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
 
 
 def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
+    async def fake_read_scene_context(user_id, conversation_id, limit=None):
+        return [_build_scene_row()]
+
     monkeypatch.setattr(
         aggregator_sdk,
-        "get_db_connection_context",
-        dummy_get_db_connection_context,
+        "read_scene_context",
+        fake_read_scene_context,
     )
 
     async def fake_check_preset_story(conversation_id):
@@ -173,16 +166,24 @@ def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
 
     active_scene = {"scene_number": 7, "scene_title": "Current Scene"}
 
-    async def fake_get_latest_conversation(*, conversation_id, user_id, conn):
+    async def fake_get_latest_conversation(*, conversation_id, user_id):
         return conversation_row
 
-    async def fake_get_active_scene(*, conversation_id, conn):
+    async def fake_get_active_scene(*, conversation_id):
         return active_scene
 
     monkeypatch.setattr(
         aggregator_sdk,
         "get_latest_openai_conversation",
         fake_get_latest_conversation,
+    )
+    async def fake_get_latest_chatkit_thread(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "get_latest_chatkit_thread",
+        fake_get_latest_chatkit_thread,
     )
     monkeypatch.setattr(
         aggregator_sdk,

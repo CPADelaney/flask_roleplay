@@ -22,6 +22,9 @@ from context.unified_cache import context_cache
 from context.vector_service import get_vector_service
 from context.memory_manager import get_memory_manager, get_memory_agent
 from context.context_manager import get_context_manager, get_context_manager_agent
+from context.projection_helpers import SceneProjection, parse_scene_projection_row
+
+from db.read import read_scene_context, read_entity_cards
 from context.models import (
     ContextRequest, ContextOutput, TokenUsage, 
     NPCData, Memory, QuestData, LocationData,
@@ -258,9 +261,11 @@ class ContextService:
         self.memory_agent = None
         self.vector_agent = None
         self.narrative_agent = None
-        
+
         # Shared context for agents
         self.agent_context = {"user_id": user_id, "conversation_id": conversation_id}
+        self._scene_projection: Optional[SceneProjection] = None
+        self._projection_lock = asyncio.Lock()
     
     async def initialize(self):
         """Initialize the context service"""
@@ -455,87 +460,57 @@ class ContextService:
         
         async def fetch_base_context():
             try:
-                from db.connection import get_db_connection_context
-                import asyncpg
-                
-                # Use proper async context manager syntax
-                async with get_db_connection_context() as conn:
-                    # Time info
-                    time_info = TimeInfo(
-                        year="1040",
-                        month="6",
-                        day="15",
-                        time_of_day="Morning"
+                rows = await read_scene_context(self.user_id, self.conversation_id)
+                projection = parse_scene_projection_row(rows[0]) if rows else SceneProjection.empty()
+                self._scene_projection = projection
+
+                roleplay_map = projection.roleplay_dict()
+
+                resolved_time = projection.time_of_day() or roleplay_map.get("TimeOfDay") or "Morning"
+                time_info = TimeInfo(
+                    year=str(roleplay_map.get("CurrentYear") or "1040"),
+                    month=str(roleplay_map.get("CurrentMonth") or "6"),
+                    day=str(roleplay_map.get("CurrentDay") or "15"),
+                    time_of_day=str(resolved_time),
+                )
+
+                stats_dict = projection.player_stats_dict()
+                player_payload = {key: stats_dict.get(key) for key in PlayerStats.__fields__}
+                player_stats = PlayerStats(**player_payload)
+
+                roleplay_payload: Dict[str, Any] = {}
+                for key in RoleplayData.__fields__:
+                    value = roleplay_map.get(key)
+                    if value is None:
+                        continue
+                    if isinstance(value, (dict, list)):
+                        roleplay_payload[key] = json.dumps(value)
+                    else:
+                        roleplay_payload[key] = str(value)
+                roleplay_data = RoleplayData(**roleplay_payload)
+
+                from logic.narrative_events import get_relationship_overview
+
+                overview = await get_relationship_overview(self.user_id, self.conversation_id)
+
+                relationship_overview = None
+                if overview and overview.get('total_relationships', 0) > 0:
+                    relationship_overview = RelationshipOverview(
+                        total_relationships=overview['total_relationships'],
+                        stage_distribution=overview['stage_distribution'],
+                        most_advanced_npcs=overview['most_advanced_npcs'][:3],
+                        aggregate_stats=overview['aggregate_stats'],
                     )
-                    
-                    # Attempt to fetch from CurrentRoleplay table
-                    time_keys = ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]
-                    for key in time_keys:
-                        row = await conn.fetchrow("""
-                            SELECT value
-                            FROM CurrentRoleplay
-                            WHERE user_id=$1 AND conversation_id=$2 AND key=$3
-                        """, self.user_id, self.conversation_id, key)
-                        
-                        if row:
-                            value = row["value"]
-                            if key == "CurrentYear":
-                                time_info.year = value
-                            elif key == "CurrentMonth":
-                                time_info.month = value
-                            elif key == "CurrentDay":
-                                time_info.day = value
-                            elif key == "TimeOfDay":
-                                time_info.time_of_day = value
-                    
-                    # Player stats
-                    player_stats = PlayerStats()
-                    player_row = await conn.fetchrow("""
-                        SELECT corruption, confidence, willpower,
-                               obedience, dependency, lust,
-                               mental_resilience, physical_endurance
-                        FROM PlayerStats
-                        WHERE user_id=$1 AND conversation_id=$2
-                        LIMIT 1
-                    """, self.user_id, self.conversation_id)
-                    
-                    if player_row:
-                        player_stats = PlayerStats(**dict(player_row))
-                    
-                    # Roleplay data
-                    roleplay_data = RoleplayData()
-                    rp_rows = await conn.fetch("""
-                        SELECT key, value
-                        FROM CurrentRoleplay
-                        WHERE user_id=$1 AND conversation_id=$2
-                        AND key IN ('CurrentLocation', 'EnvironmentDesc', 'PlayerRole', 'MainQuest')
-                    """, self.user_id, self.conversation_id)
-                    
-                    roleplay_dict = {}
-                    for row in rp_rows:
-                        roleplay_dict[row["key"]] = row["value"]
-                    roleplay_data = RoleplayData(**roleplay_dict)
-                    
-                    # Get relationship overview instead of single narrative stage
-                    from logic.narrative_events import get_relationship_overview
-                    overview = await get_relationship_overview(self.user_id, self.conversation_id)
-                    
-                    relationship_overview = None
-                    if overview and overview.get('total_relationships', 0) > 0:
-                        relationship_overview = RelationshipOverview(
-                            total_relationships=overview['total_relationships'],
-                            stage_distribution=overview['stage_distribution'],
-                            most_advanced_npcs=overview['most_advanced_npcs'][:3],  # Top 3
-                            aggregate_stats=overview['aggregate_stats']
-                        )
-                    
-                    return BaseContextData(
-                        time_info=time_info,
-                        player_stats=player_stats,
-                        current_roleplay=roleplay_data,
-                        current_location=location or roleplay_data.CurrentLocation or "Unknown",
-                        relationship_overview=relationship_overview
-                    )
+
+                current_location_value = location or roleplay_data.CurrentLocation or projection.current_location() or "Unknown"
+
+                return BaseContextData(
+                    time_info=time_info,
+                    player_stats=player_stats,
+                    current_roleplay=roleplay_data,
+                    current_location=current_location_value,
+                    relationship_overview=relationship_overview
+                )
             except Exception as e:
                 logger.error(f"Error getting base context: {e}")
                 # Fallback return
@@ -548,6 +523,43 @@ class ContextService:
                 )
         
         return await context_cache.get(cache_key, fetch_base_context, cache_level=1, importance=0.7, ttl_override=30)
+
+    async def _ensure_projection(self) -> SceneProjection:
+        if self._scene_projection is not None:
+            return self._scene_projection
+
+        async with self._projection_lock:
+            if self._scene_projection is not None:
+                return self._scene_projection
+
+            cache_key = f"scene-projection:{self.user_id}:{self.conversation_id}"
+
+            async def _fetch_projection() -> SceneProjection:
+                rows = await read_scene_context(self.user_id, self.conversation_id)
+                if not rows:
+                    return SceneProjection.empty()
+                return parse_scene_projection_row(rows[0])
+
+            try:
+                projection = await context_cache.get(
+                    cache_key,
+                    _fetch_projection,
+                    cache_level=1,
+                    importance=0.9,
+                    ttl_override=15,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Falling back to direct projection fetch: %s", exc)
+                projection = await _fetch_projection()
+
+            if not isinstance(projection, SceneProjection):
+                if isinstance(projection, dict):
+                    projection = parse_scene_projection_row({"scene_context": projection})
+                else:
+                    projection = SceneProjection.empty()
+
+            self._scene_projection = projection
+            return self._scene_projection
 
     async def _get_relevant_npcs(self, input_text: str, location: Optional[str] = None) -> List[NPCData]:
         """
@@ -593,56 +605,37 @@ class ContextService:
                 logger.error(f"Error getting NPCs from vector service: {e}")
 
         try:
-            from db.connection import get_db_connection_context
-            import asyncpg
-
-            # Use proper async context manager syntax
-            async with get_db_connection_context() as conn:
-                params = [self.user_id, self.conversation_id]
-                query = """
-                    SELECT npc_id, npc_name,
-                           dominance, cruelty, closeness,
-                           trust, respect, intensity,
-                           current_location, physical_description
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
-                """
-
-                if resolved_location:
-                    query += " AND (current_location IS NULL OR current_location=$3)"
-                    params.append(resolved_location)
-
-                query += " ORDER BY closeness DESC, trust DESC LIMIT 10"
-
-                rows = await conn.fetch(query, *params)
-                npcs = []
-                for row in rows:
-                    current_location = row["current_location"] or "Unknown"
-                    location_match = (
-                        resolved_location
-                        and current_location.lower() == resolved_location.lower()
-                    )
-                    npcs.append(NPCData(
-                        npc_id=row["npc_id"],
-                        npc_name=row["npc_name"],
-                        dominance=row["dominance"],
-                        cruelty=row["cruelty"],
-                        closeness=row["closeness"],
-                        trust=row["trust"],
-                        respect=row["respect"],
-                        intensity=row["intensity"],
-                        current_location=current_location,
-                        physical_description=row["physical_description"] or "",
-                        relevance=0.7 if location_match else 0.5
-                    ))
-                return npcs
+            projection = await self._ensure_projection()
+            npc_rows = projection.npc_rows()
+            npcs: List[NPCData] = []
+            for row in npc_rows:
+                current_location = row.get('current_location') or 'Unknown'
+                location_match = (
+                    resolved_location
+                    and current_location
+                    and current_location.lower() == resolved_location.lower()
+                )
+                npcs.append(NPCData(
+                    npc_id=str(row.get('npc_id') or ''),
+                    npc_name=str(row.get('npc_name') or ''),
+                    dominance=row.get('dominance'),
+                    cruelty=row.get('cruelty'),
+                    closeness=row.get('closeness'),
+                    trust=row.get('trust'),
+                    respect=row.get('respect'),
+                    intensity=row.get('intensity'),
+                    current_location=current_location,
+                    physical_description=row.get('physical_description') or '',
+                    relevance=0.7 if location_match else 0.5,
+                ))
+            return npcs[:10]
         except Exception as e:
-            logger.error(f"Error getting NPCs from database: {e}")
+            logger.error(f"Error getting NPCs from projection: {e}")
             return []
     
     async def _get_location_details(self, location: Optional[str] = None) -> LocationData:
         """
-        Internal method: get details about the current location 
+        Internal method: get details about the current location
         (fallback to DB if vector not available).
         """
         if not location:
@@ -667,59 +660,57 @@ class ContextService:
                             )
             except Exception as e:
                 logger.error(f"Error in vector location: {e}")
-        
-        # Fallback to DB
+
         try:
-            from db.connection import get_db_connection_context
-            import asyncpg
-            
-            # Use proper async context manager syntax
-            async with get_db_connection_context() as conn:
-                row = await conn.fetchrow("""
-                    SELECT id, location_name, description
-                    FROM Locations
-                    WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
-                    LIMIT 1
-                """, self.user_id, self.conversation_id, location)
-                if row:
+            rows = await read_entity_cards(
+                self.user_id,
+                self.conversation_id,
+                entity_types=["location"],
+                query_text=location,
+                limit=5,
+            )
+            for entry in rows:
+                card = entry.get("card") or {}
+                name = card.get("location_name") or card.get("location")
+                if location and name and name.lower() == location.lower():
                     return LocationData(
-                        location_id=str(row["id"]),
-                        location_name=row["location_name"],
-                        description=row["description"]
+                        location_id=str(card.get("location_id") or entry.get("entity_id") or ""),
+                        location_name=name,
+                        description=card.get("description"),
+                        connected_locations=card.get("connected_locations"),
+                        relevance=1.0,
                     )
-                return LocationData(location_name=location)
+            if rows:
+                card = rows[0].get("card") or {}
+                return LocationData(
+                    location_id=str(card.get("location_id") or rows[0].get("entity_id") or ""),
+                    location_name=card.get("location_name") or location or "Unknown",
+                    description=card.get("description"),
+                    connected_locations=card.get("connected_locations"),
+                    relevance=card.get("relevance"),
+                )
+            return LocationData(location_name=location or "Unknown")
         except Exception as e:
             logger.error(f"Error in get_location_details: {e}")
-            return LocationData(location_name=location)
+            return LocationData(location_name=location or "Unknown")
     
     async def _get_quest_information(self) -> List[QuestData]:
         """Internal method: get info about active quests."""
         try:
-            from db.connection import get_db_connection_context
-            import asyncpg
-            
-            # Use proper async context manager syntax
-            async with get_db_connection_context() as conn:
-                rows = await conn.fetch("""
-                    SELECT quest_id, quest_name, status, progress_detail,
-                           quest_giver, reward
-                    FROM Quests
-                    WHERE user_id=$1 AND conversation_id=$2
-                    AND status IN ('active', 'in_progress')
-                    ORDER BY quest_id
-                """, self.user_id, self.conversation_id)
-                
-                quests = []
-                for row in rows:
-                    quests.append(QuestData(
-                        quest_id=row["quest_id"],
-                        quest_name=row["quest_name"],
-                        status=row["status"],
-                        progress_detail=row["progress_detail"],
-                        quest_giver=row["quest_giver"],
-                        reward=row["reward"]
-                    ))
-                return quests
+            projection = await self._ensure_projection()
+            quests: List[QuestData] = []
+            for quest in projection.active_quests():
+                quests.append(
+                    QuestData(
+                        quest_id=str(quest.get("quest_id") or ""),
+                        quest_name=str(quest.get("quest_name") or ""),
+                        status=str(quest.get("status") or ""),
+                        progress_detail=quest.get("progress_detail"),
+                        quest_giver=quest.get("quest_giver"),
+                        reward=quest.get("reward"),
+                    )
+                )
+            return quests
         except Exception as e:
             logger.error(f"Error getting quest info: {e}")
             return []
@@ -971,12 +962,15 @@ class ContextService:
         summary_level: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Main entry point for obtaining context 
+        Main entry point for obtaining context
         (non-tool method, directly called from outside or via aggregator).
         """
         if not self.initialized:
             await self.initialize()
-        
+
+        # Reset projection cache for this request
+        self._scene_projection = None
+
         request = ContextRequest(
             user_id=self.user_id,
             conversation_id=self.conversation_id,

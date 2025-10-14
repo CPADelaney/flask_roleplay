@@ -32,9 +32,9 @@ from context.context_service import (
 )
 from context.context_config import get_config
 from context.context_performance import PerformanceMonitor, track_performance
+from context.projection_helpers import SceneProjection, parse_scene_projection_row
 
-# Using new async context manager for DB connections
-from db.connection import get_db_connection_context
+from db.read import read_scene_context
 from story_templates.preset_manager import PresetStoryManager
 from openai_integration.conversations import (
     get_active_scene as get_openai_active_scene,
@@ -104,158 +104,97 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
     """
     Get aggregated roleplay context with preset story support
     """
-    async with get_db_connection_context() as conn:
-        # Get current roleplay state
-        roleplay_rows = await conn.fetch("""
-            SELECT key, value 
-            FROM CurrentRoleplay 
-            WHERE user_id = $1 AND conversation_id = $2
-        """, user_id, conversation_id)
-        
-        current_roleplay = {}
-        for row in roleplay_rows:
-            try:
-                current_roleplay[row['key']] = json.loads(row['value'])
-            except:
-                current_roleplay[row['key']] = row['value']
-        
-        # Get current location
-        current_location = current_roleplay.get('CurrentLocation', 'Unknown')
-        time_of_day = current_roleplay.get('TimeOfDay', 'Morning')
-        
-        # Get NPCs present at location
-        npc_rows = await conn.fetch("""
-            SELECT npc_id, npc_name, physical_description, personality_traits,
-                   trust, dominance, cruelty, affection, intensity, introduced
-            FROM NPCStats
-            WHERE user_id = $1 AND conversation_id = $2 
-            AND current_location = $3
-        """, user_id, conversation_id, current_location)
-        
-        npcs_present = []
-        for npc in npc_rows:
-            try:
-                personality_traits = []
-                if npc['personality_traits']:
-                    try:
-                        personality_traits = json.loads(npc['personality_traits'])
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse personality_traits for NPC {npc['npc_id']}")
-                        personality_traits = []
-                
-                npcs_present.append({
-                    'id': npc['npc_id'],
-                    'name': npc['npc_name'],
-                    'description': npc['physical_description'],
-                    'traits': personality_traits,
-                    'stats': {
-                        'trust': npc['trust'],
-                        'dominance': npc['dominance'],
-                        'cruelty': npc['cruelty'],
-                        'affection': npc['affection'],
-                        'intensity': npc['intensity']
-                    },
-                    'introduced': npc['introduced']
-                })
-            except Exception as e:
-                logger.error(f"Error processing NPC {npc.get('npc_id', 'unknown')}: {e}")
-                continue
-        
-        # Get player stats
-        player_stats_row = await conn.fetchrow("""
-            SELECT corruption, confidence, willpower, obedience, dependency,
-                   lust, mental_resilience, physical_endurance
-            FROM PlayerStats
-            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-        """, user_id, conversation_id, player_name)
-        
-        player_stats = dict(player_stats_row) if player_stats_row else {}
-        
-        # Get active events
-        event_rows = await conn.fetch("""
-            SELECT event_name, description, location, fantasy_level
-            FROM Events
-            WHERE user_id = $1 AND conversation_id = $2
-            AND (
-                (day = $3 AND time_of_day = $4) OR
-                (
-                    start_time IS NOT NULL 
-                    AND end_time IS NOT NULL
-                    AND start_time != ''
-                    AND end_time != ''
-                    AND (
-                        (LENGTH(start_time) >= 10 AND SUBSTRING(start_time, 1, 10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND start_time::timestamp <= NOW())
-                        OR FALSE
-                    )
-                    AND (
-                        (LENGTH(end_time) >= 10 AND SUBSTRING(end_time, 1, 10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND end_time::timestamp >= NOW())
-                        OR FALSE
-                    )
-                )
-            )
-        """, user_id, conversation_id, 
-            current_roleplay.get('CurrentDay', 1),
-            time_of_day)
-        
-        active_events = [dict(row) for row in event_rows]
-        
-        # Get active quests
-        quest_rows = await conn.fetch("""
-            SELECT quest_id, quest_name, status, progress_detail
-            FROM Quests
-            WHERE user_id = $1 AND conversation_id = $2
-            AND status IN ('active', 'in_progress')
-        """, user_id, conversation_id)
-        
-        active_quests = [dict(row) for row in quest_rows]
+    projection_row: SceneProjection = SceneProjection.empty()
+    try:
+        rows = await read_scene_context(user_id, conversation_id)
+        if rows:
+            projection_row = parse_scene_projection_row(rows[0])
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Failed to load scene projection: %s", exc)
 
-        openai_conversation = await get_latest_openai_conversation(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            conn=conn,
-        )
+    current_roleplay = projection_row.roleplay_dict()
+    current_location = projection_row.current_location() or current_roleplay.get('CurrentLocation') or 'Unknown'
+    time_of_day = projection_row.time_of_day() or current_roleplay.get('TimeOfDay') or 'Morning'
 
-        chatkit_thread = await get_latest_chatkit_thread(
-            conversation_id=conversation_id,
-            conn=conn,
-        )
+    npcs_present: List[Dict[str, Any]] = []
+    for npc in projection_row.npc_rows():
+        traits = npc.get('personality_traits') or []
+        if not isinstance(traits, list):
+            traits = [traits] if traits else []
+        npcs_present.append({
+            'id': npc.get('npc_id'),
+            'name': npc.get('npc_name'),
+            'description': npc.get('physical_description') or '',
+            'traits': traits,
+            'stats': {
+                'trust': npc.get('trust'),
+                'dominance': npc.get('dominance'),
+                'cruelty': npc.get('cruelty'),
+                'affection': npc.get('affection'),
+                'intensity': npc.get('intensity')
+            },
+            'introduced': bool(npc.get('introduced'))
+        })
 
-        if chatkit_thread:
-            if not openai_conversation:
-                openai_conversation = {}
-            openai_conversation.setdefault("chatkit_thread", chatkit_thread)
-            chatkit_thread_id = chatkit_thread.get("chatkit_thread_id")
-            chatkit_run_id = chatkit_thread.get("chatkit_run_id")
-            if chatkit_thread_id:
-                openai_conversation["chatkit_thread_id"] = chatkit_thread_id
-            if chatkit_run_id:
-                openai_conversation["chatkit_run_id"] = chatkit_run_id
+    player_stats = projection_row.player_stats_dict()
 
-        active_scene = await get_openai_active_scene(
-            conversation_id=conversation_id,
-            conn=conn,
-        )
+    active_events = projection_row.active_events()
 
-        # Build base context
-        result = {
-            'currentRoleplay': current_roleplay,
-            'current_roleplay': current_roleplay,
-            'currentLocation': current_location,
-            'current_location': current_location,
-            'location': current_location,
-            'timeOfDay': time_of_day,
-            'playerName': player_name,
-            'playerStats': player_stats,
-            'npcsPresent': npcs_present,
-            'activeEvents': active_events,
-            'activeQuests': active_quests,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # Check for preset story
-        preset_info = await PresetStoryManager.check_preset_story(conversation_id)
-        
-        if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
+    active_quests = []
+    for quest in projection_row.active_quests():
+        active_quests.append({
+            'quest_id': str(quest.get('quest_id')),
+            'quest_name': quest.get('quest_name'),
+            'status': quest.get('status'),
+            'progress_detail': quest.get('progress_detail'),
+            'quest_giver': quest.get('quest_giver'),
+            'reward': quest.get('reward')
+        })
+
+    openai_conversation = await get_latest_openai_conversation(
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+
+    chatkit_thread = await get_latest_chatkit_thread(
+        conversation_id=conversation_id,
+    )
+
+    if chatkit_thread:
+        if not openai_conversation:
+            openai_conversation = {}
+        openai_conversation.setdefault("chatkit_thread", chatkit_thread)
+        chatkit_thread_id = chatkit_thread.get("chatkit_thread_id")
+        chatkit_run_id = chatkit_thread.get("chatkit_run_id")
+        if chatkit_thread_id:
+            openai_conversation["chatkit_thread_id"] = chatkit_thread_id
+        if chatkit_run_id:
+            openai_conversation["chatkit_run_id"] = chatkit_run_id
+
+    active_scene = await get_openai_active_scene(
+        conversation_id=conversation_id,
+    )
+
+    # Build base context
+    result = {
+        'currentRoleplay': current_roleplay,
+        'current_roleplay': current_roleplay,
+        'currentLocation': current_location,
+        'current_location': current_location,
+        'location': current_location,
+        'timeOfDay': time_of_day,
+        'playerName': player_name,
+        'playerStats': player_stats,
+        'npcsPresent': npcs_present,
+        'activeEvents': active_events,
+        'activeQuests': active_quests,
+        'timestamp': datetime.now().isoformat()
+    }
+
+    # Check for preset story
+    preset_info = await PresetStoryManager.check_preset_story(conversation_id)
+
+    if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
             from story_templates.moth.lore import SFBayMothFlamePreset
             from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
             
@@ -316,30 +255,30 @@ CRITICAL CONSTRAINTS FOR THIS STORY:
             if is_preset_special_location(current_location):
                 result['special_location_active'] = True
                 result['location_special_rules'] = get_location_special_rules(current_location)
-        
-        # Attach OpenAI integration metadata if present
-        openai_payload = _build_openai_integration_payload(
-            openai_conversation,
-            active_scene,
-        )
-        if openai_payload:
-            result['openai_integration'] = openai_payload
 
-        # Generate aggregator text
-        aggregator_text = build_aggregator_text(result)
-        
-        # Enhance aggregator text with preset warnings if active
-        if preset_info:
-            aggregator_text = f"""{aggregator_text}
+    # Attach OpenAI integration metadata if present
+    openai_payload = _build_openai_integration_payload(
+        openai_conversation,
+        active_scene,
+    )
+    if openai_payload:
+        result['openai_integration'] = openai_payload
+
+    # Generate aggregator text
+    aggregator_text = build_aggregator_text(result)
+
+    # Enhance aggregator text with preset warnings if active
+    if preset_info:
+        aggregator_text = f"""{aggregator_text}
 
 ACTIVE PRESET STORY: {preset_info.get('story_id')}
 You MUST follow all consistency rules for this preset story.
 {result.get('preset_constraints', '')}
 """
-        
-        result['aggregatorText'] = aggregator_text
-        
-        return result
+
+    result['aggregatorText'] = aggregator_text
+
+    return result
 
 
 def _parse_openai_metadata(metadata: Any) -> Dict[str, Any]:

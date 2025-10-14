@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from context.unified_cache import context_cache
 from context.context_config import get_config
-from db.connection import get_db_connection_context
+from db.read import read_entity_cards, read_recent_chunks
 
 from context.models import (
     EntityMetadata, NPCMetadata, LocationMetadata,
@@ -508,39 +508,14 @@ class VectorService:
         embedding_array = list(query_embedding)
 
         try:
-            async with get_db_connection_context() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT
-                        entity_type,
-                        entity_id,
-                        user_id,
-                        conversation_id,
-                        card,
-                        updated_at,
-                        CASE
-                            WHEN embedding IS NULL THEN NULL
-                            ELSE 1 - (embedding <=> $1::vector)
-                        END AS vector_score,
-                        CASE
-                            WHEN $2::text IS NULL OR $2 = '' THEN 0
-                            ELSE ts_rank_cd(search_vector, websearch_to_tsquery('english', $2))
-                        END AS text_score
-                    FROM public.v_entity_cards
-                    WHERE user_id = $3
-                      AND conversation_id = $4
-                      AND entity_type = ANY($5::text[])
-                    ORDER BY
-                        COALESCE(CASE WHEN embedding IS NULL THEN NULL ELSE 1 - (embedding <=> $1::vector) END, 0) DESC
-                    LIMIT $6
-                    """,
-                    embedding_array,
-                    ts_query or None,
-                    self.user_id,
-                    self.conversation_id,
-                    entity_types,
-                    limit,
-                )
+            rows = await read_entity_cards(
+                self.user_id,
+                self.conversation_id,
+                embedding=embedding_array,
+                query_text=ts_query,
+                entity_types=entity_types,
+                limit=limit,
+            )
         except Exception as exc:  # pragma: no cover - safety for missing DB
             logger.debug("Hybrid entity card query failed: %s", exc)
             return []
@@ -551,20 +526,11 @@ class VectorService:
     async def _query_recent_chunks(self, limit: int = 5) -> List[Dict[str, Any]]:
         """Fetch recent episodic chunks for the conversation."""
         try:
-            async with get_db_connection_context() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT chunk_id, chunk, occurred_at
-                    FROM public.v_recent_chunks
-                    WHERE user_id = $1
-                      AND conversation_id = $2
-                    ORDER BY occurred_at DESC NULLS LAST
-                    LIMIT $3
-                    """,
-                    self.user_id,
-                    self.conversation_id,
-                    limit,
-                )
+            rows = await read_recent_chunks(
+                self.user_id,
+                self.conversation_id,
+                limit=limit,
+            )
         except Exception as exc:  # pragma: no cover - safety for missing DB
             logger.debug("Recent chunk query failed: %s", exc)
             return []
