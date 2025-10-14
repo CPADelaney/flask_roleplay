@@ -14,6 +14,7 @@ QUEUES = (
 
 ROUTES = {
     "nyx.tasks.realtime.post_turn.dispatch": {"queue": "realtime", "routing_key": "realtime"},
+    "nyx.tasks.realtime.post_turn.drain_outbox": {"queue": "realtime", "routing_key": "realtime"},
     "nyx.tasks.background.world_tasks.apply_universal": {"queue": "background", "routing_key": "background"},
     "nyx.tasks.background.conflict_tasks.process_events": {"queue": "background", "routing_key": "background"},
     "nyx.tasks.background.npc_tasks.run_adaptation_cycle": {"queue": "background", "routing_key": "background"},
