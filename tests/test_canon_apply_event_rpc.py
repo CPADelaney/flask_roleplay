@@ -109,3 +109,36 @@ async def test_write_event_idempotent_replay():
 def test_build_delta_rejects_empty_payload():
     with pytest.raises(DeltaBuildError):
         build_delta_from_legacy_payload(user_id=1, conversation_id=2, payload={})
+
+
+def test_build_delta_extracts_player_location_from_roleplay_updates():
+    delta = build_delta_from_legacy_payload(
+        user_id=11,
+        conversation_id=22,
+        payload={"roleplay_updates": {"CurrentLocation": "Velvet Sanctum"}},
+    )
+
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "player.move"
+    assert op.location_slug == "Velvet Sanctum"
+    assert op.player_id == 11
+
+
+def test_build_delta_handles_roleplay_updates_array_payload():
+    delta = build_delta_from_legacy_payload(
+        user_id=5,
+        conversation_id=6,
+        payload={
+            "roleplay_updates": [
+                {"key": "current_location", "value": "Obsidian Parlor"},
+                {"key": "current_location_id", "value": 77},
+            ]
+        },
+    )
+
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "player.move"
+    assert op.location_slug == "Obsidian Parlor"
+    assert op.location_id == 77

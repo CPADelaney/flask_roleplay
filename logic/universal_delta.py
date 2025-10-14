@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Union
+from collections.abc import Mapping, Sequence
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -49,6 +50,21 @@ class NPCMoveOperation(_OperationBase):
         return self
 
 
+class PlayerMoveOperation(_OperationBase):
+    """Record a player character moving to a new location."""
+
+    type: Literal["player.move"] = "player.move"
+    player_id: Optional[int] = Field(default=None, ge=1)
+    location_slug: Optional[str] = Field(default=None, min_length=1)
+    location_id: Optional[int] = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _ensure_location(self) -> "PlayerMoveOperation":
+        if self.location_slug is None and self.location_id is None:
+            raise ValueError("player.move requires either location_slug or location_id")
+        return self
+
+
 class RelationshipBumpOperation(_OperationBase):
     """Increment a relationship score between two entities."""
 
@@ -84,7 +100,12 @@ class NarrativeAppendOperation(_OperationBase):
 
 
 DeltaOperation = Annotated[
-    Union[NPCMoveOperation, RelationshipBumpOperation, NarrativeAppendOperation],
+    Union[
+        NPCMoveOperation,
+        PlayerMoveOperation,
+        RelationshipBumpOperation,
+        NarrativeAppendOperation,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -122,6 +143,115 @@ def _coerce_request_id(request_id: Optional[Union[str, UUID]]) -> Optional[UUID]
         return UUID(str(request_id))
     except (ValueError, TypeError) as exc:  # pragma: no cover - defensive
         raise DeltaBuildError("invalid request_id") from exc
+
+
+_LOCATION_KEYS = (
+    "CurrentLocation",
+    "current_location",
+    "currentLocation",
+    "location",
+    "Location",
+)
+_LOCATION_ID_KEYS = (
+    "CurrentLocationId",
+    "current_location_id",
+    "currentLocationId",
+    "location_id",
+    "LocationId",
+)
+
+
+def _clean_location_slug(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, Mapping):
+        for key in ("slug", "name", "label", "location"):
+            candidate = value.get(key)
+            cleaned = _clean_location_slug(candidate)
+            if cleaned:
+                return cleaned
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _coerce_location_id(value: Any) -> Optional[int]:
+    if isinstance(value, Mapping):
+        for key in ("id", "location_id", "pk"):
+            coerced = _coerce_location_id(value.get(key))
+            if coerced is not None:
+                return coerced
+        return None
+    try:
+        if value is None:
+            return None
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    return coerced if coerced > 0 else None
+
+
+def _extract_location_from_mapping(mapping: Mapping[str, Any]) -> Tuple[Optional[str], Optional[int]]:
+    location_slug: Optional[str] = None
+    location_id: Optional[int] = None
+
+    for key in _LOCATION_KEYS:
+        if location_slug:
+            break
+        if key in mapping:
+            location_slug = _clean_location_slug(mapping.get(key))
+
+    for key in _LOCATION_ID_KEYS:
+        if location_id is not None:
+            break
+        if key in mapping:
+            location_id = _coerce_location_id(mapping.get(key))
+
+    # Nested composite value
+    composite = mapping.get("location") if "location" in mapping else None
+    if composite is not None:
+        if location_slug is None:
+            location_slug = _clean_location_slug(composite)
+        if location_id is None:
+            location_id = _coerce_location_id(composite)
+
+    return location_slug, location_id
+
+
+def _extract_player_location(payload: Mapping[str, Any]) -> Tuple[Optional[str], Optional[int]]:
+    location_slug: Optional[str] = None
+    location_id: Optional[int] = None
+
+    roleplay_updates = payload.get("roleplay_updates")
+    if isinstance(roleplay_updates, Mapping):
+        slug, loc_id = _extract_location_from_mapping(roleplay_updates)
+        location_slug = location_slug or slug
+        location_id = location_id or loc_id
+    elif isinstance(roleplay_updates, Sequence):
+        flattened: Dict[str, Any] = {}
+        for item in roleplay_updates:
+            if not isinstance(item, Mapping):
+                continue
+            key = item.get("key") or item.get("name") or item.get("field")
+            if key is None:
+                continue
+            flattened[str(key)] = item.get("value")
+        if flattened:
+            slug, loc_id = _extract_location_from_mapping(flattened)
+            location_slug = location_slug or slug
+            location_id = location_id or loc_id
+
+    if location_slug is None or location_id is None:
+        slug, loc_id = _extract_location_from_mapping(payload)
+        if location_slug is None:
+            location_slug = slug
+        if location_id is None:
+            location_id = loc_id
+
+    return location_slug, location_id
 
 
 def build_delta_from_legacy_payload(
@@ -173,6 +303,16 @@ def build_delta_from_legacy_payload(
                 target_id=int(link.get("entity2_id")),
                 delta=int(delta),
                 context=link.get("group_context"),
+            )
+            )
+
+    location_slug, location_id = _extract_player_location(payload)
+    if location_slug or location_id:
+        operations.append(
+            PlayerMoveOperation(
+                player_id=user_id,
+                location_slug=location_slug,
+                location_id=location_id,
             )
         )
 
