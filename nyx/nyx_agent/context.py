@@ -2614,6 +2614,11 @@ class NyxContext:
             return
 
         if not row:
+            logger.info(
+                "No CurrentLocation row found for user_id=%s conversation_id=%s",
+                self.user_id,
+                self.conversation_id,
+            )
             return
 
         try:
@@ -2623,6 +2628,11 @@ class NyxContext:
 
         normalized_location = self._normalize_location_value(raw_value)
         if not normalized_location:
+            logger.info(
+                "CurrentLocation normalization failed for user_id=%s conversation_id=%s",
+                self.user_id,
+                self.conversation_id,
+            )
             return
 
         self.current_location = normalized_location
@@ -2631,15 +2641,27 @@ class NyxContext:
         self.current_context.setdefault("location_name", normalized_location)
         self.current_context.setdefault("current_location", normalized_location)
 
+        snapshot_cache_hit = False
         try:
             user_key = str(self.user_id)
             conversation_key = str(self.conversation_id)
             snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
+            snapshot_cache_hit = bool(snapshot)
             snapshot["location_name"] = normalized_location
             snapshot.setdefault("scene_id", str(normalized_location))
             _SNAPSHOT_STORE.put(user_key, conversation_key, snapshot)
         except Exception as exc:  # pragma: no cover - best effort cache seed
             logger.debug("Snapshot store seed failed: %s", exc)
+
+        logger.info(
+            (
+                "Hydrated CurrentLocation for user_id=%s conversation_id=%s "
+                "snapshot_cache_hit=%s"
+            ),
+            self.user_id,
+            self.conversation_id,
+            snapshot_cache_hit,
+        )
 
     async def _persist_location_to_db(self, canonical_location: str) -> None:
         """Persist the canonical location to the backing CurrentRoleplay row."""

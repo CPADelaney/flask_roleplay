@@ -489,6 +489,17 @@ class ContextService:
                         roleplay_payload[key] = str(value)
                 roleplay_data = RoleplayData(**roleplay_payload)
 
+                logger.info(
+                    (
+                        "Base context DB fetch user_id=%s conversation_id=%s rows=%s "
+                        "roleplay_keys=%s"
+                    ),
+                    self.user_id,
+                    self.conversation_id,
+                    len(rows) if rows else 0,
+                    sorted(roleplay_payload.keys()),
+                )
+
                 from logic.narrative_events import get_relationship_overview
 
                 overview = await get_relationship_overview(self.user_id, self.conversation_id)
@@ -522,7 +533,37 @@ class ContextService:
                     error=str(e)
                 )
         
-        return await context_cache.get(cache_key, fetch_base_context, cache_level=1, importance=0.7, ttl_override=30)
+        hits_before = context_cache.hits
+        misses_before = context_cache.misses
+
+        base_context_model = await context_cache.get(
+            cache_key,
+            fetch_base_context,
+            cache_level=1,
+            importance=0.7,
+            ttl_override=30,
+        )
+
+        hit_delta = context_cache.hits - hits_before
+        miss_delta = context_cache.misses - misses_before
+        cache_outcome = "hit" if hit_delta else "miss" if miss_delta else "local"
+        roleplay_keys = sorted(
+            base_context_model.current_roleplay.dict(exclude_none=True).keys()
+        )
+
+        logger.info(
+            (
+                "Base context cache_%s user_id=%s conversation_id=%s location=%s "
+                "roleplay_keys=%s"
+            ),
+            cache_outcome,
+            self.user_id,
+            self.conversation_id,
+            base_context_model.current_location,
+            roleplay_keys,
+        )
+
+        return base_context_model
 
     async def _ensure_projection(self) -> SceneProjection:
         if self._scene_projection is not None:
@@ -537,16 +578,57 @@ class ContextService:
             async def _fetch_projection() -> SceneProjection:
                 rows = await read_scene_context(self.user_id, self.conversation_id)
                 if not rows:
+                    logger.info(
+                        "Scene projection DB fetch user_id=%s conversation_id=%s rows=0",
+                        self.user_id,
+                        self.conversation_id,
+                    )
                     return SceneProjection.empty()
-                return parse_scene_projection_row(rows[0])
+
+                projection_row = parse_scene_projection_row(rows[0])
+                roleplay_map = projection_row.roleplay_dict()
+                logger.info(
+                    (
+                        "Scene projection DB fetch user_id=%s conversation_id=%s rows=%s "
+                        "roleplay_keys=%s"
+                    ),
+                    self.user_id,
+                    self.conversation_id,
+                    len(rows),
+                    sorted(key for key, value in roleplay_map.items() if value is not None),
+                )
+                return projection_row
 
             try:
+                hits_before = context_cache.hits
+                misses_before = context_cache.misses
                 projection = await context_cache.get(
                     cache_key,
                     _fetch_projection,
                     cache_level=1,
                     importance=0.9,
                     ttl_override=15,
+                )
+                hit_delta = context_cache.hits - hits_before
+                miss_delta = context_cache.misses - misses_before
+                cache_outcome = "hit" if hit_delta else "miss" if miss_delta else "local"
+                roleplay_keys = []
+                try:
+                    roleplay_keys = sorted(
+                        key
+                        for key, value in projection.roleplay_dict().items()
+                        if value is not None
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    roleplay_keys = []
+                logger.info(
+                    (
+                        "Scene projection cache_%s user_id=%s conversation_id=%s roleplay_keys=%s"
+                    ),
+                    cache_outcome,
+                    self.user_id,
+                    self.conversation_id,
+                    roleplay_keys,
                 )
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.warning("Falling back to direct projection fetch: %s", exc)
