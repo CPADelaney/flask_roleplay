@@ -363,22 +363,63 @@ def build_delta_from_legacy_payload(
                 )
             )
 
-    for link in payload.get("social_links", []) or []:
-        if not isinstance(link, dict):
-            raise DeltaBuildError("social_links entries must be dictionaries")
-        delta = link.get("level_change")
-        if delta in (None, 0):
-            continue
+    def _relationship_delta_from_entry(entry: Mapping[str, Any]) -> Optional[int]:
+        level_change = entry.get("level_change")
+        if level_change is not None:
+            try:
+                coerced = int(round(float(level_change)))
+            except (TypeError, ValueError) as exc:
+                raise DeltaBuildError("relationship level_change must be numeric") from exc
+            if coerced != 0:
+                return coerced
+
+        dimension_changes = entry.get("dimension_changes")
+        if isinstance(dimension_changes, Mapping) and dimension_changes:
+            total = 0.0
+            seen_numeric = False
+            for value in dimension_changes.values():
+                try:
+                    total += float(value)
+                except (TypeError, ValueError):
+                    continue
+                else:
+                    seen_numeric = True
+            if seen_numeric:
+                coerced = int(round(total))
+                if coerced != 0:
+                    return coerced
+        return None
+
+    def _append_relationship_operation(entry: Mapping[str, Any]) -> None:
+        delta = _relationship_delta_from_entry(entry)
+        if delta is None:
+            return
+
         operations.append(
             RelationshipBumpOperation(
-                source_type=str(link.get("entity1_type", "")).strip() or "npc",
-                source_id=int(link.get("entity1_id")),
-                target_type=str(link.get("entity2_type", "")).strip() or "npc",
-                target_id=int(link.get("entity2_id")),
-                delta=int(delta),
-                context=link.get("group_context"),
+                source_type=str(entry.get("entity1_type", "")).strip() or "npc",
+                source_id=int(entry.get("entity1_id")),
+                target_type=str(entry.get("entity2_type", "")).strip() or "npc",
+                target_id=int(entry.get("entity2_id")),
+                delta=delta,
+                context=entry.get("group_context"),
             )
+        )
+
+    for key in ("social_links", "relationship_updates"):
+        entries = payload.get(key)
+        if not entries:
+            continue
+        for link in entries or []:
+            if not isinstance(link, Mapping):
+                raise DeltaBuildError(f"{key} entries must be dictionaries")
+            required_fields = (
+                link.get("entity1_id"),
+                link.get("entity2_id"),
             )
+            if any(field in (None, "") for field in required_fields):
+                raise DeltaBuildError(f"{key} entries must include entity identifiers")
+            _append_relationship_operation(link)
 
     location_slug, location_id = _extract_player_location(payload)
     if location_slug or location_id:

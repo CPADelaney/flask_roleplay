@@ -164,6 +164,56 @@ def test_build_delta_handles_roleplay_updates_array_field_payload():
     assert op.player_id == 9
 
 
+def test_build_delta_relationship_updates_only_level_change():
+    delta = build_delta_from_legacy_payload(
+        user_id=13,
+        conversation_id=14,
+        payload={
+            "relationship_updates": [
+                {
+                    "entity1_type": "npc",
+                    "entity1_id": 7,
+                    "entity2_type": "player",
+                    "entity2_id": 13,
+                    "level_change": -2,
+                }
+            ]
+        },
+    )
+
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "relationship.bump"
+    assert op.delta == -2
+    assert op.source_id == 7
+    assert op.target_id == 13
+
+
+def test_build_delta_relationship_updates_dimension_changes_only():
+    delta = build_delta_from_legacy_payload(
+        user_id=15,
+        conversation_id=16,
+        payload={
+            "relationship_updates": [
+                {
+                    "entity1_type": "npc",
+                    "entity1_id": 5,
+                    "entity2_type": "npc",
+                    "entity2_id": 6,
+                    "dimension_changes": {"trust": 1.2, "respect": 0.8},
+                }
+            ]
+        },
+    )
+
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "relationship.bump"
+    assert op.delta == 2
+    assert op.source_id == 5
+    assert op.target_id == 6
+
+
 async def test_apply_universal_updates_impl_handles_field_payload(monkeypatch):
     class _Governor:
         async def check_action_permission(self, *args, **kwargs):
