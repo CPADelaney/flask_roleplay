@@ -105,6 +105,7 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
     Get aggregated roleplay context with preset story support
     """
     projection_row: SceneProjection = SceneProjection.empty()
+    rows: List[Dict[str, Any]] = []
     try:
         rows = await read_scene_context(user_id, conversation_id)
         if rows:
@@ -173,6 +174,19 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
 
     active_scene = await get_openai_active_scene(
         conversation_id=conversation_id,
+    )
+
+    logger.info(
+        (
+            "Aggregator context load user_id=%s conversation_id=%s rows=%s "
+            "location=%s time_of_day=%s npc_count=%s"
+        ),
+        user_id,
+        conversation_id,
+        len(rows),
+        current_location,
+        time_of_day,
+        len(npcs_present),
     )
 
     # Build base context
