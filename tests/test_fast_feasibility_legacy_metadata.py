@@ -377,6 +377,36 @@ def test_fast_feasibility_accepts_generic_venue_requests(monkeypatch, action_tex
     assert "location_absent" not in violation_blob
 
 
+def test_text_marker_requires_location_vocab_hit():
+    intent = {
+        "categories": [],
+        "direct_object": ["password"],
+    }
+    no_move_tokens = {"password"}
+    assert (
+        feasibility._intent_requests_location_move(
+            intent,
+            "enter the password.",
+            no_move_tokens,
+        )
+        is False
+    )
+
+    location_intent = {
+        "categories": [],
+        "direct_object": ["tavern"],
+    }
+    location_tokens = {"the tavern"}
+    assert (
+        feasibility._intent_requests_location_move(
+            location_intent,
+            "enter the tavern.",
+            location_tokens,
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize(
     "original, normalized",
     [

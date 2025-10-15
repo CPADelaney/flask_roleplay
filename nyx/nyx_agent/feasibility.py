@@ -805,7 +805,24 @@ def _intent_requests_location_move(intent: Dict[str, Any], text_l: str, candidat
             return True
 
     text_l = text_l or ""
-    return any(marker in text_l for marker in LOCATION_MOVE_TEXT_MARKERS)
+    if not any(marker in text_l for marker in LOCATION_MOVE_TEXT_MARKERS):
+        return False
+
+    normalized_candidates: Set[str] = set()
+    for token in candidate_tokens:
+        normalized = _normalize_location_phrase(token)
+        if not normalized:
+            continue
+        normalized_candidates.add(normalized)
+        normalized_candidates.update(part for part in normalized.split() if part)
+
+    location_vocab = (
+        GENERIC_VENUE_TERMS
+        | REAL_WORLD_TOPONYM_KEYWORDS
+        | LOCATION_REFERENCE_KEYWORDS
+    )
+
+    return bool(normalized_candidates & location_vocab)
 
 
 def _extract_candidate_location_tokens(intent: Dict[str, Any]) -> Set[str]:
