@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping
 
 from celery import shared_task
 
-from celery_config import celery_app
 from db.connection import get_db_connection_context, run_async_in_worker_loop
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from celery import Celery
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,12 @@ async def _insert_outbox_entries(entries: Iterable[Dict[str, Any]]) -> int:
     return len(entries)
 
 
+def _get_celery_app() -> "Celery":
+    from celery_config import celery_app
+
+    return celery_app
+
+
 def _enqueue_task(entry_payload: Dict[str, Any]) -> None:
     task_name = entry_payload.get("task_name")
     if not task_name:
@@ -125,7 +133,7 @@ def _enqueue_task(entry_payload: Dict[str, Any]) -> None:
     if priority is not None:
         options.setdefault("priority", priority)
 
-    celery_app.send_task(task_name, kwargs=kwargs, **options)
+    _get_celery_app().send_task(task_name, kwargs=kwargs, **options)
 
 
 def _backoff_seconds(attempts: int) -> int:
