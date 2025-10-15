@@ -152,6 +152,8 @@ _LOCATION_KEYS = (
     "currentLocation",
     "location",
     "Location",
+    "location_slug",
+    "locationSlug",
 )
 _LOCATION_ID_KEYS = (
     "CurrentLocationId",
@@ -159,6 +161,7 @@ _LOCATION_ID_KEYS = (
     "currentLocationId",
     "location_id",
     "LocationId",
+    "locationId",
 )
 
 
