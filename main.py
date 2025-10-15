@@ -381,53 +381,59 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         # Apply universal update if provided
         if universal_update:
             logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
+            update_result: Optional[Dict[str, Any]] = None
+
+            async def emit_universal_update_error() -> None:
+                await sio.emit(
+                    'error',
+                    {
+                        'error': 'Failed to apply world updates.',
+                        'openai_conversation_id': conversation_identifier_for_emit,
+                    },
+                    room=str(conversation_id),
+                )
+                if request_id:
+                    await clear_request_processing(request_id, redis_pool)
+
             try:
                 from logic.universal_updater_agent import apply_universal_updates_async, UniversalUpdaterContext
-                
+
                 updater_context = UniversalUpdaterContext(user_id, conversation_id)
                 await updater_context.initialize()
-                
+
                 async with get_db_connection_context() as conn:
-                    await apply_universal_updates_async(
+                    update_result = await apply_universal_updates_async(
                         updater_context,
                         user_id,
                         conversation_id,
                         universal_update,
                         conn,
                     )
-                
+
+                if not update_result or not update_result.get("success") or update_result.get("error"):
+                    error_detail = ""
+                    if isinstance(update_result, dict):
+                        error_detail = update_result.get("error", "")
+                    logger.error(
+                        f"[BG Task {conversation_id}] Universal updates reported failure: {error_detail or 'unknown error.'}"
+                    )
+                    await emit_universal_update_error()
+                    return
+
                 logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
-                
+
                 # Refresh aggregator data post-update
                 aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                 context["aggregator_data"] = aggregator_data
                 context["recent_turns"] = await fetch_recent_turns(user_id, conversation_id)
-                
+
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
-                await sio.emit(
-                    'error',
-                    {
-                        'error': 'Failed to apply world updates.',
-                        'openai_conversation_id': conversation_identifier_for_emit,
-                    },
-                    room=str(conversation_id),
-                )
-                if request_id:
-                    await clear_request_processing(request_id, redis_pool)
+                await emit_universal_update_error()
                 return
             except Exception as update_err:
                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                await sio.emit(
-                    'error',
-                    {
-                        'error': 'Failed to apply world updates.',
-                        'openai_conversation_id': conversation_identifier_for_emit,
-                    },
-                    room=str(conversation_id),
-                )
-                if request_id:
-                    await clear_request_processing(request_id, redis_pool)
+                await emit_universal_update_error()
                 return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
