@@ -52,6 +52,129 @@ from logic.dynamic_relationships import (
 
 logger = logging.getLogger(__name__)
 
+# --- Location normalization helpers ------------------------------------------
+
+_LOCATION_KEYS = (
+    "CurrentLocation", "current_location", "currentLocation", "location", "Location",
+)
+_LOCATION_ID_KEYS = (
+    "CurrentLocationId", "current_location_id", "currentLocationId", "location_id", "LocationId",
+)
+
+def _slugify(value: str) -> str:
+    """Very light slugify to keep dependencies minimal."""
+    if not isinstance(value, str):
+        return ""
+    s = value.strip().lower()
+    out = []
+    prev_dash = False
+    for ch in s:
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        else:
+            if not prev_dash:
+                out.append("-")
+                prev_dash = True
+    slug = "".join(out).strip("-")
+    return slug or "unknown"
+
+def _mirror_location_onto_roleplay(roleplay: Dict[str, Any], display: Optional[str], loc_id: Optional[int]) -> None:
+    """
+    Ensure legacy readers always see the normalized location fields in current roleplay dict.
+    This mirrors `display` and `loc_id` onto common legacy keys if missing.
+    """
+    if not isinstance(roleplay, dict):
+        return
+
+    if display:
+        for k in ("CurrentLocation", "current_location", "location"):
+            if not roleplay.get(k):
+                roleplay[k] = display
+
+    if loc_id is not None:
+        for k in ("CurrentLocationId", "current_location_id"):
+            if roleplay.get(k) in (None, "", 0):
+                roleplay[k] = loc_id
+
+def _extract_location_from_roleplay(roleplay: Dict[str, Any]) -> tuple[Optional[str], Optional[int]]:
+    """Read location fields from a roleplay dict using many legacy keys."""
+    if not isinstance(roleplay, dict):
+        return None, None
+
+    display = None
+    for k in _LOCATION_KEYS:
+        if roleplay.get(k) not in (None, ""):
+            display = str(roleplay.get(k)).strip()
+            if display:
+                break
+
+    loc_id = None
+    for k in _LOCATION_ID_KEYS:
+        v = roleplay.get(k)
+        if v not in (None, "", 0):
+            try:
+                loc_id = int(v)
+                if loc_id > 0:
+                    break
+                loc_id = None
+            except (TypeError, ValueError):
+                loc_id = None
+    return display, loc_id
+
+def _normalize_location_from_sources(
+    projection_row: "SceneProjection",
+    current_roleplay: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Produce a canonical locationInfo block from best-available sources.
+    Preference: projection → roleplay → Unknown.
+    """
+    # 1) Try projection row API (most authoritative for the current scene snapshot)
+    display = None
+    loc_id = None
+    source = "projection"
+
+    try:
+        display = (projection_row.current_location() or "").strip() or None
+    except Exception:
+        display = None
+
+    # Some implementations may support location_id() on the projection; attempt safely
+    try:
+        maybe_id = getattr(projection_row, "location_id", None)
+        loc_id = maybe_id() if callable(maybe_id) else None
+        if isinstance(loc_id, int) and loc_id <= 0:
+            loc_id = None
+    except Exception:
+        loc_id = None
+
+    # 2) Fall back to roleplay dict
+    if not display or loc_id is None:
+        rp_display, rp_id = _extract_location_from_roleplay(current_roleplay or {})
+        if rp_display and not display:
+            display = rp_display
+            source = "roleplay"
+        if rp_id is not None and loc_id is None:
+            loc_id = rp_id
+            source = "roleplay"
+
+    # 3) Final normalization
+    display = display or "Unknown"
+    slug = _slugify(display)
+    return {
+        "display": display,
+        "id": loc_id,
+        "slug": slug,
+        "source": source,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+def _get_cache_key(user_id: int, conversation_id: int) -> str:
+    """Key that matches the invalidation used in universal_updater_agent."""
+    return f"context:{user_id}:{conversation_id}"
+
+
 ###############################################################################
 # Global Singletons: Will be set by init_singletons()
 ###############################################################################
@@ -102,124 +225,131 @@ async def init_singletons() -> None:
 @track_performance("get_aggregated_roleplay_context")
 async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, player_name: str) -> Dict[str, Any]:
     """
-    Get aggregated roleplay context with preset story support
+    Get aggregated roleplay context with preset story support.
+    Now:
+      - Uses L1 unified cache via context_cache with the same key invalidated by the updater
+      - Normalizes location and mirrors it onto legacy keys in currentRoleplay/current_roleplay
+      - Publishes canonical `locationInfo`
     """
-    projection_row: SceneProjection = SceneProjection.empty()
-    rows: List[Dict[str, Any]] = []
-    try:
-        rows = await read_scene_context(user_id, conversation_id)
-        if rows:
-            projection_row = parse_scene_projection_row(rows[0])
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("Failed to load scene projection: %s", exc)
+    async def _fetch() -> Dict[str, Any]:
+        from context.projection_helpers import SceneProjection, parse_scene_projection_row
 
-    current_roleplay = projection_row.roleplay_dict()
-    current_location = projection_row.current_location() or current_roleplay.get('CurrentLocation') or 'Unknown'
-    time_of_day = projection_row.time_of_day() or current_roleplay.get('TimeOfDay') or 'Morning'
+        projection_row: SceneProjection = SceneProjection.empty()
+        rows: List[Dict[str, Any]] = []
 
-    npcs_present: List[Dict[str, Any]] = []
-    for npc in projection_row.npc_rows():
-        traits = npc.get('personality_traits') or []
-        if not isinstance(traits, list):
-            traits = [traits] if traits else []
-        npcs_present.append({
-            'id': npc.get('npc_id'),
-            'name': npc.get('npc_name'),
-            'description': npc.get('physical_description') or '',
-            'traits': traits,
-            'stats': {
-                'trust': npc.get('trust'),
-                'dominance': npc.get('dominance'),
-                'cruelty': npc.get('cruelty'),
-                'affection': npc.get('affection'),
-                'intensity': npc.get('intensity')
-            },
-            'introduced': bool(npc.get('introduced'))
-        })
+        try:
+            rows = await read_scene_context(user_id, conversation_id)
+            if rows:
+                projection_row = parse_scene_projection_row(rows[0])
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Failed to load scene projection: %s", exc)
 
-    player_stats = projection_row.player_stats_dict()
+        # Base roleplay dict and time
+        current_roleplay = projection_row.roleplay_dict()
+        time_of_day = (
+            projection_row.time_of_day()
+            or current_roleplay.get("TimeOfDay")
+            or current_roleplay.get("time_of_day")
+            or "Morning"
+        )
 
-    active_events = projection_row.active_events()
+        # --- Normalize location & mirror onto roleplay dicts
+        location_info = _normalize_location_from_sources(projection_row, current_roleplay)
+        _mirror_location_onto_roleplay(current_roleplay, location_info["display"], location_info["id"])
 
-    active_quests = []
-    for quest in projection_row.active_quests():
-        active_quests.append({
-            'quest_id': str(quest.get('quest_id')),
-            'quest_name': quest.get('quest_name'),
-            'status': quest.get('status'),
-            'progress_detail': quest.get('progress_detail'),
-            'quest_giver': quest.get('quest_giver'),
-            'reward': quest.get('reward')
-        })
+        # NPCs present
+        npcs_present: List[Dict[str, Any]] = []
+        for npc in projection_row.npc_rows():
+            traits = npc.get('personality_traits') or []
+            if not isinstance(traits, list):
+                traits = [traits] if traits else []
+            npcs_present.append({
+                'id': npc.get('npc_id'),
+                'name': npc.get('npc_name'),
+                'description': npc.get('physical_description') or '',
+                'traits': traits,
+                'stats': {
+                    'trust': npc.get('trust'),
+                    'dominance': npc.get('dominance'),
+                    'cruelty': npc.get('cruelty'),
+                    'affection': npc.get('affection'),
+                    'intensity': npc.get('intensity')
+                },
+                'introduced': bool(npc.get('introduced'))
+            })
 
-    openai_conversation = await get_latest_openai_conversation(
-        conversation_id=conversation_id,
-        user_id=user_id,
-    )
+        player_stats = projection_row.player_stats_dict()
+        active_events = projection_row.active_events()
 
-    chatkit_thread = await get_latest_chatkit_thread(
-        conversation_id=conversation_id,
-    )
+        active_quests = []
+        for quest in projection_row.active_quests():
+            active_quests.append({
+                'quest_id': str(quest.get('quest_id')),
+                'quest_name': quest.get('quest_name'),
+                'status': quest.get('status'),
+                'progress_detail': quest.get('progress_detail'),
+                'quest_giver': quest.get('quest_giver'),
+                'reward': quest.get('reward')
+            })
 
-    if chatkit_thread:
-        if not openai_conversation:
-            openai_conversation = {}
-        openai_conversation.setdefault("chatkit_thread", chatkit_thread)
-        chatkit_thread_id = chatkit_thread.get("chatkit_thread_id")
-        chatkit_run_id = chatkit_thread.get("chatkit_run_id")
-        if chatkit_thread_id:
-            openai_conversation["chatkit_thread_id"] = chatkit_thread_id
-        if chatkit_run_id:
-            openai_conversation["chatkit_run_id"] = chatkit_run_id
+        # --- OpenAI/ChatKit integration
+        openai_conversation = await get_latest_openai_conversation(conversation_id=conversation_id, user_id=user_id)
+        chatkit_thread = await get_latest_chatkit_thread(conversation_id=conversation_id)
+        if chatkit_thread:
+            if not openai_conversation:
+                openai_conversation = {}
+            openai_conversation.setdefault("chatkit_thread", chatkit_thread)
+            chatkit_thread_id = chatkit_thread.get("chatkit_thread_id")
+            chatkit_run_id = chatkit_thread.get("chatkit_run_id")
+            if chatkit_thread_id:
+                openai_conversation["chatkit_thread_id"] = chatkit_thread_id
+            if chatkit_run_id:
+                openai_conversation["chatkit_run_id"] = chatkit_run_id
 
-    active_scene = await get_openai_active_scene(
-        conversation_id=conversation_id,
-    )
+        active_scene = await get_openai_active_scene(conversation_id=conversation_id)
 
-    logger.info(
-        (
-            "Aggregator context load user_id=%s conversation_id=%s rows=%s "
-            "location=%s time_of_day=%s npc_count=%s"
-        ),
-        user_id,
-        conversation_id,
-        len(rows),
-        current_location,
-        time_of_day,
-        len(npcs_present),
-    )
+        logger.info(
+            (
+                "Aggregator context load user_id=%s conversation_id=%s rows=%s "
+                "location=%s time_of_day=%s npc_count=%s"
+            ),
+            user_id,
+            conversation_id,
+            len(rows),
+            location_info["display"],
+            time_of_day,
+            len(npcs_present),
+        )
 
-    # Build base context
-    result = {
-        'currentRoleplay': current_roleplay,
-        'current_roleplay': current_roleplay,
-        'currentLocation': current_location,
-        'current_location': current_location,
-        'location': current_location,
-        'timeOfDay': time_of_day,
-        'playerName': player_name,
-        'playerStats': player_stats,
-        'npcsPresent': npcs_present,
-        'activeEvents': active_events,
-        'activeQuests': active_quests,
-        'timestamp': datetime.now().isoformat()
-    }
+        # --- Build base context (publish canonical + legacy for compat)
+        result: Dict[str, Any] = {
+            'locationInfo': location_info,                   # <— canonical
+            'currentRoleplay': current_roleplay,             # legacy payload
+            'current_roleplay': current_roleplay,            # legacy alias
+            'currentLocation': location_info["display"],     # legacy
+            'current_location': location_info["display"],    # legacy alias
+            'location': location_info["display"],            # common alias
+            'timeOfDay': time_of_day,
+            'playerName': player_name,
+            'playerStats': player_stats,
+            'npcsPresent': npcs_present,
+            'activeEvents': active_events,
+            'activeQuests': active_quests,
+            'timestamp': datetime.now().isoformat(),
+        }
 
-    # Check for preset story
-    preset_info = await PresetStoryManager.check_preset_story(conversation_id)
-
-    if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
+        # --- Preset story augmentation (unchanged, but benefits from unified location)
+        preset_info = await PresetStoryManager.check_preset_story(conversation_id)
+        if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
             from story_templates.moth.lore import SFBayMothFlamePreset
             from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
-            
-            # Get location-specific lore
+
             location_lore = await get_location_specific_lore(
-                conversation_id, 
-                current_location,
-                preset_info['story_id']
+                conversation_id,
+                location_info["display"],
+                preset_info['story_id'],
             )
-            
-            # Add preset-specific context
+
             result['preset_story'] = {
                 'active': True,
                 'story_id': 'the_moth_and_flame',
@@ -235,8 +365,6 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
                     'external': ['The Rose & Thorn Society', 'The Thorn Garden', 'that secret feminist cult']
                 }
             }
-            
-            # Add critical constraints as a separate field for easy access
             result['preset_constraints'] = """
 CRITICAL CONSTRAINTS FOR THIS STORY:
 1. The network has NO official name - internally called "the network" or "the garden"
@@ -247,8 +375,6 @@ CRITICAL CONSTRAINTS FOR THIS STORY:
 6. Never place the Queen's private locations precisely
 7. The network cannot operate openly or control everyone
 """
-            
-            # Add quick reference for generation
             result['generation_hints'] = {
                 'forbidden_phrases': [
                     "The Rose & Thorn Society announced",
@@ -264,35 +390,33 @@ CRITICAL CONSTRAINTS FOR THIS STORY:
                     'transformation_time': 'months of careful work'
                 }
             }
-            
-            # Check if we're at a special location
-            if is_preset_special_location(current_location):
+            if is_preset_special_location(location_info["display"]):
                 result['special_location_active'] = True
-                result['location_special_rules'] = get_location_special_rules(current_location)
+                result['location_special_rules'] = get_location_special_rules(location_info["display"])
 
-    # Attach OpenAI integration metadata if present
-    openai_payload = _build_openai_integration_payload(
-        openai_conversation,
-        active_scene,
-    )
-    if openai_payload:
-        result['openai_integration'] = openai_payload
+        # Attach OpenAI integration metadata if present
+        openai_payload = _build_openai_integration_payload(openai_conversation, active_scene)
+        if openai_payload:
+            result['openai_integration'] = openai_payload
 
-    # Generate aggregator text
-    aggregator_text = build_aggregator_text(result)
-
-    # Enhance aggregator text with preset warnings if active
-    if preset_info:
-        aggregator_text = f"""{aggregator_text}
+        # Generate aggregator text (uses locationInfo first)
+        aggregator_text = build_aggregator_text(result)
+        if preset_info:
+            aggregator_text = f"""{aggregator_text}
 
 ACTIVE PRESET STORY: {preset_info.get('story_id')}
 You MUST follow all consistency rules for this preset story.
 {result.get('preset_constraints', '')}
 """
+        result['aggregatorText'] = aggregator_text
+        return result
 
-    result['aggregatorText'] = aggregator_text
+    # --- Use unified cache if available so invalidation from the updater works
+    key = _get_cache_key(user_id, conversation_id)
+    if context_cache:
+        return await context_cache.get(key=key, fetch_func=_fetch, cache_level=1)
+    return await _fetch()
 
-    return result
 
 
 def _parse_openai_metadata(metadata: Any) -> Dict[str, Any]:
@@ -826,104 +950,97 @@ async def get_optimized_context(
 def build_aggregator_text(aggregated_data: Dict[str, Any]) -> str:
     """
     Build aggregator text from the provided data for display or logging.
+    Prefers canonical `locationInfo` when available; falls back to legacy fields.
     Includes preset story context when active.
     """
-    # If pre-built aggregator text exists, check if we need to enhance it
+    # If pre-built aggregator text exists and preset not active, keep it
     if "aggregator_text" in aggregated_data and not aggregated_data.get("preset_story"):
         return aggregated_data["aggregator_text"]
-    
-    # Extract basic information
-    current_location = aggregated_data.get("currentLocation") or aggregated_data.get("current_location", "Unknown")
-    
-    # Handle date/time - check both naming conventions
+
+    # Prefer canonical locationInfo
+    loc_info = aggregated_data.get("locationInfo") or {}
+    current_location = (
+        loc_info.get("display")
+        or aggregated_data.get("currentLocation")
+        or aggregated_data.get("current_location")
+        or aggregated_data.get("location")
+        or "Unknown"
+    )
+
+    # Date/time and roleplay block
     current_roleplay = aggregated_data.get("currentRoleplay") or aggregated_data.get("current_roleplay", {})
     year = current_roleplay.get("CurrentYear") or aggregated_data.get("year", "1040")
     month = current_roleplay.get("CurrentMonth") or aggregated_data.get("month", "6")
     day = current_roleplay.get("CurrentDay") or aggregated_data.get("day", "15")
     time_of_day = aggregated_data.get("timeOfDay") or aggregated_data.get("time_of_day", "Morning")
-    
-    # Get NPCs - handle both naming conventions
+
     introduced_npcs = aggregated_data.get("npcsPresent") or aggregated_data.get("introduced_npcs", [])
-    
+
     # Build base text
     date_line = f"- It is {year}, {month} {day}, {time_of_day}.\n"
     location_line = f"- Current location: {current_location}\n"
-    
-    # Build NPC section
+
     npc_lines = ["Introduced NPCs in the area:"]
     for npc in introduced_npcs[:5]:
-        # Handle different NPC data structures
         if isinstance(npc, dict):
             npc_loc = npc.get("current_location", current_location)
             npc_name = npc.get("name") or npc.get("npc_name", "Unnamed NPC")
             npc_lines.append(f"  - {npc_name} is at {npc_loc}")
-    
-    if introduced_npcs:
-        npc_section = "\n".join(npc_lines)
-    else:
-        npc_section = "No NPCs currently in the area."
-    
+    npc_section = "\n".join(npc_lines) if introduced_npcs else "No NPCs currently in the area."
+
     text = f"{date_line}{location_line}\n{npc_section}\n"
-    
-    # Add environment description
+
     environment_desc = current_roleplay.get("EnvironmentDesc")
     if environment_desc:
         text += f"\nEnvironment:\n{environment_desc}\n"
-    
-    # Add player role
+
     player_role = current_roleplay.get("PlayerRole")
     if player_role:
         text += f"\nPlayer Role:\n{player_role}\n"
-    
-    # Add active events if present
+
     if aggregated_data.get("activeEvents"):
         event_names = [event.get("event_name", "Unknown Event") for event in aggregated_data["activeEvents"]]
         text += f"\nActive Events: {', '.join(event_names)}\n"
-    
-    # Add active quests if present
+
     if aggregated_data.get("activeQuests"):
         quest_names = [quest.get("quest_name", "Unknown Quest") for quest in aggregated_data["activeQuests"]]
         text += f"\nActive Quests: {', '.join(quest_names)}\n"
-    
-    # Add player stats summary if available
+
     if aggregated_data.get("playerStats"):
         stats = aggregated_data["playerStats"]
         if stats:
-            dominant_stat = max(stats.items(), key=lambda x: x[1] if isinstance(x[1], (int, float)) else 0)
-            text += f"\nPlayer's dominant trait: {dominant_stat[0]} ({dominant_stat[1]})\n"
-    
-    # ADD PRESET STORY SECTION
+            dominant_stat = max(
+                stats.items(),
+                key=lambda x: x[1] if isinstance(x[1], (int, float)) else float("-inf")
+            )
+            if dominant_stat[1] != float("-inf"):
+                text += f"\nPlayer's dominant trait: {dominant_stat[0]} ({dominant_stat[1]})\n"
+
+    # PRESET STORY (unchanged logic)
     if aggregated_data.get("preset_story"):
         preset = aggregated_data["preset_story"]
         text += f"\n==== PRESET STORY ACTIVE ====\n"
         text += f"Story: {preset.get('story_id', 'Unknown')}\n"
         text += f"Setting: {preset.get('setting', 'Unknown')}, Year: {preset.get('year', 'Modern')}\n"
         text += f"Act {preset.get('current_act', 1)}"
-        
         if preset.get('current_beat'):
             text += f", Beat: {preset['current_beat']}"
         text += "\n"
-        
-        # Add location-specific lore if available
-        if preset.get('current_location_lore'):
-            lore = preset['current_location_lore']
+        lore = preset.get('current_location_lore')
+        if lore:
             if lore.get('type') == 'specific_location':
                 text += f"\nLocation Type: {lore['location'].get('location_type', 'Unknown')}\n"
                 if lore['location'].get('access_level'):
                     text += f"Access Level: {lore['location']['access_level']}\n"
             elif lore.get('type') == 'district':
                 text += f"\nDistrict: {lore['district']['name']}\n"
-        
-        # Add any special location rules
         if aggregated_data.get('location_special_rules'):
             rules = aggregated_data['location_special_rules']
             text += f"\nSpecial Rules Active: {', '.join(rules)}\n"
-    
-    # Add preset constraints if active
+
     if aggregated_data.get("preset_constraints"):
         text += f"\n{aggregated_data['preset_constraints']}\n"
-    
-    # Add generation hints if available
+
     if aggregated_data.get("generation_hints"):
         hints = aggregated_data["generation_hints"]
         text += "\n==== GENERATION REMINDERS ====\n"
@@ -931,24 +1048,22 @@ def build_aggregator_text(aggregated_data: Dict[str, Any]) -> str:
             text += "Correct usage:\n"
             for key, value in hints['correct_usage'].items():
                 text += f"  - {key}: {value}\n"
-    
-    # Add context optimization note
+
+    # Context optimization hints
     text += "\n\n<!-- Context optimized with unified context system -->"
-    
-    # Add relevance note if NPCs have relevance scores
+
     has_relevance = any(
-        "relevance_score" in npc or "relevance" in npc 
-        for npc in introduced_npcs 
-        if isinstance(npc, dict)
+        isinstance(npc, dict) and ("relevance_score" in npc or "relevance" in npc)
+        for npc in introduced_npcs
     )
     if has_relevance:
         text += "\n<!-- NPCs sorted by relevance to current context -->"
-    
-    # Add preset story warning if active
+
     if aggregated_data.get("preset_story"):
         text += "\n<!-- PRESET STORY ACTIVE - Consistency rules MUST be followed -->"
-    
+
     return text
+
 
 ###############################################################################
 # Maintenance and Migration
