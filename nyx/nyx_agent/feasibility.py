@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import unicodedata
 from copy import deepcopy
 from datetime import datetime
@@ -171,6 +172,273 @@ SCENE_LOCATION_KEYS: Tuple[str, ...] = (
     "areas",
     "wings",
 )
+
+REAL_WORLD_TOPONYM_KEYWORDS: Set[str] = {
+    "airport",
+    "avenue",
+    "ave",
+    "boulevard",
+    "bridge",
+    "campus",
+    "center",
+    "centre",
+    "court",
+    "ct",
+    "dock",
+    "drive",
+    "dr",
+    "expressway",
+    "freeway",
+    "garden",
+    "gardens",
+    "harbor",
+    "harbour",
+    "heights",
+    "highway",
+    "hwy",
+    "lane",
+    "ln",
+    "library",
+    "mall",
+    "market",
+    "marina",
+    "museum",
+    "park",
+    "parkway",
+    "pier",
+    "plaza",
+    "port",
+    "road",
+    "rd",
+    "route",
+    "rt",
+    "square",
+    "station",
+    "street",
+    "st",
+    "subway",
+    "terminal",
+    "trail",
+    "university",
+    "way",
+}
+
+REAL_WORLD_NUMERIC_STORE_PATTERN = re.compile(r"^\d+(?:[-/ ]\d+)+$")
+
+GENERIC_VENUE_PREFIXES: Tuple[str, ...] = (
+    "something like ",
+    "some kind of ",
+    "some sort of ",
+    "somewhere like ",
+    "anything like ",
+    "any kind of ",
+    "any sort of ",
+    "an ",
+    "the ",
+    "some ",
+    "any ",
+    "a ",
+)
+
+GENERIC_VENUE_SUFFIXES: Tuple[str, ...] = (
+    " or something",
+    " or whatever",
+    " maybe",
+)
+
+GENERIC_VENUE_LEADING_MODIFIERS: Set[str] = {
+    "nearest",
+    "nearby",
+    "closest",
+    "local",
+    "any",
+    "some",
+    "good",
+    "nice",
+    "cheap",
+    "fancy",
+    "popular",
+}
+
+GENERIC_VENUE_ALIASES: Dict[str, Set[str]] = {
+    "bar": {"bar", "pub", "tavern", "saloon", "speakeasy"},
+    "shop": {
+        "shop",
+        "store",
+        "general store",
+        "boutique",
+        "stall",
+        "market stall",
+        "bazaar",
+        "storefront",
+        "market",
+    },
+    "convenience store": {
+        "convenience store",
+        "corner store",
+        "bodega",
+        "7-11",
+        "7 eleven",
+    },
+    "restaurant": {
+        "restaurant",
+        "diner",
+        "eatery",
+        "cafe",
+        "coffee shop",
+        "bistro",
+    },
+    "club": {"club", "nightclub", "dance club"},
+    "park": {"park", "garden", "gardens", "botanical garden"},
+    "station": {
+        "station",
+        "train station",
+        "bus station",
+        "subway station",
+        "metro station",
+        "tram station",
+        "ferry terminal",
+        "terminal",
+    },
+    "pier": {"pier", "dock", "harbor", "harbour", "marina"},
+    "market": {"market", "street market", "farmer's market"},
+    "library": {"library", "bookstore", "book shop"},
+}
+
+GENERIC_VENUE_TERMS: Set[str] = set()
+for canonical, synonyms in GENERIC_VENUE_ALIASES.items():
+    GENERIC_VENUE_TERMS.add(canonical)
+    GENERIC_VENUE_TERMS |= synonyms
+
+
+def _is_modern_or_realistic_setting(setting_context: Optional[Dict[str, Any]]) -> bool:
+    if not setting_context:
+        return False
+
+    markers: Set[str] = set()
+    for key in (
+        "kind",
+        "type",
+        "setting_kind",
+        "setting_type",
+        "reality_context",
+        "technology_level",
+        "setting_era",
+    ):
+        value = setting_context.get(key)
+        if isinstance(value, str):
+            markers.add(value.strip().lower())
+
+    for marker in markers:
+        if not marker:
+            continue
+        if any(hint in marker for hint in ("modern", "realistic", "contemporary", "urban")):
+            return True
+    return False
+
+
+def _looks_like_real_world_toponym(
+    original_token: str, normalized_token: str, setting_context: Optional[Dict[str, Any]]
+) -> bool:
+    if not _is_modern_or_realistic_setting(setting_context):
+        return False
+
+    normalized = (normalized_token or "").strip()
+    if not normalized:
+        return False
+
+    normalized = normalized.replace("'", "")
+    parts = [part for part in re.split(r"[\s\-]+", normalized) if part]
+    if not parts:
+        return False
+
+    if REAL_WORLD_NUMERIC_STORE_PATTERN.match(normalized.replace(" ", "")):
+        return True
+
+    if any(part in REAL_WORLD_TOPONYM_KEYWORDS for part in parts):
+        return True
+
+    if any(part.isdigit() for part in parts):
+        for idx, part in enumerate(parts[:-1]):
+            if part in REAL_WORLD_TOPONYM_KEYWORDS and parts[idx + 1].isdigit():
+                return True
+
+    original = original_token or ""
+    original_parts = [p for p in re.split(r"[\s\-]+", original) if p]
+    if len(original_parts) >= 2:
+        capitalized = sum(1 for p in original_parts if p[:1].isalpha() and p[:1].isupper())
+        if capitalized >= 2:
+            return True
+
+    return False
+
+
+def _normalize_generic_venue_phrase(normalized_token: str) -> str:
+    candidate = (normalized_token or "").strip()
+    if not candidate:
+        return ""
+
+    candidate = candidate.replace("-", " ")
+
+    for prefix in sorted(GENERIC_VENUE_PREFIXES, key=len, reverse=True):
+        if candidate.startswith(prefix):
+            candidate = candidate[len(prefix) :]
+            break
+
+    for suffix in GENERIC_VENUE_SUFFIXES:
+        if candidate.endswith(suffix):
+            candidate = candidate[: -len(suffix)]
+            break
+
+    candidate = candidate.strip()
+    if not candidate:
+        return ""
+
+    parts = candidate.split()
+    while parts and parts[0] in GENERIC_VENUE_LEADING_MODIFIERS:
+        parts.pop(0)
+
+    candidate = " ".join(parts).strip()
+    return candidate
+
+
+def _matches_generic_venue_request(
+    original_token: str,
+    normalized_token: str,
+    setting_context: Optional[Dict[str, Any]],
+    location_context_tokens: Set[str],
+    known_location_tokens: Set[str],
+) -> bool:
+    if not _is_modern_or_realistic_setting(setting_context):
+        return False
+
+    candidate = _normalize_generic_venue_phrase(normalized_token)
+    if not candidate:
+        return False
+
+    lower_original = (original_token or "").strip().lower()
+    if lower_original and lower_original in GENERIC_VENUE_TERMS:
+        return True
+
+    if candidate in GENERIC_VENUE_TERMS:
+        return True
+
+    if candidate in location_context_tokens or candidate in known_location_tokens:
+        return True
+
+    parts = candidate.split()
+    if not parts:
+        return False
+
+    if parts[-1] in GENERIC_VENUE_TERMS:
+        return True
+
+    if len(parts) >= 2:
+        trailing_two = " ".join(parts[-2:])
+        if trailing_two in GENERIC_VENUE_TERMS:
+            return True
+
+    return False
 
 MUNDANE_SEARCH_TOKEN_SYNONYMS: Dict[str, Set[str]] = {
     "coin": {"coin", "coins", "penny", "pennies", "small coin", "loose coin"},
@@ -533,6 +801,7 @@ def _find_unresolved_location_targets(
     known_location_tokens: Set[str],
     scene_npc_tokens: Set[str],
     scene_item_tokens: Set[str],
+    setting_context: Optional[Dict[str, Any]],
 ) -> List[str]:
     candidate_tokens = _extract_candidate_location_tokens(intent)
     if not _intent_requests_location_move(intent, text_l, candidate_tokens):
@@ -540,7 +809,8 @@ def _find_unresolved_location_targets(
 
     unresolved: List[str] = []
     for token in candidate_tokens:
-        raw = str(token).strip().lower()
+        original = str(token).strip()
+        raw = original.lower()
         normalized = _normalize_location_phrase(token)
         if not raw and not normalized:
             continue
@@ -557,6 +827,18 @@ def _find_unresolved_location_targets(
         if _is_location_reference_token(raw, location_aliases):
             continue
         if normalized and _is_location_reference_token(normalized, location_aliases):
+            continue
+
+        if _looks_like_real_world_toponym(original, normalized, setting_context):
+            continue
+
+        if _matches_generic_venue_request(
+            original,
+            normalized,
+            setting_context,
+            location_context_tokens,
+            known_location_tokens,
+        ):
             continue
 
         candidate_forms = {raw, normalized}
@@ -1482,6 +1764,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             known_location_tokens,
             scene_npc_tokens,
             scene_item_tokens,
+            setting_context,
         )
         if not missing_location_tokens:
             continue
@@ -3209,6 +3492,20 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         location_features = [location_features]
     time_phase = (scene.get("time_phase") or scene.get("time_of_day") or "day") if isinstance(scene, dict) else "day"
 
+    setting_context = {
+        "kind": setting_kind,
+        "type": setting_type,
+        "setting_kind": setting_kind,
+        "setting_type": setting_type,
+        "reality_context": reality_context,
+        "technology_level": technology_level,
+        "setting_era": setting_era,
+        "scene": scene,
+        "location": {"name": location_name} if location_name else {},
+        "location_features": location_features,
+        "known_location_names": known_location_names,
+    }
+
     scene_npc_tokens = _tokenize_scene_values(scene_npcs)
     scene_item_tokens = _tokenize_scene_values(scene_items)
     location_token = str(location_name).strip().lower() if location_name else ""
@@ -3270,6 +3567,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             known_location_tokens,
             scene_npc_tokens,
             scene_item_tokens,
+            setting_context,
         )
         if missing_location_tokens:
             missing_location_phrase = _format_missing_names(missing_location_tokens)
