@@ -174,6 +174,70 @@ def test_assess_action_feasibility_defers_for_missing_mundane_prereqs(monkeypatc
     asyncio.run(_run())
 
 
+def test_assess_action_feasibility_location_asks_follow_soft_strategy(monkeypatch):
+    async def fake_parse_action_intents(_):
+        return [
+            {
+                "categories": ["movement"],
+                "direct_object": ["mystery lounge"],
+            }
+        ]
+
+    async def fake_load_context(_):
+        return {
+            "caps_loaded": True,
+            "capabilities": {"movement": True},
+            "available_items": [],
+            "present_entities": [],
+            "location": {"name": "Atrium"},
+            "scene": {},
+            "location_features": [],
+            "current_time": "day",
+            "hard_rules": [],
+            "established_impossibilities": [],
+            "known_location_names": [],
+        }
+
+    async def fake_find_unresolved_location_targets(*_args, **_kwargs):
+        return ["mystery lounge"]
+
+    def fake_resolver_feedback(token, _cache):
+        if "mystery lounge" in str(token).lower():
+            return {"decision": "ask", "reason": "Need a quick description."}
+        return None
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "_load_comprehensive_context", fake_load_context)
+    monkeypatch.setattr(
+        feasibility,
+        "_find_unresolved_location_targets",
+        fake_find_unresolved_location_targets,
+    )
+    monkeypatch.setattr(
+        feasibility,
+        "_resolver_feedback_for_token",
+        fake_resolver_feedback,
+    )
+
+    class DummyCtx:
+        pass
+
+    async def _run():
+        result = await feasibility.assess_action_feasibility(
+            DummyCtx(),
+            "Go to the mystery lounge",
+        )
+
+        overall = result["overall"]
+        assert overall["feasible"] is False
+        assert overall["strategy"] == "ask"
+        per_intent = result["per_intent"][0]
+        assert per_intent["strategy"] == "ask"
+        assert per_intent["feasible"] is False
+
+    asyncio.run(_run())
+
+
 @pytest.mark.anyio
 async def test_fast_feasibility_defer_on_missing_scene_entities(monkeypatch):
     async def fake_parse_action_intents(_text):
