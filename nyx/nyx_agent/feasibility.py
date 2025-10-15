@@ -2159,9 +2159,17 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
 
     if location_blocks:
         per_intent = []
+        has_ask = False
+        has_deny = False
         for idx, cats in enumerate(inferred_categories):
             if idx in location_blocks:
-                per_intent.append(location_blocks[idx])
+                block = location_blocks[idx]
+                per_intent.append(block)
+                strategy = (block or {}).get("strategy")
+                if strategy == "deny":
+                    has_deny = True
+                elif strategy == "ask":
+                    has_ask = True
             else:
                 per_intent.append(
                     {
@@ -2171,7 +2179,11 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
                     }
                 )
 
-        return {"overall": {"feasible": False, "strategy": "deny"}, "per_intent": per_intent}
+        overall_strategy = "deny" if has_deny else ("ask" if has_ask else "deny")
+        return {
+            "overall": {"feasible": False, "strategy": overall_strategy},
+            "per_intent": per_intent,
+        }
 
     # Quick check against hard rules
     quick_check = await _quick_feasibility_check(setting_context, intents)
