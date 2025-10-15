@@ -575,6 +575,38 @@ def test_collect_updates_from_intent_emits_player_move():
     assert move.location_id == 777
 
 
+def test_collect_updates_uses_last_user_input_for_movement():
+    context = NyxContext(user_id=414, conversation_id=515)
+    broker = _StubContextBroker(context)
+    context.context_broker = broker
+    context.current_location = "Old Port"
+    context.current_context = {
+        "currentRoleplay": {"CurrentLocation": {"id": "old_port", "name": "Old Port"}},
+        "location_name": "Old Port",
+        "location_id": "old_port",
+    }
+
+    asyncio.run(context.build_context_for_input("Walk to Radiant Bazaar", {}))
+
+    assert context.last_user_input == "Walk to Radiant Bazaar"
+    assert context.current_context["last_user_input"] == "Walk to Radiant Bazaar"
+
+    scope = broker.last_scope
+    assert scope is not None
+    assert scope.location_id == "old_port"
+
+    bundle = asyncio.run(broker.load_or_fetch_bundle(scope))
+    updates = asyncio.run(broker.collect_universal_updates(bundle))
+
+    assert updates
+    roleplay_updates = updates["roleplay_updates"]
+    assert roleplay_updates["CurrentLocation"] == "Radiant Bazaar"
+
+    scene_payload = json.loads(roleplay_updates["CurrentScene"])
+    assert scene_payload["location"]["name"] == "Radiant Bazaar"
+    assert scene_payload["location"]["id"] == "Radiant Bazaar"
+
+
 def test_process_user_input_persists_location(monkeypatch):
     from nyx.nyx_agent import context as context_module
     import nyx.nyx_agent.orchestrator as orchestrator_module

@@ -2753,6 +2753,7 @@ class NyxContext:
     current_world_state: Optional[Any] = None
     last_packed_context: Optional['PackedContext'] = None
     config: Optional[Any] = None  # For model context budget
+    last_user_input: Optional[str] = None
     
     # ────────── NPC-SPECIFIC STATE ──────────
     npc_snapshots: Dict[int, NPCSnapshot] = field(default_factory=dict)
@@ -3384,6 +3385,9 @@ class NyxContext:
         previous_location_id = self.current_context.get("location_id")
         if context_data:
             self.current_context.update(context_data)
+
+        self.last_user_input = user_input
+        self.current_context["last_user_input"] = user_input
 
         await self._refresh_location_from_context(
             previous_location_id=previous_location_id
