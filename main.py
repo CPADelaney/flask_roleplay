@@ -531,12 +531,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 or message_content
                 or "I'm sorry, I can't help with that."
             )
-
             if INTEGRATE_GUARDRAIL_DENIAL:
-                logger.info(
-                    "[BG Task %s] Guardrail denial will be integrated into ChatKit output.",
-                    conversation_id,
-                )
+                logger.info("[BG Task %s] Guardrail denial will be integrated into ChatKit output.", conversation_id)
                 safety_context = {
                     "denial_text": denial_text,
                     "metadata": guardrail_metadata or {},
@@ -544,14 +540,14 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             else:
                 logger.info("[BG Task %s] Guardrail denial (non-integrated).", conversation_id)
                 payload = {
-                    'full_text': denial_text,
-                    'request_id': request_id,
-                    'success': False,
-                    'guardrail': 'deny',
+                    "full_text": denial_text,
+                    "request_id": request_id,
+                    "success": False,
+                    "guardrail": "deny",
                 }
                 if conversation_identifier_for_emit is not None:
-                    payload['openai_conversation_id'] = conversation_identifier_for_emit
-                await sio.emit('done', payload, room=str(conversation_id))
+                    payload["openai_conversation_id"] = conversation_identifier_for_emit
+                await sio.emit("done", payload, room=str(conversation_id))
                 if request_id:
                     await clear_request_processing(request_id, redis_pool)
                 return
@@ -611,7 +607,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             except Exception as img_err:
                 logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
 
-        final_text = (safety_context or {}).get("denial_text") if safety_context else message_content or ""
+        final_text = (safety_context or {}).get("denial_text") if safety_context else (message_content or "")
         chatkit_streamed = False
         chatkit_final = None
         chatkit_thread_info: Dict[str, Any] = {}
@@ -673,6 +669,13 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             openai_conversation_id=openai_remote_conversation_id,
             thread_id=existing_thread_id,
         )
+        if safety_context:
+            metadata_payload.setdefault("safety", {})
+            metadata_payload["safety"].update({
+                "guardrail": "deny",
+                "integrated": True,
+                "denial_text_preview": (safety_context.get("denial_text") or "")[:160],
+            })
 
         if chatkit_server and chatkit_messages:
             async def emit_token(token: str) -> None:
@@ -1292,7 +1295,7 @@ def create_quart_app():
             if not all([conversation_id is not None, user_input is not None]):
                 error_msg = "Invalid 'storybeat' payload: missing conversation_id or user_input."
                 app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
-                await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
+                await sio.emit('error', {'error': error_msg}, to=sid)
                 return
             
             await sio.emit("processing", {"message": "Your request is being processed...", "request_id": request_id}, to=sid)
@@ -2013,42 +2016,19 @@ def create_quart_app():
             logger.warning(f"Readiness DB check unexpected error: {e}", exc_info=True)
 
 
-        # --- Redis Check (Sync - consider async if heavily used) ---
-        redis_host = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-        redis_port = int(os.getenv("REDIS_PORT", 6379))
+        # --- Redis Check (re-use existing pool) ---
         try:
-            # Get the aioredis pool/client similar to how your middleware does.
-            # For simplicity, let's assume you have a way to get an aioredis client instance.
-            # If you stored the pool on 'current_app' during initialize_systems:
-            # redis_pool = getattr(current_app, 'aioredis_rate_limit_pool', None)
-            # Or create a temporary one for the check if not easily accessible:
-            redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-            if redis_url:
-                # Use a timeout for the connection attempt in readiness
-                try:
-                    aredis_client = await asyncio.wait_for(
-                        aioredis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2),
-                        timeout=3 # Overall timeout for from_url and ping
-                    )
-                    await aredis_client.ping()
-                    status["checks"]["aioredis"] = "connected"
-                    await aredis_client.close() # Close the temporary client/pool
-                except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as aredis_err:
-                    status["checks"]["aioredis"] = f"error: {type(aredis_err).__name__}"
-                    is_ready = False
-                    logger.warning(f"Readiness aioredis check failed: {aredis_err}")
-                except Exception as e_aredis: # Catch any other exception during aioredis init/ping
-                    status["checks"]["aioredis"] = f"unexpected error: {type(e_aredis).__name__}"
-                    is_ready = False
-                    logger.warning(f"Readiness aioredis check unexpected error: {e_aredis}", exc_info=True)
+            pool = getattr(app, "redis_rate_limit_pool", None)
+            if pool:
+                await pool.ping()
+                status["checks"]["redis"] = "connected"
             else:
-                status["checks"]["aioredis"] = "not configured (REDIS_URL missing)"
-                is_ready = False # Or handle as per your requirements
-
-        except Exception as e: # General catch for the try block
-            status["checks"]["aioredis"] = f"error: {type(e).__name__}"
+                status["checks"]["redis"] = "not configured"
+                is_ready = False
+        except Exception as e:
+            status["checks"]["redis"] = f"error: {type(e).__name__}"
             is_ready = False
-            logger.warning(f"Readiness check aioredis setup error: {e}", exc_info=True)
+            logger.warning(f"Readiness Redis check failed: {e}", exc_info=True)
 
         # --- Celery Check (using inspect) ---
         # This can be slow and unreliable; consider a dedicated health check task
