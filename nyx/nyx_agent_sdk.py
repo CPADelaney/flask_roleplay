@@ -114,6 +114,151 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+# ---- Location normalization helpers (gateway-level) -------------------------
+
+_LOCATION_KEYS = (
+    "CurrentLocation", "current_location", "currentLocation", "location", "Location",
+)
+_LOCATION_ID_KEYS = (
+    "CurrentLocationId", "current_location_id", "currentLocationId", "location_id", "LocationId",
+)
+
+def _slugify_location(value: str) -> str:
+    if not isinstance(value, str):
+        return "unknown"
+    s = value.strip().lower()
+    out, prev_dash = [], False
+    for ch in s:
+        if ch.isalnum():
+            out.append(ch); prev_dash = False
+        else:
+            if not prev_dash:
+                out.append("-"); prev_dash = True
+    slug = "".join(out).strip("-")
+    return slug or "unknown"
+
+def _extract_location_from_mapping(mapping: Dict[str, Any]) -> tuple[Optional[str], Optional[int]]:
+    """Read display + id from a loose dict with many legacy key options."""
+    if not isinstance(mapping, dict):
+        return None, None
+
+    display = None
+    for k in _LOCATION_KEYS:
+        v = mapping.get(k)
+        if isinstance(v, str) and v.strip():
+            display = v.strip()
+            break
+        # composite dict like {"location": {"name": ..., "id": ...}}
+        if k == "location" and isinstance(v, dict):
+            name = v.get("name") or v.get("label") or v.get("slug") or v.get("location")
+            if isinstance(name, str) and name.strip():
+                display = name.strip()
+                break
+
+    loc_id = None
+    for k in _LOCATION_ID_KEYS:
+        v = mapping.get(k)
+        try:
+            if v is not None:
+                loc_id = int(v)
+                if loc_id <= 0:
+                    loc_id = None
+        except (TypeError, ValueError):
+            pass
+        if loc_id is not None:
+            break
+
+    # If we only had a composite `location` dict, try to read its id too.
+    if loc_id is None and isinstance(mapping.get("location"), dict):
+        v = mapping["location"].get("id") or mapping["location"].get("location_id") or mapping["location"].get("pk")
+        try:
+            if v is not None:
+                loc_id = int(v)
+                if loc_id <= 0:
+                    loc_id = None
+        except (TypeError, ValueError):
+            loc_id = None
+
+    return display, loc_id
+
+def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
+    """
+    Ensure metadata has both a canonical `locationInfo` and a mirrored `scene_scope`.
+    Does not overwrite existing scene_scope fields if they are already set.
+    """
+    if not isinstance(meta, dict):
+        return
+
+    # 1) Try canonical first
+    li = meta.get("locationInfo") if isinstance(meta.get("locationInfo"), dict) else None
+    display = None
+    loc_id = None
+    slug = None
+
+    if li:
+        display = li.get("display") or li.get("name") or li.get("label")
+        if isinstance(display, str) and display.strip():
+            display = display.strip()
+        else:
+            display = None
+        loc_id = li.get("id")
+        try:
+            if loc_id is not None:
+                loc_id = int(loc_id)
+                if loc_id <= 0:
+                    loc_id = None
+        except (TypeError, ValueError):
+            loc_id = None
+        slug = (li.get("slug") or (display and _slugify_location(display)) or "unknown")
+
+    # 2) Fallback to roleplay-style + legacy keys
+    if not display or slug is None or loc_id is None:
+        rp = meta.get("currentRoleplay") or meta.get("current_roleplay") or {}
+        if not isinstance(rp, dict):
+            rp = {}
+        rp_display, rp_id = _extract_location_from_mapping(rp)
+        fb_display, fb_id = _extract_location_from_mapping(meta)  # last-resort loose read
+
+        display = display or rp_display or fb_display or "Unknown"
+        if loc_id is None:
+            loc_id = rp_id if rp_id is not None else fb_id
+        slug = slug or _slugify_location(display)
+
+    # 3) Stamp locationInfo if missing/incomplete
+    li_obj = meta.setdefault("locationInfo", {})
+    if "display" not in li_obj:
+        li_obj["display"] = display
+    if li_obj.get("id") is None and loc_id is not None:
+        li_obj["id"] = loc_id
+    if not li_obj.get("slug"):
+        li_obj["slug"] = slug
+    li_obj.setdefault("source", "gateway")
+    li_obj.setdefault("updated_at", datetime.utcnow().isoformat())
+
+    # 4) Mirror onto scene_scope (don’t clobber explicit values)
+    ss = meta.setdefault("scene_scope", {})
+    if not ss.get("location_name"):
+        ss["location_name"] = display
+    if ss.get("location_id") is None and loc_id is not None:
+        ss["location_id"] = loc_id
+    if not ss.get("location_slug"):
+        ss["location_slug"] = slug
+
+def _invalidate_context_cache_safe(user_id: str | int, conversation_id: str | int) -> None:
+    """
+    Invalidate unified context cache (L1/L2) for this (user, conversation).
+    Safe no-op if cache layer not available.
+    """
+    try:
+        from logic.aggregator_sdk import context_cache  # late import to avoid cycles
+        if context_cache:
+            key_prefix = f"context:{int(user_id)}:{int(conversation_id)}"
+            context_cache.invalidate(key_prefix)
+    except Exception:
+        # Cache not present or not initialized; ignore.
+        pass
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Config & response models
@@ -336,75 +481,33 @@ class NyxAgentSDK:
         user_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> NyxResponse:
-        """Process with MANDATORY feasibility checks (dynamic & robust) + addiction meta (turn_index, scene_tags, stimuli)."""
         import time, uuid, re
         t0 = time.time()
         trace_id = uuid.uuid4().hex[:8]
         meta = dict(metadata or {})
-    
+
         logger.info(f"[SDK-{trace_id}] Processing input: {message[:120]}")
-    
+
         # --- rate limiting (unchanged) ---
         lock = None
         if getattr(self.config, "rate_limit_per_conversation", False):
             lock = self._locks.setdefault(conversation_id, asyncio.Lock())
             await lock.acquire()
-    
-        # --- small helpers (local, side-effect free) ---
-        def _lower(s: Optional[str]) -> str:
-            return (s or "").lower()
-    
-        def _compile_stimuli_regex() -> Optional[re.Pattern]:
-            """Union of known stimuli; prefer shared vocab from addiction_system_sdk, else fallback local set."""
-            tokens = None
-            try:
-                # Prefer the canonical mapping from the addiction SDK
-                from logic.addiction_system_sdk import AddictionTriggerConfig  # type: ignore
-                cfg = AddictionTriggerConfig()
-                vocab = set()
-                for vs in cfg.stimuli_affinity.values():
-                    vocab |= set(vs or [])
-                tokens = sorted(vocab)
-            except Exception:
-                # Minimal fallback; keep it tiny and safe to change
-                tokens = [
-                    "feet","toes","ankle","barefoot","sandals","flipflops","heels",
-                    "perfume","musk","sweat","locker","gym","laundry","socks",
-                    "ankle_socks","knee_highs","thigh_highs","stockings",
-                    "hips","ass","shorts","tight_skirt",
-                    "snicker","laugh","eye_roll","dismissive",
-                    "order","command","kneel","obedience",
-                    "perspiration","moist"
-                ]
-            # turn underscores into a pattern that also matches spaces/dashes
-            escaped = []
-            for t in tokens:
-                if "_" in t:
-                    escaped.append(r"\b" + re.escape(t).replace(r"\_", r"[-_ ]") + r"\b")
-                else:
-                    escaped.append(r"\b" + re.escape(t) + r"\b")
-            return re.compile(r"(?:%s)" % "|".join(escaped), flags=re.IGNORECASE)
-    
-        def _extract_stimuli(text: str) -> List[str]:
-            rx = getattr(self, "_stimuli_rx", None)
-            if rx is None:
-                rx = _compile_stimuli_regex()
-                setattr(self, "_stimuli_rx", rx)
-            if not rx:
-                return []
-            return sorted({m.group(0).lower().replace("-", "_").replace(" ", "_") for m in rx.finditer(text or "")})
-    
-        # --- cache key set EARLY so all early returns use the same key ---
+
+        # cache key set early
         cache_key = self._cache_key(conversation_id, user_id, message, meta)
-    
+
+        # Normalize location meta early (so orchestrator receives a consistent scene_scope)
+        _normalize_location_meta_inplace(meta)
+
         try:
             # --- cache check ---
             cached = self._read_cache(cache_key)
             if cached:
                 logger.info(f"[SDK-{trace_id}] Cache hit")
                 return cached
-    
-            # --- 1) Optional pre-moderation ---
+
+            # --- (1) Optional pre-moderation (unchanged) ---
             if getattr(self.config, "pre_moderate_input", False) and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(message)
@@ -422,8 +525,8 @@ class NyxAgentSDK:
                         return resp
                 except Exception:
                     logger.debug(f"[SDK-{trace_id}] pre-moderation failed softly", exc_info=True)
-    
-            # --- 2) MANDATORY fast feasibility gate ---
+
+            # --- (2) Fast feasibility gate (unchanged except logging) ---
             feas = None
             try:
                 from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
@@ -437,13 +540,12 @@ class NyxAgentSDK:
                 logger.error(f"[SDK-{trace_id}] Feasibility module not found: {e}")
             except Exception as e:
                 logger.error(f"[SDK-{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
-    
+
             if isinstance(feas, dict):
                 overall = feas.get("overall", {})
                 feasible_flag = overall.get("feasible")
                 strategy = (overall.get("strategy") or "").lower()
-    
-                # Hard block at SDK if 'deny'
+
                 if feasible_flag is False and strategy in {"deny", "defer"}:
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
@@ -454,12 +556,8 @@ class NyxAgentSDK:
                         if defer_context:
                             guidance = await self._generate_defer_narrative(defer_context, trace_id)
                         if not guidance:
-                            if defer_context:
-                                guidance = build_defer_fallback_text(defer_context)
-                            else:
-                                guidance = (
-                                    "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
-                                )
+                            guidance = build_defer_fallback_text(defer_context) if defer_context else \
+                                "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
                         alternatives = leads
                     else:
                         guidance = first.get("narrator_guidance") or "That can't happen here."
@@ -468,39 +566,37 @@ class NyxAgentSDK:
 
                     alt_list = list(alternatives) if isinstance(alternatives, (list, tuple)) else []
 
-                    metadata = {
+                    metadata_out = {
                         "action_blocked": True,
                         "feasibility": feas,
                         "block_stage": "pre_orchestrator",
                         "strategy": strategy,
                     }
                     if strategy == "defer":
-                        metadata["action_deferred"] = True
-                    metadata.update(extra_meta)
+                        metadata_out["action_deferred"] = True
+                    metadata_out.update(extra_meta)
 
                     resp = NyxResponse(
                         narrative=guidance,
                         choices=[{"text": alt} for alt in alt_list[:4]],
-                        metadata=metadata,
+                        metadata=metadata_out,
                         success=True,
                         trace_id=trace_id,
                         processing_time=time.time() - t0,
                     )
                     self._write_cache(cache_key, resp)
                     return resp
-    
+
                 logger.info(f"[SDK-{trace_id}] Feasibility: feasible={feasible_flag} strategy={strategy}")
-    
-            # --- 2.5) Inject turn_index, scene tags, and stimuli for addiction gating ---
-            # Turn indexing (persistent per (user, conversation))
+
+            # --- turn_index, scene_tags, stimuli (unchanged) ---
             if not hasattr(self, "_turn_indices"):
                 self._turn_indices: Dict[Tuple[str, str], int] = {}
             key = (str(user_id), str(conversation_id))
             turn_index = self._turn_indices.get(key, -1) + 1
             self._turn_indices[key] = turn_index
             meta["turn_index"] = turn_index
-    
-            # Scene tags (optional; keep your manager wiring if present)
+
             if "scene_tags" not in meta:
                 try:
                     if hasattr(self, "scene_manager"):
@@ -512,15 +608,50 @@ class NyxAgentSDK:
                                 meta["scene"] = {"tags": tags}
                 except Exception:
                     logger.debug(f"[SDK-{trace_id}] scene tag lookup failed softly", exc_info=True)
-    
-            # Stimuli from the current user message (plus any incoming metadata hint)
+
+            def _compile_stimuli_regex() -> Optional[re.Pattern]:
+                tokens = None
+                try:
+                    from logic.addiction_system_sdk import AddictionTriggerConfig  # type: ignore
+                    cfg = AddictionTriggerConfig()
+                    vocab = set()
+                    for vs in cfg.stimuli_affinity.values():
+                        vocab |= set(vs or [])
+                    tokens = sorted(vocab)
+                except Exception:
+                    tokens = [
+                        "feet","toes","ankle","barefoot","sandals","flipflops","heels",
+                        "perfume","musk","sweat","locker","gym","laundry","socks",
+                        "ankle_socks","knee_highs","thigh_highs","stockings",
+                        "hips","ass","shorts","tight_skirt",
+                        "snicker","laugh","eye_roll","dismissive",
+                        "order","command","kneel","obedience",
+                        "perspiration","moist"
+                    ]
+                escaped = []
+                for t in tokens:
+                    if "_" in t:
+                        escaped.append(r"\b" + re.escape(t).replace(r"\_", r"[-_ ]") + r"\b")
+                    else:
+                        escaped.append(r"\b" + re.escape(t) + r"\b")
+                return re.compile(r"(?:%s)" % "|".join(escaped), flags=re.IGNORECASE)
+
+            def _extract_stimuli(text: str) -> List[str]:
+                rx = getattr(self, "_stimuli_rx", None)
+                if rx is None:
+                    rx = _compile_stimuli_regex()
+                    setattr(self, "_stimuli_rx", rx)
+                if not rx:
+                    return []
+                return sorted({m.group(0).lower().replace("-", "_").replace(" ", "_") for m in rx.finditer(text or "")})
+
             msg_stimuli = _extract_stimuli(message)
-            meta_stimuli = set(_lower(s) for s in meta.get("stimuli", []) if isinstance(s, str))
+            meta_stimuli = {s.lower() for s in meta.get("stimuli", []) if isinstance(s, str)}
             combined_stimuli = sorted(set(msg_stimuli) | meta_stimuli)
             if combined_stimuli:
                 meta["stimuli"] = combined_stimuli
-    
-            # --- 3) Orchestrator call with enriched meta ---
+
+            # --- orchestrator call ---
             result = await self._call_orchestrator_with_timeout(
                 message=message,
                 conversation_id=conversation_id,
@@ -530,28 +661,26 @@ class NyxAgentSDK:
             resp = NyxResponse.from_orchestrator(result)
             resp.processing_time = resp.processing_time or (time.time() - t0)
             resp.trace_id = resp.trace_id or trace_id
-            # Strategy metadata may not be present; log best-effort for debugging consistency issues.
-            logger.info(
-                "[SDK-%s] Orchestrator completed success=%s strategy=%s",
-                trace_id,
-                resp.success,
-                (meta.get("feasibility", {}).get("overall", {}).get("strategy")
-                 if isinstance(meta.get("feasibility"), dict)
-                 else None),
-            )
-    
-            # Optionally: glean stimuli from orchestrator narrative to help next turn (cheap & safe)
+
+            # **Normalize location again on the way out (orchestrator may have changed it)**
+            try:
+                _normalize_location_meta_inplace(resp.metadata)
+            except Exception:
+                logger.debug(f"[SDK-{trace_id}] output location normalization failed softly", exc_info=True)
+
+            # glean stimuli from generated narrative
             try:
                 if resp and resp.narrative:
                     out_stimuli = _extract_stimuli(resp.narrative)
                     if out_stimuli:
-                        # Store a short-term hint; up to you if you want to persist elsewhere
-                        meta.setdefault("observed_stimuli", [])
-                        meta["observed_stimuli"] = sorted({*meta["observed_stimuli"], *out_stimuli})
+                        resp.metadata.setdefault("observed_stimuli", [])
+                        resp.metadata["observed_stimuli"] = sorted({
+                            *resp.metadata["observed_stimuli"], *out_stimuli
+                        })
             except Exception:
                 logger.debug(f"[SDK-{trace_id}] output stimuli glean failed softly", exc_info=True)
-    
-            # --- 4) Optional post-moderation ---
+
+            # --- post moderation ---
             if getattr(self.config, "post_moderate_output", False) and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
@@ -564,8 +693,8 @@ class NyxAgentSDK:
                             resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
                 except Exception:
                     logger.debug("post-moderation failed (non-fatal)", exc_info=True)
-    
-            # --- 5) Optional response filter ---
+
+            # --- response filter (optional) ---
             if getattr(self, "_filter_class", None) and resp.narrative:
                 try:
                     filter_instance = self._filter_class(
@@ -578,8 +707,8 @@ class NyxAgentSDK:
                         resp.metadata.setdefault("filters", {})["response_filter"] = True
                 except Exception:
                     logger.debug("ResponseFilter failed softly", exc_info=True)
-    
-            # --- 6) Optional post hooks ---
+
+            # --- post hooks ---
             if getattr(self, "_post_hooks", None):
                 for hook in self._post_hooks:
                     try:
@@ -587,15 +716,27 @@ class NyxAgentSDK:
                     except Exception:
                         logger.debug("post_hook failed softly", exc_info=True)
 
-            # --- 7) Telemetry & background maintenance ---
+            # --- telemetry/maintenance/fanout ---
             await self._maybe_log_perf(resp)
             await self._maybe_enqueue_maintenance(resp, conversation_id)
             await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
 
-            # --- 8) Cache & return ---
+            # **Invalidate aggregator/unified cache if we changed world state**
+            try:
+                world_changed = bool(resp.world_state) \
+                    or bool(resp.metadata.get("universal_updates")) \
+                    or bool(resp.metadata.get("canon_event_applied")) \
+                    or bool(resp.metadata.get("action_deferred"))  # scene sealing etc can alter context
+                if world_changed:
+                    _invalidate_context_cache_safe(user_id, conversation_id)
+                    # also clear our tiny per-conversation memoization window
+                    self._clear_result_cache_for_conversation(conversation_id)
+            except Exception:
+                logger.debug(f"[SDK-{trace_id}] cache invalidation failed softly", exc_info=True)
+
             self._write_cache(cache_key, resp)
             return resp
-    
+
         except Exception as e:
             logger.error("orchestrator path failed; attempting fallback. err=%s", e, exc_info=True)
             try:
@@ -607,11 +748,8 @@ class NyxAgentSDK:
                     trace_id=trace_id,
                     t0=t0,
                 )
-                logger.info(
-                    "[SDK-%s] Fallback path completed success=%s", trace_id, resp.success
-                )
-    
-                # Post moderation/filter/hooks even on fallback
+
+                # post moderation/filter/hooks (same as above), omitted here to keep diff tight:
                 if getattr(self.config, "post_moderate_output", False) and content_moderation_guardrail:
                     try:
                         verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
@@ -624,7 +762,7 @@ class NyxAgentSDK:
                                 resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
                     except Exception:
                         logger.debug("post-moderation failed (non-fatal)", exc_info=True)
-    
+
                 if getattr(self, "_filter_class", None) and resp.narrative:
                     try:
                         filter_instance = self._filter_class(
@@ -637,7 +775,7 @@ class NyxAgentSDK:
                             resp.metadata.setdefault("filters", {})["response_filter"] = True
                     except Exception:
                         logger.debug("ResponseFilter failed softly", exc_info=True)
-    
+
                 if getattr(self, "_post_hooks", None):
                     for hook in self._post_hooks:
                         try:
@@ -649,9 +787,19 @@ class NyxAgentSDK:
                 await self._maybe_enqueue_maintenance(resp, conversation_id)
                 await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
 
+                # normalize location & invalidate caches on world change
+                try:
+                    _normalize_location_meta_inplace(resp.metadata)
+                    world_changed = bool(resp.world_state) or bool(resp.metadata.get("universal_updates"))
+                    if world_changed:
+                        _invalidate_context_cache_safe(user_id, conversation_id)
+                        self._clear_result_cache_for_conversation(conversation_id)
+                except Exception:
+                    logger.debug(f"[SDK-{trace_id}] fallback post steps failed softly", exc_info=True)
+
                 self._write_cache(cache_key, resp)
                 return resp
-    
+
             except Exception as e:
                 logger.error(f"[SDK-{trace_id}] Process failed", exc_info=True)
                 return NyxResponse(
@@ -668,6 +816,7 @@ class NyxAgentSDK:
         finally:
             if lock and lock.locked():
                 lock.release()
+
 
 
     async def stream_user_input(
@@ -994,20 +1143,36 @@ class NyxAgentSDK:
         user_key = str(user_id)
         conversation_key = str(conversation_id)
 
+        # Normalize once more for safety
+        try:
+            _normalize_location_meta_inplace(metadata)
+        except Exception:
+            logger.debug(f"[SDK-{trace_id}] side-effect location normalization failed softly", exc_info=True)
+
         turn_id = metadata.get("turn_id") or f"{trace_id}-{int(time.time() * 1000)}"
         metadata["turn_id"] = turn_id
 
         snapshot = self._snapshot_store.get(user_key, conversation_key)
         current_world_version = int(snapshot.get("world_version", 0))
 
+        # Prefer scene_scope; fill it from locationInfo if missing
         scene_scope = metadata.get("scene_scope") or {}
         if isinstance(scene_scope, str):
             try:
                 import json
-
                 scene_scope = json.loads(scene_scope)
             except Exception:
                 scene_scope = {}
+
+        li = metadata.get("locationInfo") if isinstance(metadata.get("locationInfo"), dict) else None
+        if li:
+            scene_scope.setdefault("location_name", li.get("display") or li.get("name"))
+            if scene_scope.get("location_id") is None and li.get("id") is not None:
+                try:
+                    scene_scope["location_id"] = int(li["id"])
+                except (TypeError, ValueError):
+                    pass
+            scene_scope.setdefault("location_slug", li.get("slug"))
 
         participants: List[str] = []
         npc_ids = scene_scope.get("npc_ids") if isinstance(scene_scope, dict) else None
@@ -1029,6 +1194,7 @@ class NyxAgentSDK:
         elif isinstance(nation_ids, set) and nation_ids:
             region_id = next(iter(nation_ids))
 
+        # Prefer a concrete location id; else none
         scene_id = None
         if isinstance(scene_scope, dict):
             scene_id = scene_scope.get("location_id") or scene_scope.get("scene_id")
@@ -1111,6 +1277,7 @@ class NyxAgentSDK:
                 )
             )
 
+        # Build updated snapshot – prefer locationInfo-backed data
         updated_snapshot = dict(snapshot)
         if isinstance(scene_scope, dict):
             if scene_scope.get("location_name"):
@@ -1119,6 +1286,8 @@ class NyxAgentSDK:
                 updated_snapshot["scene_id"] = str(scene_scope.get("location_id"))
             if scene_scope.get("time_window") is not None:
                 updated_snapshot["time_window"] = scene_scope.get("time_window")
+            if scene_scope.get("location_slug"):
+                updated_snapshot["location_slug"] = scene_scope.get("location_slug")
         if region_id is not None:
             updated_snapshot["region_id"] = str(region_id)
         if participants:
