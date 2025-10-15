@@ -30,9 +30,13 @@ class DummyHTTPClient:
         self._payload = payload
         self._status_code = status_code
         self.calls = 0
+        self.last_args = None
+        self.last_kwargs = None
 
     async def get(self, *args, **kwargs):
         self.calls += 1
+        self.last_args = args
+        self.last_kwargs = kwargs
         return DummyResponse(self._payload, status_code=self._status_code)
 
     async def aclose(self):
@@ -143,6 +147,47 @@ def test_geocode_caches_results(monkeypatch):
         assert cached is not None
         assert cached.confidence == pytest.approx(0.92)
         assert http_client_second.calls == 0
+
+    asyncio.run(_run())
+
+
+def test_geocode_appends_near_hint(monkeypatch):
+    fake_conn = FakeGeoConnection()
+
+    @asynccontextmanager
+    async def fake_db_context(*_, **__):
+        yield fake_conn
+
+    monkeypatch.setattr(toponym, "get_db_connection_context", fake_db_context)
+
+    payload = [
+        {
+            "name": "Central Park",
+            "display_name": "Central Park, Manhattan, New York, USA",
+            "lat": "40.78509",
+            "lon": "-73.96829",
+            "importance": 0.96,
+            "class": "leisure",
+            "type": "park",
+            "address": {
+                "country_code": "us",
+                "state": "New York",
+                "city": "New York",
+            },
+        }
+    ]
+    http_client = DummyHTTPClient(payload)
+
+    async def _run():
+        result = await toponym.geocode(
+            "Central Park",
+            near="Manhattan",
+            http_client=http_client,
+        )
+        assert result is not None
+        assert http_client.calls == 1
+        assert http_client.last_kwargs is not None
+        assert http_client.last_kwargs.get("params", {}).get("q") == "Central Park, Manhattan"
 
     asyncio.run(_run())
 

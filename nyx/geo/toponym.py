@@ -200,6 +200,7 @@ async def _upsert_world_location(
 async def geocode(
     query: str,
     *,
+    near: Optional[str] = None,
     provider: str = DEFAULT_PROVIDER,
     http_client: Optional[httpx.AsyncClient] = None,
     ttl_seconds: Optional[int] = DEFAULT_CACHE_TTL_SECONDS,
@@ -238,11 +239,17 @@ async def geocode(
         http_client = httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT})
         close_client = True
 
+    near_hint = (str(near).strip() if near is not None else "")
+    request_parts = [str(query).strip()]
+    if near_hint:
+        request_parts.append(near_hint)
+    request_query = ", ".join(part for part in request_parts if part)
+
     try:
         response = await http_client.get(
             "https://nominatim.openstreetmap.org/search",
             params={
-                "q": query,
+                "q": request_query,
                 "format": "jsonv2",
                 "limit": 1,
                 "addressdetails": 1,
@@ -251,7 +258,7 @@ async def geocode(
         response.raise_for_status()
         payloads = response.json()
     except Exception:
-        logger.exception("Failed to geocode query", extra={"query": query})
+        logger.exception("Failed to geocode query", extra={"query": request_query})
         payloads = []
     finally:
         if close_client:
@@ -264,7 +271,7 @@ async def geocode(
     confidence = _confidence_from_payload(payload)
 
     await _write_cache_entry(
-        query=query,
+        query=request_query,
         normalized_query=normalized_query,
         payload=payload,
         confidence=confidence,
@@ -299,6 +306,7 @@ async def geocode(
 async def plausibility_score(
     toponym: str,
     *,
+    near: Optional[str] = None,
     provider: str = DEFAULT_PROVIDER,
     http_client: Optional[httpx.AsyncClient] = None,
 ) -> float:
@@ -326,7 +334,7 @@ async def plausibility_score(
     if cached:
         return cached["confidence"]
 
-    result = await geocode(toponym, provider=provider, http_client=http_client)
+    result = await geocode(toponym, near=near, provider=provider, http_client=http_client)
     if not result:
         return 0.0
 

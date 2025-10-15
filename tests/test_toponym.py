@@ -30,7 +30,10 @@ def _baseline_setting_context() -> dict:
 
 
 def test_resolver_allows_known_toponym(monkeypatch):
+    captured = {}
+
     async def _fake_score(name: str, *_args, **_kwargs) -> float:
+        captured["near"] = _kwargs.get("near")
         return 0.95 if str(name).lower() == "pier 39" else 0.0
 
     monkeypatch.setattr(feasibility, "plausibility_score", _fake_score)
@@ -61,10 +64,14 @@ def test_resolver_allows_known_toponym(monkeypatch):
     verdict = cache.get("pier 39")
     assert verdict
     assert verdict.get("decision") == "allow"
+    assert captured.get("near") == "Atrium"
 
 
 def test_resolver_denies_implausible_request(monkeypatch):
+    captured = {}
+
     async def _fake_score(name: str, *_args, **_kwargs) -> float:
+        captured["near"] = _kwargs.get("near")
         lowered = str(name).lower()
         if lowered == "pier 39":
             return 0.95
@@ -100,4 +107,5 @@ def test_resolver_denies_implausible_request(monkeypatch):
     verdict = cache.get("harbor in topeka") or cache.get("harbor in topeka".lower())
     assert verdict
     assert verdict.get("decision") == "deny"
+    assert captured.get("near") == "Atrium"
     assert "resolver" in verdict.get("reason", "").lower()

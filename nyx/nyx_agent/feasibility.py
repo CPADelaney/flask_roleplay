@@ -1139,7 +1139,30 @@ async def _resolve_location_candidate(
 
     token_kind = (inferred_kind or _guess_requested_kind(original, setting_context) or "real_world").lower()
 
-    score = float(await plausibility_score(original))
+    near_hint: Optional[str] = None
+    if isinstance(setting_context, dict):
+        location_ctx = setting_context.get("location")
+        if isinstance(location_ctx, dict):
+            candidate_keys = ("name", "display_name", "label", "title")
+            for key in candidate_keys:
+                value = location_ctx.get(key)
+                if isinstance(value, str) and value.strip():
+                    near_hint = value.strip()
+                    break
+            if near_hint is None:
+                for iterable_key in ("names", "aliases"):
+                    values = location_ctx.get(iterable_key)
+                    if isinstance(values, (list, tuple, set)):
+                        for candidate in values:
+                            if isinstance(candidate, str) and candidate.strip():
+                                near_hint = candidate.strip()
+                                break
+                        if near_hint:
+                            break
+        elif isinstance(location_ctx, str) and location_ctx.strip():
+            near_hint = location_ctx.strip()
+
+    score = float(await plausibility_score(original, near=near_hint))
     minted = False
 
     decision = "deny"
