@@ -3287,11 +3287,24 @@ async def _load_current_scene(nyx_ctx: NyxContext) -> Dict:
                 scene["time_phase"] = time_match.group(1).lower()
         
         # Get location details
-        location_name = scene.get("location") or await conn.fetchval("""
-            SELECT value FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
-        """, nyx_ctx.user_id, nyx_ctx.conversation_id)
-        
+        location_raw = scene.get("location")
+        location_name = None
+
+        if isinstance(location_raw, dict):
+            for key in ("name", "location_name", "display_name", "title", "label"):
+                value = location_raw.get(key)
+                if isinstance(value, str) and value.strip():
+                    location_name = value
+                    break
+        elif isinstance(location_raw, str):
+            location_name = location_raw
+
+        if not location_name:
+            location_name = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
+            """, nyx_ctx.user_id, nyx_ctx.conversation_id)
+
         if location_name:
             location = await conn.fetchrow("""
                 SELECT notable_features, hidden_aspects, description
