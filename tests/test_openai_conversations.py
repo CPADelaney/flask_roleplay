@@ -699,6 +699,39 @@ async def test_slow_path_scene_seal_updates_on_time_jump(monkeypatch):
 
 
 @pytest.mark.anyio("asyncio")
+async def test_inventory_only_updates_are_noop(monkeypatch):
+    write_calls: List[Any] = []
+
+    async def _fake_write_event(conn, delta):  # pragma: no cover - should not be called
+        write_calls.append((conn, delta))
+        return {"applied": True}
+
+    monkeypatch.setattr(
+        "logic.universal_updater_agent.db_rpc.write_event",
+        _fake_write_event,
+    )
+
+    result = await apply_universal_updates_async(
+        ctx=None,
+        user_id=42,
+        conversation_id=314,
+        updates={
+            "inventory_updates": {
+                "player_name": "Chase",
+                "added_items": [],
+                "removed_items": ["old collar"],
+            }
+        },
+        conn=None,
+    )
+
+    assert result["success"] is True
+    assert result.get("updates_applied") == 0
+    assert "no canonical operations" in (result.get("reason") or "").lower()
+    assert write_calls == []
+
+
+@pytest.mark.anyio("asyncio")
 async def test_location_only_roleplay_updates_emit_player_move(monkeypatch):
     conn = SealAwareConnection({"event_id": 12, "applied": True, "replayed": False})
     captured = []
