@@ -377,6 +377,22 @@ def test_fast_feasibility_accepts_generic_venue_requests(monkeypatch, action_tex
     assert "location_absent" not in violation_blob
 
 
+@pytest.mark.parametrize(
+    "original, normalized",
+    [
+        ("harbor in Topeka", "harbor in topeka"),
+        ("the harbor", "the harbor"),
+    ],
+)
+def test_real_world_toponym_keywords_require_supporting_evidence(original, normalized):
+    modern_context = {"setting_kind": "modern_realistic"}
+
+    assert (
+        feasibility._looks_like_real_world_toponym(original, normalized, modern_context)
+        is False
+    )
+
+
 @pytest.mark.parametrize("action_text", ["Find a harbor in Topeka."])
 def test_fast_feasibility_denies_implausible_harbor(monkeypatch, action_text, fake_plausibility_scores):
     fake_conn = FakeConnection()

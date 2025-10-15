@@ -229,6 +229,31 @@ REAL_WORLD_TOPONYM_KEYWORDS: Set[str] = {
     "way",
 }
 
+REAL_WORLD_TOPONYM_STOPWORDS: Set[str] = {
+    "the",
+    "a",
+    "an",
+    "of",
+    "in",
+    "on",
+    "at",
+    "to",
+    "from",
+    "by",
+    "for",
+    "and",
+    "or",
+    "near",
+    "with",
+    "without",
+    "into",
+    "onto",
+    "over",
+    "under",
+    "between",
+    "around",
+}
+
 REAL_WORLD_NUMERIC_STORE_PATTERN = re.compile(r"^\d+(?:[-/ ]\d+)+$")
 
 GENERIC_VENUE_PREFIXES: Tuple[str, ...] = (
@@ -361,20 +386,50 @@ def _looks_like_real_world_toponym(
     if REAL_WORLD_NUMERIC_STORE_PATTERN.match(normalized.replace(" ", "")):
         return True
 
-    if any(part in REAL_WORLD_TOPONYM_KEYWORDS for part in parts):
-        return True
-
-    if any(part.isdigit() for part in parts):
-        for idx, part in enumerate(parts[:-1]):
-            if part in REAL_WORLD_TOPONYM_KEYWORDS and parts[idx + 1].isdigit():
-                return True
-
     original = original_token or ""
     original_parts = [p for p in re.split(r"[\s\-]+", original) if p]
     if len(original_parts) >= 2:
         capitalized = sum(1 for p in original_parts if p[:1].isalpha() and p[:1].isupper())
         if capitalized >= 2:
             return True
+
+    lower_parts = [part.lower() for part in parts]
+    has_keyword = False
+    keyword_support = 0
+    supporting_signals = 0
+
+    for idx, lower_part in enumerate(lower_parts):
+        original_part = original_parts[idx] if idx < len(original_parts) else parts[idx]
+        if lower_part in REAL_WORLD_TOPONYM_KEYWORDS:
+            has_keyword = True
+            if original_part[:1].isalpha() and original_part[:1].isupper():
+                keyword_support += 1
+        else:
+            if (
+                original_part[:1].isalpha()
+                and original_part[:1].isupper()
+                and lower_part not in REAL_WORLD_TOPONYM_STOPWORDS
+            ):
+                supporting_signals += 1
+            if any(ch.isdigit() for ch in lower_part):
+                supporting_signals += 1
+
+    if not has_keyword:
+        return False
+
+    if any(part.isdigit() for part in lower_parts):
+        for idx, lower_part in enumerate(lower_parts):
+            if lower_part in REAL_WORLD_TOPONYM_KEYWORDS:
+                if idx + 1 < len(lower_parts) and lower_parts[idx + 1].isdigit():
+                    return True
+                if idx > 0 and lower_parts[idx - 1].isdigit():
+                    return True
+
+    if supporting_signals >= 1 and keyword_support + supporting_signals >= 2:
+        return True
+
+    if keyword_support >= 2:
+        return True
 
     return False
 
