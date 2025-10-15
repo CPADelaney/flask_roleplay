@@ -325,7 +325,7 @@ def test_locations_migration_allows_on_constraint_fallback(monkeypatch):
     assert locations == ["Fallback Plaza"]
     assert stub_conn.insert_calls
     normalized_query, _ = stub_conn.insert_calls[0]
-    assert "ON CONSTRAINT idx_locations_user_conversation_name" in normalized_query
+    assert "ON CONFLICT (user_id, conversation_id, location_name)" in normalized_query
     assert any("ADD CONSTRAINT" in stmt for stmt in stub_conn.executed)
 
 
