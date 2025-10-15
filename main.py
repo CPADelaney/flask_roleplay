@@ -459,6 +459,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
         # ENHANCED RESPONSE HANDLING - Extract the message content properly
         message_content = ""
+        guardrail_status: Optional[str] = None
+        guardrail_metadata: Optional[Dict[str, Any]] = None
 
         if isinstance(response, dict):
             message_content = response.get("response", "")
@@ -467,7 +469,12 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 message_content = response["function_args"].get("narrative", "")
 
             if not message_content and "metadata" in response:
-                message_content = response["metadata"].get("response", "")
+                metadata_field = response["metadata"]
+                if isinstance(metadata_field, dict):
+                    message_content = metadata_field.get("response", "")
+                    guardrail_metadata = metadata_field
+            if guardrail_metadata is None and isinstance(response.get("metadata"), dict):
+                guardrail_metadata = response["metadata"]
 
             if not message_content:
                 message_content = response.get("message", "")
@@ -483,6 +490,37 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.debug(
             f"[BG Task {conversation_id}] Extracted message content: {message_content[:100]}..."
         )
+
+        if isinstance(guardrail_metadata, dict):
+            guardrail_triggered = bool(guardrail_metadata.get("action_blocked"))
+            guardrail_triggered = guardrail_triggered or guardrail_metadata.get("strategy") == "deny"
+            if guardrail_triggered:
+                guardrail_status = "deny"
+
+        if guardrail_status == "deny":
+            denial_text = (
+                (guardrail_metadata or {}).get("denial_text")
+                or (guardrail_metadata or {}).get("message")
+                or message_content
+                or "I'm sorry, I can't help with that."
+            )
+            logger.info(
+                "[BG Task %s] Guardrail denial triggered. metadata=%s",
+                conversation_id,
+                guardrail_metadata,
+            )
+            payload = {
+                'full_text': denial_text,
+                'request_id': request_id,
+                'success': False,
+                'guardrail': 'deny',
+            }
+            if conversation_identifier_for_emit is not None:
+                payload['openai_conversation_id'] = conversation_identifier_for_emit
+            await sio.emit('done', payload, room=str(conversation_id))
+            if request_id:
+                await clear_request_processing(request_id, redis_pool)
+            return
 
         # Check if we should generate an image
         should_generate = False
@@ -543,6 +581,15 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         chatkit_streamed = False
         chatkit_final = None
         chatkit_thread_info: Dict[str, Any] = {}
+
+        if guardrail_status == "deny":  # Defensive guardrail check
+            logger.debug(
+                "[BG Task %s] Guardrail denial already handled, skipping ChatKit pipeline.",
+                conversation_id,
+            )
+            if request_id:
+                await clear_request_processing(request_id, redis_pool)
+            return
 
         aggregator_text = (
             aggregator_data.get("aggregatorText")
