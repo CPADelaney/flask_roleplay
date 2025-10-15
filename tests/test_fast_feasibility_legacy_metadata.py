@@ -47,6 +47,7 @@ class FakeConnection:
     def __init__(self):
         self.current_roleplay: dict[str, str] = {}
         self.locations: list[str] = []
+        self.location_records: dict[str, dict] = {}
 
     async def execute(self, query, *args):
         if "CurrentRoleplay" in query and "CurrentScene" in query:
@@ -74,7 +75,14 @@ class FakeConnection:
             return []
         return []
 
-    async def fetchval(self, *args, **kwargs):
+    async def fetchval(self, query, *args):
+        if "FROM CurrentRoleplay" in query:
+            if "key='CurrentScene'" in query:
+                return self.current_roleplay.get("CurrentScene")
+            if "key='CurrentLocation'" in query:
+                return self.current_roleplay.get("CurrentLocation")
+            if "key='CurrentTime'" in query:
+                return self.current_roleplay.get("CurrentTime")
         return None
 
     async def fetchrow(self, query, *args):
@@ -83,6 +91,9 @@ class FakeConnection:
             if value is None:
                 return None
             return {"value": value}
+        if "FROM Locations" in query:
+            location_name = args[2] if len(args) > 2 else None
+            return self.location_records.get(location_name)
         return None
 
 
@@ -375,6 +386,36 @@ def test_fast_feasibility_accepts_generic_venue_requests(monkeypatch, action_tex
     assert per_intent.get("strategy") == "allow"
     violation_blob = json.dumps(per_intent.get("violations", []))
     assert "location_absent" not in violation_blob
+
+
+def test_load_current_scene_normalizes_dict_location(monkeypatch):
+    fake_conn = FakeConnection()
+    fake_conn.current_roleplay.update(
+        {
+            "CurrentScene": json.dumps({"location": {"name": "Atrium"}}),
+        }
+    )
+    fake_conn.location_records["Atrium"] = {
+        "notable_features": ["glass ceiling"],
+        "hidden_aspects": ["secret door"],
+        "description": "A bright atrium",
+    }
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield fake_conn
+
+    monkeypatch.setattr(orchestrator, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
+
+    class DummyNyxCtx:
+        user_id = 1
+        conversation_id = 2
+
+    scene = asyncio.run(feasibility._load_current_scene(DummyNyxCtx()))
+
+    assert scene["location_features"] == ["glass ceiling"]
+    assert scene["location_description"] == "A bright atrium"
 
 
 def test_text_marker_requires_location_vocab_hit():
