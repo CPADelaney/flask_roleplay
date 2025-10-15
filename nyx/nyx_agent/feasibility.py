@@ -2110,23 +2110,30 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             _resolver_feedback_for_token(token, resolver_cache)
             for token in missing_location_tokens
         ]
-        ask_decision = next(
-            (d for d in resolver_decisions if d and d.get("decision") == "ask"),
-            None,
-        )
         deny_decision = next(
             (d for d in resolver_decisions if d and d.get("decision") == "deny"),
             None,
         )
-        if ask_decision:
+        ask_decision = next(
+            (d for d in resolver_decisions if d and d.get("decision") == "ask"),
+            None,
+        )
+
+        if deny_decision:
+            decision_strategy = "deny"
+            violation_reason = (
+                deny_decision.get("reason")
+                or f"{missing_location_phrase} isn't an established location right now."
+            )
+        elif ask_decision:
+            decision_strategy = "ask"
             violation_reason = ask_decision.get("reason") or (
                 f"{missing_location_phrase} needs a quick description before I can add it."
             )
         else:
+            decision_strategy = "deny"
             violation_reason = (
-                deny_decision.get("reason")
-                if deny_decision
-                else f"{missing_location_phrase} isn't an established location right now."
+                f"{missing_location_phrase} isn't an established location right now."
             )
         lead_candidates = _scene_alternatives(
             _display_scene_values(scene_npcs),
@@ -2134,22 +2141,28 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             _display_scene_values(location_features),
             time_phase,
         )
-        logger.info(
-            "[FEASIBILITY] Hard deny - fabricated location -> %s",
-            missing_location_tokens,
-        )
+        if decision_strategy == "ask":
+            logger.info(
+                "[FEASIBILITY] Resolver ASK for location -> %s",
+                missing_location_tokens,
+            )
+        else:
+            logger.info(
+                "[FEASIBILITY] Hard deny - fabricated location -> %s",
+                missing_location_tokens,
+            )
         location_blocks[idx] = {
             "feasible": False,
-            "strategy": "ask" if ask_decision else "deny",
+            "strategy": decision_strategy,
             "violations": [
                 {
-                    "rule": "location_resolver:ask" if ask_decision else "location_resolver:deny",
+                    "rule": f"location_resolver:{decision_strategy}",
                     "reason": violation_reason,
                 }
             ],
             "narrator_guidance": (
                 f"{violation_reason} Give me a quick sense of the place or pick one of the known options."
-                if ask_decision
+                if decision_strategy == "ask"
                 else f"{violation_reason} Stick to known locations or work with the narrator to introduce it first."
             ),
             "suggested_alternatives": lead_candidates,
@@ -3994,12 +4007,12 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 _resolver_feedback_for_token(token, resolver_cache)
                 for token in missing_location_tokens
             ]
-            ask_decision = next(
-                (d for d in resolver_decisions if d and d.get("decision") == "ask"),
-                None,
-            )
             deny_decision = next(
                 (d for d in resolver_decisions if d and d.get("decision") == "deny"),
+                None,
+            )
+            ask_decision = next(
+                (d for d in resolver_decisions if d and d.get("decision") == "ask"),
                 None,
             )
             lead_candidates = _scene_alternatives(
@@ -4008,7 +4021,35 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 _display_scene_values(location_features),
                 time_phase,
             )
-            if ask_decision:
+            if deny_decision:
+                reason_text = (
+                    deny_decision.get("reason")
+                    or f"{missing_location_phrase} isn't an established location right now."
+                )
+                logger.info(
+                    "[FEASIBILITY] Hard deny - fabricated location -> %s",
+                    missing_location_tokens,
+                )
+                per_intent.append(
+                    {
+                        "feasible": False,
+                        "strategy": "deny",
+                        "violations": [
+                            {
+                                "rule": "location_resolver:deny",
+                                "reason": reason_text,
+                            }
+                        ],
+                        "narrator_guidance": (
+                            f"{reason_text} Stick to known locations or introduce it in-scene first."
+                        ),
+                        "suggested_alternatives": lead_candidates,
+                        "leads": lead_candidates,
+                        "categories": sorted(cats),
+                    }
+                )
+                any_hard_block = True
+            elif ask_decision:
                 reason_text = ask_decision.get("reason") or (
                     f"{missing_location_phrase} needs a quick description before I can add it."
                 )
@@ -4036,9 +4077,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 any_ask = True
             else:
                 reason_text = (
-                    deny_decision.get("reason")
-                    if deny_decision
-                    else f"{missing_location_phrase} isn't an established location right now."
+                    f"{missing_location_phrase} isn't an established location right now."
                 )
                 logger.info(
                     "[FEASIBILITY] Hard deny - fabricated location -> %s",

@@ -238,6 +238,77 @@ def test_assess_action_feasibility_location_asks_follow_soft_strategy(monkeypatc
     asyncio.run(_run())
 
 
+def test_assess_action_feasibility_location_deny_trumps_ask(monkeypatch):
+    async def fake_parse_action_intents(_):
+        return [
+            {
+                "categories": ["movement"],
+                "direct_object": ["Shadow Hall", "Mystery Lounge"],
+            }
+        ]
+
+    async def fake_load_context(_):
+        return {
+            "caps_loaded": True,
+            "capabilities": {"movement": True},
+            "available_items": [],
+            "present_entities": [],
+            "location": {"name": "Atrium"},
+            "scene": {},
+            "location_features": [],
+            "current_time": "day",
+            "hard_rules": [],
+            "established_impossibilities": [],
+            "known_location_names": [],
+        }
+
+    async def fake_find_unresolved_location_targets(*_args, **_kwargs):
+        return ["shadow hall", "mystery lounge"]
+
+    def fake_resolver_feedback(token, _cache):
+        token_l = str(token).lower()
+        if "shadow hall" in token_l:
+            return {"decision": "deny", "reason": "Shadow Hall is sealed tight."}
+        if "mystery lounge" in token_l:
+            return {"decision": "ask", "reason": "Need a quick description."}
+        return None
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "_load_comprehensive_context", fake_load_context)
+    monkeypatch.setattr(
+        feasibility,
+        "_find_unresolved_location_targets",
+        fake_find_unresolved_location_targets,
+    )
+    monkeypatch.setattr(
+        feasibility,
+        "_resolver_feedback_for_token",
+        fake_resolver_feedback,
+    )
+
+    class DummyCtx:
+        pass
+
+    async def _run():
+        result = await feasibility.assess_action_feasibility(
+            DummyCtx(),
+            "Go to the Shadow Hall and the Mystery Lounge",
+        )
+
+        overall = result["overall"]
+        assert overall["feasible"] is False
+        assert overall["strategy"] == "deny"
+        per_intent = result["per_intent"][0]
+        assert per_intent["strategy"] == "deny"
+        assert per_intent["violations"][0]["rule"] == "location_resolver:deny"
+        reason = per_intent["violations"][0]["reason"]
+        assert "Shadow Hall is sealed tight" in reason
+        guidance = per_intent["narrator_guidance"]
+        assert "Shadow Hall is sealed tight" in guidance
+
+    asyncio.run(_run())
+
+
 @pytest.mark.anyio
 async def test_fast_feasibility_defer_on_missing_scene_entities(monkeypatch):
     async def fake_parse_action_intents(_text):
@@ -336,6 +407,87 @@ async def test_fast_feasibility_defer_on_missing_scene_entities(monkeypatch):
     assert DummyRunner.called is True
     assert "dockhand" in (DummyRunner.last_prompt or "").lower()
     assert response.narrative == "Mmm, kitten, find the dockhand before you posture."
+
+
+@pytest.mark.anyio
+async def test_fast_feasibility_location_deny_trumps_ask(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["movement"],
+                "direct_object": ["Shadow Hall", "Mystery Lounge"],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": [],
+        "items": [],
+        "location_features": [],
+        "time_phase": "night",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Atrium"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"movement": True})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            if "Locations" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_find_unresolved_location_targets(*_args, **_kwargs):
+        return ["shadow hall", "mystery lounge"]
+
+    def fake_resolver_feedback(token, _cache):
+        token_l = str(token).lower()
+        if "shadow hall" in token_l:
+            return {"decision": "deny", "reason": "Shadow Hall is sealed tight."}
+        if "mystery lounge" in token_l:
+            return {"decision": "ask", "reason": "Need a quick description."}
+        return None
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+    monkeypatch.setattr(
+        feasibility,
+        "_find_unresolved_location_targets",
+        fake_find_unresolved_location_targets,
+    )
+    monkeypatch.setattr(
+        feasibility,
+        "_resolver_feedback_for_token",
+        fake_resolver_feedback,
+    )
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=11,
+        conversation_id=11,
+        text="Head to the Shadow Hall and Mystery Lounge",
+    )
+
+    assert result["overall"] == {"feasible": False, "strategy": "deny"}
+    per_intent = result["per_intent"][0]
+    assert per_intent["strategy"] == "deny"
+    assert per_intent["violations"][0]["rule"] == "location_resolver:deny"
+    reason = per_intent["violations"][0]["reason"]
+    assert "Shadow Hall is sealed tight" in reason
+    guidance = per_intent["narrator_guidance"]
+    assert "Shadow Hall is sealed tight" in guidance
 
 
 @pytest.mark.anyio
