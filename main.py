@@ -120,8 +120,6 @@ from db.connection import (
     get_db_connection_context,
 )
 
-from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
-
 # Middleware
 from middleware.rate_limiting import rate_limit, async_ip_block_middleware
 from middleware.validation import validate_request
@@ -138,6 +136,33 @@ if not DB_DSN:
     logger.critical("DB_DSN environment variable not set!")
 
 CHATKIT_MODEL = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-5-nano")
+INTEGRATE_GUARDRAIL_DENIAL = os.getenv("INTEGRATE_GUARDRAIL_DENIAL", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+def _build_guardrail_system_prompt(
+    player_name: str,
+    location: str,
+    denial_text: Optional[str],
+) -> Dict[str, Any]:
+    """
+    System instruction that keeps the reply diegetic: brief, formal refusal in-character,
+    propose safe alternatives, and continue the scene. Never mention policies/guardrails.
+    """
+
+    denial_summary = (denial_text or "").strip() or "I can't approve that."
+    text = (
+        "INTERNAL DIRECTION (hidden from player): The last player request cannot be complied with. "
+        "Stay fully in-character and deliver a brief, formal refusal that fits the scene—"
+        "do NOT mention policies, guardrails, or safety. "
+        f"Address the player as {player_name} if natural; reference {location} only if helpful. "
+        "Immediately offer 1–2 safe, engaging alternatives and continue the scene without repeating disallowed specifics. "
+        f"You may paraphrase this suggested refusal: {denial_summary}"
+    )
+    return {"role": "system", "content": text}
 
 conversation_manager = ConversationManager()
 try:
@@ -491,6 +516,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             f"[BG Task {conversation_id}] Extracted message content: {message_content[:100]}..."
         )
 
+        safety_context: Optional[Dict[str, Any]] = None
+
         if isinstance(guardrail_metadata, dict):
             guardrail_triggered = bool(guardrail_metadata.get("action_blocked"))
             guardrail_triggered = guardrail_triggered or guardrail_metadata.get("strategy") == "deny"
@@ -504,23 +531,30 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 or message_content
                 or "I'm sorry, I can't help with that."
             )
-            logger.info(
-                "[BG Task %s] Guardrail denial triggered. metadata=%s",
-                conversation_id,
-                guardrail_metadata,
-            )
-            payload = {
-                'full_text': denial_text,
-                'request_id': request_id,
-                'success': False,
-                'guardrail': 'deny',
-            }
-            if conversation_identifier_for_emit is not None:
-                payload['openai_conversation_id'] = conversation_identifier_for_emit
-            await sio.emit('done', payload, room=str(conversation_id))
-            if request_id:
-                await clear_request_processing(request_id, redis_pool)
-            return
+
+            if INTEGRATE_GUARDRAIL_DENIAL:
+                logger.info(
+                    "[BG Task %s] Guardrail denial will be integrated into ChatKit output.",
+                    conversation_id,
+                )
+                safety_context = {
+                    "denial_text": denial_text,
+                    "metadata": guardrail_metadata or {},
+                }
+            else:
+                logger.info("[BG Task %s] Guardrail denial (non-integrated).", conversation_id)
+                payload = {
+                    'full_text': denial_text,
+                    'request_id': request_id,
+                    'success': False,
+                    'guardrail': 'deny',
+                }
+                if conversation_identifier_for_emit is not None:
+                    payload['openai_conversation_id'] = conversation_identifier_for_emit
+                await sio.emit('done', payload, room=str(conversation_id))
+                if request_id:
+                    await clear_request_processing(request_id, redis_pool)
+                return
 
         # Check if we should generate an image
         should_generate = False
@@ -535,7 +569,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 should_generate = should_generate or response["metadata"]["image"].get("should_generate", False)
 
         # Generate image if needed
-        if should_generate:
+        if should_generate and not safety_context:
             logger.info(f"[BG Task {conversation_id}] Image generation triggered.")
             try:
                 # Build image data from response
@@ -577,12 +611,12 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             except Exception as img_err:
                 logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
 
-        final_text = message_content or ""
+        final_text = (safety_context or {}).get("denial_text") if safety_context else message_content or ""
         chatkit_streamed = False
         chatkit_final = None
         chatkit_thread_info: Dict[str, Any] = {}
 
-        if guardrail_status == "deny":  # Defensive guardrail check
+        if guardrail_status == "deny" and not safety_context:  # Defensive guardrail check
             logger.debug(
                 "[BG Task %s] Guardrail denial already handled, skipping ChatKit pipeline.",
                 conversation_id,
@@ -616,6 +650,16 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     history_err,
                     exc_info=True,
                 )
+
+        if safety_context:
+            chatkit_messages.insert(
+                0,
+                _build_guardrail_system_prompt(
+                    player_name=context.get("player_name", "the player"),
+                    location=context.get("location", "the current setting"),
+                    denial_text=safety_context.get("denial_text"),
+                ),
+            )
 
         existing_thread_id: Optional[Any] = None
         if openai_record and isinstance(openai_record, dict):
@@ -660,6 +704,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     chatkit_err,
                     exc_info=True,
                 )
+                if safety_context and safety_context.get("denial_text"):
+                    final_text = safety_context["denial_text"]
 
         trimmed_text = final_text.strip()
         success = True
@@ -802,7 +848,17 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             'openai_conversation_id': conversation_identifier_for_emit,
         }
 
-        if error_message:
+        if safety_context:
+            original_metadata = completion_data.get('metadata')
+            completion_data['guardrail'] = 'deny-integrated'
+            completion_data['success'] = True
+            if original_metadata is not None:
+                completion_data['metadata_original'] = original_metadata
+            completion_data['safety_metadata'] = safety_context.get('metadata')
+            if safety_context.get('denial_text'):
+                completion_data['denial_text'] = safety_context['denial_text']
+
+        if error_message and not safety_context:
             completion_data['error'] = error_message
 
         if chatkit_thread_info:
