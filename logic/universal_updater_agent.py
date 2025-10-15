@@ -937,9 +937,19 @@ async def apply_universal_updates_async(
             conversation_id=conversation_id,
             payload=payload,
         )
-    except (DeltaBuildError, ValidationError) as exc:
+    except ValidationError as exc:
         logger.error("Failed to construct canonical delta: %s", exc)
         return {"success": False, "error": str(exc)}
+    except DeltaBuildError as exc:
+        message = str(exc)
+        if "no canonical operations could be extracted" in message.lower():
+            logger.info(
+                "Universal updater produced no canonical operations; treating as noop for conversation=%s",
+                conversation_id,
+            )
+            return {"success": True, "updates_applied": 0, "reason": message}
+        logger.error("Failed to construct canonical delta: %s", exc)
+        return {"success": False, "error": message}
 
     operation_summaries = _summarize_operations(delta)
     logger.info(
@@ -1221,13 +1231,33 @@ Example shape:
                         logger.debug("Successfully parsed raw text as JSON")
                     except Exception:
                         logger.error("Invalid JSON from updater agent (preview): %r", raw_txt[:200])
-            
+
             if not update_json:
                 logger.error("Updater returned empty output. Using minimal skeleton to continue.")
                 skel = _build_min_skeleton(int(user_id_str), int(conversation_id_str), narrative)
                 update_json = json.dumps(skel, ensure_ascii=False, separators=(",", ":"))
                 logger.debug("Created skeleton update with %d keys", len(skel))
-            
+
+            # Ensure we have a JSON object and that it carries a narrative
+            payload_dict: Dict[str, Any]
+            try:
+                if isinstance(update_json, str):
+                    payload_dict = json.loads(update_json)
+                elif isinstance(update_json, dict):
+                    payload_dict = dict(update_json)
+                else:
+                    raise TypeError(f"Unexpected payload type: {type(update_json)}")
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.error("Updater payload was not a JSON object: %s", exc)
+                payload_dict = _build_min_skeleton(int(user_id_str), int(conversation_id_str), narrative)
+
+            payload_narrative = payload_dict.get("narrative")
+            if not isinstance(payload_narrative, str) or not payload_narrative.strip():
+                logger.debug("Updater payload missing narrative; injecting fallback narrative")
+                payload_dict["narrative"] = narrative
+
+            update_json = json.dumps(payload_dict, ensure_ascii=False, separators=(",", ":"))
+
             # Log what we're about to apply
             try:
                 update_preview = json.loads(update_json) if isinstance(update_json, str) else update_json
