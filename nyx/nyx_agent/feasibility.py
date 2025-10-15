@@ -179,11 +179,15 @@ REAL_WORLD_TOPONYM_KEYWORDS: Set[str] = {
     "ave",
     "boulevard",
     "bridge",
+    "boardwalk",
+    "bay",
+    "beach",
     "campus",
     "center",
     "centre",
     "court",
     "ct",
+    "district",
     "dock",
     "drive",
     "dr",
@@ -191,8 +195,8 @@ REAL_WORLD_TOPONYM_KEYWORDS: Set[str] = {
     "freeway",
     "garden",
     "gardens",
-    "harbor",
     "harbour",
+    "harbor",
     "heights",
     "highway",
     "hwy",
@@ -206,12 +210,16 @@ REAL_WORLD_TOPONYM_KEYWORDS: Set[str] = {
     "park",
     "parkway",
     "pier",
+    "promenade",
     "plaza",
     "port",
+    "neighborhood",
+    "neighbourhood",
     "road",
     "rd",
     "route",
     "rt",
+    "point",
     "square",
     "station",
     "street",
@@ -219,11 +227,82 @@ REAL_WORLD_TOPONYM_KEYWORDS: Set[str] = {
     "subway",
     "terminal",
     "trail",
+    "village",
     "university",
     "way",
+    "wharf",
 }
 
 REAL_WORLD_NUMERIC_STORE_PATTERN = re.compile(r"^\d+(?:[-/ ]\d+)+$")
+
+REAL_WORLD_TITLE_CASE_STOPWORDS: Set[str] = {
+    "of",
+    "the",
+    "and",
+    "&",
+    "at",
+    "in",
+    "on",
+    "for",
+    "da",
+    "de",
+    "del",
+}
+
+REAL_WORLD_SINGLE_TOKEN_SUFFIXES: Tuple[str, ...] = (
+    "district",
+    "neighborhood",
+    "neighbourhood",
+    "park",
+    "town",
+    "center",
+    "centre",
+    "mall",
+    "market",
+    "square",
+    "plaza",
+    "harbor",
+    "harbour",
+    "pier",
+    "wharf",
+    "terminal",
+    "station",
+    "campus",
+    "village",
+    "heights",
+    "point",
+    "bay",
+    "beach",
+    "garden",
+    "gardens",
+    "island",
+)
+
+REAL_WORLD_COMPACT_TOPONYM_KEYWORDS: Tuple[str, ...] = tuple(
+    sorted(
+        {
+            re.sub(r"[^a-z]", "", keyword)
+            for keyword in REAL_WORLD_TOPONYM_KEYWORDS
+            if keyword
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+
+def _looks_like_title_word(word: str) -> bool:
+    cleaned = (word or "").strip(SELF_REFERENCE_STRIP_CHARS + ".")
+    if not cleaned:
+        return False
+    if cleaned.isupper() and len(cleaned) <= 4:
+        return True
+    if cleaned[:1].isalpha() and cleaned[:1].isupper():
+        return True
+    upper_count = sum(1 for ch in cleaned if ch.isupper())
+    lower_count = sum(1 for ch in cleaned if ch.islower())
+    return upper_count >= 2 and lower_count >= 1
+
 
 GENERIC_VENUE_PREFIXES: Tuple[str, ...] = (
     "something like ",
@@ -355,7 +434,20 @@ def _looks_like_real_world_toponym(
     if REAL_WORLD_NUMERIC_STORE_PATTERN.match(normalized.replace(" ", "")):
         return True
 
+    compact_parts = [re.sub(r"[^a-z0-9]", "", part) for part in parts if part]
+
     if any(part in REAL_WORLD_TOPONYM_KEYWORDS for part in parts):
+        return True
+
+    if any(
+        compact
+        and any(
+            compact.startswith(keyword) and compact[len(keyword) :].isdigit()
+            for keyword in REAL_WORLD_COMPACT_TOPONYM_KEYWORDS
+            if len(compact) > len(keyword)
+        )
+        for compact in compact_parts
+    ):
         return True
 
     if any(part.isdigit() for part in parts):
@@ -365,10 +457,31 @@ def _looks_like_real_world_toponym(
 
     original = original_token or ""
     original_parts = [p for p in re.split(r"[\s\-]+", original) if p]
-    if len(original_parts) >= 2:
-        capitalized = sum(1 for p in original_parts if p[:1].isalpha() and p[:1].isupper())
-        if capitalized >= 2:
+    if original_parts:
+        significant_parts = []
+        for part in original_parts:
+            cleaned = part.strip(SELF_REFERENCE_STRIP_CHARS + ".")
+            if not cleaned:
+                continue
+            if cleaned.lower() in REAL_WORLD_TITLE_CASE_STOPWORDS:
+                continue
+            significant_parts.append(part)
+        if len(significant_parts) >= 2 and all(
+            _looks_like_title_word(part) for part in significant_parts
+        ):
             return True
+
+    if len(compact_parts) == 1:
+        compact_single = compact_parts[0]
+        if compact_single:
+            for suffix in REAL_WORLD_SINGLE_TOKEN_SUFFIXES:
+                if compact_single.endswith(suffix) and len(compact_single) > len(suffix):
+                    original_single = original_parts[0] if original_parts else original
+                    cleaned_original = (original_single or "").strip(
+                        SELF_REFERENCE_STRIP_CHARS + "."
+                    )
+                    if cleaned_original and any(ch.isupper() for ch in cleaned_original):
+                        return True
 
     return False
 
@@ -747,11 +860,42 @@ def _intent_requests_location_move(intent: Dict[str, Any], text_l: str, candidat
     return any(marker in text_l for marker in LOCATION_MOVE_TEXT_MARKERS)
 
 
-def _extract_candidate_location_tokens(intent: Dict[str, Any]) -> Set[str]:
+def _extract_candidate_location_tokens(intent: Dict[str, Any]) -> Tuple[Set[str], Dict[str, Set[str]]]:
     tokens: Set[str] = set()
+    original_forms: Dict[str, Set[str]] = {}
+
+    def _record(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, dict):
+            for sub_value in value.values():
+                _record(sub_value)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for entry in value:
+                _record(entry)
+            return
+
+        raw_value = str(value).strip()
+        if not raw_value:
+            return
+
+        lowered = raw_value.lower()
+        normalized = _normalize_location_phrase(raw_value)
+
+        if lowered:
+            tokens.add(lowered)
+        if normalized:
+            tokens.add(normalized)
+
+        for key in {lowered, normalized}:
+            if key:
+                original_forms.setdefault(key, set()).add(raw_value)
+
     for key in LOCATION_INTENT_KEYS:
-        tokens |= _tokenize_scene_values(intent.get(key))
-    return {token for token in tokens if token}
+        _record(intent.get(key))
+
+    return {token for token in tokens if token}, original_forms
 
 
 def _build_known_location_tokens(
@@ -803,15 +947,24 @@ def _find_unresolved_location_targets(
     scene_item_tokens: Set[str],
     setting_context: Optional[Dict[str, Any]],
 ) -> List[str]:
-    candidate_tokens = _extract_candidate_location_tokens(intent)
+    candidate_tokens, original_location_forms = _extract_candidate_location_tokens(intent)
     if not _intent_requests_location_move(intent, text_l, candidate_tokens):
         return []
 
     unresolved: List[str] = []
     for token in candidate_tokens:
-        original = str(token).strip()
-        raw = original.lower()
-        normalized = _normalize_location_phrase(token)
+        token_str = str(token).strip()
+        raw = token_str.lower()
+        original_candidates = (
+            original_location_forms.get(raw)
+            or original_location_forms.get(_normalize_location_phrase(token_str))
+        )
+        original_display = (
+            next(iter(original_candidates))
+            if original_candidates
+            else token_str
+        )
+        normalized = _normalize_location_phrase(original_display or token_str)
         if not raw and not normalized:
             continue
         if raw in LOCATION_MOVE_PLACEHOLDER_TOKENS or normalized in LOCATION_MOVE_PLACEHOLDER_TOKENS:
@@ -829,11 +982,8 @@ def _find_unresolved_location_targets(
         if normalized and _is_location_reference_token(normalized, location_aliases):
             continue
 
-        if _looks_like_real_world_toponym(original, normalized, setting_context):
-            continue
-
-        if _matches_generic_venue_request(
-            original,
+        if _is_plausible_location_token(
+            original_display,
             normalized,
             setting_context,
             location_context_tokens,
@@ -846,7 +996,8 @@ def _find_unresolved_location_targets(
             form in known_location_tokens for form in candidate_forms if form
         )
         if not matches_known:
-            unresolved.append(normalized or raw or str(token))
+            display_value = original_display or normalized or raw or str(token)
+            unresolved.append(display_value)
 
     return unresolved
 
@@ -873,6 +1024,38 @@ def _matches_ambient_debris_token(token: str) -> bool:
 
     canonical = _canonicalize_mundane_search_token(token)
     if canonical and canonical in AMBIENT_DEBRIS_CANONICALS:
+        return True
+
+    return False
+
+
+def _is_plausible_location_token(
+    original_token: str,
+    normalized_token: str,
+    setting_context: Optional[Dict[str, Any]],
+    location_context_tokens: Set[str],
+    known_location_tokens: Set[str],
+) -> bool:
+    raw = (original_token or "").strip().lower()
+    normalized = (normalized_token or "").strip()
+
+    candidates = {raw, normalized}
+    if any(candidate and candidate in known_location_tokens for candidate in candidates):
+        return True
+
+    if any(candidate and candidate in location_context_tokens for candidate in candidates):
+        return True
+
+    if _looks_like_real_world_toponym(original_token, normalized, setting_context):
+        return True
+
+    if _matches_generic_venue_request(
+        original_token,
+        normalized,
+        setting_context,
+        location_context_tokens,
+        known_location_tokens,
+    ):
         return True
 
     return False

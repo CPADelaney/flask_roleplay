@@ -261,8 +261,19 @@ def test_fast_feasibility_blocks_unknown_location(monkeypatch, action_text):
     assert "hidden moon base" in violation_blob.lower()
 
 
-@pytest.mark.parametrize("action_text", ["Go to Pier 39."])
-def test_fast_feasibility_accepts_real_world_toponyms(monkeypatch, action_text):
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "Pier 39",
+        "Central Park",
+        "Mission District",
+        "Chinatown",
+        "Downtown",
+        "Fisherman's Wharf",
+        "Westfield Center",
+    ],
+)
+def test_fast_feasibility_accepts_real_world_toponyms(monkeypatch, destination):
     fake_conn = FakeConnection()
     fake_conn.current_roleplay.update(
         {
@@ -284,12 +295,14 @@ def test_fast_feasibility_accepts_real_world_toponyms(monkeypatch, action_text):
     monkeypatch.setattr(orchestrator, "get_db_connection_context", fake_db_context)
     monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
 
+    action_text = f"Go to {destination}."
+
     async def fake_parse_action_intents(text: str):
         return [
             {
                 "raw_text": text,
                 "categories": ["movement"],
-                "destination": ["Pier 39"],
+                "destination": [destination],
             }
         ]
 
