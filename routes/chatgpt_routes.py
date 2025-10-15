@@ -533,7 +533,7 @@ async def process_state_updates(user_id, conversation_id, state_updates):
                     await conn.execute("""
                         INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
                         VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT ON CONSTRAINT idx_locations_user_conversation_name
+                        ON CONFLICT (user_id, conversation_id, location_name)
                         DO UPDATE SET
                             description = EXCLUDED.description,
                             open_hours = EXCLUDED.open_hours
