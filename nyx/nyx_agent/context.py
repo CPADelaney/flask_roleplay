@@ -1185,28 +1185,348 @@ class ContextBroker:
         if not isinstance(scope, SceneScope):
             return {}
 
-        candidate_location: Optional[str] = None
-        if scope.location_name:
-            candidate_location = self.ctx._normalize_location_value(scope.location_name)
-        if not candidate_location and scope.location_id:
-            candidate_location = self.ctx._normalize_location_value(scope.location_id)
+        def _normalize_candidate(primary: Any = None, secondary: Any = None) -> Tuple[Optional[str], Optional[str]]:
+            name = self.ctx._normalize_location_value(primary)
+            ident = self.ctx._normalize_location_value(secondary) if secondary is not None else None
 
-        if not candidate_location:
-            return {}
+            if not name and secondary is not None:
+                name = self.ctx._normalize_location_value(secondary)
+
+            if name and self.ctx._is_placeholder_location_token(name):
+                name = None
+            if ident and self.ctx._is_placeholder_location_token(ident):
+                ident = None
+
+            if name and not ident:
+                ident = name
+            if not name and ident:
+                name = ident
+
+            return name, ident
 
         current_location = self.ctx._normalize_location_value(self.ctx.current_location)
-        if current_location == candidate_location:
+        current_context: Dict[str, Any] = (
+            self.ctx.current_context if isinstance(self.ctx.current_context, dict) else {}
+        )
+        current_location_id = self.ctx._normalize_location_value(current_context.get("location_id"))
+
+        def _same_as_current(name: Optional[str], ident: Optional[str]) -> bool:
+            if not name:
+                return False
+            if name != current_location:
+                return False
+            normalized_ident = ident or name
+            if current_location_id:
+                return normalized_ident == current_location_id
+            return True
+
+        candidate_name, candidate_id = _normalize_candidate(
+            scope.location_name, scope.location_id
+        )
+
+        def _coerce_signal(signal: Any) -> Any:
+            if signal is None:
+                return None
+            for attr in ("model_dump", "dict"):
+                if hasattr(signal, attr):
+                    try:
+                        return getattr(signal, attr)()
+                    except Exception:
+                        pass
+            if hasattr(signal, "items") and not isinstance(signal, dict):
+                try:
+                    return {item.key: item.value for item in signal.items}
+                except Exception:
+                    try:
+                        return dict(signal.items())
+                    except Exception:
+                        pass
+            return signal
+
+        primary_keys = {
+            "destination",
+            "location",
+            "location_name",
+            "locationName",
+            "locationSlug",
+            "location_slug",
+            "CurrentLocation",
+            "current_location",
+            "currentLocation",
+            "CurrentScene",
+            "currentScene",
+            "scene",
+            "scene_name",
+            "sceneName",
+            "venue",
+        }
+        nested_keys = {
+            "per_intent",
+            "intents",
+            "intent",
+            "normalized_intent",
+            "resolved_locations",
+            "operations",
+            "updates",
+            "payload",
+            "data",
+            "result",
+            "results",
+            "entries",
+            "targets",
+            "actions",
+        }
+        disqualifier_keys = {
+            "categories",
+            "strategy",
+            "violations",
+            "verb",
+            "type",
+            "rule",
+        }
+
+        def _extract_location_from_signal(signal: Any) -> Optional[Tuple[Any, Any]]:
+            signal = _coerce_signal(signal)
+
+            if isinstance(signal, str):
+                stripped = signal.strip()
+                return (stripped, None) if stripped else None
+
+            if isinstance(signal, (int, float)):
+                token = str(signal).strip()
+                return (token, token) if token else None
+
+            if isinstance(signal, dict):
+                candidate_name: Optional[Any] = None
+                candidate_ident: Optional[Any] = None
+
+                name_keys = [
+                    "location_name",
+                    "location",
+                    "destination",
+                    "scene",
+                    "scene_name",
+                    "sceneName",
+                    "venue",
+                ]
+
+                for key in name_keys:
+                    if key not in signal:
+                        continue
+                    value = signal.get(key)
+                    if value is None:
+                        continue
+                    if isinstance(value, (str, int, float)):
+                        candidate_name = value
+                        break
+                    nested = _extract_location_from_signal(value)
+                    if nested:
+                        return nested
+
+                if candidate_name is None and "name" in signal:
+                    if not (disqualifier_keys & set(signal.keys())):
+                        candidate_name = signal.get("name")
+
+                id_keys = [
+                    "id",
+                    "location_id",
+                    "locationId",
+                    "location_slug",
+                    "locationSlug",
+                    "slug",
+                    "scene_id",
+                    "sceneId",
+                ]
+
+                for key in id_keys:
+                    if key not in signal:
+                        continue
+                    value = signal.get(key)
+                    if value is None:
+                        continue
+                    if isinstance(value, (str, int, float)):
+                        candidate_ident = value
+                        break
+                    nested = _extract_location_from_signal(value)
+                    if nested and nested[1] is not None:
+                        return nested
+
+                if candidate_name is not None or candidate_ident is not None:
+                    return candidate_name, candidate_ident
+
+                key_field = signal.get("key") or signal.get("field")
+                if key_field:
+                    key_norm = str(key_field).strip().lower()
+                    if key_norm in {
+                        "currentlocation",
+                        "current_location",
+                        "location",
+                        "currentscene",
+                        "current_scene",
+                        "scene",
+                    }:
+                        value = signal.get("value") or signal.get("payload") or signal.get("data")
+                        nested = _extract_location_from_signal(value)
+                        if nested:
+                            return nested
+
+                for key in primary_keys:
+                    if key in signal:
+                        nested = _extract_location_from_signal(signal.get(key))
+                        if nested:
+                            return nested
+
+                for key in nested_keys:
+                    if key in signal:
+                        nested = _extract_location_from_signal(signal.get(key))
+                        if nested:
+                            return nested
+
+                return None
+
+            if isinstance(signal, (list, tuple, set)):
+                for item in signal:
+                    nested = _extract_location_from_signal(item)
+                    if nested:
+                        return nested
+
+            return None
+
+        def _extract_from_text(text: Optional[str]) -> Optional[str]:
+            if not isinstance(text, str):
+                return None
+            stripped = text.strip()
+            if not stripped:
+                return None
+
+            movement_pattern = re.compile(
+                r"(?:go|head|travel|walk|run|move|proceed|enter|drive|sail|march|ride|stroll|step|rush|dash|journey|make\s+(?:my|our|your)\s+way)\s+"
+                r"(?:to|into|toward|towards)?\s*(?:the\s+|a\s+|an\s+)?(?P<loc>[A-Za-z][A-Za-z0-9'\- ]{2,})",
+                flags=re.IGNORECASE,
+            )
+
+            match = movement_pattern.search(stripped)
+            if not match:
+                return None
+
+            raw_location = match.group("loc").strip()
+            raw_location = re.sub(r"[.!?,;:]+$", "", raw_location)
+            normalized = self.ctx._normalize_location_value(raw_location)
+            if normalized and not self.ctx._is_placeholder_location_token(normalized):
+                return normalized
+            return None
+
+        def _extract_from_signals() -> Tuple[Optional[str], Optional[str]]:
+            signals: List[Any] = []
+
+            metadata = getattr(bundle, "metadata", {})
+            if isinstance(metadata, dict) and metadata:
+                signals.append(metadata)
+                for key in (
+                    "feasibility",
+                    "feasibility_payload",
+                    "fast_feasibility",
+                    "intents",
+                    "latest_intents",
+                    "extras",
+                ):
+                    value = metadata.get(key)
+                    if value is not None:
+                        signals.append(value)
+
+            if current_context:
+                for key in (
+                    "feasibility",
+                    "fast_feasibility",
+                    "feasibility_meta",
+                    "feasibility_payload",
+                    "intents",
+                    "latest_intents",
+                    "action_intents",
+                    "intents_payload",
+                ):
+                    value = current_context.get(key)
+                    if value is not None:
+                        signals.append(value)
+
+                processing_meta = current_context.get("processing_metadata")
+                if isinstance(processing_meta, dict):
+                    feas_meta = processing_meta.get("feasibility")
+                    if feas_meta is not None:
+                        signals.append(feas_meta)
+
+                aggregator_data = current_context.get("aggregator_data")
+                if isinstance(aggregator_data, dict):
+                    for agg_key, agg_value in aggregator_data.items():
+                        lowered = str(agg_key).lower()
+                        if any(token in lowered for token in ("feas", "intent", "location")):
+                            signals.append(agg_value)
+
+            for attr in (
+                "last_feasibility",
+                "last_feasibility_result",
+                "fast_feasibility",
+                "latest_intents",
+                "last_intents_payload",
+                "last_intents",
+            ):
+                value = getattr(self.ctx, attr, None)
+                if value is not None:
+                    signals.append(value)
+
+            for raw_signal in signals:
+                extracted = _extract_location_from_signal(raw_signal)
+                if not extracted:
+                    continue
+                name, ident = extracted
+                normalized_name, normalized_ident = _normalize_candidate(name, ident)
+                if not normalized_name:
+                    continue
+                if _same_as_current(normalized_name, normalized_ident):
+                    continue
+                return normalized_name, normalized_ident
+
+            return None, None
+
+        if not candidate_name or _same_as_current(candidate_name, candidate_id):
+            signal_name, signal_id = _extract_from_signals()
+            if signal_name:
+                candidate_name, candidate_id = signal_name, signal_id
+
+        if not candidate_name or _same_as_current(candidate_name, candidate_id):
+            text_sources = [
+                getattr(self.ctx, "last_user_input", None),
+                current_context.get("last_user_input"),
+            ]
+            for text in text_sources:
+                inferred = _extract_from_text(text)
+                if not inferred:
+                    continue
+                normalized_name, normalized_ident = _normalize_candidate(inferred)
+                if not normalized_name:
+                    continue
+                if _same_as_current(normalized_name, normalized_ident):
+                    continue
+                candidate_name, candidate_id = normalized_name, normalized_ident
+                break
+
+        if not candidate_name:
             return {}
 
-        roleplay_updates: Dict[str, Any] = {"CurrentLocation": candidate_location}
+        normalized_id = candidate_id or candidate_name
 
-        normalized_location_id = self.ctx._normalize_location_value(scope.location_id)
-        scene_payload: Dict[str, Any] = {}
-        if normalized_location_id:
-            scene_payload["id"] = normalized_location_id
-        scene_payload["name"] = candidate_location
+        roleplay_updates: Dict[str, Any] = {"CurrentLocation": candidate_name}
+        if normalized_id and normalized_id != candidate_name:
+            roleplay_updates["CurrentLocationId"] = normalized_id
+
+        scene_payload: Dict[str, Any] = {"name": candidate_name}
+        if normalized_id:
+            scene_payload["id"] = normalized_id
 
         roleplay_updates["CurrentScene"] = json.dumps({"location": scene_payload})
+
+        if _same_as_current(candidate_name, normalized_id):
+            return {}
 
         return {"roleplay_updates": roleplay_updates}
 
