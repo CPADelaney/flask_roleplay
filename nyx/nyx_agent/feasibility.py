@@ -1045,6 +1045,44 @@ def _is_plausible_location_token(
     return False
 
 
+async def _persist_minted_location_binding(
+    normalized: Optional[str],
+    display_name: Optional[str],
+    *,
+    user_id: Optional[int],
+    conversation_id: Optional[int],
+) -> None:
+    if user_id is None or conversation_id is None:
+        return
+
+    normalized_name = _normalize_location_phrase(normalized or display_name)
+    if not normalized_name:
+        return
+
+    try:
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                INSERT INTO Locations (user_id, conversation_id, location_name)
+                VALUES ($1, $2, $3)
+                ON CONFLICT ON CONSTRAINT idx_locations_user_conversation_name
+                DO NOTHING
+                """,
+                user_id,
+                conversation_id,
+                normalized_name,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to persist minted location binding",
+            extra={
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "location_name": normalized_name,
+            },
+        )
+
+
 async def _resolve_location_candidate(
     original: str,
     normalized: Optional[str],
@@ -1153,6 +1191,9 @@ async def _find_unresolved_location_targets(
     scene_npc_tokens: Set[str],
     scene_item_tokens: Set[str],
     setting_context: Optional[Dict[str, Any]],
+    *,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
 ) -> List[str]:
     candidate_tokens = _extract_candidate_location_tokens(intent)
     if not _intent_requests_location_move(intent, text_l, candidate_tokens):
@@ -1222,8 +1263,19 @@ async def _find_unresolved_location_targets(
                 if minted_key:
                     known_location_tokens.add(minted_key)
                 minted_name = decision.get("token") or original
+                if isinstance(setting_context, dict):
+                    known_names = setting_context.setdefault("known_location_names", [])
+                    for candidate in filter(None, {minted_name, minted_key}):
+                        if candidate not in known_names:
+                            known_names.append(candidate)
                 if minted_name and minted_name not in minted_locations:
                     minted_locations.append(minted_name)
+                await _persist_minted_location_binding(
+                    minted_key,
+                    minted_name,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
             continue
 
         unresolved_token = (
@@ -2151,6 +2203,8 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             scene_npc_tokens,
             scene_item_tokens,
             setting_context,
+            user_id=nyx_ctx.user_id,
+            conversation_id=nyx_ctx.conversation_id,
         )
         if not missing_location_tokens:
             continue
@@ -4050,6 +4104,8 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             scene_npc_tokens,
             scene_item_tokens,
             setting_context,
+            user_id=user_id,
+            conversation_id=conversation_id,
         )
         if missing_location_tokens:
             missing_location_phrase = _format_missing_names(missing_location_tokens)
