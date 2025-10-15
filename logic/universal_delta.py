@@ -352,8 +352,7 @@ def build_delta_from_legacy_payload(
         npc_id = raw_update.get("npc_id")
         if not npc_id:
             raise DeltaBuildError("npc_updates entries must include npc_id")
-        location_slug = raw_update.get("current_location")
-        location_id = raw_update.get("location_id")
+        location_slug, location_id = _extract_location_from_mapping(raw_update)
         if location_slug or location_id:
             operations.append(
                 NPCMoveOperation(

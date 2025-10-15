@@ -164,6 +164,35 @@ def test_build_delta_handles_roleplay_updates_array_field_payload():
     assert op.player_id == 9
 
 
+@pytest.mark.parametrize(
+    "location_payload, expected_slug, expected_id",
+    [
+        ("Moonlit Plaza", "Moonlit Plaza", None),
+        ({"slug": "Hidden Alcove", "id": "77"}, "Hidden Alcove", 77),
+    ],
+)
+def test_build_delta_accepts_location_field(location_payload, expected_slug, expected_id):
+    delta = build_delta_from_legacy_payload(
+        user_id=21,
+        conversation_id=22,
+        payload={
+            "npc_updates": [
+                {
+                    "npc_id": 303,
+                    "location": location_payload,
+                }
+            ]
+        },
+    )
+
+    assert delta.operation_count == 1
+    op = delta.operations[0]
+    assert op.type == "npc.move"
+    assert op.npc_id == 303
+    assert op.location_slug == expected_slug
+    assert op.location_id == expected_id
+
+
 def test_build_delta_relationship_updates_only_level_change():
     delta = build_delta_from_legacy_payload(
         user_id=13,
