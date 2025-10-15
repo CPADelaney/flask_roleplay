@@ -395,6 +395,8 @@ async def process_user_input(
             await nyx_context.initialize()
             base_context = _normalize_scene_context(context_data or {})
             base_context["user_input"] = user_input
+            base_context["last_user_input"] = user_input
+            nyx_context.last_user_input = user_input
             nyx_context.current_context = base_context
             _preserve_hydrated_location(nyx_context.current_context, nyx_context.current_location)
 
