@@ -25,6 +25,7 @@ from nyx.feas.archetypes.roman_empire import RomanEmpire
 from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
 from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
+from nyx.geo.toponym import plausibility_score
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,11 @@ LOCATION_MOVE_PLACEHOLDER_TOKENS: Set[str] = {
     "nearby",
     "around",
 }
+
+LOCATION_RESOLVER_ALLOW_THRESHOLD = 0.55
+LOCATION_RESOLVER_ASK_THRESHOLD = 0.25
+FICTIONAL_RESOLVER_ALLOW_THRESHOLD = 0.35
+FICTIONAL_RESOLVER_ASK_THRESHOLD = 0.18
 
 LOCATION_INTENT_KEYS: Tuple[str, ...] = (
     "destination",
@@ -793,7 +799,297 @@ def _build_known_location_tokens(
     return {token for token in tokens if token}
 
 
-def _find_unresolved_location_targets(
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        if value is None:
+            raise ValueError
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _world_model_branch(
+    setting_context: Optional[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], str, bool, bool]:
+    world_model: Dict[str, Any] = {}
+    branch = "modern_realistic"
+    allow_fictional = False
+
+    if isinstance(setting_context, dict):
+        raw_world_model = setting_context.get("world_model")
+        if isinstance(raw_world_model, dict):
+            world_model = raw_world_model
+
+        branch_candidate = str(
+            world_model.get("branch")
+            or world_model.get("kind")
+            or world_model.get("mode")
+            or setting_context.get("kind")
+            or setting_context.get("type")
+            or ""
+        ).strip().lower()
+        if branch_candidate:
+            branch = branch_candidate
+
+        allow_fictional = bool(world_model.get("allow_fictional_locations"))
+        if not allow_fictional:
+            reality = str(setting_context.get("reality_context") or "").strip().lower()
+            if reality and reality not in {"normal", "mundane", "realistic"}:
+                allow_fictional = True
+
+    is_real_branch = any(
+        token in branch
+        for token in ("modern", "real", "baseline", "contemporary")
+    )
+
+    if not allow_fictional and not is_real_branch:
+        allow_fictional = True
+
+    return world_model, branch, is_real_branch, allow_fictional
+
+
+def _normalize_world_model_metadata(
+    raw_metadata: Any,
+    base_context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    fallback = base_context or {}
+
+    branch = str(
+        metadata.get("branch")
+        or metadata.get("kind")
+        or metadata.get("mode")
+        or fallback.get("kind")
+        or fallback.get("type")
+        or "modern_realistic"
+    ).strip().lower()
+    if not branch:
+        branch = "modern_realistic"
+
+    is_real_branch = any(
+        token in branch for token in ("modern", "real", "baseline", "contemporary")
+    )
+
+    allow_fictional = bool(metadata.get("allow_fictional_locations"))
+    reality = str((fallback.get("reality_context") or "")).strip().lower()
+    if not allow_fictional:
+        if reality and reality not in {"normal", "mundane", "realistic"}:
+            allow_fictional = True
+        elif not is_real_branch:
+            allow_fictional = True
+
+    resolver_cfg_raw = (
+        metadata.get("resolver")
+        or metadata.get("location_resolver")
+        or {}
+    )
+    resolver_cfg = dict(resolver_cfg_raw) if isinstance(resolver_cfg_raw, dict) else {}
+
+    allow_threshold = _coerce_float(
+        resolver_cfg.get("allow_threshold"),
+        LOCATION_RESOLVER_ALLOW_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ALLOW_THRESHOLD,
+    )
+    ask_threshold = _coerce_float(
+        resolver_cfg.get("ask_threshold"),
+        LOCATION_RESOLVER_ASK_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ASK_THRESHOLD,
+    )
+    if ask_threshold >= allow_threshold:
+        ask_threshold = max(min(allow_threshold * 0.75, allow_threshold - 0.05), 0.0)
+
+    fictional_policy = str(
+        resolver_cfg.get("fictional_policy")
+        or metadata.get("fictional_location_policy")
+        or ("allow" if allow_fictional else "deny")
+    ).strip().lower()
+    if fictional_policy not in {"allow", "ask", "deny"}:
+        fictional_policy = "allow" if allow_fictional else "deny"
+
+    return {
+        "branch": branch,
+        "allow_fictional_locations": allow_fictional,
+        "resolver": {
+            "allow_threshold": allow_threshold,
+            "ask_threshold": ask_threshold,
+            "fictional_policy": fictional_policy,
+        },
+        "raw": metadata,
+    }
+
+
+def _guess_requested_kind(
+    token: str, setting_context: Optional[Dict[str, Any]]
+) -> str:
+    token_l = (token or "").strip().lower()
+    _, branch, is_real_branch, allow_fictional = _world_model_branch(setting_context)
+
+    fictional_markers = {
+        "nebula",
+        "asteroid",
+        "moon",
+        "galaxy",
+        "quantum",
+        "void",
+        "portal",
+        "dimension",
+        "celestial",
+        "cosmic",
+        "lunar",
+        "stellar",
+        "warp",
+        "citadel",
+    }
+    realistic_markers = {
+        "harbor",
+        "harbour",
+        "park",
+        "pier",
+        "square",
+        "street",
+        "avenue",
+        "airport",
+        "university",
+        "station",
+        "bridge",
+        "boulevard",
+        "campus",
+        "museum",
+    }
+
+    if any(marker in token_l for marker in fictional_markers):
+        return "fictional"
+    if any(marker in token_l for marker in realistic_markers):
+        return "real_world"
+
+    if allow_fictional and not is_real_branch:
+        return "fictional"
+
+    return "real_world"
+
+
+def _resolver_feedback_for_token(
+    token: str, resolver_cache: Dict[str, Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    if not resolver_cache:
+        return None
+
+    raw = (token or "").strip().lower()
+    normalized = _normalize_location_phrase(token)
+    for candidate in filter(None, {normalized, raw}):
+        verdict = resolver_cache.get(candidate)
+        if verdict:
+            return verdict
+    return None
+
+
+def _is_plausible_location_token(
+    token: str, resolver_cache: Dict[str, Dict[str, Any]]
+) -> bool:
+    verdict = _resolver_feedback_for_token(token, resolver_cache)
+    if verdict:
+        return verdict.get("decision") == "allow"
+    return False
+
+
+async def _resolve_location_candidate(
+    original: str,
+    normalized: Optional[str],
+    setting_context: Optional[Dict[str, Any]],
+    resolver_cache: Dict[str, Dict[str, Any]],
+    inferred_kind: Optional[str] = None,
+) -> Dict[str, Any]:
+    existing = _resolver_feedback_for_token(normalized or original, resolver_cache)
+    if existing:
+        return existing
+
+    world_model, branch, is_real_branch, allow_fictional = _world_model_branch(setting_context)
+    resolver_cfg: Dict[str, Any] = {}
+    if isinstance(world_model.get("resolver"), dict):
+        resolver_cfg = dict(world_model["resolver"])
+    elif isinstance(world_model.get("location_resolver"), dict):
+        resolver_cfg = dict(world_model["location_resolver"])
+
+    allow_threshold = _coerce_float(
+        resolver_cfg.get("allow_threshold"),
+        LOCATION_RESOLVER_ALLOW_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ALLOW_THRESHOLD,
+    )
+    ask_threshold = _coerce_float(
+        resolver_cfg.get("ask_threshold"),
+        LOCATION_RESOLVER_ASK_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ASK_THRESHOLD,
+    )
+    if ask_threshold >= allow_threshold:
+        ask_threshold = max(min(allow_threshold * 0.75, allow_threshold - 0.05), 0.0)
+
+    fictional_policy = str(
+        resolver_cfg.get("fictional_policy")
+        or world_model.get("fictional_location_policy")
+        or ("allow" if allow_fictional else "deny")
+    ).strip().lower()
+    if fictional_policy not in {"allow", "ask", "deny"}:
+        fictional_policy = "allow" if allow_fictional else "deny"
+
+    token_kind = (inferred_kind or _guess_requested_kind(original, setting_context) or "real_world").lower()
+
+    score = float(await plausibility_score(original))
+    minted = False
+
+    decision = "deny"
+    reason = ""
+
+    if token_kind != "fictional" and is_real_branch:
+        if score >= allow_threshold:
+            decision = "allow"
+            reason = f"Resolver recognized '{original}' (score {score:.2f})."
+        elif score >= ask_threshold:
+            decision = "ask"
+            reason = f"Resolver is unsure about '{original}' (score {score:.2f})."
+        else:
+            decision = "deny"
+            reason = f"Resolver rejected '{original}' (score {score:.2f})."
+    else:
+        if score >= allow_threshold:
+            decision = "allow"
+            reason = f"Resolver recognized '{original}' (score {score:.2f})."
+        elif allow_fictional and fictional_policy == "allow":
+            decision = "allow"
+            minted = True
+            reason = (
+                f"Resolver minted '{original}' for the {branch or 'fictional'} branch."
+            )
+        elif allow_fictional and fictional_policy == "ask":
+            decision = "ask"
+            reason = (
+                f"Resolver can mint '{original}' if you confirm it belongs in this story."
+            )
+        elif score >= ask_threshold:
+            decision = "ask"
+            reason = f"Resolver is unsure about '{original}' (score {score:.2f})."
+        else:
+            decision = "deny"
+            if allow_fictional:
+                reason = (
+                    f"Resolver rejected '{original}' because minting is disabled for this branch (score {score:.2f})."
+                )
+            else:
+                reason = f"Resolver rejected '{original}' (score {score:.2f})."
+
+    payload = {
+        "decision": decision,
+        "reason": reason,
+        "score": score,
+        "kind": token_kind,
+        "token": original,
+        "normalized": normalized,
+        "branch": branch,
+        "minted": minted,
+    }
+
+    for candidate in filter(None, {normalized, (original or "").strip().lower()}):
+        resolver_cache[candidate] = payload
+
+    return payload
+
+
+async def _find_unresolved_location_targets(
     intent: Dict[str, Any],
     text_l: str,
     location_aliases: Set[str],
@@ -806,6 +1102,17 @@ def _find_unresolved_location_targets(
     candidate_tokens = _extract_candidate_location_tokens(intent)
     if not _intent_requests_location_move(intent, text_l, candidate_tokens):
         return []
+
+    resolver_cache: Dict[str, Dict[str, Any]] = {}
+    minted_locations: List[str] = []
+    if isinstance(setting_context, dict):
+        resolver_cache = setting_context.setdefault("location_resolver_cache", {})
+        existing_minted = setting_context.setdefault("resolver_minted_locations", [])
+        if isinstance(existing_minted, list):
+            minted_locations = existing_minted
+        else:
+            minted_locations = []
+            setting_context["resolver_minted_locations"] = minted_locations
 
     unresolved: List[str] = []
     for token in candidate_tokens:
@@ -829,9 +1136,6 @@ def _find_unresolved_location_targets(
         if normalized and _is_location_reference_token(normalized, location_aliases):
             continue
 
-        if _looks_like_real_world_toponym(original, normalized, setting_context):
-            continue
-
         if _matches_generic_venue_request(
             original,
             normalized,
@@ -845,8 +1149,35 @@ def _find_unresolved_location_targets(
         matches_known = any(
             form in known_location_tokens for form in candidate_forms if form
         )
-        if not matches_known:
-            unresolved.append(normalized or raw or str(token))
+        if matches_known:
+            continue
+
+        inferred_kind = _guess_requested_kind(original, setting_context)
+        decision = await _resolve_location_candidate(
+            original,
+            normalized,
+            setting_context,
+            resolver_cache,
+            inferred_kind=inferred_kind,
+        )
+
+        if _is_plausible_location_token(original, resolver_cache):
+            if decision.get("minted"):
+                minted_key = decision.get("normalized") or normalized or raw
+                if minted_key:
+                    known_location_tokens.add(minted_key)
+                minted_name = decision.get("token") or original
+                if minted_name and minted_name not in minted_locations:
+                    minted_locations.append(minted_name)
+            continue
+
+        unresolved_token = (
+            decision.get("normalized")
+            or normalized
+            or raw
+            or str(token)
+        )
+        unresolved.append(unresolved_token)
 
     return unresolved
 
@@ -1756,7 +2087,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
                 cats = inferred
         inferred_categories.append(cats)
 
-        missing_location_tokens = _find_unresolved_location_targets(
+        missing_location_tokens = await _find_unresolved_location_targets(
             intent,
             text_l,
             location_aliases,
@@ -1770,9 +2101,33 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             continue
 
         missing_location_phrase = _format_missing_names(missing_location_tokens)
-        violation_reason = (
-            f"{missing_location_phrase} isn't an established location right now."
+        resolver_cache = (
+            setting_context.get("location_resolver_cache", {})
+            if isinstance(setting_context, dict)
+            else {}
         )
+        resolver_decisions = [
+            _resolver_feedback_for_token(token, resolver_cache)
+            for token in missing_location_tokens
+        ]
+        ask_decision = next(
+            (d for d in resolver_decisions if d and d.get("decision") == "ask"),
+            None,
+        )
+        deny_decision = next(
+            (d for d in resolver_decisions if d and d.get("decision") == "deny"),
+            None,
+        )
+        if ask_decision:
+            violation_reason = ask_decision.get("reason") or (
+                f"{missing_location_phrase} needs a quick description before I can add it."
+            )
+        else:
+            violation_reason = (
+                deny_decision.get("reason")
+                if deny_decision
+                else f"{missing_location_phrase} isn't an established location right now."
+            )
         lead_candidates = _scene_alternatives(
             _display_scene_values(scene_npcs),
             _display_scene_values(scene_items),
@@ -1785,16 +2140,17 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         )
         location_blocks[idx] = {
             "feasible": False,
-            "strategy": "deny",
+            "strategy": "ask" if ask_decision else "deny",
             "violations": [
                 {
-                    "rule": "location_absent",
+                    "rule": "location_resolver:ask" if ask_decision else "location_resolver:deny",
                     "reason": violation_reason,
                 }
             ],
             "narrator_guidance": (
-                f"I can't route you to {missing_location_phrase}; stick to known "
-                "locations or work with the narrator to introduce it first."
+                f"{violation_reason} Give me a quick sense of the place or pick one of the known options."
+                if ask_decision
+                else f"{violation_reason} Stick to known locations or work with the narrator to introduce it first."
             ),
             "suggested_alternatives": lead_candidates,
             "leads": lead_candidates,
@@ -1963,6 +2319,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         "setting_name": "",
         "stat_modifiers": {},
         "known_location_names": [],
+        "world_model": {},
     }
     
     async with get_db_connection_context() as conn:
@@ -1973,6 +2330,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             'CurrentSetting', 'SettingStatModifiers', 'EnvironmentHistory',
             'ScenarioName', 'CurrentLocation', 'CurrentTime', 'InfrastructureFlags',
             'EconomyFlags', 'TechnologyLevel', 'SettingEra',
+            'WorldModel'
         ]
         
         setting_data = await conn.fetch("""
@@ -1985,6 +2343,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         economy_flags: Dict[str, Any] = {}
         physics_caps_local: Dict[str, Any] = {}
         world_type_value: Optional[str] = None
+        world_model_raw: Optional[Dict[str, Any]] = None
         technology_level = context.get("technology_level")
         setting_era = context.get("setting_era")
         technology_level_from_db = False
@@ -2057,6 +2416,13 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             elif key == 'SettingEra':
                 setting_era = value
                 setting_era_from_db = True
+            elif key == 'WorldModel':
+                try:
+                    parsed_world = json.loads(value)
+                except Exception:
+                    parsed_world = None
+                if isinstance(parsed_world, dict):
+                    world_model_raw = parsed_world
 
         if world_type_value:
             context["type"] = world_type_value
@@ -2065,6 +2431,14 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         context["infrastructure_flags"] = infra_flags
         context["economy_flags"] = economy_flags
         context["physics_caps"] = physics_caps_local
+        context["world_model"] = _normalize_world_model_metadata(
+            world_model_raw,
+            {
+                "kind": context.get("kind"),
+                "type": context.get("type"),
+                "reality_context": context.get("reality_context"),
+            },
+        )
 
         caps_loaded_flag = any(
             [
@@ -2229,7 +2603,15 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         """, nyx_ctx.conversation_id)
         
         context["narrative_history"] = [r["content"][:500] for r in recent if r["content"]]
-        
+
+    existing_world_model = context.get("world_model")
+    raw_world_model = (
+        existing_world_model.get("raw")
+        if isinstance(existing_world_model, dict)
+        else existing_world_model
+    )
+    context["world_model"] = _normalize_world_model_metadata(raw_world_model, context)
+
     return context
 
 async def generate_dynamic_rejection(
@@ -3299,6 +3681,14 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     physics_caps_local: Dict[str, Any] = {}
     technology_level: Optional[str] = None
     setting_era: Optional[str] = None
+    world_model_context: Dict[str, Any] = _normalize_world_model_metadata(
+        {},
+        {
+            "kind": setting_kind,
+            "type": setting_type,
+            "reality_context": reality_context,
+        },
+    )
 
     try:
         async with get_db_connection_context() as conn:
@@ -3325,6 +3715,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     "EconomyFlags",
                     "TechnologyLevel",
                     "SettingEra",
+                    "WorldModel",
                 ],
             )
             kv = {r["key"]: r["value"] for r in rows}
@@ -3346,6 +3737,15 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 or technology_level
             )
             setting_era = kv.get("SettingEra") or raw_capabilities.get("era") or setting_era
+            world_model_raw = _safe_json_loads(kv.get("WorldModel"), {}) or {}
+            world_model_context = _normalize_world_model_metadata(
+                world_model_raw,
+                {
+                    "kind": setting_kind,
+                    "type": setting_type,
+                    "reality_context": reality_context,
+                },
+            )
 
             if technology_level and "technology" not in capabilities:
                 capabilities["technology"] = technology_level
@@ -3483,6 +3883,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     per_intent: List[Dict[str, Any]] = []
     any_hard_block = False
     any_defer = False
+    any_ask = False
 
     # Quick scene affordances for alternatives
     scene_npcs = (scene.get("npcs") or scene.get("present_npcs") or []) if isinstance(scene, dict) else []
@@ -3504,6 +3905,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         "location": {"name": location_name} if location_name else {},
         "location_features": location_features,
         "known_location_names": known_location_names,
+        "world_model": world_model_context,
     }
 
     scene_npc_tokens = _tokenize_scene_values(scene_npcs)
@@ -3559,7 +3961,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             if inferred:
                 cats = inferred
 
-        missing_location_tokens = _find_unresolved_location_targets(
+        missing_location_tokens = await _find_unresolved_location_targets(
             intent,
             text_l,
             location_aliases,
@@ -3571,38 +3973,84 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         )
         if missing_location_tokens:
             missing_location_phrase = _format_missing_names(missing_location_tokens)
+            resolver_cache = (
+                setting_context.get("location_resolver_cache", {})
+                if isinstance(setting_context, dict)
+                else {}
+            )
+            resolver_decisions = [
+                _resolver_feedback_for_token(token, resolver_cache)
+                for token in missing_location_tokens
+            ]
+            ask_decision = next(
+                (d for d in resolver_decisions if d and d.get("decision") == "ask"),
+                None,
+            )
+            deny_decision = next(
+                (d for d in resolver_decisions if d and d.get("decision") == "deny"),
+                None,
+            )
             lead_candidates = _scene_alternatives(
                 _display_scene_values(scene_npcs),
                 _display_scene_values(scene_items),
                 _display_scene_values(location_features),
                 time_phase,
             )
-            logger.info(
-                "[FEASIBILITY] Hard deny - fabricated location -> %s",
-                missing_location_tokens,
-            )
-            per_intent.append(
-                {
-                    "feasible": False,
-                    "strategy": "deny",
-                    "violations": [
-                        {
-                            "rule": "location_absent",
-                            "reason": (
-                                f"{missing_location_phrase} isn't an established location right now."
-                            ),
-                        }
-                    ],
-                    "narrator_guidance": (
-                        f"I can't route you to {missing_location_phrase}; stick to known "
-                        "locations or introduce it in-scene first."
-                    ),
-                    "suggested_alternatives": lead_candidates,
-                    "leads": lead_candidates,
-                    "categories": sorted(cats),
-                }
-            )
-            any_hard_block = True
+            if ask_decision:
+                reason_text = ask_decision.get("reason") or (
+                    f"{missing_location_phrase} needs a quick description before I can add it."
+                )
+                logger.info(
+                    "[FEASIBILITY] Resolver ASK for location -> %s", missing_location_tokens
+                )
+                per_intent.append(
+                    {
+                        "feasible": False,
+                        "strategy": "ask",
+                        "violations": [
+                            {
+                                "rule": "location_resolver:ask",
+                                "reason": reason_text,
+                            }
+                        ],
+                        "narrator_guidance": (
+                            f"{reason_text} Give me a quick sense of the place or pick one of the known options."
+                        ),
+                        "suggested_alternatives": lead_candidates,
+                        "leads": lead_candidates,
+                        "categories": sorted(cats),
+                    }
+                )
+                any_ask = True
+            else:
+                reason_text = (
+                    deny_decision.get("reason")
+                    if deny_decision
+                    else f"{missing_location_phrase} isn't an established location right now."
+                )
+                logger.info(
+                    "[FEASIBILITY] Hard deny - fabricated location -> %s",
+                    missing_location_tokens,
+                )
+                per_intent.append(
+                    {
+                        "feasible": False,
+                        "strategy": "deny",
+                        "violations": [
+                            {
+                                "rule": "location_resolver:deny",
+                                "reason": reason_text,
+                            }
+                        ],
+                        "narrator_guidance": (
+                            f"{reason_text} Stick to known locations or introduce it in-scene first."
+                        ),
+                        "suggested_alternatives": lead_candidates,
+                        "leads": lead_candidates,
+                        "categories": sorted(cats),
+                    }
+                )
+                any_hard_block = True
             continue
 
         referenced_targets = _tokenize_scene_values(intent.get("direct_object"))
@@ -3788,6 +4236,8 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
     if any_hard_block:
         overall = {"feasible": False, "strategy": "deny"}
+    elif any_ask:
+        overall = {"feasible": False, "strategy": "ask"}
     elif any_defer:
         overall = {"feasible": False, "strategy": "defer"}
     else:

@@ -86,6 +86,21 @@ class FakeConnection:
         return None
 
 
+@pytest.fixture(autouse=True)
+def fake_plausibility_scores(monkeypatch):
+    scores: dict[str, float] = {
+        "pier 39": 0.92,
+        "hidden moon base": 0.02,
+        "harbor in topeka": 0.05,
+    }
+
+    async def _fake_plausibility(name: str, *_args, **_kwargs) -> float:
+        return scores.get(str(name).lower(), 0.0)
+
+    monkeypatch.setattr(feasibility, "plausibility_score", _fake_plausibility)
+    return scores
+
+
 @pytest.mark.parametrize("action_text", ["Talk to Mallory about the treasure."])
 def test_fast_feasibility_blocks_absent_entities(monkeypatch, action_text):
     fake_conn = FakeConnection()
@@ -257,7 +272,7 @@ def test_fast_feasibility_blocks_unknown_location(monkeypatch, action_text):
     assert overall.get("strategy") == "deny"
     assert per_intent.get("strategy") == "deny"
     violation_blob = json.dumps(per_intent.get("violations", []))
-    assert "location_absent" in violation_blob
+    assert "location_resolver:deny" in violation_blob
     assert "hidden moon base" in violation_blob.lower()
 
 
@@ -360,6 +375,56 @@ def test_fast_feasibility_accepts_generic_venue_requests(monkeypatch, action_tex
     assert per_intent.get("strategy") == "allow"
     violation_blob = json.dumps(per_intent.get("violations", []))
     assert "location_absent" not in violation_blob
+
+
+@pytest.mark.parametrize("action_text", ["Find a harbor in Topeka."])
+def test_fast_feasibility_denies_implausible_harbor(monkeypatch, action_text, fake_plausibility_scores):
+    fake_conn = FakeConnection()
+    fake_conn.current_roleplay.update(
+        {
+            "SettingCapabilities": json.dumps({"technology": "modern"}),
+            "SettingType": "modern_realistic",
+            "SettingKind": "modern_realistic",
+            "RealityContext": "normal",
+            "PhysicsModel": "realistic",
+            "CurrentLocation": "Atrium",
+            "CurrentScene": json.dumps({"location": {"name": "Atrium"}}),
+            "WorldModel": json.dumps({"branch": "modern_realistic"}),
+        }
+    )
+    fake_conn.locations = ["Atrium"]
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield fake_conn
+
+    monkeypatch.setattr(orchestrator, "get_db_connection_context", fake_db_context)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
+
+    async def fake_parse_action_intents(text: str):
+        return [
+            {
+                "raw_text": text,
+                "categories": ["movement"],
+                "destination": ["harbor in Topeka"],
+            }
+        ]
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+
+    async def _run():
+        return await feasibility.assess_action_feasibility_fast(1, 2, action_text)
+
+    result = asyncio.run(_run())
+
+    overall = result.get("overall", {})
+    per_intent = (result.get("per_intent") or [])[0]
+    assert overall.get("feasible") is False
+    assert overall.get("strategy") == "deny"
+    assert per_intent.get("strategy") == "deny"
+    violation_blob = json.dumps(per_intent.get("violations", []))
+    assert "location_resolver:deny" in violation_blob
+    assert "harbor in topeka" in violation_blob.lower()
 
 
 def test_hydrated_location_survives_normalization_roundtrip():
