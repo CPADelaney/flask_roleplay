@@ -109,3 +109,27 @@ def test_resolver_denies_implausible_request(monkeypatch):
     assert verdict.get("decision") == "deny"
     assert captured.get("near") == "Atrium"
     assert "resolver" in verdict.get("reason", "").lower()
+
+
+def test_world_model_override_thresholds():
+    metadata = {
+        "branch": "modern_realistic",
+        "allow_fictional_locations": False,
+        "resolver": {
+            "allow_threshold": 0.88,
+            "ask_threshold": 0.66,
+            "fictional_policy": "ask",
+        },
+    }
+    base_context = {
+        "kind": "modern_realistic",
+        "type": "modern_realistic",
+        "reality_context": "normal",
+    }
+
+    normalized = feasibility._normalize_world_model_metadata(metadata, base_context)
+
+    resolver_cfg = normalized.get("resolver", {})
+    assert resolver_cfg.get("allow_threshold") == 0.88
+    assert resolver_cfg.get("ask_threshold") == 0.66
+    assert resolver_cfg.get("fictional_policy") == "ask"
