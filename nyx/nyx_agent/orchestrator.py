@@ -101,13 +101,22 @@ async def _generate_defer_taunt(
             logger.debug(f"[{trace_id}] Failed to wrap Nyx context for defer taunt", exc_info=True)
 
     try:
+        # Use remaining turn budget if available; else fall back to default
+        remaining = None
+        try:
+            import time as _t
+            dl = (getattr(nyx_context, "current_context", {}) or {}).get("_deadline")
+            if dl:
+                remaining = max(0.25, dl - _t.monotonic())
+        except Exception:
+            remaining = None
         result = await asyncio.wait_for(
             Runner.run(
                 nyx_defer_agent,
                 prompt,
                 **run_kwargs,
             ),
-            timeout=get_defer_run_timeout_seconds(),
+            timeout=remaining if remaining is not None else get_defer_run_timeout_seconds(),
         )
     except asyncio.TimeoutError:
         logger.debug(
@@ -346,6 +355,15 @@ async def process_user_input(
     """Process user input with MANDATORY fast feasibility + dynamic full feasibility (no hard globals)."""
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
+    monotonic = time.monotonic
+    # Adopt a single absolute deadline from the SDK or create a reasonable one
+    deadline = None
+    if isinstance(context_data, dict):
+        deadline = context_data.get("_deadline") or context_data.get("deadline")
+    if deadline is None:
+        deadline = monotonic() + get_defer_run_timeout_seconds()
+    def time_left(floor: float = 0.25) -> float:
+        return max(floor, deadline - monotonic())
     nyx_context: Optional[NyxContext] = None
     packed_context: Optional[PackedContext] = None
 
@@ -394,6 +412,7 @@ async def process_user_input(
             nyx_context = NyxContext(user_id, conversation_id)
             await nyx_context.initialize()
             base_context = _normalize_scene_context(context_data or {})
+            base_context["_deadline"] = deadline
             base_context["user_input"] = user_input
             base_context["last_user_input"] = user_input
             nyx_context.last_user_input = user_input
@@ -535,7 +554,10 @@ async def process_user_input(
             run_config = RunConfig(model_settings=safe_settings)
 
             # Use enhanced_input that includes feasibility context
-            result = await Runner.run(nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config)
+            result = await asyncio.wait_for(
+                Runner.run(nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config),
+                timeout=time_left()
+            )
 
             # Normalize result to a list of messages/events
             if hasattr(result, 'messages'):
@@ -566,8 +588,9 @@ async def process_user_input(
 
         # ---- STEP 6: Post-run enforcement (updates/image hooks + punishment) ---
         async with _log_step("post_run_enforcement", trace_id):
-            # Inject universal updates if missing
-            if not _did_call_tool(resp_stream, "generate_universal_updates"):
+            if time_left() < 2.0:
+                logger.info(f"[{trace_id}] Skipping post-run extras due to low budget")
+            elif not _did_call_tool(resp_stream, "generate_universal_updates"):
                 narrative = _extract_last_assistant_text(resp_stream)
                 if narrative and len(narrative) > 20:
                     try:
@@ -585,7 +608,7 @@ async def process_user_input(
                         logger.debug(f"[{trace_id}] Post-run universal updates failed softly: {e}")
 
             # Image decision if not already done
-            if not _did_call_tool(resp_stream, "decide_image_generation"):
+            if time_left() >= 2.0 and not _did_call_tool(resp_stream, "decide_image_generation"):
                 narrative = _extract_last_assistant_text(resp_stream)
                 if narrative and len(narrative) > 20:
                     try:
@@ -599,7 +622,7 @@ async def process_user_input(
                         logger.debug(f"[{trace_id}] Post-run image decision failed softly: {e}")
 
             # Punishment enforcement — runs every turn, gate decides tier/emit
-            if enforce_all_rules_on_player:
+            if time_left() >= 2.0 and enforce_all_rules_on_player:
                 try:
                     player_name = (
                         nyx_context.current_context.get("player_name")
