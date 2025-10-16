@@ -436,6 +436,73 @@ def _looks_like_real_world_toponym(
 
     return False
 
+def _extract_geo_hints_from_location(location: Any) -> Dict[str, Optional[str]]:
+    """
+    Pulls common geo fields out of a location payload, tolerating multiple schemas.
+    Returns {district|neighborhood|borough -> 'district', city/town -> 'city', region/state/province -> 'region', country}.
+    """
+    out = {"district": None, "city": None, "region": None, "country": None}
+    if not isinstance(location, dict):
+        return out
+
+    def _get(*keys: str) -> Optional[str]:
+        for k in keys:
+            v = location.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return None
+
+    out["district"] = _get("district", "neighborhood", "borough")
+    out["city"] = _get("city", "town", "municipality")
+    out["region"] = _get("region", "state", "province")
+    out["country"] = _get("country")
+    return out
+
+
+def _derive_near_string(setting_context: Optional[Dict[str, Any]], fallback: Optional[str] = None) -> Optional[str]:
+    """
+    Build the best 'near' string for geocoding when the current location name is fictional.
+    Prefers: district+city → city → region → world_model.resolver.anchor → any known real toponym.
+    """
+    if not isinstance(setting_context, dict):
+        return fallback
+
+    # 1) Try structured fields on the current location
+    loc = setting_context.get("location") or {}
+    hints = _extract_geo_hints_from_location(loc)
+    parts = []
+    if hints.get("district"):
+        parts.append(hints["district"])
+    if hints.get("city"):
+        parts.append(hints["city"])
+    if parts:
+        return ", ".join(parts)
+
+    # 2) Try world model resolver anchor (if present)
+    wm = setting_context.get("world_model") or {}
+    res = wm.get("resolver") or {}
+    anchor = res.get("anchor") or {}
+    if isinstance(anchor, dict):
+        anchor_parts = []
+        if anchor.get("district"):
+            anchor_parts.append(str(anchor["district"]).strip())
+        if anchor.get("city"):
+            anchor_parts.append(str(anchor["city"]).strip())
+        if anchor_parts:
+            return ", ".join(p for p in anchor_parts if p)
+
+        # fall back to region if no city
+        if anchor.get("region"):
+            return str(anchor["region"]).strip()
+
+    # 3) Try any known real toponym we've seen in this conversation
+    for name in setting_context.get("known_location_names", []):
+        norm = _normalize_location_phrase(name)
+        if _looks_like_real_world_toponym(name, norm, setting_context):
+            return name
+
+    return fallback
+
 
 def _normalize_generic_venue_phrase(normalized_token: str) -> str:
     candidate = (normalized_token or "").strip()
@@ -960,24 +1027,24 @@ def _normalize_world_model_metadata(
     )
     resolver_cfg = dict(resolver_cfg_raw) if isinstance(resolver_cfg_raw, dict) else {}
 
-    allow_threshold = _coerce_float(
-        resolver_cfg.get("allow_threshold"),
-        LOCATION_RESOLVER_ALLOW_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ALLOW_THRESHOLD,
-    )
-    ask_threshold = _coerce_float(
-        resolver_cfg.get("ask_threshold"),
-        LOCATION_RESOLVER_ASK_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ASK_THRESHOLD,
-    )
-    if ask_threshold >= allow_threshold:
-        ask_threshold = max(min(allow_threshold * 0.75, allow_threshold - 0.05), 0.0)
-
-    fictional_policy = str(
-        resolver_cfg.get("fictional_policy")
-        or metadata.get("fictional_location_policy")
-        or ("allow" if allow_fictional else "deny")
-    ).strip().lower()
-    if fictional_policy not in {"allow", "ask", "deny"}:
-        fictional_policy = "allow" if allow_fictional else "deny"
+    # NEW: normalize a geo anchor if provided (tolerate both nested and flat keys)
+    anchor_raw = resolver_cfg.get("anchor") or metadata.get("anchor") or {}
+    anchor = {}
+    if isinstance(anchor_raw, dict):
+        anchor = {
+            "district": (str(anchor_raw.get("district") or "").strip() or None),
+            "city": (str(anchor_raw.get("city") or "").strip() or None),
+            "region": (str(anchor_raw.get("region") or anchor_raw.get("state") or "").strip() or None),
+            "country": (str(anchor_raw.get("country") or "").strip() or None),
+            "lat": anchor_raw.get("lat"),
+            "lon": anchor_raw.get("lon"),
+        }
+    else:
+        anchor = {
+            "city": (str(resolver_cfg.get("anchor_city") or metadata.get("anchor_city") or "").strip() or None),
+            "region": (str(resolver_cfg.get("anchor_region") or metadata.get("anchor_region") or "").strip() or None),
+            "country": (str(resolver_cfg.get("anchor_country") or metadata.get("anchor_country") or "").strip() or None),
+        }
 
     return {
         "branch": branch,
@@ -986,6 +1053,7 @@ def _normalize_world_model_metadata(
             "allow_threshold": allow_threshold,
             "ask_threshold": ask_threshold,
             "fictional_policy": fictional_policy,
+            "anchor": anchor,  # <-- keep the normalized anchor handy
         },
         "raw": metadata,
     }
@@ -1142,28 +1210,29 @@ async def _resolve_location_candidate(
 
     token_kind = (inferred_kind or _guess_requested_kind(original, setting_context) or "real_world").lower()
 
+    # --- Existing near-hint discovery (kept) ---
     near_hint: Optional[str] = None
     if isinstance(setting_context, dict):
         location_ctx = setting_context.get("location")
         if isinstance(location_ctx, dict):
-            candidate_keys = ("name", "display_name", "label", "title")
-            for key in candidate_keys:
+            for key in ("name", "display_name", "label", "title"):
                 value = location_ctx.get(key)
                 if isinstance(value, str) and value.strip():
                     near_hint = value.strip()
                     break
-            if near_hint is None:
-                for iterable_key in ("names", "aliases"):
-                    values = location_ctx.get(iterable_key)
-                    if isinstance(values, (list, tuple, set)):
-                        for candidate in values:
-                            if isinstance(candidate, str) and candidate.strip():
-                                near_hint = candidate.strip()
-                                break
-                        if near_hint:
-                            break
         elif isinstance(location_ctx, str) and location_ctx.strip():
             near_hint = location_ctx.strip()
+
+    # --- NEW: if near_hint looks fictional or is empty, upgrade to a real anchor ---
+    use_near = near_hint
+    try:
+        looks_real = bool(use_near and _looks_like_real_world_toponym(use_near, _normalize_location_phrase(use_near), setting_context))
+    except Exception:
+        looks_real = False
+    if not looks_real:
+        derived = _derive_near_string(setting_context)
+        if derived:
+            use_near = derived
 
     score = float(await plausibility_score(original, near=near_hint))
     minted = False
@@ -1217,6 +1286,7 @@ async def _resolve_location_candidate(
         "normalized": normalized,
         "branch": branch,
         "minted": minted,
+        "near_used": use_near,  # helpful for logs
     }
 
     for candidate in filter(None, {normalized, (original or "").strip().lower()}):
@@ -4462,26 +4532,43 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                         except Exception:
                             kind_value = "REAL" if is_real else "HYBRID"
 
-                        # Build SettingProfile (fall back to dict shape)
+                        loc = setting_context.get("location") or {}
+                        hints = _extract_geo_hints_from_location(loc)
+                        wm = setting_context.get("world_model") or {}
+                        res = wm.get("resolver") or {}
+                        wm_anchor = res.get("anchor") or {}
+                        
+                        primary_city = (
+                            hints.get("city") or hints.get("district") or
+                            wm_anchor.get("city") or
+                            getattr(anchor, "city", None) or
+                            setting_context.get("primary_city")
+                        )
+                        region = hints.get("region") or wm_anchor.get("region") or getattr(anchor, "region", None)
+                        country = hints.get("country") or wm_anchor.get("country") or getattr(anchor, "country", None)
+                        lat = getattr(anchor, "lat", None) or wm_anchor.get("lat")
+                        lon = getattr(anchor, "lon", None) or wm_anchor.get("lon")
+                        
+                        # Build SettingProfile with the richer anchor
                         try:
                             setting_profile = SettingProfile(
                                 kind=kind_value,
-                                primary_city=(getattr(anchor, "city", None) or setting_context.get("primary_city")),
-                                region=getattr(anchor, "region", None),
-                                country=getattr(anchor, "country", None),
-                                lat=getattr(anchor, "lat", None),
-                                lon=getattr(anchor, "lon", None),
+                                primary_city=primary_city,
+                                region=region,
+                                country=country,
+                                lat=lat,
+                                lon=lon,
                                 label=getattr(anchor, "label", None),
                             )
                         except Exception:
                             setting_profile = {
                                 "kind": kind_value,
-                                "primary_city": getattr(anchor, "city", None) if anchor else setting_context.get("primary_city"),
-                                "region": getattr(anchor, "region", None) if anchor else None,
-                                "country": getattr(anchor, "country", None) if anchor else None,
-                                "lat": getattr(anchor, "lat", None) if anchor else None,
-                                "lon": getattr(anchor, "lon", None) if anchor else None,
-                                "label": getattr(anchor, "label", None) if anchor else None,
+                                "primary_city": primary_city,
+                                "region": region,
+                                "country": country,
+                                "lat": lat,
+                                "lon": lon,
+                                "label": getattr(anchor, "label", None),
                             }
 
                         # Call resolver (support different signatures)
