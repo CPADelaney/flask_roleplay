@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, Mapping, Optional
 
 
 def build_metadata_payload(
@@ -33,3 +34,19 @@ def build_metadata_payload(
         payload["thread_id"] = str(thread_id)
 
     return payload
+
+
+def encode_safety_metadata(safety_context: Mapping[str, Any]) -> str:
+    """Serialise guardrail metadata so ChatKit receives a string value.
+
+    ChatKit expects metadata values to be strings. We JSON-encode the guardrail
+    details after coercing each field to a string to avoid type mismatches.
+    """
+
+    denial_preview = (safety_context.get("denial_text") or "")[:160]
+    guardrail_details = {
+        "guardrail": "deny",
+        "integrated": "true",
+        "denial_text_preview": denial_preview,
+    }
+    return json.dumps(guardrail_details, ensure_ascii=False)

@@ -15,6 +15,7 @@ from openai_integration.conversations import ConversationManager
 from chatkit_server import (
     RoleplayChatServer,
     build_metadata_payload,
+    encode_safety_metadata,
     extract_response_text,
     extract_thread_metadata,
     format_messages_for_chatkit,
@@ -670,12 +671,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             thread_id=existing_thread_id,
         )
         if safety_context:
-            metadata_payload.setdefault("safety", {})
-            metadata_payload["safety"].update({
-                "guardrail": "deny",
-                "integrated": True,
-                "denial_text_preview": (safety_context.get("denial_text") or "")[:160],
-            })
+            metadata_payload["safety"] = encode_safety_metadata(safety_context)
 
         if chatkit_server and chatkit_messages:
             async def emit_token(token: str) -> None:
