@@ -207,7 +207,7 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
                     loc_id = None
         except (TypeError, ValueError):
             loc_id = None
-       slug = (li.get("slug") or (display and _slugify_location(display)) or "unknown")
+        slug = (li.get("slug") or (display and _slugify_location(display)) or "unknown")
 
     # 2) Fallback to roleplay-style + legacy keys
     if not display or slug is None or loc_id is None:
