@@ -1,10 +1,13 @@
 # nyx/location/anchors.py
 from __future__ import annotations
 import math
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 import httpx
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class GeoAnchor:
@@ -21,7 +24,6 @@ _store = ConversationSnapshotStore()
 def _deg_box(lat: float, lon: float, km: float) -> Tuple[float, float, float, float]:
     dlat = km / 111.0
     dlon = km / (111.0 * max(0.1, math.cos(math.radians(lat))))
-    # Return (west, north, east, south) for Nominatim's viewbox
     return (lon - dlon, lat + dlat, lon + dlon, lat - dlat)
 
 async def _geocode_city_once(city: str, region: Optional[str], country: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
@@ -45,16 +47,18 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
     """
     Build a robust anchor with lat/lon. Never rely on fictional scene names.
     Priority:
-      1) incoming meta.lat/lon
+      1) incoming meta.locationInfo.geo lat/lon
       2) last persisted anchor from snapshot_store
-      3) city/region/country (geocode once, cache)
+      3) world.primary_city (geocode once, cache)
     """
     snap = _store.get(str(user_id), str(conversation_id)) or {}
     a = GeoAnchor()
 
     li = meta.get("locationInfo") or {}
-    ss = meta.get("scene_scope") or {}
-    # 1) Direct coordinates first
+    world = meta.get("world") or {}
+    ss = meta.get("scene_scope") or {}  # used only for neighborhood label; never for city/region/country
+
+    # 1) Direct coordinates (locationInfo.geo or scene_scope if it has numeric lat/lon)
     for scope in (li.get("geo") or {}, ss):
         try:
             if a.lat is None and "lat" in scope and "lon" in scope:
@@ -72,20 +76,25 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
         except Exception:
             pass
 
-    # 3) Semantic labels (neighborhood/city/region/country)
-    for scope in (li, ss, meta.get("world") or {}):
+    # Neighborhood: ok to use scene_scope for flavor
+    for src, dst in [("neighborhood","neighborhood"), ("district","neighborhood")]:
+        v = (li.get(src) if li.get(src) is not None else ss.get(src))
+        if isinstance(v, str) and getattr(a, dst) is None:
+            setattr(a, dst, v.strip())
+
+    # City/region/country: **only** trusted sources (locationInfo and world.*)
+    for scope in (li, world):
         for src, dst in [
-            ("neighborhood", "neighborhood"), ("district", "neighborhood"),
-            ("city", "city"), ("region", "region"), ("state", "region"),
-            ("country", "country"),
+            ("city","city"), ("region","region"), ("state","region"),
+            ("country","country")
         ]:
             v = scope.get(src)
             if isinstance(v, str) and getattr(a, dst) is None:
                 setattr(a, dst, v.strip())
 
-    # 4) If still missing lat/lon, geocode city once (cache)
+    # 3) If still missing lat/lon, geocode world.primary_city (not scene labels)
     if a.lat is None or a.lon is None:
-        city = a.city or (meta.get("world") or {}).get("primary_city")
+        city = a.city or world.get("primary_city")
         if city:
             lat, lon = await _geocode_city_once(city, a.region, a.country)
             a.lat, a.lon = lat, lon
@@ -97,22 +106,19 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
                 _store.put(str(user_id), str(conversation_id), snap)
 
     # Human label
-    if a.neighborhood and a.city:
-        a.label = f"{a.neighborhood}, {a.city}"
+    if a.neighborhood and (a.city or world.get("primary_city")):
+        a.label = f"{a.neighborhood}, {a.city or world.get('primary_city')}"
     elif a.city:
         a.label = a.city
+    elif world.get("primary_city"):
+        a.label = world.get("primary_city")
 
+    logger.debug(f"[ANCHOR] derived anchor lat={a.lat} lon={a.lon} city={a.city} region={a.region} country={a.country} label={a.label}")
     return a
 
 def build_nominatim_params_for_poi(poi: str, anchor: GeoAnchor, *, radius_km: float, limit: int) -> Dict[str, str]:
-    """
-    - If we have lat/lon: ALWAYS use a bounded viewbox (no fictional strings).
-    - If we have no lat/lon but have a city: q = "<poi>, <city>".
-    - Otherwise: q = "<poi>".
-    """
     def _normalize(s: str) -> str:
         return (s or "").replace("’", "'").strip()
-
     params = {"format": "jsonv2", "limit": str(limit), "addressdetails": "1"}
     brand = _normalize(poi)
     if anchor.lat is not None and anchor.lon is not None:
@@ -121,6 +127,7 @@ def build_nominatim_params_for_poi(poi: str, anchor: GeoAnchor, *, radius_km: fl
         params["viewbox"] = f"{w:.6f},{n:.6f},{e:.6f},{s:.6f}"
         params["bounded"] = "1"
     elif anchor.city:
+        # Safe to use because we no longer let scene labels populate 'city'
         params["q"] = f"{brand}, {anchor.city}"
     else:
         params["q"] = brand
@@ -128,7 +135,6 @@ def build_nominatim_params_for_poi(poi: str, anchor: GeoAnchor, *, radius_km: fl
 
 def nearest_airport_label(anchor: GeoAnchor):
     if anchor.lat and anchor.lon:
-        # Nice touch: special case for SFO to make demos fun, otherwise local stub
         if 37.60 <= anchor.lat <= 37.90 and -122.55 <= anchor.lon <= -122.20:
             return "San Francisco International Airport", 37.6213, -122.3790
         return "Nearest International Airport", anchor.lat + 0.09, anchor.lon + 0.09
