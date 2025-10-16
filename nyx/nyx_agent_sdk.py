@@ -271,6 +271,8 @@ class NyxSDKConfig:
 
     # Timeouts & retry
     request_timeout_seconds: float = 45.0
+    safety_margin_seconds: float = 1.0      # leave a little time for cleanup/logging
+    min_step_seconds: float = 0.25          # never schedule sub-250ms timeouts
     retry_on_failure: bool = True
     retry_delay_seconds: float = 0.75
 
@@ -369,6 +371,7 @@ class NyxAgentSDK:
         self,
         context: DeferPromptContext,
         trace_id: str,
+        timeout: Optional[float] = None,
     ) -> Optional[str]:
         """Ask Nyx to craft a defer narrative; return None if the call fails."""
 
@@ -379,6 +382,13 @@ class NyxAgentSDK:
         if not prompt.strip():
             return None
 
+        # Respect overall deadline if provided
+        effective_timeout = timeout
+        if effective_timeout is None:
+            try:
+                effective_timeout = float(getattr(self.config, "request_timeout_seconds", 45.0)) / 3.0
+            except Exception:
+                effective_timeout = 10.0
         try:
             result = await asyncio.wait_for(
                 Runner.run(
@@ -386,7 +396,7 @@ class NyxAgentSDK:
                     prompt,
                     max_turns=2,
                 ),
-                timeout=_orchestrator.get_defer_run_timeout_seconds(self.config),
+                timeout=max(0.25, effective_timeout),
             )
         except asyncio.TimeoutError:
             logger.debug(
@@ -484,6 +494,13 @@ class NyxAgentSDK:
         meta = dict(metadata or {})
 
         logger.info(f"[SDK-{trace_id}] Processing input: {message[:120]}")
+        # Compute a single absolute deadline and pass it downstream.
+        deadline = time.monotonic() + float(self.config.request_timeout_seconds)
+        meta["_deadline"] = deadline
+        safety_margin = float(getattr(self.config, "safety_margin_seconds", 1.0))
+        min_step = float(getattr(self.config, "min_step_seconds", 0.25))
+        def _time_left() -> float:
+            return max(min_step, deadline - time.monotonic())
 
         # --- rate limiting (unchanged) ---
         lock = None
@@ -551,7 +568,9 @@ class NyxAgentSDK:
                         leads = extra_meta.get("leads", [])
                         guidance = None
                         if defer_context:
-                            guidance = await self._generate_defer_narrative(defer_context, trace_id)
+                            guidance = await self._generate_defer_narrative(
+                                defer_context, trace_id, timeout=_time_left()
+                            )
                         if not guidance:
                             guidance = build_defer_fallback_text(defer_context) if defer_context else \
                                 "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
@@ -658,6 +677,7 @@ class NyxAgentSDK:
                 conversation_id=conversation_id,
                 user_id=user_id,
                 meta=meta,
+                deadline=deadline,
             )
             resp = NyxResponse.from_orchestrator(result)
             resp.processing_time = resp.processing_time or (time.time() - t0)
@@ -719,8 +739,10 @@ class NyxAgentSDK:
 
             # --- telemetry/maintenance/fanout ---
             await self._maybe_log_perf(resp)
-            await self._maybe_enqueue_maintenance(resp, conversation_id)
-            await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
+            # If we're out of budget, skip non-essential fanout
+            if _time_left() > safety_margin:
+                await self._maybe_enqueue_maintenance(resp, conversation_id)
+                await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
 
             # **Invalidate aggregator/unified cache if we changed world state**
             try:
@@ -785,8 +807,9 @@ class NyxAgentSDK:
                             logger.debug("post_hook failed softly", exc_info=True)
 
                 await self._maybe_log_perf(resp)
-                await self._maybe_enqueue_maintenance(resp, conversation_id)
-                await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
+                if _time_left() > safety_margin:
+                    await self._maybe_enqueue_maintenance(resp, conversation_id)
+                    await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
 
                 # normalize location & invalidate caches on world change
                 try:
