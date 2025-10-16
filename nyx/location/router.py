@@ -2,7 +2,6 @@
 from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
-
 from .types import PlaceQuery, SettingProfile, SettingKind, ResolutionResult
 from .anchors import derive_geo_anchor
 from .search import resolve_real
@@ -50,21 +49,14 @@ async def resolve_place_or_travel(
     user_id: str,
     conversation_id: str
 ) -> ResolutionResult:
-    """
-    Route a user place/travel request to the appropriate resolver (real or fictional),
-    based on the world kind + available anchor.
-    """
     if store is None:
         store = ConversationSnapshotStore()
-
     setting = await _setting_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
-
     if setting.kind == SettingKind.REAL or (setting.kind == SettingKind.HYBRID and setting.primary_city):
         res = await resolve_real(q, setting, meta)
     else:
         res = await resolve_fictional(q, setting, meta, store, user_id, conversation_id)
-
     a = await derive_geo_anchor(meta, user_id, conversation_id)
     res.anchor_used = a.label or a.city or None
     return res
