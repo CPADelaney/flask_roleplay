@@ -1502,6 +1502,34 @@ class MemoryOrchestrator:
             include_analysis = kwargs["use_llm_analysis"]
     
         entity_type = self._as_et_str(entity_type)
+        requested_entity_id = entity_id
+        normalized_entity_id = await self._normalize_entity_id(entity_type, entity_id)
+
+        if normalized_entity_id is None:
+            result = {
+                "memories": [],
+                "count": 0,
+                "entity_type": entity_type,
+                "entity_id": requested_entity_id,
+            }
+            try:
+                await self._telemetry(
+                    "retrieve_memories",
+                    started_at=t0,
+                    success=True,
+                    data_size=0,
+                    metadata={
+                        "et": entity_type,
+                        "eid": requested_entity_id,
+                        "resolved": False,
+                        "limit": limit,
+                    },
+                )
+            except Exception:
+                pass
+            return result
+
+        entity_id = normalized_entity_id
     
         try:
             # Build a stable cache key with user/conversation in prefix
@@ -1522,14 +1550,48 @@ class MemoryOrchestrator:
     
             cached = await self.cache.get(cache_key)
             if cached:
-                logger.debug(f"Retrieval cache hit for entity {entity_type}:{entity_id}")
+                logger.debug(
+                    "Retrieval cache hit for entity %s:%s (requested=%s)",
+                    entity_type,
+                    entity_id,
+                    requested_entity_id,
+                )
                 result = cached
             else:
-                logger.debug(f"Retrieval cache miss for entity {entity_type}:{entity_id}")
-    
+                logger.debug(
+                    "Retrieval cache miss for entity %s:%s (requested=%s)",
+                    entity_type,
+                    entity_id,
+                    requested_entity_id,
+                )
+
                 # Get entity manager
                 manager = await self._get_entity_manager(entity_type, entity_id)
-    
+
+                if manager is None:
+                    result = {
+                        "memories": [],
+                        "count": 0,
+                        "entity_type": entity_type,
+                        "entity_id": requested_entity_id,
+                    }
+                    try:
+                        await self._telemetry(
+                            "retrieve_memories",
+                            started_at=t0,
+                            success=True,
+                            data_size=0,
+                            metadata={
+                                "et": entity_type,
+                                "eid": requested_entity_id,
+                                "resolved": False,
+                                "limit": limit,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    return result
+
                 # Retrieve memories with robust fallbacks.
                 mem_list = []
                 if query:
@@ -1680,7 +1742,7 @@ class MemoryOrchestrator:
                     )
     
                 await self.cache.set(cache_key, result)
-    
+
             # Telemetry (success)
             try:
                 await self._telemetry(
@@ -1688,11 +1750,16 @@ class MemoryOrchestrator:
                     started_at=t0,
                     success=True,
                     data_size=result.get("count", 0),
-                    metadata={"et": entity_type, "eid": entity_id, "limit": limit}
+                    metadata={
+                        "et": entity_type,
+                        "eid": entity_id,
+                        "requested_eid": requested_entity_id,
+                        "limit": limit,
+                    }
                 )
             except Exception:
                 pass
-    
+
             return result
     
         except Exception as e:
@@ -1703,7 +1770,11 @@ class MemoryOrchestrator:
                     started_at=t0,
                     success=False,
                     error=str(e),
-                    metadata={"et": entity_type, "eid": entity_id}
+                    metadata={
+                        "et": entity_type,
+                        "eid": entity_id,
+                        "requested_eid": requested_entity_id,
+                    }
                 )
             except Exception:
                 pass
@@ -1832,7 +1903,7 @@ class MemoryOrchestrator:
     async def update_memory(
         self,
         entity_type: str,
-        entity_id: int,
+        entity_id: Union[int, str],
         memory_id: int,
         updates: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -1843,21 +1914,40 @@ class MemoryOrchestrator:
             await self.initialize()
     
         try:
+            normalized_type = self._as_et_str(entity_type)
+            requested_entity_id = entity_id
+            resolved_entity_id = await self._normalize_entity_id(normalized_type, entity_id)
+
+            if resolved_entity_id is None:
+                return {"error": "entity_not_found", "success": False}
+
+            entity_type = normalized_type
+            entity_id = resolved_entity_id
+
             manager = await self._get_entity_manager(entity_type, entity_id)
+
+            if manager is None:
+                return {"error": "entity_not_found", "success": False}
+
             updated = await manager.update_memory(memory_id, updates)
-    
+
             await self._invalidate_caches_for_entity(entity_type, entity_id)
             self._invalidate_by_metadata(updates.get("metadata"), updates.get("tags"))
-    
+
             out = {"success": True, "memory_id": memory_id}
-    
+
             # Telemetry (success)
             try:
                 await self._telemetry(
                     "update_memory",
                     started_at=t0,
                     success=True,
-                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                    metadata={
+                        "et": entity_type,
+                        "eid": entity_id,
+                        "mid": memory_id,
+                        "requested_eid": requested_entity_id,
+                    }
                 )
             except Exception:
                 pass
@@ -1872,7 +1962,12 @@ class MemoryOrchestrator:
                     started_at=t0,
                     success=False,
                     error=str(e),
-                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                    metadata={
+                        "et": normalized_type if 'normalized_type' in locals() else self._as_et_str(entity_type),
+                        "eid": entity_id,
+                        "mid": memory_id,
+                        "requested_eid": locals().get("requested_entity_id", entity_id),
+                    }
                 )
             except Exception:
                 pass
@@ -1883,7 +1978,7 @@ class MemoryOrchestrator:
     async def delete_memory(
         self,
         entity_type: str,
-        entity_id: int,
+        entity_id: Union[int, str],
         memory_id: int
     ) -> Dict[str, Any]:
         """Delete a memory (telemetry-instrumented)."""
@@ -1893,8 +1988,21 @@ class MemoryOrchestrator:
             await self.initialize()
     
         try:
+            normalized_type = self._as_et_str(entity_type)
+            requested_entity_id = entity_id
+            resolved_entity_id = await self._normalize_entity_id(normalized_type, entity_id)
+
+            if resolved_entity_id is None:
+                return {"error": "entity_not_found", "success": False}
+
+            entity_type = normalized_type
+            entity_id = resolved_entity_id
+
             manager = await self._get_entity_manager(entity_type, entity_id)
-    
+
+            if manager is None:
+                return {"error": "entity_not_found", "success": False}
+
             prev = None
             if hasattr(manager, "get_memory"):
                 try:
@@ -1916,7 +2024,12 @@ class MemoryOrchestrator:
                     "delete_memory",
                     started_at=t0,
                     success=True,
-                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                    metadata={
+                        "et": entity_type,
+                        "eid": entity_id,
+                        "mid": memory_id,
+                        "requested_eid": requested_entity_id,
+                    }
                 )
             except Exception:
                 pass
@@ -1931,11 +2044,16 @@ class MemoryOrchestrator:
                     started_at=t0,
                     success=False,
                     error=str(e),
-                    metadata={"et": entity_type, "eid": entity_id, "mid": memory_id}
+                    metadata={
+                        "et": normalized_type if 'normalized_type' in locals() else self._as_et_str(entity_type),
+                        "eid": entity_id,
+                        "mid": memory_id,
+                        "requested_eid": locals().get("requested_entity_id", entity_id),
+                    }
                 )
             except Exception:
                 pass
-    
+
             logger.error(f"Error deleting memory: {e}")
             return {"error": str(e), "success": False}
     
@@ -1943,73 +2061,165 @@ class MemoryOrchestrator:
     # Entity Manager Operations
     # ========================================================================
     
-    async def _get_entity_manager(self, entity_type: str, entity_id: int):
-            et = str(entity_type).lower()
-            key = f"{et}_{entity_id}"
-            if key not in self.memory_managers:
-                if et == EntityType.NPC.value:
-                    from memory.managers import NPCMemoryManager
-                    manager = NPCMemoryManager(
-                        npc_id=entity_id,
-                        user_id=self.user_id,
-                        conversation_id=self.conversation_id
+    async def _normalize_entity_id(
+        self,
+        entity_type: Union[str, Enum],
+        entity_id: Optional[Union[int, str]]
+    ) -> Optional[Union[int, str]]:
+        """
+        Normalize entity identifiers prior to manager resolution.
+
+        For location entities we accept either numeric identifiers or human readable
+        slugs. Slugs are resolved case-insensitively against the Locations table for
+        the current user/conversation. If resolution fails we return ``None`` so the
+        caller can short-circuit without instantiating a manager that would raise a
+        database error.
+        """
+
+        if entity_id is None:
+            return None
+
+        if isinstance(entity_id, int):
+            return entity_id
+
+        et = self._as_et_str(entity_type)
+
+        if isinstance(entity_id, str):
+            candidate = entity_id.strip()
+            if not candidate:
+                return None if et == EntityType.LOCATION.value else candidate
+
+            try:
+                return int(candidate)
+            except ValueError:
+                pass
+
+            if et == EntityType.LOCATION.value:
+                try:
+                    from db.connection import get_db_connection_context
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to import DB context while normalizing location id %s: %s",
+                        candidate,
+                        exc,
                     )
-                elif et == EntityType.PLAYER.value:
-                    # Player manager in managers.py requires player_name; source from DB or default.
-                    from memory.managers import PlayerMemoryManager
-                    player_name = "Chase"
+                    return None
+
+                try:
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT id
+                            FROM Locations
+                            WHERE user_id=$1
+                              AND conversation_id=$2
+                              AND LOWER(location_name) = LOWER($3)
+                            LIMIT 1
+                            """,
+                            self.user_id,
+                            self.conversation_id,
+                            candidate,
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to resolve location slug %s to id: %s",
+                        candidate,
+                        exc,
+                    )
+                    return None
+
+                if not row:
+                    return None
+
+                try:
+                    location_id = row["id"]
+                except (KeyError, TypeError):
                     try:
-                        from db.connection import get_db_connection_context
-                        async with get_db_connection_context() as conn:
-                            row = await conn.fetchrow(
-                                "SELECT player_name FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 LIMIT 1",
-                                self.user_id, self.conversation_id
-                            )
-                            if row and row.get("player_name"):
-                                player_name = row["player_name"]
+                        location_id = row[0]
                     except Exception:
-                        pass
-                    manager = PlayerMemoryManager(
-                        player_name=player_name,
-                        user_id=self.user_id,
-                        conversation_id=self.conversation_id
-                    )
-                elif et == EntityType.NYX.value:
-                    # reuse initialized instance if available
-                    if self.nyx_memory_manager:
-                        manager = self.nyx_memory_manager
-                    else:
-                        from memory.managers import NyxMemoryManager
-                        manager = NyxMemoryManager(self.user_id, self.conversation_id)
-                elif et == EntityType.CONFLICT.value:
-                    if self.conflict_manager:
-                        manager = self.conflict_manager
-                    else:
-                        from memory.managers import ConflictMemoryManager
-                        manager = ConflictMemoryManager(self.user_id, self.conversation_id)
-                elif et == EntityType.LORE.value:
-                    if self.lore_manager:
-                        manager = self.lore_manager
-                    else:
-                        from memory.managers import LoreMemoryManager
-                        manager = LoreMemoryManager(self.user_id, self.conversation_id)
-                elif et == EntityType.CONTEXT.value:
-                    if self.context_manager:
-                        manager = self.context_manager
-                    else:
-                        from memory.managers import ContextEvolutionManager
-                        manager = ContextEvolutionManager(self.user_id, self.conversation_id)
+                        return None
+
+                try:
+                    return int(location_id)
+                except (TypeError, ValueError):
+                    return None
+
+            return candidate
+
+        return entity_id
+
+    async def _get_entity_manager(self, entity_type: Union[str, Enum], entity_id: Optional[Union[int, str]]):
+        et = self._as_et_str(entity_type)
+        resolved_entity_id = await self._normalize_entity_id(et, entity_id)
+
+        if resolved_entity_id is None:
+            return None
+
+        key = f"{et}_{resolved_entity_id}"
+        if key not in self.memory_managers:
+            if et == EntityType.NPC.value:
+                from memory.managers import NPCMemoryManager
+                manager = NPCMemoryManager(
+                    npc_id=resolved_entity_id,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+            elif et == EntityType.PLAYER.value:
+                # Player manager in managers.py requires player_name; source from DB or default.
+                from memory.managers import PlayerMemoryManager
+                player_name = "Chase"
+                try:
+                    from db.connection import get_db_connection_context
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            "SELECT player_name FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 LIMIT 1",
+                            self.user_id, self.conversation_id
+                        )
+                        if row and row.get("player_name"):
+                            player_name = row["player_name"]
+                except Exception:
+                    pass
+                manager = PlayerMemoryManager(
+                    player_name=player_name,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+            elif et == EntityType.NYX.value:
+                # reuse initialized instance if available
+                if self.nyx_memory_manager:
+                    manager = self.nyx_memory_manager
                 else:
-                    # Fallback: core UnifiedMemoryManager (per-entity instance)
-                    from memory.core import UnifiedMemoryManager
-                    manager = UnifiedMemoryManager(
-                        entity_type=entity_type,
-                        entity_id=entity_id,
-                        user_id=self.user_id,
-                        conversation_id=self.conversation_id
-                    )
-                self.memory_managers[key] = manager
-            return self.memory_managers[key]
+                    from memory.managers import NyxMemoryManager
+                    manager = NyxMemoryManager(self.user_id, self.conversation_id)
+            elif et == EntityType.CONFLICT.value:
+                if self.conflict_manager:
+                    manager = self.conflict_manager
+                else:
+                    from memory.managers import ConflictMemoryManager
+                    manager = ConflictMemoryManager(self.user_id, self.conversation_id)
+            elif et == EntityType.LORE.value:
+                if self.lore_manager:
+                    manager = self.lore_manager
+                else:
+                    from memory.managers import LoreMemoryManager
+                    manager = LoreMemoryManager(self.user_id, self.conversation_id)
+            elif et == EntityType.CONTEXT.value:
+                if self.context_manager:
+                    manager = self.context_manager
+                else:
+                    from memory.managers import ContextEvolutionManager
+                    manager = ContextEvolutionManager(self.user_id, self.conversation_id)
+            else:
+                # Fallback: core UnifiedMemoryManager (per-entity instance)
+                from memory.core import UnifiedMemoryManager
+                manager = UnifiedMemoryManager(
+                    entity_type=et,
+                    entity_id=resolved_entity_id,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+            self.memory_managers[key] = manager
+        return self.memory_managers[key]
 
     async def ensure_npc_mask(self, npc_id: int, overwrite: bool = False) -> Dict[str, Any]:
         """

@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import os
 import sys
@@ -6,6 +7,7 @@ import types
 import typing
 
 import pytest
+from unittest.mock import AsyncMock
 
 from pathlib import Path
 
@@ -23,6 +25,9 @@ class _StubSentenceTransformer:  # pragma: no cover - import shim
 
     def encode(self, texts, **kwargs):
         return [[0.0] for _ in texts]
+
+    def get_sentence_embedding_dimension(self):
+        return 768
 
 
 stub_sentence_transformers = types.ModuleType("sentence_transformers")
@@ -970,3 +975,123 @@ def test_context_service_filters_npcs_by_resolved_location(monkeypatch):
     assert result["npcs"][0]["current_location"] == "Frostpeak Tavern"
     assert result["npcs"][0]["relevance"] == 0.7
     assert observed_location["location"] == "Frostpeak Tavern"
+
+
+def test_memory_orchestrator_normalizes_location_slug(monkeypatch):
+    """Regression test for resolving location slugs before memory retrieval."""
+
+    stub_module = sys.modules.get("memory.memory_orchestrator")
+    if stub_module is not None:
+        sys.modules.pop("memory.memory_orchestrator")
+
+    from db import connection as db_connection
+
+    if not hasattr(db_connection, "run_async_in_worker_loop"):
+        monkeypatch.setattr(
+            db_connection,
+            "run_async_in_worker_loop",
+            lambda func, *args, **kwargs: None,
+            raising=False,
+        )
+
+    real_memory_module = importlib.import_module("memory.memory_orchestrator")
+
+    if stub_module is not None:
+        sys.modules["memory.memory_orchestrator"] = stub_module
+
+    resolved_location_id = 101
+    db_calls = {"count": 0}
+
+    class _FakeConnCtx:
+        async def __aenter__(self):
+            db_calls["count"] += 1
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def fetchrow(self, query, user_id, conversation_id, location_name):
+            assert "FROM Locations" in query
+            if str(location_name).lower() == "shadow-market":
+                return {"id": resolved_location_id}
+            return None
+
+    def _fake_get_db_connection_context(*_args, **_kwargs):
+        return _FakeConnCtx()
+
+    monkeypatch.setattr(
+        db_connection,
+        "get_db_connection_context",
+        _fake_get_db_connection_context,
+    )
+
+    class _StubCache:
+        def __init__(self):
+            self.store: dict[str, dict[str, typing.Any]] = {}
+            self.ops: list[tuple[str, str]] = []
+
+        async def get(self, key):
+            self.ops.append(("get", key))
+            return self.store.get(key)
+
+        async def set(self, key, value):
+            self.ops.append(("set", key))
+            self.store[key] = value
+
+        async def clear(self):
+            self.store.clear()
+
+    class _FakeUnifiedMemoryManager:
+        instances: list["_FakeUnifiedMemoryManager"] = []
+
+        def __init__(self, *, entity_type, entity_id, user_id, conversation_id):
+            assert isinstance(entity_id, int)
+            self.entity_type = entity_type
+            self.entity_id = entity_id
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+            _FakeUnifiedMemoryManager.instances.append(self)
+
+        async def query_memories(self, **kwargs):
+            return []
+
+    stub_core = types.ModuleType("memory.core")
+    stub_core.UnifiedMemoryManager = _FakeUnifiedMemoryManager
+    monkeypatch.setitem(sys.modules, "memory.core", stub_core)
+
+    monkeypatch.setattr(real_memory_module, "MemoryTelemetry", None, raising=False)
+
+    async def _exercise():
+        orchestrator = real_memory_module.MemoryOrchestrator(user_id=7, conversation_id=8)
+        orchestrator.initialized = True
+        orchestrator.cache = _StubCache()
+        orchestrator._telemetry = AsyncMock(return_value=None)
+        orchestrator.search_vector_store = AsyncMock(return_value=[])
+
+        slug_result = await orchestrator.retrieve_memories(
+            real_memory_module.EntityType.LOCATION.value,
+            "Shadow-Market",
+        )
+
+        assert slug_result["entity_id"] == resolved_location_id
+        assert slug_result["memories"] == []
+        assert slug_result["count"] == 0
+        assert _FakeUnifiedMemoryManager.instances
+        assert _FakeUnifiedMemoryManager.instances[0].entity_id == resolved_location_id
+
+        cached_result = await orchestrator.retrieve_memories(
+            real_memory_module.EntityType.LOCATION.value,
+            resolved_location_id,
+        )
+
+        assert cached_result == slug_result
+        assert len(_FakeUnifiedMemoryManager.instances) == 1
+        assert db_calls["count"] == 1
+        assert orchestrator.memory_managers.get("location_101") is _FakeUnifiedMemoryManager.instances[0]
+        assert len(orchestrator.cache.ops) == 3
+        assert orchestrator.cache.ops[0][0] == "get"
+        assert orchestrator.cache.ops[1][0] == "set"
+        assert orchestrator.cache.ops[2][0] == "get"
+        assert orchestrator.cache.ops[0][1] == orchestrator.cache.ops[2][1]
+
+    asyncio.run(_exercise())
