@@ -337,6 +337,20 @@ GENERIC_VENUE_ALIASES: Dict[str, Set[str]] = {
     "pier": {"pier", "dock", "harbor", "harbour", "marina"},
     "market": {"market", "street market", "farmer's market"},
     "library": {"library", "bookstore", "book shop"},
+    "grocery store": {
+        "grocery store", "grocer", "grocery", "supermarket", "food market",
+        "whole foods", "whole foods market", "trader joes", "trader joe's",
+        "safeway", "kroger", "ralphs", "albertsons", "publix", "heb", "h‑e‑b",
+        "meijer", "hy-vee", "hyvee", "wegmans", "aldi", "lidl",
+        "tesco", "sainsbury", "sainsbury's", "asda", "morrisons", "waitrose",
+        "carrefour"
+    },
+
+    # (Optional but handy) coffee chains as a distinct bucket
+    "coffee shop": {
+        "coffee shop", "coffee", "cafe", "espresso bar","dutch bros","dutch bros."
+        "starbucks", "dunkin", "costa", "peet's", "peets"
+    },
 }
 
 GENERIC_VENUE_TERMS: Set[str] = set()
