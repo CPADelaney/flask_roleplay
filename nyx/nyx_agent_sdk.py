@@ -148,7 +148,6 @@ def _extract_location_from_mapping(mapping: Dict[str, Any]) -> tuple[Optional[st
         if isinstance(v, str) and v.strip():
             display = v.strip()
             break
-        # composite dict like {"location": {"name": ..., "id": ...}}
         if k == "location" and isinstance(v, dict):
             name = v.get("name") or v.get("label") or v.get("slug") or v.get("location")
             if isinstance(name, str) and name.strip():
@@ -168,7 +167,6 @@ def _extract_location_from_mapping(mapping: Dict[str, Any]) -> tuple[Optional[st
         if loc_id is not None:
             break
 
-    # If we only had a composite `location` dict, try to read its id too.
     if loc_id is None and isinstance(mapping.get("location"), dict):
         v = mapping["location"].get("id") or mapping["location"].get("location_id") or mapping["location"].get("pk")
         try:
@@ -209,7 +207,7 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
                     loc_id = None
         except (TypeError, ValueError):
             loc_id = None
-        slug = (li.get("slug") or (display and _slugify_location(display)) or "unknown")
+       slug = (li.get("slug") or (display and _slugify_location(display)) or "unknown")
 
     # 2) Fallback to roleplay-style + legacy keys
     if not display or slug is None or loc_id is None:
@@ -257,7 +255,6 @@ def _invalidate_context_cache_safe(user_id: str | int, conversation_id: str | in
     except Exception:
         # Cache not present or not initialized; ignore.
         pass
-
 
 
 # ──────────────────────────────────────────────────────────────────────────────
