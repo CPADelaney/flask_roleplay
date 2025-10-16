@@ -1,3 +1,4 @@
+# nyx/location/fictional_resolver.py
 from __future__ import annotations
 import json, os, random
 from typing import Any, Dict, List
@@ -5,17 +6,6 @@ from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from .types import *
 from .anchors import derive_geo_anchor
 
-# Optional: load a content pack at runtime (no hardcoded archetypes).
-# Put JSON at nyx_data/city_archetypes.json (mounted volume or repo data).
-# Schema:
-# {
-#   "districts": [{"key":"old_port","label":"Old Port","vibe":"..."}, ...],
-#   "archetypes": [
-#       {"slot":"landmark_sweets","category":"landmark","name_patterns":["{harbor} {sweet} Hall", ...]},
-#       {"slot":"dim_sum","category":"restaurant","name_patterns":["{dragon} Steam House", ...]}
-#   ],
-#   "lexicon": {"harbor":["Harbor","Bay","Jetty"], "sweet":["Confections","Chocolatier","Sweets"], "dragon":["Dragon","Jade","Pearl"]}
-# }
 _CONTENT_PATH = os.environ.get("NYX_CITY_CONTENT", "nyx_data/city_archetypes.json")
 
 def _load_pack() -> Dict[str, Any]:
@@ -29,7 +19,6 @@ def _load_pack() -> Dict[str, Any]:
 
 def _synth_name(patterns: List[str], lexicon: Dict[str, List[str]], rng: random.Random) -> str:
     if not patterns:
-        # ultra-minimal fallback: deterministic nonsense
         return "The " + "".join(rng.choice("BCDFGHJKLMNPQRSTVWXYZ") + rng.choice("aeiou") for _ in range(3))
     pat = rng.choice(patterns)
     def repl(tok: str) -> str:
@@ -41,29 +30,24 @@ def _synth_name(patterns: List[str], lexicon: Dict[str, List[str]], rng: random.
         if ch == "{":
             if cur: buf += ch
             else:
-                cur = True
-                buf = "{"
+                cur = True; buf = "{"
         elif ch == "}":
             if cur:
-                buf += "}"
-                out.append(repl(buf))
-                cur = False
-                buf = ""
+                buf += "}"; out.append(repl(buf)); cur = False; buf = ""
             else:
                 out.append("}")
         else:
             if cur: buf += ch
             else: out.append(ch)
-    if cur: out.append(buf)  # unmatched { }
+    if cur: out.append(buf)
     return "".join(out).strip()
 
-def _ensure_city_graph(store: ConversationSnapshotStore, user_key: str, conv_key: str, world_name: str, anchor: GeoAnchor) -> Dict[str, Any]:
-    snap = store.get(user_key, conv_key)
+def _ensure_city_graph(store: ConversationSnapshotStore, user_key: str, conv_key: str, world_name: str, anchor) -> Dict[str, Any]:
+    snap = store.get(user_key, conv_key) or {}
     graph = snap.get("city_graph") or {}
     if graph: return graph
     pack = _load_pack()
     rng = random.Random(f"{user_key}:{conv_key}:{world_name}")
-    # districts: if pack empty, synth a small set around the anchor
     districts = []
     base_lat = anchor.lat or 37.77
     base_lon = anchor.lon or -122.42
@@ -82,12 +66,9 @@ def _ensure_city_graph(store: ConversationSnapshotStore, user_key: str, conv_key
     return graph
 
 def _spawn_archetype(graph: Dict[str, Any], slot: str, pack: Dict[str, Any], rng: random.Random, near_key: str) -> Dict[str, Any]:
-    # already exists?
     for v in graph.get("venues", []):
         if v.get("slot") == slot: return v
-    # choose district
     dist = next((d for d in graph["districts"] if d["key"] == near_key), graph["districts"][0])
-    # name from pack or synth
     arch = next((a for a in pack.get("archetypes", []) if a.get("slot") == slot), None)
     name = _synth_name(arch.get("name_patterns", []) if arch else [], pack.get("lexicon", {}), rng)
     category = (arch or {}).get("category") or "place"
@@ -100,7 +81,6 @@ def _spawn_archetype(graph: Dict[str, Any], slot: str, pack: Dict[str, Any], rng
 
 async def resolve_fictional(query: PlaceQuery, setting: SettingProfile, meta: Dict[str, Any],
                             store: ConversationSnapshotStore, user_id: str, conversation_id: str) -> ResolutionResult:
-    # All data‑driven: districts + archetypes come from pack; names are synthesized deterministically.
     anchor = await derive_geo_anchor(meta, user_id=user_id, conversation_id=conversation_id)
     world_name = setting.world_name or (meta.get("world") or {}).get("name") or "Fictional City"
     graph = _ensure_city_graph(store, str(user_id), str(conversation_id), world_name, anchor)
@@ -111,26 +91,32 @@ async def resolve_fictional(query: PlaceQuery, setting: SettingProfile, meta: Di
     if not target:
         return ResolutionResult(status=ResolutionStatus.AMBIGUOUS, message="What kind of place are you seeking?")
 
-    # classify intent coarsely (no hand-coded brands)
     if any(k in target for k in ["chocolate","sweets","confection","ghirardelli","square"]):
         v = _spawn_archetype(graph, "landmark_sweets", pack, rng, near_key="old_port")
-        return ResolutionResult(status=ResolutionStatus.EXACT,
+        return ResolutionResult(
+            status=ResolutionStatus.EXACT,
             candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": v["district"]}, category=v["category"], confidence=0.9)],
             canonical_ops=[{"op":"poi.navigate","label":v["name"],"lat":v["lat"],"lon":v["lon"],"category":v["category"],"lore":{"district": v["district"]}}],
-            message=f"Heading to {v['name']} in {v['district']}.")
+            message=f"Heading to {v['name']} in {v['district']}."
+        )
+
     if any(k in target for k in ["dim sum","dumpling","yum cha","yank sing"]):
         v = _spawn_archetype(graph, "dim_sum", pack, rng, near_key="arts")
-        return ResolutionResult(status=ResolutionStatus.EXACT,
+        return ResolutionResult(
+            status=ResolutionStatus.EXACT,
             candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": v["district"]}, category=v["category"], confidence=0.9)],
             canonical_ops=[{"op":"poi.navigate","label":v["name"],"lat":v["lat"],"lon":v["lon"],"category":v["category"],"lore":{"district": v["district"]}}],
-            message=f"Steam curls from {v['name']} in {v['district']}—let’s go.")
+            message=f"Steam curls from {v['name']} in {v['district']}—let’s go."
+        )
 
-    # Unknown – ask via archetype prompts derived from pack (no hardcoding required)
-    choices = []
+    choices: List[str] = []
     if pack.get("archetypes"):
         for a in pack["archetypes"][:3]:
             pretty = a.get("slot","place").replace("_"," ").title()
             choices.append(f"{pretty} in {graph['districts'][0]['label']}")
     else:
         choices = ["night market", "waterfront sweets hall", "residential dunes on the west side"]
-    return ResolutionResult(status=ResolutionStatus.ASK, message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?", choices=choices)
+
+    return ResolutionResult(status=ResolutionStatus.ASK,
+                            message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?",
+                            choices=choices)
