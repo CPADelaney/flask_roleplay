@@ -33,6 +33,81 @@ from nyx.location.config import LocationSettings
 logger = logging.getLogger(__name__)
 
 
+ROLEPLAY_ONLY_DEFAULT: Set[str] = {
+    "1",
+    "always",
+    "enforced",
+    "enabled",
+    "locked",
+    "required",
+    "strict",
+    "true",
+    "yes",
+}
+
+OOC_PREFIX_MARKERS: Set[str] = {
+    "[ooc]",
+    "(ooc)",
+    "{ooc}",
+    "ooc:",
+    "ooc-",
+    "ooc—",
+    "ooc ",
+    "//ooc",
+    "// ooc",
+    "((ooc))",
+}
+
+OOC_KEYPHRASES: Set[str] = {
+    "as an ai",
+    "be yourself",
+    "break character",
+    "drop the roleplay",
+    "for real",
+    "meta question",
+    "not roleplay",
+    "ooc request",
+    "out of character",
+    "real world question",
+    "serious question",
+    "stop roleplaying",
+    "talk normally",
+    "this isn't roleplay",
+}
+
+BRAND_TERMS: Set[str] = {
+    "amazon",
+    "burger king",
+    "chatgpt",
+    "discord",
+    "facebook",
+    "github",
+    "google",
+    "hulu",
+    "instagram",
+    "kfc",
+    "lyft",
+    "mcdonalds",
+    "microsoft",
+    "netflix",
+    "openai",
+    "playstation",
+    "reddit",
+    "slack",
+    "snapchat",
+    "spotify",
+    "starbucks",
+    "tesla",
+    "tiktok",
+    "twitter",
+    "uber",
+    "walmart",
+    "xbox",
+    "youtube",
+    "zoom",
+}
+
+
 IMPOSSIBLE_DEFAULT: Set[str] = {
     "physics_violation",
     "unaided_flight",
@@ -4096,6 +4171,232 @@ def _default_feasibility_response(intents: List[Dict]) -> Dict[str, Any]:
         },
         "per_intent": per_intent
     }
+
+
+
+def _is_ooc_request(text: Optional[str]) -> bool:
+    """Detect classic out-of-character requests or real-world pivots."""
+
+    if not text:
+        return False
+
+    normalized = unicodedata.normalize("NFKC", str(text)).lower()
+    stripped = normalized.strip()
+    if not stripped:
+        return False
+
+    for prefix in OOC_PREFIX_MARKERS:
+        if stripped.startswith(prefix):
+            return True
+
+    if any(phrase in normalized for phrase in OOC_KEYPHRASES):
+        return True
+
+    for term in BRAND_TERMS:
+        if " " in term:
+            if term in normalized:
+                return True
+        else:
+            if re.search(rf"\\b{re.escape(term)}\\b", normalized):
+                return True
+
+    return False
+
+
+def _policy_roleplay_only_enabled(*policy_sources: Any, default: bool = True) -> bool:
+    """Inspect nested policy metadata to determine if roleplay-only mode is active."""
+
+    false_tokens = {"0", "false", "off", "disabled", "relaxed", "allow", "allowed", "open", "no"}
+
+    def _coerce(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            norm = unicodedata.normalize("NFKC", value).strip().lower()
+            if not norm:
+                return None
+            if norm in ROLEPLAY_ONLY_DEFAULT:
+                return True
+            if norm in false_tokens:
+                return False
+        return None
+
+    def _extract_flag(candidate: Any, depth: int = 0) -> Optional[bool]:
+        if candidate is None or depth > 5:
+            return None
+
+        coerced = _coerce(candidate)
+        if coerced is not None:
+            return coerced
+
+        if isinstance(candidate, dict):
+            keys = (
+                "roleplay_only",
+                "roleplayOnly",
+                "ROLEPLAY_ONLY",
+                "roleplay-mode",
+                "roleplay_mode",
+                "nyx_roleplay_only",
+            )
+            for key in keys:
+                if key in candidate:
+                    flag = _extract_flag(candidate[key], depth + 1)
+                    if flag is not None:
+                        return flag
+
+            nested_keys = (
+                "policy_flags",
+                "policies",
+                "policy",
+                "flags",
+                "feature_flags",
+                "settings",
+                "meta",
+                "governance",
+            )
+            for nested_key in nested_keys:
+                if nested_key in candidate:
+                    flag = _extract_flag(candidate[nested_key], depth + 1)
+                    if flag is not None:
+                        return flag
+
+        elif isinstance(candidate, (list, tuple, set)):
+            for item in candidate:
+                flag = _extract_flag(item, depth + 1)
+                if flag is not None:
+                    return flag
+
+        return None
+
+    for source in policy_sources:
+        flag = _extract_flag(source)
+        if flag is not None:
+            return flag
+
+    return default
+
+
+def _nyx_meta_decline_payload(reason: str = "roleplay_only") -> Dict[str, Any]:
+    """Return a canonical Nyx meta decline payload for roleplay-only enforcement."""
+
+    violation_reason = {
+        "ooc_request": "Nyx stays firmly in character and won't break immersion.",
+        "ooc_output": "Nyx refuses to respond to out-of-character prompts.",
+        "irl_reference": "Nyx ignores real-world chatter and keeps the scene sealed.",
+        "roleplay_only": "Nyx enforces in-character play only.",
+    }.get(reason, "Nyx enforces in-character play only.")
+
+    narrator_guidance = (
+        "Nyx curls a finger, reminding you this stays in-scene. Answer her as the character you're playing."
+    )
+
+    return {
+        "overall": {"feasible": False, "strategy": "deny"},
+        "per_intent": [
+            {
+                "feasible": False,
+                "strategy": "deny",
+                "violations": [
+                    {
+                        "rule": "policy:roleplay_only",
+                        "reason": violation_reason,
+                    }
+                ],
+                "narrator_guidance": narrator_guidance,
+                "suggested_alternatives": [
+                    "Describe what your character does next in the scene.",
+                    "React to Nyx from your character's perspective.",
+                ],
+                "categories": [],
+            }
+        ],
+        "meta": {
+            "kind": "nyx_meta_decline",
+            "reason": reason,
+        },
+    }
+
+
+def _harden_output_against_ooc_leakage(
+    result: Any,
+    *,
+    request_text: Optional[str] = None,
+    policy_sources: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Inspect agent output and swap in a Nyx meta decline when OOC leakage is detected."""
+
+    if isinstance(policy_sources, dict) or not isinstance(policy_sources, Iterable):
+        sources: List[Any] = [policy_sources] if policy_sources is not None else []
+    else:
+        sources = list(policy_sources)
+
+    policy_enabled = _policy_roleplay_only_enabled(*sources)
+    if not policy_enabled:
+        return {"declined": False, "payload": result, "reason": None}
+
+    decline_reason: Optional[str] = None
+
+    if request_text and _is_ooc_request(request_text):
+        decline_reason = "ooc_request"
+
+    seen: Set[int] = set()
+    fragments: List[str] = []
+
+    def _collect(value: Any, depth: int = 0) -> None:
+        if value is None or depth > 5:
+            return
+        identifier = id(value)
+        if identifier in seen:
+            return
+        seen.add(identifier)
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                fragments.append(stripped)
+            return
+
+        if isinstance(value, dict):
+            for candidate in value.values():
+                _collect(candidate, depth + 1)
+            return
+
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _collect(item, depth + 1)
+            return
+
+        for attr in ("final_output", "output_text", "content", "text"):
+            if hasattr(value, attr):
+                _collect(getattr(value, attr), depth + 1)
+
+        for attr in ("messages", "history", "events"):
+            if hasattr(value, attr):
+                _collect(getattr(value, attr), depth + 1)
+
+    _collect(result)
+
+    for fragment in fragments:
+        if _is_ooc_request(fragment):
+            decline_reason = decline_reason or "ooc_output"
+            break
+        normalized_fragment = unicodedata.normalize("NFKC", fragment).lower()
+        for term in BRAND_TERMS:
+            if (" " in term and term in normalized_fragment) or (
+                " " not in term and re.search(rf"\\b{re.escape(term)}\\b", normalized_fragment)
+            ):
+                decline_reason = decline_reason or "irl_reference"
+                break
+        if decline_reason:
+            break
+
+    if decline_reason:
+        payload = _nyx_meta_decline_payload(decline_reason)
+        return {"declined": True, "payload": payload, "reason": decline_reason}
+
+    return {"declined": False, "payload": result, "reason": None}
 
 
 
