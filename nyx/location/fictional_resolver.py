@@ -1,113 +1,136 @@
-# nyx/location/fictional_resolver.py
 from __future__ import annotations
-import random
-from typing import Any, Dict, List, Tuple
+import json, os, random
+from typing import Any, Dict, List
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
-
 from .types import *
 from .anchors import derive_geo_anchor
 
-# Minimal archetypes. Extend as you like.
-_DISTRICT_ARCHETYPES = [
-    {"key": "old_port", "label": "Old Port", "vibe": "waterfront, brick warehouses, sweets/markets"},
-    {"key": "hi_tech", "label": "Glassline", "vibe": "modern towers, neon lanes, cafes"},
-    {"key": "sunset_equiv", "label": "Western Dunes", "vibe": "foggy residential blocks, parks, diners"},
-    {"key": "arts", "label": "Canvas Row", "vibe": "galleries, night markets, street food"},
-]
-_VENUE_ARCHETYPES = [
-    {"slot": "landmark_sweets", "names": ["Bellweather Confections", "Gilded Chocolatier", "Harbor Confection Hall"], "category": "landmark"},
-    {"slot": "dim_sum", "names": ["Dragon Steam House", "Pearl Bamboo Court", "Red Lantern Hall"], "category": "restaurant"},
-    {"slot": "festival", "names": ["Blossom Night Market", "Lantern Petal Fair", "Moonflow Parade"], "category": "festival"},
-]
+# Optional: load a content pack at runtime (no hardcoded archetypes).
+# Put JSON at nyx_data/city_archetypes.json (mounted volume or repo data).
+# Schema:
+# {
+#   "districts": [{"key":"old_port","label":"Old Port","vibe":"..."}, ...],
+#   "archetypes": [
+#       {"slot":"landmark_sweets","category":"landmark","name_patterns":["{harbor} {sweet} Hall", ...]},
+#       {"slot":"dim_sum","category":"restaurant","name_patterns":["{dragon} Steam House", ...]}
+#   ],
+#   "lexicon": {"harbor":["Harbor","Bay","Jetty"], "sweet":["Confections","Chocolatier","Sweets"], "dragon":["Dragon","Jade","Pearl"]}
+# }
+_CONTENT_PATH = os.environ.get("NYX_CITY_CONTENT", "nyx_data/city_archetypes.json")
 
-def _ensure_city_graph(store: ConversationSnapshotStore, user_key: str, conv_key: str, world_name: str) -> Dict[str, Any]:
+def _load_pack() -> Dict[str, Any]:
+    if os.path.exists(_CONTENT_PATH):
+        try:
+            with open(_CONTENT_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"districts": [], "archetypes": [], "lexicon": {}}
+
+def _synth_name(patterns: List[str], lexicon: Dict[str, List[str]], rng: random.Random) -> str:
+    if not patterns:
+        # ultra-minimal fallback: deterministic nonsense
+        return "The " + "".join(rng.choice("BCDFGHJKLMNPQRSTVWXYZ") + rng.choice("aeiou") for _ in range(3))
+    pat = rng.choice(patterns)
+    def repl(tok: str) -> str:
+        key = tok.strip("{}").lower()
+        choices = lexicon.get(key) or [key.title()]
+        return rng.choice(choices)
+    out, cur, buf = [], False, ""
+    for ch in pat:
+        if ch == "{":
+            if cur: buf += ch
+            else:
+                cur = True
+                buf = "{"
+        elif ch == "}":
+            if cur:
+                buf += "}"
+                out.append(repl(buf))
+                cur = False
+                buf = ""
+            else:
+                out.append("}")
+        else:
+            if cur: buf += ch
+            else: out.append(ch)
+    if cur: out.append(buf)  # unmatched { }
+    return "".join(out).strip()
+
+def _ensure_city_graph(store: ConversationSnapshotStore, user_key: str, conv_key: str, world_name: str, anchor: GeoAnchor) -> Dict[str, Any]:
     snap = store.get(user_key, conv_key)
     graph = snap.get("city_graph") or {}
-    if graph:
-        return graph
-    # Seed a small, coherent city graph
-    random.seed(f"{user_key}:{conv_key}:{world_name}")
+    if graph: return graph
+    pack = _load_pack()
+    rng = random.Random(f"{user_key}:{conv_key}:{world_name}")
+    # districts: if pack empty, synth a small set around the anchor
     districts = []
-    for a in _DISTRICT_ARCHETYPES:
-        # Fake coordinates around a rough center if none provided in meta
-        lat = (snap.get("lat") or 37.77) + random.uniform(-0.03, 0.03)
-        lon = (snap.get("lon") or -122.42) + random.uniform(-0.03, 0.03)
-        districts.append({"key": a["key"], "label": a["label"], "vibe": a["vibe"], "lat": lat, "lon": lon, "venues": []})
-    graph = {"districts": districts, "venues": []}
+    base_lat = anchor.lat or 37.77
+    base_lon = anchor.lon or -122.42
+    if pack["districts"]:
+        for d in pack["districts"]:
+            districts.append({"key": d["key"], "label": d["label"], "vibe": d.get("vibe",""),
+                              "lat": base_lat + rng.uniform(-0.03, 0.03),
+                              "lon": base_lon + rng.uniform(-0.03, 0.03),
+                              "venues": []})
+    else:
+        for key,label in [("old_port","Old Port"),("hi_tech","Glassline"),("west_res","Western Dunes"),("arts","Canvas Row")]:
+            districts.append({"key": key, "label": label, "vibe": "", "lat": base_lat + rng.uniform(-0.03,0.03), "lon": base_lon + rng.uniform(-0.03,0.03), "venues": []})
+    graph = {"districts": districts, "venues": [], "pack_loaded": bool(pack["districts"])}
     snap["city_graph"] = graph
     store.put(user_key, conv_key, snap)
     return graph
 
-def _find_or_create_venue(graph: Dict[str, Any], slot: str, near_district_key: str) -> Dict[str, Any]:
-    # Check if created already
+def _spawn_archetype(graph: Dict[str, Any], slot: str, pack: Dict[str, Any], rng: random.Random, near_key: str) -> Dict[str, Any]:
+    # already exists?
     for v in graph.get("venues", []):
-        if v.get("slot") == slot:
-            return v
-    # Else create new venue in the right district
-    dist = next((d for d in graph["districts"] if d["key"] == near_district_key), graph["districts"][0])
-    names = next((x["names"] for x in _VENUE_ARCHETYPES if x["slot"] == slot), ["The Place"])
-    category = next((x["category"] for x in _VENUE_ARCHETYPES if x["slot"] == slot), "place")
-    name = random.choice(names)
-    venue = {"slot": slot, "name": name, "lat": dist["lat"] + random.uniform(-0.002, 0.002),
-             "lon": dist["lon"] + random.uniform(-0.002, 0.002), "category": category, "district": dist["label"]}
-    graph["venues"].append(venue)
-    dist["venues"].append(venue)
+        if v.get("slot") == slot: return v
+    # choose district
+    dist = next((d for d in graph["districts"] if d["key"] == near_key), graph["districts"][0])
+    # name from pack or synth
+    arch = next((a for a in pack.get("archetypes", []) if a.get("slot") == slot), None)
+    name = _synth_name(arch.get("name_patterns", []) if arch else [], pack.get("lexicon", {}), rng)
+    category = (arch or {}).get("category") or "place"
+    venue = {"slot": slot, "name": name,
+             "lat": dist["lat"] + rng.uniform(-0.002, 0.002),
+             "lon": dist["lon"] + rng.uniform(-0.002, 0.002),
+             "category": category, "district": dist["label"]}
+    graph["venues"].append(venue); dist["venues"].append(venue)
     return venue
 
 async def resolve_fictional(query: PlaceQuery, setting: SettingProfile, meta: Dict[str, Any],
                             store: ConversationSnapshotStore, user_id: str, conversation_id: str) -> ResolutionResult:
-    world_name = setting.world_name or "Velvet City"
-    graph = _ensure_city_graph(store, str(user_id), str(conversation_id), world_name)
+    # All data‑driven: districts + archetypes come from pack; names are synthesized deterministically.
+    anchor = await derive_geo_anchor(meta, user_id=user_id, conversation_id=conversation_id)
+    world_name = setting.world_name or (meta.get("world") or {}).get("name") or "Fictional City"
+    graph = _ensure_city_graph(store, str(user_id), str(conversation_id), world_name, anchor)
+    pack = _load_pack()
+    rng = random.Random(f"{user_id}:{conversation_id}:{world_name}")
 
-    # Simple mapping from famous real‑world requests → fictional analogues
-    target = (query.target or "").strip().lower()
+    target = (query.target or "").lower().strip()
     if not target:
         return ResolutionResult(status=ResolutionStatus.AMBIGUOUS, message="What kind of place are you seeking?")
 
-    if any(k in target for k in ["ghirardelli", "chocolate", "square", "sweets"]):
-        v = _find_or_create_venue(graph, "landmark_sweets", near_district_key="old_port")
-        return ResolutionResult(
-            status=ResolutionStatus.EXACT,
+    # classify intent coarsely (no hand-coded brands)
+    if any(k in target for k in ["chocolate","sweets","confection","ghirardelli","square"]):
+        v = _spawn_archetype(graph, "landmark_sweets", pack, rng, near_key="old_port")
+        return ResolutionResult(status=ResolutionStatus.EXACT,
             candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": v["district"]}, category=v["category"], confidence=0.9)],
-            canonical_ops=[{"op": "poi.navigate", "label": v["name"], "lat": v["lat"], "lon": v["lon"], "category": v["category"], "lore": {"district": v["district"]}}],
-            message=f"Heading to {v['name']} in {v['district']}.",
-        )
-
-    if any(k in target for k in ["yank sing", "dim sum", "dumpling"]):
-        v = _find_or_create_venue(graph, "dim_sum", near_district_key="arts")
-        return ResolutionResult(
-            status=ResolutionStatus.EXACT,
+            canonical_ops=[{"op":"poi.navigate","label":v["name"],"lat":v["lat"],"lon":v["lon"],"category":v["category"],"lore":{"district": v["district"]}}],
+            message=f"Heading to {v['name']} in {v['district']}.")
+    if any(k in target for k in ["dim sum","dumpling","yum cha","yank sing"]):
+        v = _spawn_archetype(graph, "dim_sum", pack, rng, near_key="arts")
+        return ResolutionResult(status=ResolutionStatus.EXACT,
             candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": v["district"]}, category=v["category"], confidence=0.9)],
-            canonical_ops=[{"op": "poi.navigate", "label": v["name"], "lat": v["lat"], "lon": v["lon"], "category": v["category"], "lore": {"district": v["district"]}}],
-            message=f"Steam curls from {v['name']} in {v['district']}—let’s go.",
-        )
+            canonical_ops=[{"op":"poi.navigate","label":v["name"],"lat":v["lat"],"lon":v["lon"],"category":v["category"],"lore":{"district": v["district"]}}],
+            message=f"Steam curls from {v['name']} in {v['district']}—let’s go.")
 
-    if any(k in target for k in ["sunset", "west", "residential", "beach", "dunes"]):
-        d = next((d for d in graph["districts"] if d["key"] == "sunset_equiv"), graph["districts"][0])
-        return ResolutionResult(
-            status=ResolutionStatus.EXACT,
-            candidates=[PlaceCandidate(name=d["label"], lat=d["lat"], lon=d["lon"], address={}, category="district", confidence=0.85)],
-            canonical_ops=[{"op": "poi.navigate", "label": d["label"], "lat": d["lat"], "lon": d["lon"], "category": "district"}],
-            message=f"Angling toward {d['label']}—fog and grid streets ahead.",
-        )
-
-    if any(k in target for k in ["cherry blossom", "festival", "fair", "parade"]):
-        v = _find_or_create_venue(graph, "festival", near_district_key="arts")
-        return ResolutionResult(
-            status=ResolutionStatus.EXACT,
-            candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": "Canvas Row"}, category="festival", confidence=0.8)],
-            canonical_ops=[{"op": "event.attend", "label": v["name"], "lat": v["lat"], "lon": v["lon"], "category": v["category"]}],
-            message=f"Festival lights gather at {v['name']}—we can head there now.",
-        )
-
-    # Fallback: soft ask with archetypal suggestions
-    suggestions = [
-        "night market in Canvas Row",
-        "waterfront sweets hall in Old Port",
-        "residential dunes on the west side",
-    ]
-    return ResolutionResult(
-        status=ResolutionStatus.ASK,
-        message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?",
-        choices=suggestions,
-    )
+    # Unknown – ask via archetype prompts derived from pack (no hardcoding required)
+    choices = []
+    if pack.get("archetypes"):
+        for a in pack["archetypes"][:3]:
+            pretty = a.get("slot","place").replace("_"," ").title()
+            choices.append(f"{pretty} in {graph['districts'][0]['label']}")
+    else:
+        choices = ["night market", "waterfront sweets hall", "residential dunes on the west side"]
+    return ResolutionResult(status=ResolutionStatus.ASK, message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?", choices=choices)
