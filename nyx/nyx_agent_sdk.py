@@ -543,7 +543,7 @@ class NyxAgentSDK:
                 feasible_flag = overall.get("feasible")
                 strategy = (overall.get("strategy") or "").lower()
 
-                if feasible_flag is False and strategy in {"deny", "defer"}:
+                if feasible_flag is False and strategy in {"deny", "defer", "ask"}:
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
                     if strategy == "defer":
@@ -556,6 +556,10 @@ class NyxAgentSDK:
                             guidance = build_defer_fallback_text(defer_context) if defer_context else \
                                 "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
                         alternatives = leads
+                    elif strategy == "ask":
+                        guidance = first.get("narrator_guidance") or "I need a bit more detail to ground that."
+                        alternatives = first.get("suggested_alternatives") or feas.get("choices") or []
+                        extra_meta = {"violations": first.get("violations") or []}
                     else:
                         guidance = first.get("narrator_guidance") or "That can't happen here."
                         alternatives = first.get("suggested_alternatives") or []
@@ -564,7 +568,7 @@ class NyxAgentSDK:
                     alt_list = list(alternatives) if isinstance(alternatives, (list, tuple)) else []
 
                     metadata_out = {
-                        "action_blocked": True,
+                        "action_blocked": strategy != "ask",
                         "feasibility": feas,
                         "block_stage": "pre_orchestrator",
                         "strategy": strategy,
