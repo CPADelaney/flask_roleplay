@@ -34,6 +34,7 @@ if "nyx.core.memory.vector_store" not in sys.modules:
     vector_store_stub.load = _stub_load  # type: ignore[attr-defined]
     sys.modules["nyx.core.memory.vector_store"] = vector_store_stub
 
+from chatkit_server import build_metadata_payload, encode_safety_metadata
 from openai_integration import ConversationManager, conversations
 from logic.universal_updater_agent import apply_universal_updates_async
 from openai_integration.conversations import ConversationStreamError
@@ -190,6 +191,28 @@ async def test_create_conversation_uses_defined_columns():
         None,
         {"foo": "bar", "openai_conversation_id": "conv-remote-1"},
     )
+
+
+def test_chatkit_metadata_safety_is_serialised_to_string():
+    payload = build_metadata_payload(
+        conversation_id=1,
+        user_id=2,
+        request_id="req-123",
+        assistant_id="asst-456",
+        openai_conversation_id="conv-789",
+        thread_id="thread-000",
+    )
+    safety_context = {"denial_text": "I'm afraid that's against protocol."}
+
+    payload["safety"] = encode_safety_metadata(safety_context)
+
+    assert isinstance(payload["safety"], str)
+    decoded = json.loads(payload["safety"])
+    assert decoded == {
+        "guardrail": "deny",
+        "integrated": "true",
+        "denial_text_preview": "I'm afraid that's against protocol.",
+    }
 
 
 @pytest.mark.anyio("asyncio")
