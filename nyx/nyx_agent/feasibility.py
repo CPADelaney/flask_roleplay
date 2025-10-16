@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from agents import Agent, Runner
 from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
+from logic.aggregator_sdk import fallback_get_context
 from nyx.nyx_agent.context import NyxContext
 
 from nyx.feas.actions.mundane import evaluate_mundane
@@ -2583,10 +2584,77 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     # Parse the intended actions
     intents = await parse_action_intents(user_input)
     text_l = (user_input or "").lower()
-    
+
+    policy_sources: List[Any] = []
+    for candidate in (
+        getattr(nyx_ctx, "current_context", None),
+        getattr(nyx_ctx, "last_packed_context", None),
+        getattr(nyx_ctx, "config", None),
+        getattr(nyx_ctx, "policy_flags", None),
+    ):
+        if candidate is not None:
+            policy_sources.append(candidate)
+
+    enforced_response_meta = {
+        "response_mode": "diegetic",
+        "response_mode_reason": "roleplay_only_policy",
+    }
+
+    minimal_context: Optional[Dict[str, Any]] = None
+
+    def _stamp_response_meta(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            meta = payload.setdefault("meta", {})
+            meta.update(enforced_response_meta)
+        return payload
+
+    def _finalize_result(raw_payload: Any) -> Dict[str, Any]:
+        payload_dict: Dict[str, Any]
+        if isinstance(raw_payload, dict):
+            payload_dict = deepcopy(raw_payload)
+        else:
+            payload_dict = {"meta": {}, "raw": raw_payload}
+
+        _stamp_response_meta(payload_dict)
+
+        sources = list(policy_sources)
+        if minimal_context:
+            sources.append(minimal_context)
+
+        hardened = _harden_output_against_ooc_leakage(
+            payload_dict,
+            request_text=user_input,
+            policy_sources=sources,
+        )
+        final_payload = hardened.get("payload", payload_dict)
+        if isinstance(final_payload, dict):
+            _stamp_response_meta(final_payload)
+            return final_payload
+        return payload_dict
+
+    if _is_ooc_request(user_input):
+        minimal_context = await _load_minimal_context(nyx_ctx)
+        policy_candidates = list(policy_sources)
+        if minimal_context:
+            policy_candidates.append(minimal_context)
+        if _policy_roleplay_only_enabled(*policy_candidates):
+            return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
+
     # Load comprehensive setting context
     setting_context = await _load_comprehensive_context(nyx_ctx)
     _log_caps_snapshot(setting_context.get("capabilities"))
+
+    policy_sources.append(setting_context)
+    if isinstance(setting_context, dict):
+        setting_meta = setting_context.setdefault("meta", {})
+        setting_meta["response_mode"] = enforced_response_meta["response_mode"]
+        setting_meta["response_mode_reason"] = enforced_response_meta["response_mode_reason"]
+
+    policy_candidates = list(policy_sources)
+    if minimal_context:
+        policy_candidates.append(minimal_context)
+    if _is_ooc_request(user_input) and _policy_roleplay_only_enabled(*policy_candidates):
+        return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
 
     caps_loaded = bool(setting_context.get("caps_loaded"))
     fail_open = _fail_open_missing_caps(
@@ -2594,7 +2662,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         setting_context.get("capabilities") if caps_loaded else {},
     )
     if fail_open:
-        return fail_open
+        return _finalize_result(fail_open)
 
     impossible_logged: Set[str] = set()
     for imp in setting_context.get("established_impossibilities", []):
@@ -2767,10 +2835,12 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
                 )
 
         overall_strategy = "deny" if has_deny else ("ask" if has_ask else "deny")
-        return {
-            "overall": {"feasible": False, "strategy": overall_strategy},
-            "per_intent": per_intent,
-        }
+        return _finalize_result(
+            {
+                "overall": {"feasible": False, "strategy": overall_strategy},
+                "per_intent": per_intent,
+            }
+        )
 
     # Quick check against hard rules
     quick_check = await _quick_feasibility_check(setting_context, intents)
@@ -2824,7 +2894,9 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
                     }
                 )
 
-        return {"overall": {"feasible": False, "strategy": "defer"}, "per_intent": per_intent}
+        return _finalize_result(
+            {"overall": {"feasible": False, "strategy": "defer"}, "per_intent": per_intent}
+        )
 
     if quick_check.get("hard_blocked"):
         # Generate dynamic, unique rejections for blocked actions
@@ -2855,10 +2927,12 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
                     "categories": intent.get("categories", [])
                 })
         
-        return {
-            "overall": {"feasible": False, "strategy": "deny"},
-            "per_intent": per_intent
-        }
+        return _finalize_result(
+            {
+                "overall": {"feasible": False, "strategy": "deny"},
+                "per_intent": per_intent,
+            }
+        )
 
     mundane_eval = await _evaluate_mundane_actions(nyx_ctx, setting_context, intents)
 
@@ -2872,10 +2946,12 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             for i in range(len(intents))
         ]
 
-        return {
-            "overall": mundane_eval.get("overall", _combine_overall(per_intent)),
-            "per_intent": per_intent,
-        }
+        return _finalize_result(
+            {
+                "overall": mundane_eval.get("overall", _combine_overall(per_intent)),
+                "per_intent": per_intent,
+            }
+        )
 
     # Full AI-powered assessment for nuanced cases
     full_result = await _full_dynamic_assessment(nyx_ctx, user_input, intents, setting_context)
@@ -2883,7 +2959,32 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     if mundane_eval and mundane_eval.get("overrides"):
         full_result = _apply_mundane_overrides(full_result, intents, mundane_eval["overrides"])
 
-    return full_result
+    return _finalize_result(full_result)
+
+
+async def _load_minimal_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
+    """Load a minimal slice of context for policy enforcement checks."""
+
+    existing = getattr(nyx_ctx, "current_context", None)
+    if isinstance(existing, dict) and existing:
+        return existing
+
+    try:
+        minimal = await fallback_get_context(nyx_ctx.user_id, nyx_ctx.conversation_id)
+    except Exception:
+        logger.warning(
+            "Failed to load minimal context for policy enforcement user_id=%s conversation_id=%s",
+            nyx_ctx.user_id,
+            nyx_ctx.conversation_id,
+            exc_info=True,
+        )
+        return {}
+
+    if isinstance(minimal, dict):
+        return minimal
+
+    return {}
+
 
 async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
     """Load all relevant context about what's possible in this setting"""
