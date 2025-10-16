@@ -1952,32 +1952,256 @@ def _apply_mundane_overrides(
 async def _evaluate_mundane_actions(
     nyx_ctx: NyxContext, setting_context: Dict[str, Any], intents: List[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
-    """Evaluate mundane intents using the archetype-driven affordance engine."""
+    """
+    Evaluate mundane intents using the archetype-driven affordance engine when available,
+    with a hardened, scene-aware heuristic fallback that never raises.
 
+    Returns None when there are no mundane/trade intents.
+    """
+
+    # ---- 0) Which intents are mundane? ----------------------------------------
     indices: List[int] = []
-    for idx, intent in enumerate(intents):
-        categories = {str(cat).lower() for cat in intent.get("categories", [])}
+    for idx, intent in enumerate(intents or []):
+        categories = {str(cat).lower() for cat in (intent.get("categories") or [])}
         if "mundane_action" in categories or "trade" in categories:
             indices.append(idx)
 
     if not indices:
         return None
 
-    current_scene = await _load_current_scene(nyx_ctx)
-    scene_snapshot = _build_scene_snapshot(setting_context, current_scene)
-    player_snapshot = _build_player_snapshot(setting_context)
-    archetypes = _infer_world_archetypes(setting_context)
-    world_caps = load_world_caps({"archetypes": archetypes})
-    affordance_index = build_affordance_index(world_caps, scene_snapshot, player_snapshot)
+    # ---- 1) Gather scene context (safe) ---------------------------------------
+    try:
+        current_scene = await _load_current_scene(nyx_ctx)
+    except Exception:
+        current_scene = {}
+
+    # Normalize scene slices
+    def _as_str_list(values: Any) -> List[str]:
+        out: List[str] = []
+        if values is None:
+            return out
+        if isinstance(values, (list, tuple, set)):
+            for v in values:
+                if isinstance(v, dict):
+                    for key in ("name", "item_name", "npc_name", "label", "title", "display_name"):
+                        val = v.get(key)
+                        if isinstance(val, str) and val.strip():
+                            out.append(val.strip())
+                            break
+                    else:
+                        out.append(str(v))
+                elif v is not None:
+                    out.append(str(v))
+        elif isinstance(values, dict):
+            name = values.get("name") or values.get("display_name") or values.get("label")
+            out.append(str(name) if name else str(values))
+        else:
+            out.append(str(values))
+        return [s for s in (x.strip() for x in out) if s]
+
+    scene_npcs = _as_str_list(current_scene.get("npcs") or setting_context.get("present_entities") or [])
+    scene_items = _as_str_list(current_scene.get("items") or setting_context.get("available_items") or [])
+    scene_feats = _as_str_list(current_scene.get("location_features") or setting_context.get("location_features") or [])
+    time_phase_value = (current_scene.get("time_phase") or setting_context.get("current_time") or "day")
+    time_phase = str(time_phase_value).lower() if isinstance(time_phase_value, str) else "day"
+
+    location_payload = setting_context.get("location") or {}
+    if not isinstance(location_payload, dict):
+        location_payload = {"name": str(location_payload)}
+    location_name = location_payload.get("name") or location_payload.get("display_name") or location_payload.get("label")
+
+    def _tokens_of(*values: Any) -> Set[str]:
+        tokens: Set[str] = set()
+        for coll in values:
+            for s in _as_str_list(coll):
+                s_l = s.lower()
+                tokens.add(s_l)
+                for part in s_l.replace("/", " ").replace("-", " ").split():
+                    if part:
+                        tokens.add(part)
+        return tokens
+
+    scene_tokens = _tokens_of(
+        current_scene.get("npcs"),
+        current_scene.get("items"),
+        current_scene.get("location_features"),
+        [location_name] if location_name else []
+    )
+
+    # Vendor detection for "trade" intents
+    _VENDOR_TOKENS = {
+        "merchant", "trader", "shopkeeper", "clerk", "cashier", "vendor", "barkeep",
+        "bartender", "innkeeper", "grocer", "dealer", "pharmacist", "seller",
+        "market", "bazaar", "stall", "booth", "kiosk", "counter", "register",
+        "shop", "store", "tavern", "bar", "inn"
+    }
+    vendor_present = bool(scene_tokens & _VENDOR_TOKENS)
+
+    # Ambient debris allowed unless the environment looks sterile
+    sterile_hints = {h.lower() for h in (STERILE_ENVIRONMENT_HINTS or set())}
+    looks_sterile = bool(scene_tokens & sterile_hints)
+
+    def _alts() -> List[str]:
+        alts: List[str] = []
+        if scene_items:
+            alts.append(f"examine the {scene_items[0]} more closely")
+        if scene_feats:
+            alts.append(f"investigate the {scene_feats[0]}")
+        if scene_npcs:
+            alts.append(f"approach {scene_npcs[0]} for help")
+        if time_phase == "night":
+            alts.append("wait until dawn for better visibility")
+        return (alts[:3] or ["try a simpler, grounded action that uses something visible in the scene"])
+
+    # ---- 2) Try the affordance engine if it's wired in ------------------------
+    def _fallback_scene_snapshot() -> Dict[str, Any]:
+        return {
+            "location": {"name": location_name} if location_name else {},
+            "npcs": scene_npcs,
+            "items": scene_items,
+            "features": scene_feats,
+            "time_phase": time_phase,
+        }
+
+    def _fallback_player_snapshot() -> Dict[str, Any]:
+        return {
+            "abilities": setting_context.get("character_abilities") or [],
+            "stats": setting_context.get("character_state") or {},
+            "inventory": _as_str_list(setting_context.get("available_items") or []),
+        }
+
+    def _fallback_infer_archetypes() -> List[str]:
+        kind = str(setting_context.get("kind") or setting_context.get("setting_kind") or "").lower()
+        if "fantasy" in kind:
+            return ["fantasy_grounded"]
+        if "cyber" in kind or "sci" in kind:
+            return ["technoir"]
+        return ["realistic_modern"]
+
+    def _combine_overall_local(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not entries:
+            return {"feasible": True, "strategy": "allow"}
+        if any((e or {}).get("strategy") == "deny" for e in entries):
+            return {"feasible": False, "strategy": "deny"}
+        if any((e or {}).get("strategy") == "defer" for e in entries):
+            return {"feasible": False, "strategy": "defer"}
+        if any((e or {}).get("strategy") == "ask" for e in entries):
+            return {"feasible": False, "strategy": "ask"}
+        return {"feasible": True, "strategy": "allow"}
+
+    try:
+        scene_snapshot = _build_scene_snapshot(setting_context, current_scene)  # type: ignore[name-defined]
+    except Exception:
+        scene_snapshot = _fallback_scene_snapshot()
+
+    try:
+        player_snapshot = _build_player_snapshot(setting_context)  # type: ignore[name-defined]
+    except Exception:
+        player_snapshot = _fallback_player_snapshot()
+
+    try:
+        archetypes = _infer_world_archetypes(setting_context)  # type: ignore[name-defined]
+    except Exception:
+        archetypes = _fallback_infer_archetypes()
 
     overrides: Dict[int, Dict[str, Any]] = {}
-    for idx in indices:
-        evaluation = evaluate_mundane(intents[idx], world_caps, affordance_index, scene_snapshot, player_snapshot)
-        overrides[idx] = _mundane_result_to_intent_entry(intents[idx], evaluation)
+    engine_ok = True
+    try:
+        world_caps = load_world_caps({"archetypes": archetypes})  # type: ignore[name-defined]
+        affordance_index = build_affordance_index(  # type: ignore[name-defined]
+            world_caps, scene_snapshot, player_snapshot
+        )
+    except Exception:
+        engine_ok = False
+
+    if engine_ok:
+        try:
+            for idx in indices:
+                try:
+                    evaluation = evaluate_mundane(  # type: ignore[name-defined]
+                        intents[idx], world_caps, affordance_index, scene_snapshot, player_snapshot
+                    )
+                    try:
+                        entry = _mundane_result_to_intent_entry(intents[idx], evaluation)  # type: ignore[name-defined]
+                    except Exception:
+                        feasible = bool((evaluation or {}).get("feasible", True))
+                        entry = {
+                            "feasible": feasible,
+                            "strategy": "allow" if feasible else "deny",
+                            "categories": intents[idx].get("categories", []),
+                            "violations": (evaluation or {}).get("violations", []),
+                        }
+                    overrides[idx] = entry
+                except Exception:
+                    overrides[idx] = {"__needs_heuristic__": True}
+        except Exception:
+            overrides.clear()
+            engine_ok = False
+
+    async def _heuristic_entry(intent: Dict[str, Any]) -> Dict[str, Any]:
+        cats = {str(c).lower() for c in (intent.get("categories") or [])}
+
+        # Respect common prerequisite logic
+        prereq_ok, prereq_reason = await _check_prerequisites(intent, setting_context)
+        if not prereq_ok:
+            strategy = "defer" if ({"trade", "mundane_action"} & cats) else "deny"
+            return {
+                "feasible": False,
+                "strategy": strategy,
+                "violations": [{"rule": "missing_prereq", "reason": prereq_reason or "Required elements are not present"}],
+                "narrator_guidance": prereq_reason or "Required elements are not present right now.",
+                "suggested_alternatives": _alts(),
+                "categories": sorted(cats),
+            }
+
+        # Trade requires a vendor-ish presence
+        if "trade" in cats:
+            if vendor_present:
+                return {"feasible": True, "strategy": "allow", "categories": sorted(cats)}
+            return {
+                "feasible": False,
+                "strategy": "defer",
+                "violations": [{"rule": "no_vendor_here", "reason": "No vendor/point-of-sale in the current scene"}],
+                "narrator_guidance": "No vendor here. Try heading to the market, counter, or corner shop nearby.",
+                "suggested_alternatives": _alts(),
+                "categories": sorted(cats),
+            }
+
+        # Mundane instrument: ambient debris OK unless sterile
+        instruments = intent.get("instruments")
+        if instruments:
+            inst_tokens = _tokens_of(instruments)
+            ambient_hit = bool(inst_tokens & (AMBIENT_DEBRIS_KEYWORDS | AMBIENT_DEBRIS_CANONICALS))
+            if ambient_hit and not looks_sterile:
+                return {"feasible": True, "strategy": "allow", "categories": sorted(cats)}
+
+        # Default: allow mundane if prerequisites passed
+        return {"feasible": True, "strategy": "allow", "categories": sorted(cats)}
+
+    if not engine_ok:
+        for idx in indices:
+            overrides[idx] = await _heuristic_entry(intents[idx])
+    else:
+        for idx in indices:
+            if overrides.get(idx, {}).get("__needs_heuristic__"):
+                overrides[idx] = await _heuristic_entry(intents[idx])
+
+    # ---- 4) Build overall & return -------------------------------------------
+    entries = list(overrides.values())
+    try:
+        overall = _combine_overall(entries)  # type: ignore[name-defined]
+    except Exception:
+        overall = _fallback_scene_snapshot  # type: ignore[assignment]
+        overall = {"feasible": True, "strategy": "allow"} if not entries else (
+            {"feasible": False, "strategy": "deny"} if any((e or {}).get("strategy") == "deny" for e in entries)
+            else {"feasible": False, "strategy": "defer"} if any((e or {}).get("strategy") == "defer" for e in entries)
+            else {"feasible": False, "strategy": "ask"} if any((e or {}).get("strategy") == "ask" for e in entries)
+            else {"feasible": True, "strategy": "allow"}
+        )
 
     return {
         "overrides": overrides,
-        "overall": _combine_overall(list(overrides.values())),
+        "overall": overall,
         "all_handled": len(indices) == len(intents),
     }
 
@@ -4160,7 +4384,150 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             user_id=user_id,
             conversation_id=conversation_id,
         )
+        
+        # --- BEGIN: Updated location resolver integration ---
         if missing_location_tokens:
+            # Check if this is a place query (venue request or real-world toponym)
+            is_place_query = any(
+                _matches_generic_venue_request(
+                    token,
+                    _normalize_location_phrase(token),
+                    setting_context,
+                    location_context_tokens,
+                    known_location_tokens,
+                )
+                or _looks_like_real_world_toponym(
+                    token,
+                    _normalize_location_phrase(token),
+                    setting_context,
+                )
+                for token in missing_location_tokens
+            )
+
+            if is_place_query:
+                try:
+                    # Try to import the resolver stack; if not present, we fall through.
+                    try:
+                        from nyx.location.search import resolve_real  # type: ignore
+                        from nyx.location.types import PlaceQuery, SettingProfile, SettingKind  # type: ignore
+                        from nyx.location.anchors import derive_geo_anchor  # type: ignore
+                    except Exception:
+                        resolve_real = None  # type: ignore
+                        PlaceQuery = None  # type: ignore
+                        SettingProfile = None  # type: ignore
+                        SettingKind = None  # type: ignore
+                        derive_geo_anchor = None  # type: ignore
+
+                    if resolve_real:
+                        query_text = missing_location_tokens[0]
+                        normalized = _normalize_location_phrase(query_text) or query_text
+
+                        # Build query object (fall back to dict if types unavailable)
+                        try:
+                            query = PlaceQuery(
+                                raw_text=text_l,
+                                normalized=normalized.lower(),
+                                target=query_text,
+                            )
+                        except Exception:
+                            query = {
+                                "raw_text": text_l,
+                                "normalized": normalized.lower(),
+                                "target": query_text,
+                            }
+
+                        # Build a setting profile anchored to user context if possible
+                        anchor = None
+                        try:
+                            # Not all deployments expose derive_geo_anchor or accept meta; be maximally permissive.
+                            if derive_geo_anchor:
+                                try:
+                                    anchor = await derive_geo_anchor(
+                                        {"user_id": user_id, "conversation_id": conversation_id},
+                                        str(user_id),
+                                        str(conversation_id),
+                                    )
+                                except TypeError:
+                                    # Some versions accept fewer params
+                                    anchor = await derive_geo_anchor(str(user_id), str(conversation_id))
+                        except Exception:
+                            anchor = None
+
+                        is_real = _is_modern_or_realistic_setting(setting_context)
+                        try:
+                            kind_value = SettingKind.REAL if is_real else SettingKind.HYBRID  # type: ignore
+                        except Exception:
+                            kind_value = "REAL" if is_real else "HYBRID"
+
+                        # Build SettingProfile (fall back to dict shape)
+                        try:
+                            setting_profile = SettingProfile(
+                                kind=kind_value,
+                                primary_city=(getattr(anchor, "city", None) or setting_context.get("primary_city")),
+                                region=getattr(anchor, "region", None),
+                                country=getattr(anchor, "country", None),
+                                lat=getattr(anchor, "lat", None),
+                                lon=getattr(anchor, "lon", None),
+                                label=getattr(anchor, "label", None),
+                            )
+                        except Exception:
+                            setting_profile = {
+                                "kind": kind_value,
+                                "primary_city": getattr(anchor, "city", None) if anchor else setting_context.get("primary_city"),
+                                "region": getattr(anchor, "region", None) if anchor else None,
+                                "country": getattr(anchor, "country", None) if anchor else None,
+                                "lat": getattr(anchor, "lat", None) if anchor else None,
+                                "lon": getattr(anchor, "lon", None) if anchor else None,
+                                "label": getattr(anchor, "label", None) if anchor else None,
+                            }
+
+                        # Call resolver (support different signatures)
+                        try:
+                            result = await resolve_real(query, setting_profile, setting_context)  # type: ignore
+                        except TypeError:
+                            result = await resolve_real(query, setting_profile)  # type: ignore
+
+                        status = getattr(result, "status", None) or (result.get("status") if isinstance(result, dict) else None)
+                        if status in {"exact", "multiple", "ask", "travel_plan"}:
+                            message = getattr(result, "message", None) or (result.get("message") if isinstance(result, dict) else None)
+                            choices = getattr(result, "choices", None) or (result.get("choices") if isinstance(result, dict) else None)
+                            canonical_ops = getattr(result, "canonical_ops", None) or (result.get("canonical_ops") if isinstance(result, dict) else None)
+
+                            logger.info(
+                                f"[FEASIBILITY] Location resolver found results for {query_text!r} -> status={status}"
+                            )
+
+                            if status == "exact":
+                                per_intent.append({
+                                    "feasible": True,
+                                    "strategy": "allow",
+                                    "categories": sorted(cats),
+                                    "location_resolved": True,
+                                    "resolver_result": canonical_ops,
+                                })
+                                continue
+                            else:  # multiple / ask / travel_plan
+                                lead_candidates = _scene_alternatives(
+                                    _display_scene_values(scene_npcs),
+                                    _display_scene_values(scene_items),
+                                    _display_scene_values(location_features),
+                                    time_phase,
+                                )
+                                per_intent.append({
+                                    "feasible": False,
+                                    "strategy": "ask",
+                                    "violations": [],
+                                    "narrator_guidance": message or "Which one do you mean?",
+                                    "suggested_alternatives": (choices or lead_candidates)[:3],
+                                    "categories": sorted(cats),
+                                    "location_resolved": True,
+                                })
+                                any_ask = True
+                                continue
+                except Exception as e:
+                    logger.debug(f"[FEASIBILITY] Location resolver failed softly: {e}")
+            
+            # Fall through to original resolver cache logic if resolver didn't handle it
             missing_location_phrase = _format_missing_names(missing_location_tokens)
             resolver_cache = (
                 setting_context.get("location_resolver_cache", {})
@@ -4267,6 +4634,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 )
                 any_hard_block = True
             continue
+        # --- END: Updated location resolver integration ---
 
         referenced_targets = _tokenize_scene_values(intent.get("direct_object"))
         referenced_items = _tokenize_scene_values(intent.get("instruments"))
@@ -4439,7 +4807,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 "suggested_alternatives": _scene_alternatives(scene_npcs, scene_items, location_features, time_phase),
                 "categories": sorted(cats),
             })
-            # ASK is not a hard block; we won’t set any_hard_block = True
+            # ASK is not a hard block; we won't set any_hard_block = True
             continue
 
         # (D) No issues => allow
@@ -4466,7 +4834,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             "feasible": False,
             "strategy": "ask",
             "violations": [{"rule": "parse_error", "reason": "Unclear intent"}],
-            "narrator_guidance": "I didn’t quite follow that. Say it as a single, concrete action or break it into steps.",
+            "narrator_guidance": "I didn't quite follow that. Say it as a single, concrete action or break it into steps.",
             "suggested_alternatives": ["Describe one action you take", "Name an object in the scene you use"],
             "categories": []
         }]
@@ -4530,3 +4898,126 @@ def _compose_guidance(setting_kind: str, location_name: Optional[str], blocking:
     if {"time_travel", "teleportation"} & blocking:
         return f"Time and distance refuse shortcuts{loc}."
     return f"This setting{loc} doesn’t support that move; try a grounded approach."
+
+# ---------- Helper/guard additions (safe to paste once) ----------
+if "_normalize_location_phrase" not in globals():
+    def _normalize_location_phrase(s: Optional[str]) -> str:
+        return (s or "").strip().lower()
+
+if "_is_modern_or_realistic_setting" not in globals():
+    def _is_modern_or_realistic_setting(ctx: Dict[str, Any]) -> bool:
+        kind = str(ctx.get("kind") or ctx.get("setting_kind") or "").lower()
+        stype = str(ctx.get("type") or ctx.get("setting_type") or "").lower()
+        caps = ctx.get("capabilities") or {}
+        tech = str(caps.get("technology") or "").lower()
+        physics = str(caps.get("physics") or "").lower()
+        # "realistic" / "modern" in kind/type OR modernish tech with realistic/flexible physics
+        return any([
+            "modern" in kind or "realistic" in kind,
+            "realistic" in stype or "modern" in stype,
+            tech in {"modern", "advanced", "futuristic"} and physics in {"realistic", "flexible"},
+        ])
+
+if "_matches_generic_venue_request" not in globals():
+    def _matches_generic_venue_request(token: str, normalized: str,
+                                       setting_context: Dict[str, Any],
+                                       location_context_tokens: Set[str],
+                                       known_location_tokens: Set[str]) -> bool:
+        if not normalized:
+            return False
+        if normalized in (known_location_tokens or set()):
+            return False
+        generic = {
+            "cafe","coffee","coffee shop","restaurant","diner","bar","pub","tavern","inn",
+            "pharmacy","drugstore","apothecary","hospital","clinic","urgent care",
+            "store","shop","market","bazaar","kiosk","booth","stall",
+            "bookstore","library",
+            "bank","atm",
+            "park","plaza","square","station","airport","harbor","harbour","port","dock",
+            "gas","gas station","petrol","fuel","charging","ev charger","charger",
+            "hotel","motel","hostel",
+            "police","police station","precinct","fire station","post office",
+            "school","university","college",
+            "gym","pool",
+        }
+        brands = {
+            "starbucks","dunkin","mcdonalds","subway","kfc","burger king","taco bell",
+            "walmart","target","costco","tesco","sainsbury","aldi","lidl",
+            "walgreens","cvs","rite aid","boots",
+            "ikea","apple store","best buy","home depot","lowe's","lowes",
+            "shell","bp","chevron","exxon","exxonmobil","7-eleven","7 eleven","7‑eleven",
+        }
+        n = normalized
+        return (n in brands) or (n in generic) or any(kw in n for kw in (brands | generic))
+
+if "_looks_like_real_world_toponym" not in globals():
+    def _looks_like_real_world_toponym(token: str, normalized: str, setting_context: Dict[str, Any]) -> bool:
+        if not normalized:
+            return False
+        t = normalized
+        street_suffixes = {" st", " ave", " ave.", " rd", " rd.", " road", " street", " boulevard", " blvd", " blvd.",
+                           " lane", " ln", " ln.", " drive", " dr", " dr.", " court", " ct", " ct.",
+                           " way", " square", " sq", " sq."}
+        place_suffixes = {" park", " plaza", " mall", " center", " centre", " station",
+                          " airport", " university", " college", " hospital", " museum"}
+        if any(t.endswith(sfx) for sfx in (street_suffixes | place_suffixes)):
+            return True
+        big_cities = {
+            "new york","los angeles","san francisco","seattle","chicago","boston","miami","houston","dallas","atlanta",
+            "london","paris","berlin","rome","madrid","barcelona","amsterdam","brussels","vienna","prague",
+            "tokyo","osaka","kyoto","seoul","beijing","shanghai","shenzhen","hong kong","singapore",
+            "sydney","melbourne","auckland",
+            "toronto","vancouver","montreal",
+            "mumbai","delhi","bangalore","bengaluru","kolkata","chennai","karachi",
+            "rio de janeiro","são paulo","sao paulo","mexico city","buenos aires",
+        }
+        if t in big_cities:
+            return True
+        if " city" in t or " town" in t or " village" in t or "," in t:
+            return True
+        # loose postal/zip-ish look (letters+digits+separator)
+        if any(ch.isdigit() for ch in t) and any(ch.isalpha() for ch in t) and any(x in t for x in (" ", "-", ",")):
+            return True
+        return False
+
+if "LOCATION_REFERENCE_KEYWORDS" not in globals():
+    LOCATION_REFERENCE_KEYWORDS = {"here","there","nearby","around","this place","that place","the area"}
+
+if "SELF_REFERENCE_STRIP_CHARS" not in globals():
+    SELF_REFERENCE_STRIP_CHARS = "\"'.,:;!?`"
+
+if "_looks_like_sterile_environment" not in globals():
+    def _looks_like_sterile_environment(location_token: str, context_tokens: Set[str]) -> bool:
+        hints = {h.lower() for h in (STERILE_ENVIRONMENT_HINTS or set())}
+        token_hit = location_token in hints if location_token else False
+        return token_hit or bool((context_tokens or set()) & hints)
+
+if "_matches_ambient_debris_token" not in globals():
+    def _matches_ambient_debris_token(token: str) -> bool:
+        t = (token or "").strip().lower()
+        if not t:
+            return False
+        if t in AMBIENT_DEBRIS_KEYWORDS:
+            return True
+        if t.endswith("s") and t[:-1] in AMBIENT_DEBRIS_CANONICALS:
+            return True
+        return False
+
+if "_display_scene_values" not in globals():
+    def _display_scene_values(values: Any) -> List[str]:
+        if not values:
+            return []
+        if isinstance(values, (list, tuple, set)):
+            out: List[str] = []
+            for v in values:
+                if isinstance(v, dict):
+                    for k in ("name","display_name","label","title","item_name","npc_name"):
+                        if v.get(k):
+                            out.append(str(v.get(k)))
+                            break
+                    else:
+                        out.append(str(v))
+                else:
+                    out.append(str(v))
+            return out
+        return [str(values)]
