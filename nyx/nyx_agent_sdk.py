@@ -883,32 +883,39 @@ class NyxAgentSDK:
         conversation_id: str,
         user_id: str,
         meta: Dict[str, Any],
+        deadline: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Call orchestrator with timeout and (optional) single retry."""
+        """
+        Call orchestrator without an outer watchdog to avoid mid-TLS cancellations.
+        Pass an absolute deadline in metadata and let the orchestrator budget the turn.
+        Still retry once if there's meaningful time left.
+        """
+        if deadline is None:
+            deadline = meta.get("_deadline") or (time.monotonic() + float(self.config.request_timeout_seconds))
+        def _left() -> float:
+            return max(float(getattr(self.config, "min_step_seconds", 0.25)), deadline - time.monotonic())
         try:
-            return await asyncio.wait_for(
-                _orchestrator_process(
-                    user_id=int(user_id),
-                    conversation_id=int(conversation_id),
-                    user_input=message,
-                    context_data=meta,
-                ),
-                timeout=self.config.request_timeout_seconds,
+            return await _orchestrator_process(
+                user_id=int(user_id),
+                conversation_id=int(conversation_id),
+                user_input=message,
+                context_data=meta,
             )
         except Exception as first_error:
             logger.warning("orchestrator call failed: %s", first_error)
             if not self.config.retry_on_failure:
                 raise
-            await asyncio.sleep(self.config.retry_delay_seconds)
+            # Retry only if we still have budget
+            delay = min(self.config.retry_delay_seconds, max(0.0, _left() - 1.0))
+            if delay <= 0.0:
+                raise
+            await asyncio.sleep(delay)
             logger.info("retrying orchestrator once…")
-            return await asyncio.wait_for(
-                _orchestrator_process(
-                    user_id=int(user_id),
-                    conversation_id=int(conversation_id),
-                    user_input=message,
-                    context_data=meta,
-                ),
-                timeout=self.config.request_timeout_seconds,
+            return await _orchestrator_process(
+                user_id=int(user_id),
+                conversation_id=int(conversation_id),
+                user_input=message,
+                context_data=meta,
             )
 
     async def _fallback_direct_run(
@@ -937,6 +944,13 @@ class NyxAgentSDK:
         ctx.current_context = (metadata or {}).copy()
         ctx.current_context["user_input"] = message
         _preserve_hydrated_location(ctx.current_context, ctx.current_location)
+        # Adopt absolute deadline if present
+        import time as _time_mod
+        deadline = (metadata or {}).get("_deadline") or (_time_mod.monotonic() + float(self.config.request_timeout_seconds))
+        min_step = float(getattr(self.config, "min_step_seconds", 0.25))
+        safety_margin = float(getattr(self.config, "safety_margin_seconds", 1.0))
+        def _left() -> float:
+            return max(min_step, deadline - _time_mod.monotonic())
 
         enhanced_input = message
         feasibility: Optional[Dict[str, Any]] = None
@@ -1070,8 +1084,11 @@ class NyxAgentSDK:
         runner_context = RunContextWrapper(ctx)
 
         try:
-            result = await Runner.run(
-                nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config
+            result = await asyncio.wait_for(
+                Runner.run(
+                    nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config
+                ),
+                timeout=max(0.5, _left() - safety_margin)
             )
         except Exception:
             logger.exception("[SDK-%s] Fallback Runner invocation failed", trace_id)
@@ -1124,6 +1141,12 @@ class NyxAgentSDK:
             "[SDK-%s] Fallback response generated (narrative_len=%d)", trace_id, len(narrative)
         )
         return response
+
+    def _clear_result_cache_for_conversation(self, conversation_id: str) -> None:
+        """Remove all cached results for a given conversation id."""
+        keys = [k for k in list(self._result_cache.keys()) if k.startswith(f"{conversation_id}|")]
+        for k in keys:
+            self._result_cache.pop(k, None)
 
     async def _maybe_log_perf(self, resp: NyxResponse) -> None:
         if not (self.config.enable_telemetry and _log_perf):
