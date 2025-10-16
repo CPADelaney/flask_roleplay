@@ -21,6 +21,7 @@ _store = ConversationSnapshotStore()
 def _deg_box(lat: float, lon: float, km: float) -> Tuple[float, float, float, float]:
     dlat = km / 111.0
     dlon = km / (111.0 * max(0.1, math.cos(math.radians(lat))))
+    # Return (west, north, east, south) for Nominatim's viewbox
     return (lon - dlon, lat + dlat, lon + dlon, lat - dlat)
 
 async def _geocode_city_once(city: str, region: Optional[str], country: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
@@ -48,35 +49,41 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
       2) last persisted anchor from snapshot_store
       3) city/region/country (geocode once, cache)
     """
-    snap = _store.get(str(user_id), str(conversation_id))
+    snap = _store.get(str(user_id), str(conversation_id)) or {}
     a = GeoAnchor()
 
     li = meta.get("locationInfo") or {}
     ss = meta.get("scene_scope") or {}
+    # 1) Direct coordinates first
     for scope in (li.get("geo") or {}, ss):
         try:
             if a.lat is None and "lat" in scope and "lon" in scope:
-                a.lat = float(scope["lat"]); a.lon = float(scope["lon"])
+                a.lat = float(scope["lat"])
+                a.lon = float(scope["lon"])
         except Exception:
             pass
 
+    # 2) Previous snapshot fallback
     if a.lat is None and isinstance(snap, dict):
         try:
             if "lat" in snap and "lon" in snap:
-                a.lat = float(snap["lat"]); a.lon = float(snap["lon"])
+                a.lat = float(snap["lat"])
+                a.lon = float(snap["lon"])
         except Exception:
             pass
 
+    # 3) Semantic labels (neighborhood/city/region/country)
     for scope in (li, ss, meta.get("world") or {}):
         for src, dst in [
-            ("neighborhood","neighborhood"), ("district","neighborhood"),
-            ("city","city"), ("region","region"), ("state","region"),
-            ("country","country")
+            ("neighborhood", "neighborhood"), ("district", "neighborhood"),
+            ("city", "city"), ("region", "region"), ("state", "region"),
+            ("country", "country"),
         ]:
             v = scope.get(src)
             if isinstance(v, str) and getattr(a, dst) is None:
                 setattr(a, dst, v.strip())
 
+    # 4) If still missing lat/lon, geocode city once (cache)
     if a.lat is None or a.lon is None:
         city = a.city or (meta.get("world") or {}).get("primary_city")
         if city:
@@ -85,9 +92,11 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
             if lat is not None and lon is not None:
                 snap = dict(snap or {})
                 snap["lat"], snap["lon"] = lat, lon
-                if a.city: snap["city"] = a.city
+                if a.city:
+                    snap["city"] = a.city
                 _store.put(str(user_id), str(conversation_id), snap)
 
+    # Human label
     if a.neighborhood and a.city:
         a.label = f"{a.neighborhood}, {a.city}"
     elif a.city:
@@ -119,6 +128,7 @@ def build_nominatim_params_for_poi(poi: str, anchor: GeoAnchor, *, radius_km: fl
 
 def nearest_airport_label(anchor: GeoAnchor):
     if anchor.lat and anchor.lon:
+        # Nice touch: special case for SFO to make demos fun, otherwise local stub
         if 37.60 <= anchor.lat <= 37.90 and -122.55 <= anchor.lon <= -122.20:
             return "San Francisco International Airport", 37.6213, -122.3790
         return "Nearest International Airport", anchor.lat + 0.09, anchor.lon + 0.09
