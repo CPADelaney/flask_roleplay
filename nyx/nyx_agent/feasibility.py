@@ -1041,6 +1041,45 @@ def _normalize_world_model_metadata(
     )
     resolver_cfg = dict(resolver_cfg_raw) if isinstance(resolver_cfg_raw, dict) else {}
 
+    world_model_context: Dict[str, Any] = {}
+    if isinstance(fallback.get("world_model"), dict):
+        world_model_context = dict(fallback["world_model"])
+    elif isinstance(metadata, dict):
+        world_model_context = metadata
+
+    fallback_resolver_cfg: Dict[str, Any] = {}
+    candidate = world_model_context.get("resolver") or world_model_context.get("location_resolver")
+    if isinstance(candidate, dict):
+        fallback_resolver_cfg = dict(candidate)
+
+    allow_source = resolver_cfg.get("allow_threshold")
+    if allow_source is None:
+        allow_source = fallback_resolver_cfg.get("allow_threshold")
+    allow_threshold = _coerce_float(
+        allow_source,
+        LOCATION_RESOLVER_ALLOW_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ALLOW_THRESHOLD,
+    )
+
+    ask_source = resolver_cfg.get("ask_threshold")
+    if ask_source is None:
+        ask_source = fallback_resolver_cfg.get("ask_threshold")
+    ask_threshold = _coerce_float(
+        ask_source,
+        LOCATION_RESOLVER_ASK_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ASK_THRESHOLD,
+    )
+    if ask_threshold >= allow_threshold:
+        ask_threshold = max(min(allow_threshold * 0.75, allow_threshold - 0.05), 0.0)
+
+    fictional_policy = str(
+        resolver_cfg.get("fictional_policy")
+        or fallback_resolver_cfg.get("fictional_policy")
+        or metadata.get("fictional_location_policy")
+        or world_model_context.get("fictional_location_policy")
+        or ("allow" if allow_fictional else "deny")
+    ).strip().lower()
+    if fictional_policy not in {"allow", "ask", "deny"}:
+        fictional_policy = "allow" if allow_fictional else "deny"
+
     # NEW: normalize a geo anchor if provided (tolerate both nested and flat keys)
     anchor_raw = resolver_cfg.get("anchor") or metadata.get("anchor") or {}
     anchor = {}
