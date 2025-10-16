@@ -1,16 +1,14 @@
 # nyx/location/search.py
-
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 import math
-import json
 import httpx
 
 from .types import (
     PlaceCandidate, PlaceQuery, SettingProfile, ResolutionResult,
     ResolutionStatus, TravelPlan, TravelLeg
 )
-from .anchors import GeoAnchor, derive_geo_anchor, build_nominatim_params_for_poi
+from .anchors import GeoAnchor, derive_geo_anchor, build_nominatim_params_for_poi, nearest_airport_label
 from .config import DEFAULT_LOCATION_SETTINGS as _LS
 
 try:
@@ -21,8 +19,6 @@ except Exception:  # optional
 # ---------- Helpers & Normalization ----------
 
 _GENERIC_SYNONYMS: Dict[str, List[Tuple[str, str]]] = {
-    # maps user generic term -> list of (key, value) Overpass tag filters
-    # amenity
     "restaurant":         [("amenity","restaurant")],
     "restaurants":        [("amenity","restaurant")],
     "fast food":          [("amenity","fast_food")],
@@ -65,7 +61,6 @@ def _is_generic_term(text: str) -> bool:
     t = text.lower().strip()
     if t in _GENERIC_SYNONYMS:
         return True
-    # crude heuristics for plurals like "restaurants", "cafes"
     if t.endswith("s") and t[:-1] in _GENERIC_SYNONYMS:
         return True
     return False
@@ -75,11 +70,10 @@ def _guess_query_kind(text: str) -> str:
         return "discovery"
     if _is_generic_term(text):
         return "generic"
-    # Heuristic: brand if it contains "'s" or is 1–3 words not in synonyms
     tl = text.lower()
     if "'s" in tl or "’s" in text or len(text.split()) <= 3:
         return "brand"
-    return "brand"  # default to brand if not matched
+    return "brand"
 
 def _haversine_km(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
     R = 6371.0
@@ -117,25 +111,21 @@ def _candidate_from_overpass(el: Dict[str, Any]) -> Optional[PlaceCandidate]:
     tags = el.get("tags") or {}
     name = tags.get("name") or "Unknown"
     if not name or name == "Unknown":
-        # Prefer named POIs for UX; still allow if brand match
         brand = tags.get("brand")
         if not brand:
             return None
         name = brand
-    # Coordinates:
     if "lat" in el and "lon" in el:
         lat, lon = float(el["lat"]), float(el["lon"])
     elif "center" in el and isinstance(el["center"], dict):
         lat, lon = float(el["center"]["lat"]), float(el["center"]["lon"])
     else:
         return None
-    # Category guess:
     cat = None
     for key in ("amenity","shop","leisure","tourism"):
         if key in tags:
             cat = f"{key}:{tags.get(key)}"; break
     addr = _address_from_tags(tags)
-    # Confidence: if brand tag present, start higher
     conf = 0.75 if tags.get("brand") else 0.60
     return PlaceCandidate(name=name, lat=lat, lon=lon, address=addr, category=cat, confidence=conf)
 
@@ -151,7 +141,6 @@ async def _nominatim_search(poi: str, anchor: GeoAnchor, *, km: float, limit: in
         return [_candidate_from_nominatim(x) for x in (data if isinstance(data, list) else [])]
 
 def _overpass_brand_block(poi_norm: str) -> str:
-    # brand or name regex (case-insensitive), escape quotes
     rx = poi_norm.replace('"', '\\"')
     return f"""
   node["amenity"]["brand"~"{rx}",i];
@@ -166,7 +155,6 @@ def _overpass_brand_block(poi_norm: str) -> str:
 """
 
 def _overpass_generic_block(filters: List[Tuple[str, str]]) -> str:
-    # Build a union of the provided tag filters
     parts = []
     for key, val in filters:
         parts.append(f'  node["{key}"="{val}"];')
@@ -207,21 +195,22 @@ out center {limit};
         r.raise_for_status()
         data = r.json() or {}
         els = data.get("elements") or []
-        cands = []
+        cands: List[PlaceCandidate] = []
         for el in els:
             c = _candidate_from_overpass(el)
-            if c: cands.append(c)
+            if c:
+                cands.append(c)
         return cands[:limit]
 
 # ---------- Ranking & Merge ----------
 
 def _rank_by_name_similarity(query: str, cands: List[PlaceCandidate]) -> List[PlaceCandidate]:
-    if not cands: return cands
+    if not cands:
+        return cands
     if not fuzz:
         return cands
     q = _norm_text(query).lower()
     for c in cands:
-        # Blend existing confidence with name similarity
         sim = fuzz.token_set_ratio(q, _norm_text(c.name).lower()) / 100.0
         c.confidence = 0.5 * c.confidence + 0.5 * sim
     return sorted(cands, key=lambda x: x.confidence, reverse=True)
@@ -231,7 +220,6 @@ def _rank_by_distance(anchor: GeoAnchor, cands: List[PlaceCandidate]) -> List[Pl
         return cands
     for c in cands:
         d = _haversine_km(anchor.lat, anchor.lon, c.lat, c.lon)
-        # Softly adjust confidence closer = higher
         c.confidence = 0.7 * c.confidence + 0.3 * max(0.0, 1.0 - min(1.0, d / _LS.search_radius_km))
     return sorted(cands, key=lambda x: x.confidence, reverse=True)
 
@@ -251,14 +239,14 @@ def _merge_dedupe(anchor: GeoAnchor, a: List[PlaceCandidate], b: List[PlaceCandi
 async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[str, Any]) -> ResolutionResult:
     """
     Multistep resolution:
-      1) Travel plans handled first (unchanged).
+      1) Travel plans handled first.
       2) Build anchor (lat/lon) without fictional strings.
       3) If discovery: Overpass multiple common categories within radius.
       4) If brand: Overpass brand/name → fallback Nominatim → widen radius.
       5) If generic: Overpass category → fallback Nominatim → widen radius.
       6) Rank, dedupe, return EXACT/MULTIPLE/ASK with canonical ops.
     """
-    # ---- 1) Travel (unchanged) ----
+    # ---- 1) Travel
     if getattr(query, "is_travel", False) and query.target:
         anchor = await derive_geo_anchor(meta)
         airport_label, alat, alon = nearest_airport_label(anchor)
@@ -274,10 +262,9 @@ async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[st
                                 message=f"Planning trip to {query.target}.",
                                 canonical_ops=[{"op":"travel.plan","plan":plan}])
 
-    # ---- 2) Anchor ----
+    # ---- 2) Anchor
     anchor = await derive_geo_anchor(meta)
     if anchor.lat is None or anchor.lon is None:
-        # We can’t bound a search without coordinates; ask for a city
         return ResolutionResult(status=ResolutionStatus.ASK,
                                 message="I need a real anchor (coords or city) to search nearby. Which city are we in?")
 
@@ -286,15 +273,13 @@ async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[st
     limit_n   = min(_LS.nominatim_limit, 12)
     limit_o   = min(_LS.overpass_limit, 24)
 
-    # ---- 3) Discovery mode ----
+    # ---- 3) Discovery vs Brand/Generic
     tgt = _norm_text(getattr(query, "target", None) or "")
     if not tgt or _is_discovery_text(tgt):
         try:
-            cands_o = await _overpass_search(anchor, km=radius_km, limit=limit_o,
-                                             generic_filters=_DISCOVERY_DEFAULTS)
+            cands_o = await _overpass_search(anchor, km=radius_km, limit=limit_o, generic_filters=_DISCOVERY_DEFAULTS)
         except Exception:
             cands_o = []
-        # No Nominatim in discovery (it’s free-text oriented), we already covered wide common POIs
         cands = _rank_by_distance(anchor, cands_o)[:8]
         if not cands:
             return ResolutionResult(status=ResolutionStatus.ASK,
@@ -307,24 +292,22 @@ async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[st
             canonical_ops=[{"op":"poi.suggest","items":[{"name":c.name,"lat":c.lat,"lon":c.lon,"category":c.category} for c in cands]}]
         )
 
-    # ---- 4/5) Brand vs Generic ----
     kind = _guess_query_kind(tgt)
 
     cands_overpass: List[PlaceCandidate] = []
     cands_nominatim: List[PlaceCandidate] = []
 
-    # First pass (radius = 5 miles)
+    # Pass 1 (~5 miles)
     try:
         if kind == "brand":
             cands_overpass = await _overpass_search(anchor, km=radius_km, limit=limit_o, poi_norm=tgt)
-        else:  # generic
+        else:
             filters = _GENERIC_SYNONYMS.get(tgt.lower(), [])
             cands_overpass = await _overpass_search(anchor, km=radius_km, limit=limit_o, generic_filters=filters or _DISCOVERY_DEFAULTS)
     except Exception:
         cands_overpass = []
 
     try:
-        # Nominatim fallback in parallel style flow
         cands_nominatim = await _nominatim_search(tgt, anchor, km=radius_km, limit=limit_n)
     except Exception:
         cands_nominatim = []
@@ -332,7 +315,7 @@ async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[st
     merged = _merge_dedupe(anchor, cands_overpass, cands_nominatim)
     ranked = _rank_by_name_similarity(tgt, merged) if kind == "brand" else merged
 
-    # Widen pass if still empty (radius ~12 km)
+    # Widen if empty (~12 km)
     if not ranked:
         try:
             if kind == "brand":
@@ -348,9 +331,7 @@ async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[st
             wide_n = []
         ranked = _rank_by_name_similarity(tgt, _merge_dedupe(anchor, wide_o, wide_n)) if kind == "brand" else _merge_dedupe(anchor, wide_o, wide_n)
 
-    # Decide result shape
     if not ranked:
-        # We explicitly *looked*—be constructive
         city_label = anchor.city or (anchor.label or "this area")
         msg = f"Couldn’t find “{tgt}” within ~5–7.5 miles of {city_label}. Try a nearby alternative or broaden the area?"
         return ResolutionResult(status=ResolutionStatus.ASK, message=msg)
@@ -365,7 +346,6 @@ async def resolve_real(query: PlaceQuery, setting: SettingProfile, meta: Dict[st
             message=f"Heading to {top.name}."
         )
 
-    # Multiple good options
     take = ranked[: min(6, len(ranked))]
     return ResolutionResult(
         status=ResolutionStatus.MULTIPLE,
