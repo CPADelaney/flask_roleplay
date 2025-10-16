@@ -26,6 +26,9 @@ from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
 from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
 from nyx.geo.toponym import plausibility_score
+from nyx.location.real_world_resolver import resolve_real
+from nyx.location.types import PlaceQuery
+from nyx.location.config import LocationSettings
 
 logger = logging.getLogger(__name__)
 
