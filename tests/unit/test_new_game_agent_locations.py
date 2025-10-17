@@ -86,12 +86,28 @@ def test_create_preset_locations_uses_factory(monkeypatch, caplog):
     preset_payload = {
         "name": "Bootstrap",
         "required_locations": [
-            {"name": "Quick Plaza", "description": "Central hub", "type": "public"},
+            {
+                "name": "Quick Plaza",
+                "description": "Central hub",
+                "type": "public",
+                "building": "Quick Plaza Pavilion",
+                "district": "Central Commons",
+                "city": "Evergreen City",
+                "region": "Washington",
+                "country": "USA",
+                "rooms": {"gazebo": "Primary rendezvous point"},
+            },
             {
                 "name": "Schedule Hall",
                 "description": "Detailed coordination center",
                 "type": "administrative",
                 "open_hours": {"Mon": "09:00-17:00"},
+                "building": "Coordination Annex",
+                "room": "Operations Desk",
+                "district": "Central Commons",
+                "city": "Evergreen City",
+                "region": "Washington",
+                "country": "USA",
             },
         ],
     }
@@ -111,7 +127,12 @@ def test_create_preset_locations_uses_factory(monkeypatch, caplog):
     second_meta = calls[1]["candidate"].place.meta
 
     assert first_meta["description"] == "Central hub"
+    assert first_meta["building"] == "Quick Plaza Pavilion"
+    assert first_meta["district"] == "Central Commons"
+    assert first_meta["rooms"]["gazebo"] == "Primary rendezvous point"
     assert second_meta["open_hours"] == {"Mon": "09:00-17:00"}
+    assert second_meta["room"] == "Operations Desk"
+    assert second_meta["city"] == "Evergreen City"
 
     fallback_logs = [
         record

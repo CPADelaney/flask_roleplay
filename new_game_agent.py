@@ -57,6 +57,24 @@ NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER
 NEW_GAME_AGENT_NYX_ID = "new_game_director_agent"  # Use consistent ID throughout
 
 
+LOCATION_HIERARCHY_META_KEYS: Tuple[str, ...] = (
+    "building",
+    "district",
+    "city",
+    "region",
+    "country",
+    "room",
+    "rooms",
+)
+
+
+FALLBACK_LOCATION_BASE_HIERARCHY: Dict[str, str] = {
+    "district": "Evergreen Commons",
+    "city": "Seattle",
+    "region": "Washington",
+    "country": "United States",
+}
+
 FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
     "setting_name": "Evergreen Commons",
     "environment_desc": (
@@ -109,6 +127,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "public",
             "features": ["community board", "gathering space"],
             "open_hours_json": json.dumps({"Mon-Sun": "Always open"}),
+            "building": "Evergreen Commons Civic Pavilion",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "lantern_arcade": "String lights guide evening promenades around the central fountain.",
+                "listening_nook": "A half-enclosed pergola where caretakers host reflection circles.",
+            },
         },
         {
             "location_name": "Riverside Cafe",
@@ -116,6 +140,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "business",
             "features": ["canal view", "soft seating"],
             "open_hours_json": json.dumps({"Mon-Sun": "06:00-22:00"}),
+            "building": "Riverside Conservatory",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "main_bar": "Polished wood counters where regulars exchange quiet greetings.",
+                "wintergarden": "A glass-walled sunroom that overlooks the canal.",
+            },
         },
         {
             "location_name": "Community Library",
@@ -123,6 +153,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "public",
             "features": ["study rooms", "archival wing"],
             "open_hours_json": json.dumps({"Mon-Sat": "08:00-20:00", "Sun": "10:00-16:00"}),
+            "building": "Evergreen Knowledge Annex",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "north_stacks": "Shelves of curated literature organized by the caretakers.",
+                "reflection_rooms": "Sound-dampened spaces for guided journaling.",
+            },
         },
         {
             "location_name": "Observation Park",
@@ -130,6 +166,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "park",
             "features": ["observation decks", "walking paths"],
             "open_hours_json": json.dumps({"Mon-Sun": "05:00-23:00"}),
+            "building": "Observation Terrace Overlook",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "southern_outlook": "Tiered seating with gentle supervision over the water.",
+                "charting_gazebo": "A sheltered kiosk where daily schedules are recorded.",
+            },
         },
         {
             "location_name": "Market Row",
@@ -137,6 +179,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "market",
             "features": ["artisan stalls", "curated goods"],
             "open_hours_json": json.dumps({"Mon-Sat": "09:00-19:00", "Sun": "10:00-17:00"}),
+            "building": "Commons Mercantile Arcade",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "rotunda_entry": "A domed atrium guiding visitors toward specialty stalls.",
+                "council_counter": "A concierge desk where procurement requests are logged.",
+            },
         },
         {
             "location_name": "Workshop Alley",
@@ -144,6 +192,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "creative",
             "features": ["artisan studios", "mentorship tables"],
             "open_hours_json": json.dumps({"Mon-Fri": "08:00-18:00", "Sat": "10:00-16:00"}),
+            "building": "Commons Makers Cooperative",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "woodshop": "Guided carving tables under skylights.",
+                "textile_lab": "Soft-loom studio for collaborative weaving projects.",
+            },
         },
         {
             "location_name": "Harbor Walk",
@@ -151,6 +205,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "recreation",
             "features": ["canal overlooks", "guided tours"],
             "open_hours_json": json.dumps({"Mon-Sun": "06:00-22:00"}),
+            "building": "Harbor Walk Promenade",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "east_dock": "Launch point for the Commons' quiet canal boats.",
+                "evening_pier": "Lantern-lit stretch reserved for nightly reflection walks.",
+            },
         },
         {
             "location_name": "City Hall Annex",
@@ -158,6 +218,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "administrative",
             "features": ["records office", "planning chamber"],
             "open_hours_json": json.dumps({"Mon-Fri": "08:30-17:30"}),
+            "building": "Evergreen Stewardship Annex",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "intake_hall": "Residents schedule check-ins beneath frosted glass windows.",
+                "planning_chamber": "A circular conference room for caretakers' deliberations.",
+            },
         },
         {
             "location_name": "Wellness Studio",
@@ -165,6 +231,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "wellness",
             "features": ["meditation room", "stretch classes"],
             "open_hours_json": json.dumps({"Mon-Sat": "07:00-21:00"}),
+            "building": "Serenity Atrium",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "meditation_suite": "Soundproofed space scented with cedar and bergamot.",
+                "balance_studio": "Adaptive movement room with guided apparatus.",
+            },
         },
         {
             "location_name": "Transit Hub",
@@ -172,6 +244,12 @@ FALLBACK_ENVIRONMENT_PAYLOAD: Dict[str, Any] = {
             "type": "infrastructure",
             "features": ["tram service", "information desk"],
             "open_hours_json": json.dumps({"Mon-Sun": "05:00-23:30"}),
+            "building": "Commons Transit Pavilion",
+            **FALLBACK_LOCATION_BASE_HIERARCHY,
+            "rooms": {
+                "arrival_gallery": "Arrival platform with soft ambient lighting and greeters.",
+                "dispatch_room": "Tram coordinators manage curated travel itineraries.",
+            },
         },
     ],
     "scenario_name": "A Gentle Orientation",
@@ -2753,6 +2831,15 @@ class NewGameAgent:
                         "schedule": schedule,
                         "atmosphere": atmosphere,
                     }
+                    for hierarchy_key in LOCATION_HIERARCHY_META_KEYS:
+                        if hierarchy_key in loc_data and loc_data[hierarchy_key] is not None:
+                            metadata[hierarchy_key] = loc_data[hierarchy_key]
+
+                    hierarchy_payload = loc_data.get("hierarchy")
+                    if isinstance(hierarchy_payload, dict):
+                        for hierarchy_key, hierarchy_value in hierarchy_payload.items():
+                            if hierarchy_value is not None and hierarchy_key not in metadata:
+                                metadata[hierarchy_key] = hierarchy_value
                     raw_open_hours = (
                         loc_data.get("open_hours")
                         or loc_data.get("open_hours_json")
