@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
+import asyncpg
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
@@ -18,6 +18,8 @@ class _FakeConnection:
         self._place_id = 0
         self._location_id = 100
         self.admin_path_payloads = []
+        self.place_meta_payloads = []
+        self.edge_meta_payloads = []
 
     async def fetchrow(self, query, *args):
         normalized = " ".join(query.split())
@@ -28,6 +30,12 @@ class _FakeConnection:
 
             if not isinstance(admin_path_arg, str):
                 raise AssertionError("admin_path should be serialized as a JSON string")
+
+            meta_arg = args[8]
+            self.place_meta_payloads.append(meta_arg)
+
+            if not isinstance(meta_arg, str):
+                raise asyncpg.DataError("meta should be serialized as a JSON string")
 
             self._place_id += 1
             return {"id": self._place_id, "place_key": args[1]}
@@ -110,6 +118,15 @@ class _FakeConnection:
         raise AssertionError(f"Unexpected query: {query}")
 
     async def execute(self, query, *args):
+        normalized = " ".join(query.split())
+
+        if normalized.startswith("INSERT INTO PlaceEdges"):
+            meta_arg = args[4]
+            self.edge_meta_payloads.append(meta_arg)
+
+            if not isinstance(meta_arg, str):
+                raise asyncpg.DataError("edge meta should be serialized as a JSON string")
+
         return None
 
 
@@ -152,3 +169,47 @@ def test_get_or_create_location_serializes_admin_path():
     assert final_path["country"] == "Wonderland"
     assert final_path["city"] == "Heart City"
     assert final_path["venue"] == "Crystal Garden"
+
+
+def test_get_or_create_location_serializes_place_and_edge_meta():
+    conn = _FakeConnection()
+
+    candidate = Candidate(
+        place=Place(
+            name="Arcadia Spire",
+            level="venue",
+            address={
+                "_normalized_admin_path": {
+                    "country": "Arcadia",
+                    "city": "Skyhold",
+                }
+            },
+            meta={
+                "world_name": "Clockwork Realm",
+                "classification": {"tier": "prime"},
+            },
+        ),
+        confidence=0.95,
+    )
+
+    location = asyncio.run(
+        get_or_create_location(
+            conn,
+            user_id=100,
+            conversation_id=200,
+            candidate=candidate,
+            scope="fictional",
+        )
+    )
+
+    assert location.location_name == "arcadia spire"
+
+    assert conn.place_meta_payloads, "expected place metadata writes"
+    parsed_place_meta = [json.loads(payload) for payload in conn.place_meta_payloads]
+    final_meta = parsed_place_meta[-1]
+    assert final_meta["world_name"] == "Clockwork Realm"
+    assert final_meta["classification"] == {"tier": "prime"}
+
+    assert conn.edge_meta_payloads, "expected edge metadata writes"
+    parsed_edge_meta = [json.loads(payload) for payload in conn.edge_meta_payloads]
+    assert all(meta_dict.get("scope") == "fictional" for meta_dict in parsed_edge_meta)
