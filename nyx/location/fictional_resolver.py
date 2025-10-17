@@ -2,9 +2,20 @@
 from __future__ import annotations
 import json, os, random
 from typing import Any, Dict, List
+
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
-from .types import *
+
 from .anchors import derive_geo_anchor
+from .query import PlaceQuery
+from .types import (
+    Anchor,
+    Candidate,
+    Place,
+    ResolveResult,
+    STATUS_ASK,
+    STATUS_AMBIGUOUS,
+    STATUS_EXACT,
+)
 
 _CONTENT_PATH = os.environ.get("NYX_CITY_CONTENT", "nyx_data/city_archetypes.json")
 
@@ -79,34 +90,70 @@ def _spawn_archetype(graph: Dict[str, Any], slot: str, pack: Dict[str, Any], rng
     graph["venues"].append(venue); dist["venues"].append(venue)
     return venue
 
-async def resolve_fictional(query: PlaceQuery, setting: SettingProfile, meta: Dict[str, Any],
-                            store: ConversationSnapshotStore, user_id: str, conversation_id: str) -> ResolutionResult:
-    anchor = await derive_geo_anchor(meta, user_id=user_id, conversation_id=conversation_id)
-    world_name = setting.world_name or (meta.get("world") or {}).get("name") or "Fictional City"
+async def resolve_fictional(
+    query: PlaceQuery,
+    anchor: Anchor,
+    meta: Dict[str, Any],
+    store: ConversationSnapshotStore,
+    user_id: str,
+    conversation_id: str,
+) -> ResolveResult:
+    if anchor.lat is None or anchor.lon is None:
+        try:
+            geo = await derive_geo_anchor(meta, user_id=user_id, conversation_id=conversation_id)
+            anchor.lat = geo.lat
+            anchor.lon = geo.lon
+        except Exception:
+            pass
+
+    world_meta = meta.get("world") or {}
+    world_name = anchor.world_name or world_meta.get("name") or world_meta.get("world_name") or "Fictional City"
     graph = _ensure_city_graph(store, str(user_id), str(conversation_id), world_name, anchor)
     pack = _load_pack()
     rng = random.Random(f"{user_id}:{conversation_id}:{world_name}")
 
     target = (query.target or "").lower().strip()
     if not target:
-        return ResolutionResult(status=ResolutionStatus.AMBIGUOUS, message="What kind of place are you seeking?")
+        return ResolveResult(status=STATUS_AMBIGUOUS, message="What kind of place are you seeking?", anchor=anchor, scope=anchor.scope)
 
     if any(k in target for k in ["chocolate","sweets","confection","ghirardelli","square"]):
         v = _spawn_archetype(graph, "landmark_sweets", pack, rng, near_key="old_port")
-        return ResolutionResult(
-            status=ResolutionStatus.EXACT,
-            candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": v["district"]}, category=v["category"], confidence=0.9)],
-            canonical_ops=[{"op":"poi.navigate","label":v["name"],"lat":v["lat"],"lon":v["lon"],"category":v["category"],"lore":{"district": v["district"]}}],
-            message=f"Heading to {v['name']} in {v['district']}."
+        place = Place(
+            name=v["name"],
+            level="venue",
+            lat=v.get("lat"),
+            lon=v.get("lon"),
+            address={"district": v.get("district")},
+            meta={"category": v.get("category"), "source": "fictional"},
+        )
+        cand = Candidate(place=place, confidence=0.9, rationale="fictional_archetype")
+        return ResolveResult(
+            status=STATUS_EXACT,
+            candidates=[cand],
+            operations=[{"op":"poi.navigate","label":v["name"],"lat":v.get("lat"),"lon":v.get("lon"),"category":v.get("category"),"lore":{"district": v.get("district")}}],
+            message=f"Heading to {v['name']} in {v['district']}.",
+            anchor=anchor,
+            scope=anchor.scope,
         )
 
     if any(k in target for k in ["dim sum","dumpling","yum cha","yank sing"]):
         v = _spawn_archetype(graph, "dim_sum", pack, rng, near_key="arts")
-        return ResolutionResult(
-            status=ResolutionStatus.EXACT,
-            candidates=[PlaceCandidate(name=v["name"], lat=v["lat"], lon=v["lon"], address={"district": v["district"]}, category=v["category"], confidence=0.9)],
-            canonical_ops=[{"op":"poi.navigate","label":v["name"],"lat":v["lat"],"lon":v["lon"],"category":v["category"],"lore":{"district": v["district"]}}],
-            message=f"Steam curls from {v['name']} in {v['district']}—let’s go."
+        place = Place(
+            name=v["name"],
+            level="venue",
+            lat=v.get("lat"),
+            lon=v.get("lon"),
+            address={"district": v.get("district")},
+            meta={"category": v.get("category"), "source": "fictional"},
+        )
+        cand = Candidate(place=place, confidence=0.9, rationale="fictional_archetype")
+        return ResolveResult(
+            status=STATUS_EXACT,
+            candidates=[cand],
+            operations=[{"op":"poi.navigate","label":v["name"],"lat":v.get("lat"),"lon":v.get("lon"),"category":v.get("category"),"lore":{"district": v.get("district")}}],
+            message=f"Steam curls from {v['name']} in {v['district']}—let’s go.",
+            anchor=anchor,
+            scope=anchor.scope,
         )
 
     choices: List[str] = []
@@ -117,6 +164,10 @@ async def resolve_fictional(query: PlaceQuery, setting: SettingProfile, meta: Di
     else:
         choices = ["night market", "waterfront sweets hall", "residential dunes on the west side"]
 
-    return ResolutionResult(status=ResolutionStatus.ASK,
-                            message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?",
-                            choices=choices)
+    return ResolveResult(
+        status=STATUS_ASK,
+        message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?",
+        choices=choices,
+        anchor=anchor,
+        scope=anchor.scope,
+    )

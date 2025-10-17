@@ -1,73 +1,135 @@
 # nyx/location/types.py
 from __future__ import annotations
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
 
-class SettingKind(str, Enum):
-    REAL = "real"
-    FICTIONAL = "fictional"
-    HYBRID = "hybrid"
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional
+
+Scope = Literal["real", "fictional", "hybrid"]
+
+PlaceLevel = Literal[
+    "world",
+    "country",
+    "region",
+    "state",
+    "city",
+    "district",
+    "neighborhood",
+    "venue",
+    "virtual",
+    "route",
+    "unknown",
+]
+
 
 @dataclass
-class SettingProfile:
-    kind: SettingKind
-    primary_city: Optional[str] = None           # e.g., "San Francisco"
-    region: Optional[str] = None                 # e.g., "CA"
-    country: Optional[str] = None                # e.g., "USA"
+class Place:
+    """Represents a concrete or fictional location entity."""
+
+    name: str
+    level: PlaceLevel
+    key: Optional[str] = None
     lat: Optional[float] = None
     lon: Optional[float] = None
-    label: Optional[str] = None                  # "SoMa, San Francisco"
-    world_name: Optional[str] = None             # for fictional worlds
-
-@dataclass
-class PlaceQuery:
-    raw_text: str
-    normalized: str
-    is_travel: bool = False                      # e.g., "fly to Tokyo"
-    target: Optional[str] = None                 # the thing to find
-    transport_hint: Optional[str] = None         # "walk", "drive", "fly"
-
-@dataclass
-class PlaceCandidate:
-    name: str
-    lat: float
-    lon: float
     address: Dict[str, Any] = field(default_factory=dict)
-    category: Optional[str] = None               # "landmark", "restaurant", "airport", "festival"
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PlaceEdge:
+    """Relationship between two places in the location graph."""
+
+    source: str
+    target: str
+    kind: Literal["contains", "near", "route", "alias", "anchors"]
+    distance_km: Optional[float] = None
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Anchor:
+    """Scope-aware anchor describing the player's current context."""
+
+    scope: Scope
+    focus: Optional[Place] = None
+    label: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    primary_city: Optional[str] = None
+    region: Optional[str] = None
+    country: Optional[str] = None
+    world_name: Optional[str] = None
+    hints: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Candidate:
+    """A ranked candidate place with supporting metadata."""
+
+    place: Place
     confidence: float = 0.0
-    notes: Optional[str] = None
+    distance_km: Optional[float] = None
+    edges: List[PlaceEdge] = field(default_factory=list)
+    rationale: Optional[str] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
 
-class ResolutionStatus(str, Enum):
-    EXACT = "exact"
-    NEARBY = "nearby"
-    MULTIPLE = "multiple"
-    AMBIGUOUS = "ambiguous"
-    NOT_FOUND = "not_found"
-    TRAVEL_PLAN = "travel_plan"
+
+ResolveStatus = Literal[
+    "exact",
+    "nearby",
+    "multiple",
+    "ambiguous",
+    "not_found",
+    "travel_plan",
+    "ask",
+]
+
+STATUS_EXACT: ResolveStatus = "exact"
+STATUS_NEARBY: ResolveStatus = "nearby"
+STATUS_MULTIPLE: ResolveStatus = "multiple"
+STATUS_AMBIGUOUS: ResolveStatus = "ambiguous"
+STATUS_NOT_FOUND: ResolveStatus = "not_found"
+STATUS_TRAVEL_PLAN: ResolveStatus = "travel_plan"
+STATUS_ASK: ResolveStatus = "ask"
+
 
 @dataclass
-class TravelLeg:
-    kind: str                                    # "local", "transit", "flight"
-    origin_label: str
-    dest_label: str
-    origin: Optional[Tuple[float, float]] = None
-    dest: Optional[Tuple[float, float]] = None
-    estimate_min: Optional[int] = None
-    carrier: Optional[str] = None
-    notes: Optional[str] = None
+class ResolveResult:
+    """Result container for real and fictional location resolution."""
 
-@dataclass
-class TravelPlan:
-    legs: List[TravelLeg] = field(default_factory=list)
-    arrival_setting: Optional[SettingProfile] = None
+    status: ResolveStatus
+    message: Optional[str] = None
+    choices: List[str] = field(default_factory=list)
+    candidates: List[Candidate] = field(default_factory=list)
+    operations: List[Dict[str, Any]] = field(default_factory=list)
+    anchor: Optional[Anchor] = None
+    scope: Optional[Scope] = None
+    errors: List[str] = field(default_factory=list)
 
-@dataclass
-class ResolutionResult:
-    status: ResolutionStatus
-    message: Optional[str] = None                # guidance/"ask" prompt text
-    choices: List[str] = field(default_factory=list)  # clarifying options
-    candidates: List[PlaceCandidate] = field(default_factory=list)
-    travel: Optional[TravelPlan] = None
-    canonical_ops: List[Dict[str, Any]] = field(default_factory=list)  # ops for universal_updater
-    anchor_used: Optional[str] = None            # e.g., "SoMa, San Francisco"
+    @property
+    def canonical_ops(self) -> List[Dict[str, Any]]:
+        """Backward compatible view of operations for legacy callers."""
+
+        return self.operations
+
+    @canonical_ops.setter
+    def canonical_ops(self, value: Optional[List[Dict[str, Any]]]) -> None:
+        self.operations = list(value or [])
+
+
+__all__ = [
+    "Anchor",
+    "Candidate",
+    "Place",
+    "PlaceEdge",
+    "PlaceLevel",
+    "ResolveResult",
+    "ResolveStatus",
+    "Scope",
+    "STATUS_EXACT",
+    "STATUS_NEARBY",
+    "STATUS_MULTIPLE",
+    "STATUS_AMBIGUOUS",
+    "STATUS_NOT_FOUND",
+    "STATUS_TRAVEL_PLAN",
+    "STATUS_ASK",
+]

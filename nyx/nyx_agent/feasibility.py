@@ -27,8 +27,6 @@ from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
 from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
 from nyx.geo.toponym import plausibility_score
-from nyx.location.real_world_resolver import resolve_real
-from nyx.location.types import PlaceQuery
 from nyx.location.config import LocationSettings
 
 logger = logging.getLogger(__name__)
@@ -5052,141 +5050,72 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
 
             if is_place_query:
                 try:
-                    # Try to import the resolver stack; if not present, we fall through.
+                    from nyx.location.router import resolve_place_or_travel  # type: ignore
+                except Exception:
+                    resolve_place_or_travel = None  # type: ignore
+
+                if resolve_place_or_travel:
+                    query_text = missing_location_tokens[0]
                     try:
-                        from nyx.location.search import resolve_real  # type: ignore
-                        from nyx.location.types import PlaceQuery, SettingProfile, SettingKind  # type: ignore
-                        from nyx.location.anchors import derive_geo_anchor  # type: ignore
-                    except Exception:
-                        resolve_real = None  # type: ignore
-                        PlaceQuery = None  # type: ignore
-                        SettingProfile = None  # type: ignore
-                        SettingKind = None  # type: ignore
-                        derive_geo_anchor = None  # type: ignore
-
-                    if resolve_real:
-                        query_text = missing_location_tokens[0]
-                        normalized = _normalize_location_phrase(query_text) or query_text
-
-                        # Build query object (fall back to dict if types unavailable)
-                        try:
-                            query = PlaceQuery(
-                                raw_text=text_l,
-                                normalized=normalized.lower(),
-                                target=query_text,
-                            )
-                        except Exception:
-                            query = {
-                                "raw_text": text_l,
-                                "normalized": normalized.lower(),
-                                "target": query_text,
-                            }
-
-                        # Build a setting profile anchored to user context if possible
-                        anchor = None
-                        try:
-                            # Not all deployments expose derive_geo_anchor or accept meta; be maximally permissive.
-                            if derive_geo_anchor:
-                                try:
-                                    anchor = await derive_geo_anchor(
-                                        {"user_id": user_id, "conversation_id": conversation_id},
-                                        str(user_id),
-                                        str(conversation_id),
-                                    )
-                                except TypeError:
-                                    # Some versions accept fewer params
-                                    anchor = await derive_geo_anchor(str(user_id), str(conversation_id))
-                        except Exception:
-                            anchor = None
-
-                        is_real = _is_modern_or_realistic_setting(setting_context)
-                        try:
-                            kind_value = SettingKind.REAL if is_real else SettingKind.HYBRID  # type: ignore
-                        except Exception:
-                            kind_value = "REAL" if is_real else "HYBRID"
-
-                        loc = setting_context.get("location") or {}
-                        hints = _extract_geo_hints_from_location(loc)
-                        wm = setting_context.get("world_model") or {}
-                        res = wm.get("resolver") or {}
-                        wm_anchor = res.get("anchor") or {}
-                        
-                        primary_city = (
-                            hints.get("city") or hints.get("district") or
-                            wm_anchor.get("city") or
-                            getattr(anchor, "city", None) or
-                            setting_context.get("primary_city")
+                        result = await resolve_place_or_travel(
+                            query_text,
+                            setting_context,
+                            None,
+                            str(user_id),
+                            str(conversation_id),
                         )
-                        region = hints.get("region") or wm_anchor.get("region") or getattr(anchor, "region", None)
-                        country = hints.get("country") or wm_anchor.get("country") or getattr(anchor, "country", None)
-                        lat = getattr(anchor, "lat", None) or wm_anchor.get("lat")
-                        lon = getattr(anchor, "lon", None) or wm_anchor.get("lon")
-                        
-                        # Build SettingProfile with the richer anchor
-                        try:
-                            setting_profile = SettingProfile(
-                                kind=kind_value,
-                                primary_city=primary_city,
-                                region=region,
-                                country=country,
-                                lat=lat,
-                                lon=lon,
-                                label=getattr(anchor, "label", None),
+                    except TypeError:
+                        # Older signatures may omit store argument; fall back gracefully.
+                        result = await resolve_place_or_travel(
+                            query_text,
+                            setting_context,
+                            None,
+                            str(user_id),
+                            str(conversation_id),
+                        )
+
+                    status = getattr(result, "status", None) or (result.get("status") if isinstance(result, dict) else None)
+                    if status in {"exact", "multiple", "ask", "travel_plan"}:
+                        message = getattr(result, "message", None) or (result.get("message") if isinstance(result, dict) else None)
+                        choices = getattr(result, "choices", None) or (result.get("choices") if isinstance(result, dict) else None)
+                        operations = (
+                            getattr(result, "operations", None)
+                            or getattr(result, "canonical_ops", None)
+                            or (result.get("operations") if isinstance(result, dict) else None)
+                            or (result.get("canonical_ops") if isinstance(result, dict) else None)
+                        )
+
+                        logger.info(
+                            f"[FEASIBILITY] Location resolver found results for {query_text!r} -> status={status}"
+                        )
+
+                        if status == "exact":
+                            per_intent.append({
+                                "feasible": True,
+                                "strategy": "allow",
+                                "categories": sorted(cats),
+                                "location_resolved": True,
+                                "resolver_result": operations,
+                            })
+                            continue
+                        else:  # multiple / ask / travel_plan
+                            lead_candidates = _scene_alternatives(
+                                _display_scene_values(scene_npcs),
+                                _display_scene_values(scene_items),
+                                _display_scene_values(location_features),
+                                time_phase,
                             )
-                        except Exception:
-                            setting_profile = {
-                                "kind": kind_value,
-                                "primary_city": primary_city,
-                                "region": region,
-                                "country": country,
-                                "lat": lat,
-                                "lon": lon,
-                                "label": getattr(anchor, "label", None),
-                            }
-
-                        # Call resolver (support different signatures)
-                        try:
-                            result = await resolve_real(query, setting_profile, setting_context)  # type: ignore
-                        except TypeError:
-                            result = await resolve_real(query, setting_profile)  # type: ignore
-
-                        status = getattr(result, "status", None) or (result.get("status") if isinstance(result, dict) else None)
-                        if status in {"exact", "multiple", "ask", "travel_plan"}:
-                            message = getattr(result, "message", None) or (result.get("message") if isinstance(result, dict) else None)
-                            choices = getattr(result, "choices", None) or (result.get("choices") if isinstance(result, dict) else None)
-                            canonical_ops = getattr(result, "canonical_ops", None) or (result.get("canonical_ops") if isinstance(result, dict) else None)
-
-                            logger.info(
-                                f"[FEASIBILITY] Location resolver found results for {query_text!r} -> status={status}"
-                            )
-
-                            if status == "exact":
-                                per_intent.append({
-                                    "feasible": True,
-                                    "strategy": "allow",
-                                    "categories": sorted(cats),
-                                    "location_resolved": True,
-                                    "resolver_result": canonical_ops,
-                                })
-                                continue
-                            else:  # multiple / ask / travel_plan
-                                lead_candidates = _scene_alternatives(
-                                    _display_scene_values(scene_npcs),
-                                    _display_scene_values(scene_items),
-                                    _display_scene_values(location_features),
-                                    time_phase,
-                                )
-                                per_intent.append({
-                                    "feasible": False,
-                                    "strategy": "ask",
-                                    "violations": [],
-                                    "narrator_guidance": message or "Which one do you mean?",
-                                    "suggested_alternatives": (choices or lead_candidates)[:3],
-                                    "categories": sorted(cats),
-                                    "location_resolved": True,
-                                })
-                                any_ask = True
-                                continue
+                            per_intent.append({
+                                "feasible": False,
+                                "strategy": "ask",
+                                "violations": [],
+                                "narrator_guidance": message or "Which one do you mean?",
+                                "suggested_alternatives": (choices or lead_candidates)[:3],
+                                "categories": sorted(cats),
+                                "location_resolved": True,
+                            })
+                            any_ask = True
+                            continue
                 except Exception as e:
                     logger.debug(f"[FEASIBILITY] Location resolver failed softly: {e}")
             
