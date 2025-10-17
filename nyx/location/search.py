@@ -6,6 +6,8 @@ import httpx
 
 from .anchors import GeoAnchor, build_nominatim_params_for_poi, derive_geo_anchor, nearest_airport_label
 from .config import DEFAULT_LOCATION_SETTINGS as _LS
+from .nominatim_map import nominatim_to_admin_path
+from .providers.gazetteer import candidate_from_nominatim
 from .query import PlaceQuery
 from .types import (
     Anchor,
@@ -103,33 +105,6 @@ def _address_from_tags(tags: Dict[str, Any]) -> Dict[str, Any]:
 
 # ---------- Candidate constructors ----------
 
-def _candidate_from_nominatim(n: Dict[str, Any]) -> Candidate:
-    name = n.get("name") or (n.get("display_name", "").split(",")[0].strip() or "Unknown")
-    lat = float(n["lat"])
-    lon = float(n["lon"])
-    cat = n.get("category") or n.get("type")
-    addr = n.get("address") or {}
-    imp = float(n.get("importance", 0) or 0)
-    place = Place(
-        name=name,
-        level="venue",
-        key=str(n.get("place_id") or n.get("osm_id") or name.lower()),
-        lat=lat,
-        lon=lon,
-        address=addr,
-        meta={
-            "category": cat,
-            "source": "nominatim",
-            "importance": imp,
-            "display_name": n.get("display_name"),
-        },
-    )
-    return Candidate(
-        place=place,
-        confidence=min(0.99, 0.5 + imp / 2),
-        raw=n,
-    )
-
 
 def _candidate_from_overpass(el: Dict[str, Any]) -> Optional[Candidate]:
     tags = el.get("tags") or {}
@@ -150,6 +125,9 @@ def _candidate_from_overpass(el: Dict[str, Any]) -> Optional[Candidate]:
         if key in tags:
             cat = f"{key}:{tags.get(key)}"; break
     addr = _address_from_tags(tags)
+    normalized_path = nominatim_to_admin_path(addr)
+    if normalized_path:
+        addr["_normalized_admin_path"] = normalized_path
     conf = 0.75 if tags.get("brand") else 0.60
     place = Place(
         name=name,
@@ -175,7 +153,12 @@ async def _nominatim_search(poi: str, anchor: GeoAnchor, *, km: float, limit: in
         r = await client.get("https://nominatim.openstreetmap.org/search", params=params, headers=headers)
         r.raise_for_status()
         data = r.json() or []
-        return [_candidate_from_nominatim(x) for x in (data if isinstance(data, list) else [])]
+        cands: List[Candidate] = []
+        for item in data if isinstance(data, list) else []:
+            cand = candidate_from_nominatim(item)
+            if cand:
+                cands.append(cand)
+        return cands
 
 def _overpass_brand_block(poi_norm: str) -> str:
     rx = poi_norm.replace('"', '\\"')
