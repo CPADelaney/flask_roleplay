@@ -46,6 +46,25 @@ ROLEPLAY_ONLY_DEFAULT: Set[str] = {
     "yes",
 }
 
+MODE_POLICY_TRUE_ALIASES: Set[str] = ROLEPLAY_ONLY_DEFAULT | {
+    "roleplay_only",
+    "roleplay-only",
+    "roleplayonly",
+}
+
+MODE_POLICY_FALSE_ALIASES: Set[str] = {
+    "0",
+    "allow",
+    "allowed",
+    "disabled",
+    "false",
+    "no",
+    "off",
+    "open",
+    "permissive",
+    "relaxed",
+}
+
 OOC_PREFIX_MARKERS: Set[str] = {
     "[ooc]",
     "(ooc)",
@@ -107,6 +126,51 @@ BRAND_TERMS: Set[str] = {
     "youtube",
     "zoom",
 }
+
+
+def _normalize_mode_value(value: Any) -> Optional[str]:
+    """Normalize a stored mode string into a canonical representation."""
+
+    if isinstance(value, str):
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not normalized:
+            return None
+        if normalized in {"diegetic", "in_character", "in-character", "ic"}:
+            return "diegetic"
+        if normalized in {"ooc", "out_of_character", "out-of-character", "outofcharacter"}:
+            return "ooc"
+    elif isinstance(value, bool):
+        return "diegetic" if value else "ooc"
+
+    return None
+
+
+def _normalize_mode_policy_value(value: Any) -> Optional[str]:
+    """Normalize a stored mode policy value to a canonical label."""
+
+    if isinstance(value, bool):
+        return "roleplay_only" if value else "open"
+
+    if isinstance(value, (int, float)):
+        return "roleplay_only" if value else "open"
+
+    if isinstance(value, str):
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not normalized:
+            return None
+
+        if normalized in MODE_POLICY_TRUE_ALIASES:
+            return "roleplay_only"
+
+        if normalized in MODE_POLICY_FALSE_ALIASES:
+            return "open"
+
+        if normalized in {"hybrid", "mixed"}:
+            return "mixed"
+
+        return normalized
+
+    return None
 
 
 IMPOSSIBLE_DEFAULT: Set[str] = {
@@ -3020,6 +3084,8 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         "stat_modifiers": {},
         "known_location_names": [],
         "world_model": {},
+        "mode": None,
+        "mode_policy": None,
     }
     
     async with get_db_connection_context() as conn:
@@ -3030,7 +3096,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             'CurrentSetting', 'SettingStatModifiers', 'EnvironmentHistory',
             'ScenarioName', 'CurrentLocation', 'CurrentTime', 'InfrastructureFlags',
             'EconomyFlags', 'TechnologyLevel', 'SettingEra',
-            'WorldModel'
+            'WorldModel', 'RoleplayMode', 'ModePolicy'
         ]
         
         setting_data = await conn.fetch("""
@@ -3123,6 +3189,14 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                     parsed_world = None
                 if isinstance(parsed_world, dict):
                     world_model_raw = parsed_world
+            elif key == 'RoleplayMode':
+                normalized_mode = _normalize_mode_value(value)
+                if normalized_mode:
+                    context["mode"] = normalized_mode
+            elif key == 'ModePolicy':
+                normalized_policy = _normalize_mode_policy_value(value)
+                if normalized_policy:
+                    context["mode_policy"] = normalized_policy
 
         if world_type_value:
             context["type"] = world_type_value
@@ -3159,6 +3233,11 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             )
         )
         context["caps_loaded"] = caps_loaded_flag
+
+        normalized_mode_policy = _normalize_mode_policy_value(context.get("mode_policy"))
+        if normalized_mode_policy is None:
+            normalized_mode_policy = "roleplay_only"
+        context["mode_policy"] = normalized_mode_policy
 
         # Auto-detect if not set
         if context["type"] == "unknown":
