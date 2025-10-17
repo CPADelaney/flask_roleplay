@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .types import Anchor, Scope
+from .types import Anchor, Scope, DEFAULT_REALM
 
 _ALLOWED_POLICIES = {"allow", "ask", "deny"}
 
@@ -125,7 +125,7 @@ def resolver_policy_for_context(
     if default_galaxy is None:
         default_galaxy = "Milky Way" if _infer_scope(anchor, setting_context) == "real" else "Unknown Galaxy"
     if default_realm is None:
-        default_realm = "physical" if _infer_scope(anchor, setting_context) == "real" else "fictional"
+        default_realm = DEFAULT_REALM if _infer_scope(anchor, setting_context) == "real" else "fictional"
 
     return {
         "mint_policy": mint_policy,

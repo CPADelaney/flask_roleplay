@@ -1,8 +1,11 @@
 # nyx/location/types.py
 from __future__ import annotations
 
+import os
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
+
+DEFAULT_REALM = os.getenv("NYX_DEFAULT_REALM", "Prime Material")
 
 Scope = Literal["real", "fictional", "hybrid"]
 
@@ -145,7 +148,7 @@ class Location:
     country: Optional[str] = None
     planet: str = "Earth"
     galaxy: str = "Milky Way"
-    realm: str = "physical"
+    realm: Optional[str] = DEFAULT_REALM
     lat: Optional[float] = None
     lon: Optional[float] = None
     is_fictional: bool = False
@@ -178,7 +181,8 @@ class Location:
         self.country = self._clean_optional_str(self.country)
         self.planet = self._clean_required_str(self.planet, default="Earth")
         self.galaxy = self._clean_required_str(self.galaxy, default="Milky Way")
-        self.realm = self._clean_required_str(self.realm, default="physical")
+        realm_value = self._clean_optional_str(self.realm)
+        self.realm = realm_value or DEFAULT_REALM
         self.lat = self._coerce_float(self.lat)
         self.lon = self._coerce_float(self.lon)
         self.is_fictional = bool(self.is_fictional)
@@ -312,6 +316,7 @@ class Location:
 
 __all__ = [
     "Anchor",
+    "DEFAULT_REALM",
     "Candidate",
     "Location",
     "Place",

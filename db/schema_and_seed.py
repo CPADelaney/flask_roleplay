@@ -366,7 +366,7 @@ async def create_all_tables():
                     district_type TEXT,
                     planet TEXT NOT NULL DEFAULT 'Earth',
                     galaxy TEXT NOT NULL DEFAULT 'Milky Way',
-                    realm TEXT NOT NULL DEFAULT 'physical',
+                    realm TEXT DEFAULT 'Prime Material',
                     lat DOUBLE PRECISION,
                     lon DOUBLE PRECISION,
                     is_fictional BOOLEAN NOT NULL DEFAULT FALSE,
@@ -3090,7 +3090,7 @@ async def create_all_tables():
                 ''',
                 '''
                 ALTER TABLE Locations
-                ADD COLUMN IF NOT EXISTS realm TEXT NOT NULL DEFAULT 'physical';
+                ADD COLUMN IF NOT EXISTS realm TEXT DEFAULT 'Prime Material';
                 ''',
                 '''
                 ALTER TABLE Locations
@@ -3164,9 +3164,12 @@ async def create_all_tables():
                           AND table_name = 'locations'
                           AND column_name = 'realm'
                     ) THEN
-                        UPDATE Locations SET realm = COALESCE(realm, 'physical');
-                        ALTER TABLE Locations ALTER COLUMN realm SET DEFAULT 'physical';
-                        ALTER TABLE Locations ALTER COLUMN realm SET NOT NULL;
+                        UPDATE Locations
+                        SET realm = 'Prime Material'
+                        WHERE realm IS NULL
+                           OR btrim(realm) = ''
+                           OR lower(realm) = 'physical';
+                        ALTER TABLE Locations ALTER COLUMN realm SET DEFAULT 'Prime Material';
                     END IF;
                     IF EXISTS (
                         SELECT 1 FROM information_schema.columns

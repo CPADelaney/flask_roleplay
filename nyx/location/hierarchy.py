@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import asyncpg
 
 from .nominatim_map import nominatim_to_admin_path
-from .types import Anchor, Candidate, Location, PlaceEdge, Scope
+from .types import Anchor, Candidate, Location, PlaceEdge, Scope, DEFAULT_REALM
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -416,7 +416,7 @@ async def generate_and_persist_hierarchy(
 
     realm = meta.get("realm") or (reuse_row.get("realm") if reuse_row else None) or default_realm
     if not realm:
-        realm = "physical" if scope == "real" else "fictional"
+        realm = DEFAULT_REALM if scope == "real" else "fictional"
 
     meta.setdefault("planet", planet)
     meta.setdefault("galaxy", galaxy)

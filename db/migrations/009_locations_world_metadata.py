@@ -35,7 +35,7 @@ ADD_REQUIRED_COLUMNS = [
     """,
     """
     ALTER TABLE Locations
-    ADD COLUMN IF NOT EXISTS realm TEXT NOT NULL DEFAULT 'physical';
+    ADD COLUMN IF NOT EXISTS realm TEXT DEFAULT 'Prime Material';
     """,
     """
     ALTER TABLE Locations
@@ -116,9 +116,12 @@ BEGIN
           AND table_name = 'locations'
           AND column_name = 'realm'
     ) THEN
-        UPDATE Locations SET realm = COALESCE(realm, 'physical');
-        ALTER TABLE Locations ALTER COLUMN realm SET DEFAULT 'physical';
-        ALTER TABLE Locations ALTER COLUMN realm SET NOT NULL;
+        UPDATE Locations
+        SET realm = 'Prime Material'
+        WHERE realm IS NULL
+           OR btrim(realm) = ''
+           OR lower(realm) = 'physical';
+        ALTER TABLE Locations ALTER COLUMN realm SET DEFAULT 'Prime Material';
     END IF;
 
     IF EXISTS (
@@ -137,7 +140,7 @@ END $$;
 
 BACKFILL_NOTE = (
     "Default world metadata now backfills existing Locations rows. Review any non-Earth "
-    "or non-physical settings and update their planet/galaxy/realm values manually."
+    "or non-Prime Material settings and update their planet/galaxy/realm values manually."
 )
 
 
