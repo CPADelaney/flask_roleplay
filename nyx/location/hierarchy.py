@@ -462,12 +462,44 @@ async def generate_and_persist_hierarchy(
     meta.setdefault("galaxy", galaxy)
     meta.setdefault("realm", realm)
 
+    anchor_hints: Dict[str, Any] = {}
+    if anchor and isinstance(anchor.hints, dict):
+        anchor_hints = anchor.hints
+
+    anchor_geo = anchor_hints.get("geo_anchor") if isinstance(anchor_hints, dict) else None
+    anchor_district_hint: Optional[str] = None
+    if anchor_geo is not None:
+        anchor_district_hint = getattr(anchor_geo, "neighborhood", None) or getattr(anchor_geo, "district", None)
+    if not anchor_district_hint and anchor_hints:
+        hint_value = anchor_hints.get("district") or anchor_hints.get("neighborhood")
+        if isinstance(hint_value, str):
+            anchor_district_hint = hint_value
+    if not anchor_district_hint and anchor and anchor.focus and anchor.focus.meta:
+        focus_meta = anchor.focus.meta
+        anchor_district_hint = focus_meta.get("district") or focus_meta.get("neighborhood")
+
+    normalized_district = _normalize_location_name(district) if district else None
+    normalized_anchor_district = (
+        _normalize_location_name(anchor_district_hint) if anchor_district_hint else None
+    )
+    same_district_as_anchor = bool(
+        normalized_district and normalized_anchor_district == normalized_district
+    )
+
     base_lat = candidate.place.lat
     base_lon = candidate.place.lon
     if base_lat is None and anchor and anchor.lat is not None:
         base_lat = anchor.lat
     if base_lon is None and anchor and anchor.lon is not None:
         base_lon = anchor.lon
+    if base_lat is None and anchor_geo is not None:
+        geo_lat = getattr(anchor_geo, "lat", None)
+        if geo_lat is not None:
+            base_lat = geo_lat
+    if base_lon is None and anchor_geo is not None:
+        geo_lon = getattr(anchor_geo, "lon", None)
+        if geo_lon is not None:
+            base_lon = geo_lon
 
     if is_fictional_branch:
         seed_base = f"{user_id}:{conversation_id}:{normalized_name}"
@@ -478,8 +510,45 @@ async def generate_and_persist_hierarchy(
             lon_rng = random.Random(f"{seed_base}:lon")
             base_lon = base_lon + lon_rng.uniform(-0.02, 0.02)
 
-    lat = round(base_lat, 6) if base_lat is not None else None
-    lon = round(base_lon, 6) if base_lon is not None else None
+    center_lat: Optional[float] = None
+    center_lon: Optional[float] = None
+    if normalized_district:
+        center_base_lat: Optional[float] = None
+        center_base_lon: Optional[float] = None
+
+        if anchor and anchor.lat is not None and anchor.lon is not None:
+            center_base_lat = anchor.lat
+            center_base_lon = anchor.lon
+        elif anchor_geo is not None:
+            geo_lat = getattr(anchor_geo, "lat", None)
+            geo_lon = getattr(anchor_geo, "lon", None)
+            if geo_lat is not None and geo_lon is not None:
+                center_base_lat = geo_lat
+                center_base_lon = geo_lon
+        elif base_lat is not None and base_lon is not None:
+            center_base_lat = base_lat
+            center_base_lon = base_lon
+
+        if center_base_lat is not None and center_base_lon is not None:
+            jitter_scale = 0.0 if same_district_as_anchor else 0.005
+            center_seed = f"{conversation_id}:{normalized_district}:center"
+            center_rng = random.Random(center_seed)
+            lat_jitter = center_rng.uniform(-jitter_scale, jitter_scale) if jitter_scale else 0.0
+            lon_jitter = center_rng.uniform(-jitter_scale, jitter_scale) if jitter_scale else 0.0
+            center_lat = center_base_lat + lat_jitter
+            center_lon = center_base_lon + lon_jitter
+            meta.setdefault("district_center", {"lat": round(center_lat, 6), "lon": round(center_lon, 6)})
+
+    if center_lat is not None and center_lon is not None:
+        offset_seed = f"{conversation_id}:{normalized_name}:offset"
+        offset_rng = random.Random(offset_seed)
+        lat_offset = offset_rng.uniform(-0.001, 0.001)
+        lon_offset = offset_rng.uniform(-0.001, 0.001)
+        lat = round(center_lat + lat_offset, 6)
+        lon = round(center_lon + lon_offset, 6)
+    else:
+        lat = round(base_lat, 6) if base_lat is not None else None
+        lon = round(base_lon, 6) if base_lon is not None else None
 
     candidate.place.lat = lat
     candidate.place.lon = lon

@@ -1,3 +1,4 @@
+import random
 from collections import deque
 from pathlib import Path
 import sys
@@ -7,7 +8,8 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from nyx.location import hierarchy as location_hierarchy
-from nyx.location.types import Candidate, Place, DEFAULT_REALM
+from nyx.location.anchors import GeoAnchor
+from nyx.location.types import Anchor, Candidate, Place, DEFAULT_REALM
 
 
 class StubConnection:
@@ -110,30 +112,7 @@ class StubConnection:
         return record
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-@pytest.mark.anyio
-async def test_region_isolated_between_cities(monkeypatch):
-    connection = StubConnection(
-        city_rows=deque([None, None]),
-        fallback_rows=deque(
-            [
-                None,
-                {
-                    "city": "Alpha City",
-                    "region": "North Province",
-                    "country": "Freedonia",
-                    "planet": "Earth",
-                    "galaxy": "Milky Way",
-                    "realm": DEFAULT_REALM,
-                },
-            ]
-        ),
-    )
-
+def _install_fake_assign_and_location(monkeypatch):
     async def fake_assign_hierarchy(conn, candidate, **kwargs):
         candidate.place.meta.setdefault("place_key", f"place::{candidate.place.name}")
         return {"chain": [], "leaf": {"id": 101}, "world_name": "Earth"}
@@ -169,6 +148,32 @@ async def test_region_isolated_between_cities(monkeypatch):
         return cls(**data)
 
     monkeypatch.setattr(location_hierarchy.Location, "from_record", classmethod(fake_from_record))
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_region_isolated_between_cities(monkeypatch):
+    connection = StubConnection(
+        city_rows=deque([None, None]),
+        fallback_rows=deque(
+            [
+                None,
+                {
+                    "city": "Alpha City",
+                    "region": "North Province",
+                    "country": "Freedonia",
+                    "planet": "Earth",
+                    "galaxy": "Milky Way",
+                    "realm": DEFAULT_REALM,
+                },
+            ]
+        ),
+    )
+    _install_fake_assign_and_location(monkeypatch)
 
     candidate_alpha = Candidate(
         place=Place(
@@ -218,6 +223,146 @@ async def test_region_isolated_between_cities(monkeypatch):
     assert second_location.region is None
     assert second_location.country is None
     assert connection.inserted_rows[0]["region"] == "North Province"
+
+
+@pytest.mark.anyio
+async def test_district_matches_anchor_gets_seeded_offset(monkeypatch):
+    _install_fake_assign_and_location(monkeypatch)
+
+    connection = StubConnection(city_rows=deque([None, None]), fallback_rows=deque([None, None]))
+
+    anchor_geo = GeoAnchor(lat=37.7749, lon=-122.4194, neighborhood="Downtown", city="San Francisco")
+    anchor = Anchor(
+        scope="real",
+        lat=37.7749,
+        lon=-122.4194,
+        primary_city="San Francisco",
+        hints={"geo_anchor": anchor_geo},
+    )
+
+    candidate = Candidate(
+        place=Place(
+            name="Downtown Cafe",
+            level="venue",
+            address={"_normalized_admin_path": {"city": "San Francisco", "district": "Downtown"}},
+            meta={"display_name": "Downtown Cafe"},
+        )
+    )
+
+    location = await location_hierarchy.generate_and_persist_hierarchy(
+        connection,
+        user_id=5,
+        conversation_id=99,
+        candidate=candidate,
+        scope="real",
+        anchor=anchor,
+    )
+
+    normalized_name = location_hierarchy._normalize_location_name(location.location_name)
+    rng = random.Random(f"99:{normalized_name}:offset")
+    lat_offset = rng.uniform(-0.001, 0.001)
+    lon_offset = rng.uniform(-0.001, 0.001)
+    expected_lat = round(anchor.lat + lat_offset, 6)
+    expected_lon = round(anchor.lon + lon_offset, 6)
+
+    assert connection.inserted_rows[-1]["lat"] == expected_lat
+    assert connection.inserted_rows[-1]["lon"] == expected_lon
+    assert candidate.place.meta.get("district_center") == {
+        "lat": round(anchor.lat, 6),
+        "lon": round(anchor.lon, 6),
+    }
+
+
+@pytest.mark.anyio
+async def test_new_district_mints_center_from_anchor(monkeypatch):
+    _install_fake_assign_and_location(monkeypatch)
+
+    connection = StubConnection(
+        city_rows=deque([None, None, None, None]),
+        fallback_rows=deque([None, None]),
+    )
+
+    anchor_geo = GeoAnchor(lat=34.0522, lon=-118.2437, city="Los Angeles")
+    anchor = Anchor(
+        scope="real",
+        lat=34.0522,
+        lon=-118.2437,
+        primary_city="Los Angeles",
+        hints={"geo_anchor": anchor_geo},
+    )
+
+    display_name = "Harbor Market"
+    district_name = "Harbor District"
+    candidate = Candidate(
+        place=Place(
+            name=display_name,
+            level="venue",
+            address={
+                "_normalized_admin_path": {
+                    "city": "Los Angeles",
+                    "district": district_name,
+                }
+            },
+            meta={"display_name": display_name},
+        )
+    )
+
+    location = await location_hierarchy.generate_and_persist_hierarchy(
+        connection,
+        user_id=8,
+        conversation_id=200,
+        candidate=candidate,
+        scope="real",
+        anchor=anchor,
+    )
+
+    normalized_district = location_hierarchy._normalize_location_name(district_name)
+    center_rng = random.Random(f"200:{normalized_district}:center")
+    lat_center_offset = center_rng.uniform(-0.005, 0.005)
+    lon_center_offset = center_rng.uniform(-0.005, 0.005)
+    expected_center_lat = anchor.lat + lat_center_offset
+    expected_center_lon = anchor.lon + lon_center_offset
+
+    normalized_name = location_hierarchy._normalize_location_name(location.location_name)
+    offset_rng = random.Random(f"200:{normalized_name}:offset")
+    lat_offset = offset_rng.uniform(-0.001, 0.001)
+    lon_offset = offset_rng.uniform(-0.001, 0.001)
+    expected_lat = round(expected_center_lat + lat_offset, 6)
+    expected_lon = round(expected_center_lon + lon_offset, 6)
+
+    assert connection.inserted_rows[-1]["lat"] == expected_lat
+    assert connection.inserted_rows[-1]["lon"] == expected_lon
+    assert candidate.place.meta.get("district_center") == {
+        "lat": round(expected_center_lat, 6),
+        "lon": round(expected_center_lon, 6),
+    }
+
+    # Stable results on repeated invocation with the same identifiers.
+    candidate_repeat = Candidate(
+        place=Place(
+            name=display_name,
+            level="venue",
+            address={
+                "_normalized_admin_path": {
+                    "city": "Los Angeles",
+                    "district": district_name,
+                }
+            },
+            meta={"display_name": display_name},
+        )
+    )
+
+    await location_hierarchy.generate_and_persist_hierarchy(
+        connection,
+        user_id=8,
+        conversation_id=200,
+        candidate=candidate_repeat,
+        scope="real",
+        anchor=anchor,
+    )
+
+    assert connection.inserted_rows[-1]["lat"] == expected_lat
+    assert connection.inserted_rows[-1]["lon"] == expected_lon
     assert connection.inserted_rows[1]["region"] is None
     # ensure we attempted to reuse context but did not propagate hierarchy data
     assert len(connection.city_query_args) == 2
