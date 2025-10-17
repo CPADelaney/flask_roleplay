@@ -1433,7 +1433,7 @@ async def _resolve_location_candidate(
         if derived:
             use_near = derived
 
-    score = float(await plausibility_score(original, near=near_hint))
+    score = float(await plausibility_score(original, near=use_near))
     minted = False
 
     decision = "deny"
