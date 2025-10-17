@@ -28,13 +28,15 @@ from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
 from nyx.geo.toponym import plausibility_score
 from nyx.location.config import LocationSettings
-from nyx.location.hierarchy import assign_hierarchy
+from nyx.location.hierarchy import assign_hierarchy, get_or_create_location
 from nyx.location.policies import resolver_policy_for_context
 from nyx.location.types import (
     Anchor,
     Candidate,
     Location,
+    Place,
     ResolveResult,
+    Scope,
     STATUS_ASK,
     STATUS_EXACT,
     STATUS_MULTIPLE,
@@ -1403,6 +1405,16 @@ def _coerce_resolve_result(result: Any) -> Optional[ResolveResult]:
     anchor = result.get("anchor") if isinstance(result.get("anchor"), Anchor) else None
     operations = result.get("operations") or result.get("canonical_ops") or []
 
+    location_obj: Optional[Location] = None
+    location_payload = result.get("location")
+    if isinstance(location_payload, Location):
+        location_obj = location_payload
+    elif isinstance(location_payload, dict):
+        try:
+            location_obj = Location.from_record(location_payload)
+        except Exception:
+            location_obj = None
+
     return ResolveResult(
         status=result.get("status"),
         message=result.get("message"),
@@ -1412,45 +1424,241 @@ def _coerce_resolve_result(result: Any) -> Optional[ResolveResult]:
         anchor=anchor,
         scope=result.get("scope"),
         errors=list(result.get("errors") or []),
+        location=location_obj,
     )
 
 
-async def _persist_minted_location_binding(
-    normalized: Optional[str],
-    display_name: Optional[str],
+def _scope_from_resolver_decision(decision: Dict[str, Any]) -> Scope:
+    branch = str(decision.get("branch") or "").lower()
+    allow_fictional = bool(decision.get("allow_fictional"))
+    is_real_branch = bool(decision.get("is_real_branch"))
+
+    if "hybrid" in branch:
+        return "hybrid"
+    if is_real_branch:
+        return "real"
+    if any(token in branch for token in ("fiction", "fantasy", "sci", "space")):
+        return "fictional"
+    if allow_fictional and not is_real_branch:
+        return "fictional"
+    return "real"
+
+
+def _extract_coordinates(payload: Any) -> Tuple[Optional[float], Optional[float]]:
+    if not isinstance(payload, dict):
+        return None, None
+
+    def _coerce(value: Any) -> Optional[float]:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    lat = None
+    lon = None
+
+    for key in ("lat", "latitude"):
+        lat = _coerce(payload.get(key))
+        if lat is not None:
+            break
+    for key in ("lon", "long", "longitude"):
+        lon = _coerce(payload.get(key))
+        if lon is not None:
+            break
+
+    coords = payload.get("coords") or payload.get("coordinates")
+    if isinstance(coords, dict):
+        if lat is None:
+            for key in ("lat", "latitude"):
+                lat = _coerce(coords.get(key))
+                if lat is not None:
+                    break
+        if lon is None:
+            for key in ("lon", "long", "longitude"):
+                lon = _coerce(coords.get(key))
+                if lon is not None:
+                    break
+
+    return lat, lon
+
+
+def _anchor_from_setting_context(
+    setting_context: Optional[Dict[str, Any]],
     *,
-    user_id: Optional[int],
-    conversation_id: Optional[int],
-) -> None:
-    if user_id is None or conversation_id is None:
-        return
+    scope: Scope,
+    label: Optional[str] = None,
+) -> Optional[Anchor]:
+    if not isinstance(setting_context, dict):
+        return None
 
-    normalized_name = _normalize_location_phrase(normalized or display_name)
-    if not normalized_name:
-        return
+    location_payload = setting_context.get("location") or {}
+    hints = _extract_geo_hints_from_location(location_payload)
+    lat, lon = _extract_coordinates(location_payload)
 
-    try:
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """
-                INSERT INTO Locations (user_id, conversation_id, location_name)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, conversation_id, location_name)
-                DO NOTHING
-                """,
-                user_id,
-                conversation_id,
-                normalized_name,
-            )
-    except Exception:
-        logger.exception(
-            "Failed to persist minted location binding",
-            extra={
-                "user_id": user_id,
-                "conversation_id": conversation_id,
-                "location_name": normalized_name,
-            },
+    label_value = (
+        label
+        or location_payload.get("display_name")
+        or location_payload.get("name")
+        or location_payload.get("label")
+        or setting_context.get("setting_name")
+        or None
+    )
+
+    world_name: Optional[str] = None
+    search_payloads: List[Dict[str, Any]] = []
+    world_model = setting_context.get("world_model")
+    if isinstance(world_model, dict):
+        search_payloads.append(world_model)
+    for key in ("world", "world_meta", "world_info"):
+        payload = setting_context.get(key)
+        if isinstance(payload, dict):
+            search_payloads.append(payload)
+
+    for payload in search_payloads:
+        for candidate_key in ("world_name", "name", "label", "title"):
+            value = payload.get(candidate_key)
+            if isinstance(value, str) and value.strip():
+                world_name = value.strip()
+                break
+        if world_name:
+            break
+
+    focus: Optional[Place] = None
+    if hints.get("city"):
+        focus = Place(
+            name=hints["city"],
+            level="city",
+            lat=lat,
+            lon=lon,
+            address={k: v for k, v in hints.items() if v},
+            meta={"source": "feasibility_anchor"},
         )
+
+    hints_payload = {
+        "location": location_payload,
+        "world_model": world_model,
+    }
+
+    return Anchor(
+        scope=scope,
+        focus=focus,
+        label=label_value,
+        lat=lat,
+        lon=lon,
+        primary_city=hints.get("city"),
+        region=hints.get("region"),
+        country=hints.get("country"),
+        world_name=world_name,
+        hints=hints_payload,
+    )
+
+
+def _build_minted_candidate(
+    name: str,
+    normalized: Optional[str],
+    decision: Dict[str, Any],
+    setting_context: Optional[Dict[str, Any]],
+    *,
+    anchor: Optional[Anchor],
+    scope: Scope,
+) -> Candidate:
+    token = (normalized or name or "").strip().lower()
+
+    def _has_any(markers: Iterable[str]) -> bool:
+        return any(marker in token for marker in markers)
+
+    if _has_any({"district", "quarter", "ward", "borough", "neighborhood"}):
+        level = "district"
+    elif _has_any({"city", "town", "village", "metropolis", "capital"}):
+        level = "city"
+    elif _has_any({"region", "province", "state", "kingdom", "realm", "empire", "territory"}):
+        level = "region"
+    else:
+        level = "venue"
+
+    hints = (
+        _extract_geo_hints_from_location(setting_context.get("location"))
+        if isinstance(setting_context, dict)
+        else {"district": None, "city": None, "region": None, "country": None}
+    )
+
+    address: Dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("district", hints.get("district")),
+            ("city", hints.get("city")),
+            ("region", hints.get("region")),
+            ("country", hints.get("country")),
+        )
+        if value
+    }
+
+    if anchor:
+        if anchor.primary_city and "city" not in address:
+            address["city"] = anchor.primary_city
+        if anchor.region and "region" not in address:
+            address["region"] = anchor.region
+        if anchor.country and "country" not in address:
+            address["country"] = anchor.country
+
+    lat, lon = None, None
+    location_payload = setting_context.get("location") if isinstance(setting_context, dict) else {}
+    loc_lat, loc_lon = _extract_coordinates(location_payload)
+    if anchor and anchor.lat is not None:
+        lat = anchor.lat
+    elif loc_lat is not None:
+        lat = loc_lat
+    if anchor and anchor.lon is not None:
+        lon = anchor.lon
+    elif loc_lon is not None:
+        lon = loc_lon
+
+    key_candidate = (normalized or name or "").strip().lower().replace(" ", "_")
+    place_key = key_candidate or None
+
+    meta: Dict[str, Any] = {
+        "source": "feasibility_resolver",
+        "display_name": name,
+        "resolver_branch": decision.get("branch"),
+        "resolver_score": decision.get("score"),
+        "minted": True,
+        "minted_at": datetime.utcnow().isoformat(),
+        "category": decision.get("kind"),
+        "normalized_token": normalized,
+    }
+
+    if anchor and anchor.world_name:
+        meta["world_name"] = anchor.world_name
+    if scope != "real":
+        meta["is_fictional_branch"] = True
+    if isinstance(location_payload, dict):
+        parent_name = (
+            location_payload.get("name")
+            or location_payload.get("display_name")
+            or location_payload.get("label")
+        )
+        if parent_name:
+            meta.setdefault("parent_location", parent_name)
+
+    for key, value in address.items():
+        if value and key not in meta:
+            meta[key] = value
+
+    confidence = float(decision.get("score") or 0.0)
+
+    place = Place(
+        name=name,
+        level=level,  # type: ignore[arg-type]
+        key=place_key,
+        lat=lat,
+        lon=lon,
+        address=address,
+        meta=meta,
+    )
+
+    return Candidate(place=place, confidence=confidence)
 
 
 async def _resolve_location_candidate(
@@ -1569,6 +1777,8 @@ async def _resolve_location_candidate(
         "branch": branch,
         "minted": minted,
         "near_used": use_near,  # helpful for logs
+        "allow_fictional": allow_fictional,
+        "is_real_branch": is_real_branch,
     }
 
     for candidate in filter(None, {normalized, (original or "").strip().lower()}):
@@ -1654,23 +1864,82 @@ async def _find_unresolved_location_targets(
 
         if _is_plausible_location_token(original, resolver_cache):
             if decision.get("minted"):
-                minted_key = decision.get("normalized") or normalized or raw
-                if minted_key:
-                    known_location_tokens.add(minted_key)
                 minted_name = decision.get("token") or original
+                minted_key = decision.get("normalized") or normalized or raw
+                identifiers = [
+                    candidate
+                    for candidate in {minted_name, minted_key}
+                    if candidate
+                ]
+
                 if isinstance(setting_context, dict):
                     known_names = setting_context.setdefault("known_location_names", [])
-                    for candidate in filter(None, {minted_name, minted_key}):
-                        if candidate not in known_names:
-                            known_names.append(candidate)
-                if minted_name and minted_name not in minted_locations:
-                    minted_locations.append(minted_name)
-                await _persist_minted_location_binding(
-                    minted_key,
-                    minted_name,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                )
+                    for candidate_name in identifiers:
+                        if candidate_name not in known_names:
+                            known_names.append(candidate_name)
+
+                for candidate_name in identifiers:
+                    known_location_tokens.add(candidate_name)
+                    if candidate_name not in minted_locations:
+                        minted_locations.append(candidate_name)
+
+                location_obj: Optional[Location] = None
+                candidate_model: Optional[Candidate] = None
+
+                if minted_name and user_id is not None and conversation_id is not None:
+                    scope = _scope_from_resolver_decision(decision)
+                    anchor = _anchor_from_setting_context(
+                        setting_context,
+                        scope=scope,
+                        label=minted_name,
+                    )
+                    policy_meta = resolver_policy_for_context(setting_context, anchor=anchor)
+                    candidate_model = _build_minted_candidate(
+                        minted_name,
+                        minted_key,
+                        decision,
+                        setting_context,
+                        anchor=anchor,
+                        scope=scope,
+                    )
+
+                    try:
+                        async with get_db_connection_context() as conn:
+                            location_obj = await get_or_create_location(
+                                conn,
+                                user_id=int(user_id),
+                                conversation_id=int(conversation_id),
+                                candidate=candidate_model,
+                                scope=scope,
+                                anchor=anchor,
+                                mint_policy=policy_meta.get("mint_policy") if policy_meta else None,
+                                default_planet=policy_meta.get("default_planet") if policy_meta else None,
+                                default_galaxy=policy_meta.get("default_galaxy") if policy_meta else None,
+                                default_realm=policy_meta.get("default_realm") if policy_meta else None,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Failed to mint location hierarchy",
+                            extra={
+                                "user_id": user_id,
+                                "conversation_id": conversation_id,
+                                "minted_name": minted_name,
+                            },
+                        )
+                    else:
+                        decision["location"] = location_obj
+                        decision["candidate"] = candidate_model
+                        if location_obj and location_obj.location_name:
+                            normalized_token = location_obj.location_name
+                            decision["normalized"] = normalized_token
+                            if normalized_token not in minted_locations:
+                                minted_locations.append(normalized_token)
+                            known_location_tokens.add(normalized_token)
+                            if isinstance(setting_context, dict):
+                                known_names = setting_context.setdefault("known_location_names", [])
+                                if normalized_token not in known_names:
+                                    known_names.append(normalized_token)
+                            resolver_cache[normalized_token] = decision
             continue
 
         unresolved_token = (

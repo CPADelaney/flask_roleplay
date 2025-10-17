@@ -38,6 +38,8 @@ def resolver_policy_for_context(
     The response contains:
         ``mint_policy`` – allow/ask/deny for minting fictional places.
         ``default_planet`` – fallback world/planet name when the candidate lacks one.
+        ``default_galaxy`` – fallback galaxy label for fictional scopes.
+        ``default_realm`` – fallback realm or plane label.
         ``allow_fictional`` – whether fictional locations are generally allowed.
     """
 
@@ -92,9 +94,44 @@ def resolver_policy_for_context(
         else:
             default_planet = "Earth"
 
+    default_galaxy: Optional[str] = None
+    default_realm: Optional[str] = None
+
+    search_payloads: list[Dict[str, Any]] = []
+    if isinstance(world_model, dict):
+        search_payloads.append(world_model)
+    if isinstance(setting_context, dict):
+        for key in ("world", "world_meta", "world_info", "meta", "setting_meta"):
+            payload = setting_context.get(key)
+            if isinstance(payload, dict):
+                search_payloads.append(payload)
+
+    for payload in search_payloads:
+        if default_galaxy is None:
+            default_galaxy = _clean(
+                payload.get("galaxy")
+                or payload.get("galaxy_name")
+                or payload.get("stellar_region")
+            )
+        if default_realm is None:
+            default_realm = _clean(
+                payload.get("realm")
+                or payload.get("plane")
+                or payload.get("dimension")
+            )
+        if default_galaxy and default_realm:
+            break
+
+    if default_galaxy is None:
+        default_galaxy = "Milky Way" if _infer_scope(anchor, setting_context) == "real" else "Unknown Galaxy"
+    if default_realm is None:
+        default_realm = "physical" if _infer_scope(anchor, setting_context) == "real" else "fictional"
+
     return {
         "mint_policy": mint_policy,
         "default_planet": default_planet,
+        "default_galaxy": default_galaxy,
+        "default_realm": default_realm,
         "allow_fictional": allow_fictional,
     }
 

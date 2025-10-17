@@ -104,6 +104,7 @@ class ResolveResult:
     anchor: Optional[Anchor] = None
     scope: Optional[Scope] = None
     errors: List[str] = field(default_factory=list)
+    location: Optional["Location"] = None
 
     @property
     def canonical_ops(self) -> List[Dict[str, Any]]:
