@@ -8,6 +8,7 @@ import re
 from typing import Dict, Any, Optional, List
 from db.connection import get_db_connection_context
 from agents import RunContextWrapper
+from nyx.location.types import Location
 
 logger = logging.getLogger(__name__)
 
@@ -404,17 +405,27 @@ class WorldGovernanceMixin:
                 # Location-based restrictions
                 if "location" in (action_details or {}):
                     location = action_details["location"]
-                    location_row = await conn.fetchrow("""
-                        SELECT access_restrictions, local_customs
+                    location_row = await conn.fetchrow(
+                        """
+                        SELECT *
                           FROM Locations
                          WHERE user_id = $1
                            AND conversation_id = $2
                            AND location_name = $3
-                    """, self.user_id, self.conversation_id, location)
-    
+                        """,
+                        self.user_id,
+                        self.conversation_id,
+                        location,
+                    )
+
                     if location_row:
-                        ld = dict(location_row)
-                        customs = ld.get("local_customs") or []
+                        location_obj = Location.from_record(
+                            location_row,
+                            user_id=self.user_id,
+                            conversation_id=self.conversation_id,
+                            location_name=location,
+                        )
+                        customs = location_obj.local_customs or []
                         for custom in customs:
                             if isinstance(custom, str) and action_type.lower() in custom.lower():
                                 return True

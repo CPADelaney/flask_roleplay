@@ -11,6 +11,7 @@ from agents import ModelSettings, RunConfig
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
+from nyx.location.types import Location
 from utils.caching import NPC_CACHE
 
 logger = logging.getLogger(__name__)
@@ -124,13 +125,24 @@ async def get_location_description(ctx) -> str:
         current_location = row["value"]
         
         # Now get the location description
-        location_row = await conn.fetchrow("""
-            SELECT description FROM Locations
+        location_row = await conn.fetchrow(
+            """
+            SELECT *
+            FROM Locations
             WHERE location_name = $1 AND user_id = $2
-        """, current_location, user_id)
-        
+            """,
+            current_location,
+            user_id,
+        )
+
         if location_row and location_row["description"]:
-            return location_row["description"]
+            location_obj = Location.from_record(
+                location_row,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                location_name=current_location,
+            )
+            return location_obj.description
         else:
             logger.warning(
                 "Location description missing for '%s' (user_id=%s conversation_id=%s)",
