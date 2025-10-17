@@ -382,6 +382,51 @@ async def create_all_tables():
                 ON Locations USING hnsw (embedding vector_cosine_ops);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS Places (
+                    id BIGSERIAL PRIMARY KEY,
+                    scope TEXT NOT NULL DEFAULT 'real',
+                    place_key TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    admin_path JSONB,
+                    latitude DOUBLE PRECISION,
+                    longitude DOUBLE PRECISION,
+                    meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_places_level
+                ON Places (level);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_places_scope_level_name
+                ON Places (scope, level, normalized_name);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlaceEdges (
+                    id BIGSERIAL PRIMARY KEY,
+                    parent_id BIGINT NOT NULL REFERENCES Places(id) ON DELETE CASCADE,
+                    child_id BIGINT NOT NULL REFERENCES Places(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    distance_km DOUBLE PRECISION,
+                    meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (parent_id, child_id, kind)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_place_edges_parent
+                ON PlaceEdges (parent_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_place_edges_child
+                ON PlaceEdges (child_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS Events (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
