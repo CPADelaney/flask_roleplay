@@ -33,6 +33,7 @@ from nyx.location.policies import resolver_policy_for_context
 from nyx.location.types import (
     Anchor,
     Candidate,
+    Location,
     ResolveResult,
     STATUS_ASK,
     STATUS_EXACT,
@@ -4032,16 +4033,59 @@ async def _load_current_scene(nyx_ctx: NyxContext) -> Dict:
             """, nyx_ctx.user_id, nyx_ctx.conversation_id)
 
         if location_name:
-            location = await conn.fetchrow("""
-                SELECT notable_features, hidden_aspects, description
+            location_row = await conn.fetchrow(
+                """
+                SELECT *
                 FROM Locations
                 WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
-            """, nyx_ctx.user_id, nyx_ctx.conversation_id, location_name)
-            
-            if location:
-                scene["location_features"] = location.get("notable_features", []) or []
-                scene["location_description"] = location.get("description", "")
-        
+                """,
+                nyx_ctx.user_id,
+                nyx_ctx.conversation_id,
+                location_name,
+            )
+
+            if location_row:
+                location_obj = Location.from_record(
+                    location_row,
+                    user_id=nyx_ctx.user_id,
+                    conversation_id=nyx_ctx.conversation_id,
+                    location_name=location_name,
+                )
+                scene["location_features"] = list(location_obj.notable_features)
+                scene["location_description"] = location_obj.description or ""
+                scene["location_record"] = location_obj.to_dict()
+
+                enriched_details = {
+                    "room": location_obj.room,
+                    "building": location_obj.building,
+                    "district": location_obj.district,
+                    "district_type": location_obj.district_type,
+                    "city": location_obj.city,
+                    "region": location_obj.region,
+                    "country": location_obj.country,
+                    "planet": location_obj.planet,
+                    "galaxy": location_obj.galaxy,
+                    "realm": location_obj.realm,
+                    "lat": location_obj.lat,
+                    "lon": location_obj.lon,
+                    "is_fictional": location_obj.is_fictional,
+                    "cultural_significance": location_obj.cultural_significance,
+                    "economic_importance": location_obj.economic_importance,
+                    "strategic_value": location_obj.strategic_value,
+                    "population_density": location_obj.population_density,
+                    "access_restrictions": list(location_obj.access_restrictions),
+                    "local_customs": list(location_obj.local_customs),
+                    "hidden_aspects": list(location_obj.hidden_aspects),
+                    "controlling_faction": location_obj.controlling_faction,
+                }
+                enriched_details = {k: v for k, v in enriched_details.items() if v not in (None, [])}
+
+                current_details = scene.get("location_details")
+                if isinstance(current_details, dict):
+                    current_details.update(enriched_details)
+                else:
+                    scene["location_details"] = enriched_details
+
         # Get recent narrative
         recent = await conn.fetch("""
             SELECT content FROM messages
