@@ -570,7 +570,59 @@ async def generate_and_persist_hierarchy(
     return persisted
 
 
+async def get_or_create_location(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    conversation_id: int,
+    candidate: Candidate,
+    scope: Scope = "real",
+    anchor: Optional[Anchor] = None,
+    mint_policy: Optional[str] = None,
+    default_planet: Optional[str] = None,
+    default_galaxy: Optional[str] = None,
+    default_realm: Optional[str] = None,
+) -> Location:
+    """Return an existing location or persist a new hierarchy-backed entry."""
+
+    name_source = candidate.place.meta.get("display_name") if isinstance(candidate.place.meta, dict) else None
+    display_name = name_source or candidate.place.name
+    normalized_name = _normalize_location_name(display_name)
+
+    row = await conn.fetchrow(
+        """
+        SELECT *
+        FROM Locations
+        WHERE user_id = $1 AND conversation_id = $2 AND location_name = $3
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        int(user_id),
+        int(conversation_id),
+        normalized_name,
+    )
+    if row:
+        return Location.from_record(row)
+
+    candidate.place.meta = dict(candidate.place.meta or {})
+    candidate.place.meta.setdefault("display_name", display_name)
+
+    return await generate_and_persist_hierarchy(
+        conn,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        candidate=candidate,
+        scope=scope,
+        anchor=anchor,
+        mint_policy=mint_policy,
+        default_planet=default_planet,
+        default_galaxy=default_galaxy,
+        default_realm=default_realm,
+    )
+
+
 __all__ = [
     "assign_hierarchy",
     "generate_and_persist_hierarchy",
+    "get_or_create_location",
 ]

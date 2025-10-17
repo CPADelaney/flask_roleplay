@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from nyx.location.types import Location as LocationModel
 from nyx.nyx_agent import feasibility
 
 
@@ -13,28 +14,25 @@ class _FakeConnection:
     def __init__(self):
         self.locations = []
 
-    async def execute(self, query, *args):
-        if "INSERT INTO Locations" in query:
-            user_id, conversation_id, location_name = args[:3]
-            existing = next(
-                (
-                    row
-                    for row in self.locations
-                    if row["user_id"] == user_id
-                    and row["conversation_id"] == conversation_id
-                    and row["location_name"] == location_name
-                ),
-                None,
+    def upsert_location(self, user_id: int, conversation_id: int, location_name: str) -> None:
+        existing = next(
+            (
+                row
+                for row in self.locations
+                if row["user_id"] == user_id
+                and row["conversation_id"] == conversation_id
+                and row["location_name"] == location_name
+            ),
+            None,
+        )
+        if not existing:
+            self.locations.append(
+                {
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                    "location_name": location_name,
+                }
             )
-            if not existing:
-                self.locations.append(
-                    {
-                        "user_id": user_id,
-                        "conversation_id": conversation_id,
-                        "location_name": location_name,
-                    }
-                )
-        return "OK"
 
     async def fetch(self, query, *args):
         if "SELECT location_name FROM Locations" in query:
@@ -68,6 +66,30 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
         yield fake_conn
 
     monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
+    stored_candidates = []
+
+    async def fake_get_or_create_location(
+        conn,
+        *,
+        user_id,
+        conversation_id,
+        candidate,
+        **_kwargs,
+    ):
+        stored_candidates.append(candidate)
+        normalized_name = feasibility._normalize_location_phrase(candidate.place.name)
+        conn.upsert_location(int(user_id), int(conversation_id), normalized_name)
+        return LocationModel(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            location_name=normalized_name,
+            location_type=candidate.place.level,
+            city=candidate.place.address.get("city"),
+            region=candidate.place.address.get("region"),
+            country=candidate.place.address.get("country"),
+        )
+
+    monkeypatch.setattr(feasibility, "get_or_create_location", fake_get_or_create_location)
 
     minted_call_count = 0
     minted_name = "Shadow Citadel"
@@ -115,8 +137,18 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
     )
 
     assert unresolved == []
+    assert minted_name in setting_context["known_location_names"]
     assert normalized in setting_context["known_location_names"]
     assert any(row["location_name"] == normalized for row in fake_conn.locations)
+
+    resolver_cache = setting_context["location_resolver_cache"]
+    assert normalized in resolver_cache
+    minted_decision = resolver_cache[normalized]
+    assert isinstance(minted_decision.get("location"), LocationModel)
+    assert minted_decision["location"].location_name == normalized
+    assert minted_decision.get("candidate").place.name == minted_name
+
+    assert stored_candidates
 
     context_bundle = await feasibility._load_comprehensive_context(_DummyNyxContext(1, 2))
     assert normalized in context_bundle["known_location_names"]
@@ -144,4 +176,5 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
 
     assert second_unresolved == []
     assert minted_call_count == 1
+    assert len(stored_candidates) == 1
     assert sum(1 for row in fake_conn.locations if row["location_name"] == normalized) == 1
