@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import random
+import json
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import asyncpg
@@ -448,8 +449,37 @@ async def generate_and_persist_hierarchy(
     if lon is not None:
         meta.setdefault("lon", lon)
 
-    open_hours = meta.get("open_hours") if isinstance(meta.get("open_hours"), dict) else None
+    open_hours_raw = meta.get("open_hours")
+    if isinstance(open_hours_raw, dict):
+        open_hours = open_hours_raw
+    elif isinstance(open_hours_raw, str):
+        try:
+            open_hours = json.loads(open_hours_raw)
+        except json.JSONDecodeError:
+            open_hours = open_hours_raw
+    else:
+        open_hours = None
+
     controlling_faction = meta.get("controlling_faction")
+    cultural_significance = meta.get("cultural_significance")
+    economic_importance = meta.get("economic_importance")
+    strategic_value = meta.get("strategic_value")
+    population_density = meta.get("population_density")
+
+    notable_features = meta.get("notable_features")
+    if notable_features is not None and not isinstance(notable_features, (list, tuple, set)):
+        notable_features = [notable_features]
+    hidden_aspects = meta.get("hidden_aspects")
+    if hidden_aspects is not None and not isinstance(hidden_aspects, (list, tuple, set)):
+        hidden_aspects = [hidden_aspects]
+    access_restrictions = meta.get("access_restrictions")
+    if access_restrictions is not None and not isinstance(access_restrictions, (list, tuple, set)):
+        access_restrictions = [access_restrictions]
+    local_customs = meta.get("local_customs")
+    if local_customs is not None and not isinstance(local_customs, (list, tuple, set)):
+        local_customs = [local_customs]
+
+    embedding = meta.get("embedding")
 
     location_kwargs: Dict[str, Any] = {
         "user_id": user_id,
@@ -474,6 +504,25 @@ async def generate_and_persist_hierarchy(
         "open_hours": open_hours,
         "controlling_faction": controlling_faction,
     }
+
+    if cultural_significance is not None:
+        location_kwargs["cultural_significance"] = cultural_significance
+    if economic_importance is not None:
+        location_kwargs["economic_importance"] = economic_importance
+    if strategic_value is not None:
+        location_kwargs["strategic_value"] = strategic_value
+    if population_density is not None:
+        location_kwargs["population_density"] = population_density
+    if notable_features is not None:
+        location_kwargs["notable_features"] = list(notable_features)
+    if hidden_aspects is not None:
+        location_kwargs["hidden_aspects"] = list(hidden_aspects)
+    if access_restrictions is not None:
+        location_kwargs["access_restrictions"] = list(access_restrictions)
+    if local_customs is not None:
+        location_kwargs["local_customs"] = list(local_customs)
+    if embedding is not None:
+        location_kwargs["embedding"] = list(embedding)
 
     location_obj = Location(**location_kwargs)
     payload = location_obj.to_dict()
@@ -501,14 +550,24 @@ async def generate_and_persist_hierarchy(
             lon,
             is_fictional,
             open_hours,
-            controlling_faction
+            controlling_faction,
+            cultural_significance,
+            economic_importance,
+            strategic_value,
+            population_density,
+            notable_features,
+            hidden_aspects,
+            access_restrictions,
+            local_customs,
+            embedding
         )
         VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15,
             $16, $17, $18, $19, $20,
-            $21
+            $21, $22, $23, $24, $25,
+            $26, $27, $28, $29, $30
         )
         ON CONFLICT (user_id, conversation_id, location_name)
         DO UPDATE SET
@@ -529,7 +588,16 @@ async def generate_and_persist_hierarchy(
             lon = COALESCE(EXCLUDED.lon, Locations.lon),
             is_fictional = EXCLUDED.is_fictional,
             open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours),
-            controlling_faction = COALESCE(EXCLUDED.controlling_faction, Locations.controlling_faction)
+            controlling_faction = COALESCE(EXCLUDED.controlling_faction, Locations.controlling_faction),
+            cultural_significance = COALESCE(EXCLUDED.cultural_significance, Locations.cultural_significance),
+            economic_importance = COALESCE(EXCLUDED.economic_importance, Locations.economic_importance),
+            strategic_value = COALESCE(EXCLUDED.strategic_value, Locations.strategic_value),
+            population_density = COALESCE(EXCLUDED.population_density, Locations.population_density),
+            notable_features = COALESCE(EXCLUDED.notable_features, Locations.notable_features),
+            hidden_aspects = COALESCE(EXCLUDED.hidden_aspects, Locations.hidden_aspects),
+            access_restrictions = COALESCE(EXCLUDED.access_restrictions, Locations.access_restrictions),
+            local_customs = COALESCE(EXCLUDED.local_customs, Locations.local_customs),
+            embedding = COALESCE(EXCLUDED.embedding, Locations.embedding)
         RETURNING *
         """,
         payload["user_id"],
@@ -553,6 +621,15 @@ async def generate_and_persist_hierarchy(
         payload.get("is_fictional"),
         payload.get("open_hours"),
         payload.get("controlling_faction"),
+        payload.get("cultural_significance"),
+        payload.get("economic_importance"),
+        payload.get("strategic_value"),
+        payload.get("population_density"),
+        payload.get("notable_features"),
+        payload.get("hidden_aspects"),
+        payload.get("access_restrictions"),
+        payload.get("local_customs"),
+        payload.get("embedding"),
     )
 
     if row is None:
