@@ -67,6 +67,12 @@ def _normalize_location_name(value: str) -> str:
     return normalized or "unknown location"
 
 
+def _serialize_admin_path(admin_path: Optional[Dict[str, str]]) -> str:
+    """Return a deterministic JSON payload for admin path storage."""
+
+    return json.dumps(admin_path or {}, sort_keys=True)
+
+
 async def _get_or_create_place(
     conn: asyncpg.Connection,
     *,
@@ -91,6 +97,8 @@ async def _get_or_create_place(
     place_key = _make_id([scope, level, name, *ordered_path])
     normalized_name = _slugify(name)
 
+    serialized_admin_path = _serialize_admin_path(admin_path)
+
     row = await conn.fetchrow(
         """
         INSERT INTO Places (scope, place_key, name, normalized_name, level, admin_path,
@@ -111,7 +119,7 @@ async def _get_or_create_place(
         name,
         normalized_name or name.lower(),
         level,
-        admin_path or {},
+        serialized_admin_path,
         lat,
         lon,
         meta or {},
