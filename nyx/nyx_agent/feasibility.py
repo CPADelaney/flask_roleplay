@@ -2645,11 +2645,28 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     Dynamically assess if an action is feasible in the current setting context.
     Generates unique, contextual responses for every rejection.
     """
-    # Parse the intended actions
-    intents = await parse_action_intents(user_input)
-    text_l = (user_input or "").lower()
 
     policy_sources: List[Any] = []
+
+    def _extend_policy_sources_from(candidate: Any) -> None:
+        if not isinstance(candidate, dict):
+            return
+        for key in (
+            "policy_flags",
+            "policies",
+            "policy",
+            "flags",
+            "feature_flags",
+            "settings",
+            "meta",
+            "governance",
+            "mode_policy",
+            "mode",
+        ):
+            value = candidate.get(key)
+            if value is not None:
+                policy_sources.append(value)
+
     for candidate in (
         getattr(nyx_ctx, "current_context", None),
         getattr(nyx_ctx, "last_packed_context", None),
@@ -2658,6 +2675,8 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     ):
         if candidate is not None:
             policy_sources.append(candidate)
+            if isinstance(candidate, dict):
+                _extend_policy_sources_from(candidate)
 
     enforced_response_meta = {
         "response_mode": "diegetic",
@@ -2696,10 +2715,19 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             return final_payload
         return payload_dict
 
+    if _is_ooc_request(user_input) and _policy_roleplay_only_enabled(*policy_sources):
+        return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
+
+    # Parse the intended actions only after early OOC guardrails
+    intents = await parse_action_intents(user_input)
+    text_l = (user_input or "").lower()
+
     if _is_ooc_request(user_input):
         minimal_context = await _load_minimal_context(nyx_ctx)
         policy_candidates = list(policy_sources)
         if minimal_context:
+            policy_sources.append(minimal_context)
+            _extend_policy_sources_from(minimal_context)
             policy_candidates.append(minimal_context)
         if _policy_roleplay_only_enabled(*policy_candidates):
             return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
@@ -2710,12 +2738,13 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
 
     policy_sources.append(setting_context)
     if isinstance(setting_context, dict):
+        _extend_policy_sources_from(setting_context)
         setting_meta = setting_context.setdefault("meta", {})
         setting_meta["response_mode"] = enforced_response_meta["response_mode"]
         setting_meta["response_mode_reason"] = enforced_response_meta["response_mode_reason"]
 
     policy_candidates = list(policy_sources)
-    if minimal_context:
+    if minimal_context and minimal_context not in policy_candidates:
         policy_candidates.append(minimal_context)
     if _is_ooc_request(user_input) and _policy_roleplay_only_enabled(*policy_candidates):
         return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
