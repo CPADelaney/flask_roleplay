@@ -99,11 +99,13 @@ async def _get_or_create_place(
 
     serialized_admin_path = _serialize_admin_path(admin_path)
 
+    serialized_meta = json.dumps(meta or {}, sort_keys=True)
+
     row = await conn.fetchrow(
         """
         INSERT INTO Places (scope, place_key, name, normalized_name, level, admin_path,
                             latitude, longitude, meta)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
         ON CONFLICT (place_key) DO UPDATE
         SET name = EXCLUDED.name,
             level = EXCLUDED.level,
@@ -122,7 +124,7 @@ async def _get_or_create_place(
         serialized_admin_path,
         lat,
         lon,
-        meta or {},
+        serialized_meta,
     )
 
     assert row is not None
@@ -143,10 +145,12 @@ async def _link(
     if parent_id == child_id:
         return
 
+    serialized_meta = json.dumps(meta or {}, sort_keys=True)
+
     await conn.execute(
         """
         INSERT INTO PlaceEdges (parent_id, child_id, kind, distance_km, meta)
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
         ON CONFLICT (parent_id, child_id, kind) DO UPDATE
         SET distance_km = COALESCE(PlaceEdges.distance_km, EXCLUDED.distance_km),
             meta = COALESCE(PlaceEdges.meta, '{}'::jsonb) || EXCLUDED.meta,
@@ -156,7 +160,7 @@ async def _link(
         child_id,
         kind,
         distance_km,
-        meta or {},
+        serialized_meta,
     )
 
 
