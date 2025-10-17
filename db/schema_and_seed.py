@@ -361,6 +361,15 @@ async def create_all_tables():
                     hidden_aspects JSONB DEFAULT '[]',    -- Changed from TEXT[]
                     access_restrictions JSONB DEFAULT '[]', -- Changed from TEXT[]
                     local_customs JSONB DEFAULT '[]',     -- Changed from TEXT[]
+                    room TEXT,
+                    building TEXT,
+                    district_type TEXT,
+                    planet TEXT NOT NULL DEFAULT 'Earth',
+                    galaxy TEXT NOT NULL DEFAULT 'Milky Way',
+                    realm TEXT NOT NULL DEFAULT 'physical',
+                    lat DOUBLE PRECISION,
+                    lon DOUBLE PRECISION,
+                    is_fictional BOOLEAN NOT NULL DEFAULT FALSE,
                     open_hours JSONB,
                     embedding vector(1536),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -3056,15 +3065,123 @@ async def create_all_tables():
                 ADD COLUMN IF NOT EXISTS special_mechanics JSONB DEFAULT '{}'::jsonb;
                 ''',
                 '''
-                ALTER TABLE NPCStats 
+                ALTER TABLE NPCStats
                 ADD COLUMN IF NOT EXISTS evolution_paths JSONB DEFAULT '{}'::jsonb;
                 ''',
                 '''
-                ALTER TABLE Locations 
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS room TEXT;
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS building TEXT;
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS district_type TEXT;
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS planet TEXT NOT NULL DEFAULT 'Earth';
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS galaxy TEXT NOT NULL DEFAULT 'Milky Way';
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS realm TEXT NOT NULL DEFAULT 'physical';
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION;
+                ''',
+                '''
+                ALTER TABLE Locations
+                ADD COLUMN IF NOT EXISTS is_fictional BOOLEAN NOT NULL DEFAULT FALSE;
+                ''',
+                '''
+                ALTER TABLE Locations
                 ADD COLUMN IF NOT EXISTS controlling_faction TEXT;
                 ''',
                 '''
-                ALTER TABLE NPCStats 
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'locations'
+                          AND column_name = 'lat'
+                          AND data_type <> 'double precision'
+                    ) THEN
+                        ALTER TABLE Locations
+                            ALTER COLUMN lat TYPE DOUBLE PRECISION
+                            USING NULLIF(trim(lat::text), '')::double precision;
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'locations'
+                          AND column_name = 'lon'
+                          AND data_type <> 'double precision'
+                    ) THEN
+                        ALTER TABLE Locations
+                            ALTER COLUMN lon TYPE DOUBLE PRECISION
+                            USING NULLIF(trim(lon::text), '')::double precision;
+                    END IF;
+                END $$;
+                ''',
+                '''
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'locations'
+                          AND column_name = 'planet'
+                    ) THEN
+                        UPDATE Locations SET planet = COALESCE(planet, 'Earth');
+                        ALTER TABLE Locations ALTER COLUMN planet SET DEFAULT 'Earth';
+                        ALTER TABLE Locations ALTER COLUMN planet SET NOT NULL;
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'locations'
+                          AND column_name = 'galaxy'
+                    ) THEN
+                        UPDATE Locations SET galaxy = COALESCE(galaxy, 'Milky Way');
+                        ALTER TABLE Locations ALTER COLUMN galaxy SET DEFAULT 'Milky Way';
+                        ALTER TABLE Locations ALTER COLUMN galaxy SET NOT NULL;
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'locations'
+                          AND column_name = 'realm'
+                    ) THEN
+                        UPDATE Locations SET realm = COALESCE(realm, 'physical');
+                        ALTER TABLE Locations ALTER COLUMN realm SET DEFAULT 'physical';
+                        ALTER TABLE Locations ALTER COLUMN realm SET NOT NULL;
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'locations'
+                          AND column_name = 'is_fictional'
+                    ) THEN
+                        UPDATE Locations SET is_fictional = COALESCE(is_fictional, FALSE);
+                        ALTER TABLE Locations ALTER COLUMN is_fictional SET DEFAULT FALSE;
+                        ALTER TABLE Locations ALTER COLUMN is_fictional SET NOT NULL;
+                    END IF;
+                END $$;
+                ''',
+                '''
+                ALTER TABLE NPCStats
                 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
                 ''',
                 '''
