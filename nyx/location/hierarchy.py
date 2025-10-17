@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+import random
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import asyncpg
 
-from .types import Anchor, Candidate, PlaceEdge, Scope
+from .nominatim_map import nominatim_to_admin_path
+from .types import Anchor, Candidate, Location, PlaceEdge, Scope
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -53,6 +55,15 @@ def _make_id(parts: Iterable[str]) -> str:
     if not tokens:
         raise ValueError("Cannot compose id from empty parts")
     return "::".join(tokens)
+
+
+def _normalize_location_name(value: str) -> str:
+    """Return a lower-cased, whitespace-collapsed location identifier."""
+
+    if not isinstance(value, str):
+        value = str(value or "")
+    normalized = " ".join(value.replace("_", " ").split()).strip().lower()
+    return normalized or "unknown location"
 
 
 async def _get_or_create_place(
@@ -270,6 +281,296 @@ async def assign_hierarchy(
     }
 
 
+async def generate_and_persist_hierarchy(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    conversation_id: int,
+    candidate: Candidate,
+    scope: Scope = "real",
+    anchor: Optional[Anchor] = None,
+    mint_policy: Optional[str] = None,
+    default_planet: Optional[str] = None,
+    default_galaxy: Optional[str] = None,
+    default_realm: Optional[str] = None,
+) -> Location:
+    """Persist a candidate as a :class:`Location` with enriched hierarchy data."""
+
+    meta = candidate.place.meta = dict(candidate.place.meta or {})
+
+    # Normalize the address via Nominatim so that admin keys align with Nyx
+    # hierarchy expectations.
+    address = dict(candidate.place.address or {})
+    normalized_admin = address.get("_normalized_admin_path")
+    if not normalized_admin:
+        normalized_admin = nominatim_to_admin_path(address)
+        if normalized_admin:
+            address["_normalized_admin_path"] = normalized_admin
+    candidate.place.address = address
+
+    admin_path: Dict[str, str] = dict(normalized_admin or {})
+
+    # Enrich with anchor hints for partially specified locations.
+    if anchor:
+        if anchor.primary_city and not admin_path.get("city"):
+            admin_path["city"] = anchor.primary_city
+        if anchor.region and not admin_path.get("region"):
+            admin_path["region"] = anchor.region
+        if anchor.country and not admin_path.get("country"):
+            admin_path["country"] = anchor.country
+
+    # Reuse the last persisted region context when available so fictional
+    # worlds stay internally coherent.
+    reuse_row = await conn.fetchrow(
+        """
+        SELECT city, region, country, planet, galaxy, realm
+        FROM Locations
+        WHERE user_id = $1 AND conversation_id = $2
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        int(user_id),
+        int(conversation_id),
+    )
+    if reuse_row:
+        for level in ("city", "region", "country"):
+            if not admin_path.get(level):
+                value = reuse_row.get(level)
+                if value:
+                    admin_path[level] = value
+
+    if admin_path:
+        meta.setdefault("admin_path", admin_path)
+
+    source = str(meta.get("source") or "").strip().lower()
+    is_fictional_branch = scope == "fictional" or source == "fictional"
+
+    planet_hint = (
+        meta.get("planet")
+        or meta.get("world_name")
+        or default_planet
+        or (anchor.world_name if anchor and anchor.world_name else None)
+    )
+
+    hierarchy = await assign_hierarchy(
+        conn,
+        candidate,
+        scope=scope,
+        anchor=anchor,
+        mint_policy=mint_policy,
+        default_planet=planet_hint,
+    )
+
+    world_name: Optional[str] = None
+    if isinstance(hierarchy, dict):
+        chain = hierarchy.get("chain")
+        if chain and "hierarchy_chain" not in meta:
+            meta["hierarchy_chain"] = chain
+        leaf = hierarchy.get("leaf")
+        if isinstance(leaf, dict) and "place_leaf_id" not in meta:
+            meta["place_leaf_id"] = leaf.get("id")
+        world_name = hierarchy.get("world_name")
+
+    display_name = meta.get("display_name") or candidate.place.name or "Unknown"
+    normalized_name = _normalize_location_name(display_name)
+    meta.setdefault("display_name", display_name)
+
+    description = meta.get("description") or meta.get("display_name")
+    if not description:
+        contextual = [display_name]
+        for key in ("city", "region", "country"):
+            val = admin_path.get(key)
+            if val and val not in contextual:
+                contextual.append(val)
+        if len(contextual) > 1:
+            description = ", ".join(contextual)
+
+    location_type = meta.get("location_type") or meta.get("category") or candidate.place.level
+    parent_location = (
+        meta.get("parent_location")
+        or admin_path.get("district")
+        or admin_path.get("city")
+        or admin_path.get("region")
+    )
+
+    room = meta.get("room")
+    building = meta.get("building") or admin_path.get("building")
+    district = meta.get("district") or admin_path.get("district") or admin_path.get("neighborhood")
+    district_type = meta.get("district_type")
+    city = meta.get("city") or admin_path.get("city")
+    region = meta.get("region") or admin_path.get("region")
+    country = meta.get("country") or admin_path.get("country")
+
+    for key, value in (("city", city), ("region", region), ("country", country)):
+        if value and key not in meta:
+            meta[key] = value
+
+    planet = meta.get("planet") or world_name or (reuse_row.get("planet") if reuse_row else None) or default_planet
+    if not planet:
+        planet = "Earth" if scope == "real" else (world_name or "Fictional World")
+
+    galaxy = meta.get("galaxy") or (reuse_row.get("galaxy") if reuse_row else None) or default_galaxy
+    if not galaxy:
+        galaxy = "Milky Way" if scope == "real" else "Unknown Galaxy"
+
+    realm = meta.get("realm") or (reuse_row.get("realm") if reuse_row else None) or default_realm
+    if not realm:
+        realm = "physical" if scope == "real" else "fictional"
+
+    meta.setdefault("planet", planet)
+    meta.setdefault("galaxy", galaxy)
+    meta.setdefault("realm", realm)
+
+    base_lat = candidate.place.lat
+    base_lon = candidate.place.lon
+    if base_lat is None and anchor and anchor.lat is not None:
+        base_lat = anchor.lat
+    if base_lon is None and anchor and anchor.lon is not None:
+        base_lon = anchor.lon
+
+    if is_fictional_branch:
+        seed_base = f"{user_id}:{conversation_id}:{normalized_name}"
+        if base_lat is not None:
+            lat_rng = random.Random(f"{seed_base}:lat")
+            base_lat = base_lat + lat_rng.uniform(-0.02, 0.02)
+        if base_lon is not None:
+            lon_rng = random.Random(f"{seed_base}:lon")
+            base_lon = base_lon + lon_rng.uniform(-0.02, 0.02)
+
+    lat = round(base_lat, 6) if base_lat is not None else None
+    lon = round(base_lon, 6) if base_lon is not None else None
+
+    candidate.place.lat = lat
+    candidate.place.lon = lon
+
+    if lat is not None:
+        meta.setdefault("lat", lat)
+    if lon is not None:
+        meta.setdefault("lon", lon)
+
+    open_hours = meta.get("open_hours") if isinstance(meta.get("open_hours"), dict) else None
+    controlling_faction = meta.get("controlling_faction")
+
+    location_kwargs: Dict[str, Any] = {
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "location_name": normalized_name,
+        "description": description,
+        "location_type": location_type,
+        "parent_location": parent_location,
+        "room": room,
+        "building": building,
+        "district": district,
+        "district_type": district_type,
+        "city": city,
+        "region": region,
+        "country": country,
+        "planet": planet,
+        "galaxy": galaxy,
+        "realm": realm,
+        "lat": lat,
+        "lon": lon,
+        "is_fictional": bool(meta.get("is_fictional") or is_fictional_branch),
+        "open_hours": open_hours,
+        "controlling_faction": controlling_faction,
+    }
+
+    location_obj = Location(**location_kwargs)
+    payload = location_obj.to_dict()
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO Locations (
+            user_id,
+            conversation_id,
+            location_name,
+            description,
+            location_type,
+            parent_location,
+            room,
+            building,
+            district,
+            district_type,
+            city,
+            region,
+            country,
+            planet,
+            galaxy,
+            realm,
+            lat,
+            lon,
+            is_fictional,
+            open_hours,
+            controlling_faction
+        )
+        VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15,
+            $16, $17, $18, $19, $20,
+            $21
+        )
+        ON CONFLICT (user_id, conversation_id, location_name)
+        DO UPDATE SET
+            description = COALESCE(EXCLUDED.description, Locations.description),
+            location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
+            parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
+            room = COALESCE(EXCLUDED.room, Locations.room),
+            building = COALESCE(EXCLUDED.building, Locations.building),
+            district = COALESCE(EXCLUDED.district, Locations.district),
+            district_type = COALESCE(EXCLUDED.district_type, Locations.district_type),
+            city = COALESCE(EXCLUDED.city, Locations.city),
+            region = COALESCE(EXCLUDED.region, Locations.region),
+            country = COALESCE(EXCLUDED.country, Locations.country),
+            planet = COALESCE(EXCLUDED.planet, Locations.planet),
+            galaxy = COALESCE(EXCLUDED.galaxy, Locations.galaxy),
+            realm = COALESCE(EXCLUDED.realm, Locations.realm),
+            lat = COALESCE(EXCLUDED.lat, Locations.lat),
+            lon = COALESCE(EXCLUDED.lon, Locations.lon),
+            is_fictional = EXCLUDED.is_fictional,
+            open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours),
+            controlling_faction = COALESCE(EXCLUDED.controlling_faction, Locations.controlling_faction)
+        RETURNING *
+        """,
+        payload["user_id"],
+        payload["conversation_id"],
+        payload["location_name"],
+        payload.get("description"),
+        payload.get("location_type"),
+        payload.get("parent_location"),
+        payload.get("room"),
+        payload.get("building"),
+        payload.get("district"),
+        payload.get("district_type"),
+        payload.get("city"),
+        payload.get("region"),
+        payload.get("country"),
+        payload.get("planet"),
+        payload.get("galaxy"),
+        payload.get("realm"),
+        payload.get("lat"),
+        payload.get("lon"),
+        payload.get("is_fictional"),
+        payload.get("open_hours"),
+        payload.get("controlling_faction"),
+    )
+
+    if row is None:
+        raise RuntimeError("Failed to persist location hierarchy")
+
+    persisted = Location.from_record(row)
+
+    if persisted.id is not None:
+        meta.setdefault("location_row_id", persisted.id)
+    meta.setdefault("location_name", persisted.location_name)
+    meta.setdefault("planet", persisted.planet)
+    meta.setdefault("galaxy", persisted.galaxy)
+    meta.setdefault("realm", persisted.realm)
+
+    return persisted
+
+
 __all__ = [
     "assign_hierarchy",
+    "generate_and_persist_hierarchy",
 ]
