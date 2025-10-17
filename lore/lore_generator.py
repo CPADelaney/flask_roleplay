@@ -50,6 +50,8 @@ from .data_access import (
     LoreKnowledgeAccess,
 )
 from embedding.vector_store import generate_embedding
+from nyx.location.hierarchy import get_or_create_location
+from nyx.location.types import Candidate, Place
 
 # Import error handling
 from .error_manager import LoreError, ErrorHandler, handle_errors
@@ -1554,51 +1556,45 @@ class FactionGenerator(BaseGenerator):
                 elif not isinstance(strategic_value, int):
                     strategic_value = 5
 
-                # Serialize JSONB fields
-                notable_features_json = json.dumps(
-                    location_data.get("notable_features", [])
-                )
-                hidden_aspects_json = json.dumps(
-                    location_data.get("hidden_secrets", [])
-                )
-                access_restrictions_json = json.dumps(
-                    location_data.get("access_restrictions", [])
-                )
-                local_customs_json = json.dumps(location_data.get("local_customs", []))
+                meta: Dict[str, Any] = {
+                    "display_name": location_data.get("name"),
+                    "description": location_data.get("description"),
+                    "location_type": location_data.get("type", "settlement"),
+                    "parent_location": location_data.get("parent_location"),
+                    "cultural_significance": location_data.get("cultural_significance", "moderate"),
+                    "economic_importance": location_data.get("economic_importance", "moderate"),
+                    "strategic_value": strategic_value,
+                    "population_density": location_data.get("population_density", "moderate"),
+                    "notable_features": location_data.get("notable_features", []),
+                    "hidden_aspects": location_data.get("hidden_secrets", []),
+                    "access_restrictions": location_data.get("access_restrictions", []),
+                    "local_customs": location_data.get("local_customs", []),
+                    "embedding": embedding,
+                }
 
-                # Insert location
-                location_id = await conn.fetchval(
-                    """
-                    INSERT INTO Locations (
-                        user_id, conversation_id, location_name, description,
-                        location_type, parent_location, cultural_significance,
-                        economic_importance, strategic_value, population_density,
-                        notable_features, hidden_aspects, access_restrictions,
-                        local_customs, embedding
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                    RETURNING id
-                """,
-                    self.user_id,
-                    self.conversation_id,
-                    location_data.get("name"),
-                    location_data.get("description"),
-                    location_data.get("type", "settlement"),
-                    location_data.get("parent_location"),
-                    location_data.get("cultural_significance", "moderate"),
-                    location_data.get("economic_importance", "moderate"),
-                    strategic_value,  # Now guaranteed to be an integer
-                    location_data.get("population_density", "moderate"),
-                    notable_features_json,
-                    hidden_aspects_json,  # mapped from hidden_secrets
-                    access_restrictions_json,
-                    local_customs_json,
-                    embedding,
+                candidate = Candidate(
+                    place=Place(
+                        name=location_data.get("name", "Unknown Location"),
+                        level="venue",
+                        meta={k: v for k, v in meta.items() if v is not None},
+                    )
                 )
+
+                location_record = await get_or_create_location(
+                    conn,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                    candidate=candidate,
+                    scope="fictional",
+                )
+
+                if location_record.id is None:
+                    raise RuntimeError("Location factory did not persist record")
 
                 logger.info(
-                    f"Stored location '{location_data['name']}' with id {location_id}"
+                    f"Stored location '{location_data['name']}' with id {location_record.id}"
                 )
-                return location_id
+                return location_record.id
 
         except Exception as e:
             logger.error(f"Error storing location: {e}")

@@ -40,6 +40,8 @@ from datetime import datetime, timedelta
 from agents import Runner
 
 from memory.memory_orchestrator import get_memory_orchestrator, EntityType
+from nyx.location.hierarchy import get_or_create_location
+from nyx.location.types import Candidate, Place
 
 # Import the new validation agent
 from lore.core.validation import CanonValidationAgent
@@ -1991,31 +1993,42 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     
     # Create new location (already passed existence gate)
     search_vector = await memory_orchestrator.generate_embedding(embedding_text)
-    
-    location_id = await conn.fetchval("""
-        INSERT INTO Locations (
-            user_id, conversation_id, location_name, description,
-            location_type, parent_location, cultural_significance,
-            economic_importance, strategic_value, population_density,
-            notable_features, hidden_aspects, access_restrictions,
-            local_customs, embedding
+
+    meta: Dict[str, Any] = {
+        "display_name": location_name,
+        "description": description,
+        "location_type": kwargs.get('location_type', 'settlement'),
+        "parent_location": kwargs.get('parent_location'),
+        "cultural_significance": kwargs.get('cultural_significance', 'moderate'),
+        "economic_importance": kwargs.get('economic_importance', 'moderate'),
+        "strategic_value": kwargs.get('strategic_value', 5),
+        "population_density": kwargs.get('population_density', 'moderate'),
+        "notable_features": kwargs.get('notable_features', []),
+        "hidden_aspects": kwargs.get('hidden_aspects', []),
+        "access_restrictions": kwargs.get('access_restrictions', []),
+        "local_customs": kwargs.get('local_customs', []),
+        "embedding": search_vector,
+    }
+
+    candidate = Candidate(
+        place=Place(
+            name=location_name,
+            level='venue',
+            meta={k: v for k, v in meta.items() if v is not None},
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-        RETURNING id
-    """,
-        ctx.user_id, ctx.conversation_id, location_name, description,
-        kwargs.get('location_type', 'settlement'),
-        kwargs.get('parent_location'),
-        kwargs.get('cultural_significance', 'moderate'),
-        kwargs.get('economic_importance', 'moderate'),
-        kwargs.get('strategic_value', 5),
-        kwargs.get('population_density', 'moderate'),
-        json.dumps(kwargs.get('notable_features', [])),
-        json.dumps(kwargs.get('hidden_aspects', [])),
-        json.dumps(kwargs.get('access_restrictions', [])),
-        json.dumps(kwargs.get('local_customs', [])),
-        search_vector
     )
+
+    location_record = await get_or_create_location(
+        conn,
+        user_id=ctx.user_id,
+        conversation_id=ctx.conversation_id,
+        candidate=candidate,
+        scope='fictional',
+    )
+
+    location_id = location_record.id
+    if location_id is None:
+        raise RuntimeError("Location factory did not return a persisted identifier")
     
     # Store in memory system
     from memory.memory_orchestrator import EntityType

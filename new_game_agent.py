@@ -40,6 +40,8 @@ from db.connection import get_db_connection_context
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.location.hierarchy import get_or_create_location
+from nyx.location.types import Candidate, Place
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
@@ -2830,94 +2832,39 @@ class NewGameAgent:
                     },
                 )
 
-                try:
-                    fallback_row = await conn.fetchrow(
-                        """
-                        INSERT INTO Locations (
-                            user_id, conversation_id, location_name, description,
-                            location_type, open_hours
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        ON CONFLICT (user_id, conversation_id, location_name)
-                        DO UPDATE SET
-                            description = EXCLUDED.description,
-                            location_type = EXCLUDED.location_type,
-                            open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours)
-                        RETURNING location_name
-                        """,
-                        user_id,
-                        conversation_id,
-                        normalized_name,
-                        normalized_description,
-                        normalized_type,
-                        open_hours_serialized,
-                    )
-                except (asyncpg.InvalidColumnReferenceError, asyncpg.UndefinedObjectError):
-                    logger.warning(
-                        "preset_location_missing_unique_constraint; run the Locations uniqueness migration",
-                        extra={
-                            "conversation_id": conversation_id,
-                            "user_id": user_id,
-                            "location_name": normalized_name,
-                            "action": "manual_upsert",
-                            "remediation": "run the Locations uniqueness migration",
-                        },
-                    )
+                meta_payload: Dict[str, Any] = {
+                    "display_name": normalized_name,
+                    "description": normalized_description,
+                    "location_type": normalized_type,
+                }
+                meta_payload.update({k: v for k, v in metadata.items() if v is not None})
 
-                    existing_location = await conn.fetchrow(
-                        """
-                        SELECT location_name, description, location_type, open_hours
-                        FROM Locations
-                        WHERE user_id = $1
-                          AND conversation_id = $2
-                          AND location_name = $3
-                        """,
-                        user_id,
-                        conversation_id,
-                        normalized_name,
+                if raw_open_hours is not None:
+                    if isinstance(raw_open_hours, dict):
+                        meta_payload["open_hours"] = raw_open_hours
+                    elif open_hours_serialized:
+                        try:
+                            meta_payload["open_hours"] = json.loads(open_hours_serialized)
+                        except json.JSONDecodeError:
+                            meta_payload["open_hours"] = {"raw": open_hours_serialized}
+
+                candidate = Candidate(
+                    place=Place(
+                        name=normalized_name,
+                        level="venue",
+                        meta=meta_payload,
                     )
+                )
 
-                    if existing_location:
-                        fallback_row = await conn.fetchrow(
-                            """
-                            UPDATE Locations
-                            SET description = $4,
-                                location_type = $5,
-                                open_hours = COALESCE($6, Locations.open_hours)
-                            WHERE user_id = $1
-                              AND conversation_id = $2
-                              AND location_name = $3
-                            RETURNING location_name
-                            """,
-                            user_id,
-                            conversation_id,
-                            normalized_name,
-                            normalized_description,
-                            normalized_type,
-                            open_hours_serialized,
-                        )
-                    else:
-                        fallback_row = await conn.fetchrow(
-                            """
-                            INSERT INTO Locations (
-                                user_id, conversation_id, location_name, description,
-                                location_type, open_hours
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                            RETURNING location_name
-                            """,
-                            user_id,
-                            conversation_id,
-                            normalized_name,
-                            normalized_description,
-                            normalized_type,
-                            open_hours_serialized,
-                        )
+                location_obj = await get_or_create_location(
+                    conn,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    candidate=candidate,
+                    scope="fictional",
+                )
 
-                if fallback_row and "location_name" in fallback_row:
-                    location_names.append(fallback_row["location_name"])
-                else:
-                    location_names.append(normalized_name)
+                location_names.append(location_obj.location_name)
 
         return location_names
     

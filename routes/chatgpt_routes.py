@@ -10,6 +10,8 @@ from db.connection import get_db_connection_context
 from logic.gpt_image_prompting import get_system_prompt_with_image_guidance, format_user_prompt_for_image_awareness
 from lore.core.lore_system import LoreSystem
 from lore.core import canon
+from nyx.location.hierarchy import get_or_create_location
+from nyx.location.types import Candidate, Place
 import logging
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 
@@ -527,22 +529,37 @@ async def process_state_updates(user_id, conversation_id, state_updates):
         # Handle location creations
         if 'location_creations' in state_updates:
             for location in state_updates['location_creations']:
-                # Create location entries
                 location_name = location.get('location_name')
                 if location_name:
-                    await conn.execute("""
-                        INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
-                        VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (user_id, conversation_id, location_name)
-                        DO UPDATE SET
-                            description = EXCLUDED.description,
-                            open_hours = EXCLUDED.open_hours
-                    """, 
-                    user_id, 
-                    conversation_id,
-                    location_name,
-                    location.get('description', ''),
-                    json.dumps(location.get('open_hours', []))
+                    meta: Dict[str, Any] = {
+                        "display_name": location_name,
+                        "description": location.get('description', ''),
+                    }
+
+                    open_hours = location.get('open_hours')
+                    if open_hours is not None:
+                        if isinstance(open_hours, dict):
+                            meta['open_hours'] = open_hours
+                        else:
+                            try:
+                                meta['open_hours'] = json.loads(open_hours)
+                            except (TypeError, json.JSONDecodeError):
+                                meta['open_hours'] = {"raw": open_hours}
+
+                    candidate = Candidate(
+                        place=Place(
+                            name=location_name,
+                            level='venue',
+                            meta=meta,
+                        )
+                    )
+
+                    await get_or_create_location(
+                        conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        candidate=candidate,
+                        scope='fictional',
                     )
 
         # Handle event list updates
