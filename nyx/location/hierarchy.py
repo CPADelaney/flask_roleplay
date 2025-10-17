@@ -320,19 +320,51 @@ async def generate_and_persist_hierarchy(
         if anchor.country and not admin_path.get("country"):
             admin_path["country"] = anchor.country
 
-    # Reuse the last persisted region context when available so fictional
-    # worlds stay internally coherent.
-    reuse_row = await conn.fetchrow(
-        """
-        SELECT city, region, country, planet, galaxy, realm
-        FROM Locations
-        WHERE user_id = $1 AND conversation_id = $2
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        int(user_id),
-        int(conversation_id),
-    )
+    # Reuse persisted context scoped to the same city when available so that
+    # admin hierarchy hints are only shared between matching locations.
+    reuse_row: Optional[asyncpg.Record] = None
+    fallback_row: Optional[asyncpg.Record] = None
+    candidate_city = admin_path.get("city")
+
+    if candidate_city:
+        reuse_row = await conn.fetchrow(
+            """
+            SELECT city, region, country, planet, galaxy, realm
+            FROM Locations
+            WHERE user_id = $1 AND conversation_id = $2 AND city IS NOT NULL
+                  AND LOWER(city) = LOWER($3)
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            int(user_id),
+            int(conversation_id),
+            candidate_city,
+        )
+        if not reuse_row:
+            fallback_row = await conn.fetchrow(
+                """
+                SELECT city, region, country, planet, galaxy, realm
+                FROM Locations
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                int(user_id),
+                int(conversation_id),
+            )
+    else:
+        fallback_row = await conn.fetchrow(
+            """
+            SELECT city, region, country, planet, galaxy, realm
+            FROM Locations
+            WHERE user_id = $1 AND conversation_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            int(user_id),
+            int(conversation_id),
+        )
+
     if reuse_row:
         for level in ("city", "region", "country"):
             if not admin_path.get(level):
@@ -406,15 +438,23 @@ async def generate_and_persist_hierarchy(
         if value and key not in meta:
             meta[key] = value
 
-    planet = meta.get("planet") or world_name or (reuse_row.get("planet") if reuse_row else None) or default_planet
+    context_row: Optional[asyncpg.Record]
+    if reuse_row:
+        context_row = reuse_row
+    elif candidate_city:
+        context_row = None
+    else:
+        context_row = fallback_row
+
+    planet = meta.get("planet") or world_name or (context_row.get("planet") if context_row else None) or default_planet
     if not planet:
         planet = "Earth" if scope == "real" else (world_name or "Fictional World")
 
-    galaxy = meta.get("galaxy") or (reuse_row.get("galaxy") if reuse_row else None) or default_galaxy
+    galaxy = meta.get("galaxy") or (context_row.get("galaxy") if context_row else None) or default_galaxy
     if not galaxy:
         galaxy = "Milky Way" if scope == "real" else "Unknown Galaxy"
 
-    realm = meta.get("realm") or (reuse_row.get("realm") if reuse_row else None) or default_realm
+    realm = meta.get("realm") or (context_row.get("realm") if context_row else None) or default_realm
     if not realm:
         realm = DEFAULT_REALM if scope == "real" else "fictional"
 
