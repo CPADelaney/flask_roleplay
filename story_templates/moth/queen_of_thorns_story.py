@@ -7,6 +7,13 @@ Complete story definition with poem integration and complex character dynamics
 from story_templates.preset_stories import PresetStory, StoryBeat
 from story_templates.character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
 
+SAN_FRANCISCO_HIERARCHY = {
+    "district": "SoMa",
+    "city": "San Francisco",
+    "region": "California",
+    "country": "USA",
+}
+
 # The foundational poems that define tone, imagery, and themes
 THORNS_POEMS = {
     "when_curtain_falls": """When the Curtain Falls
@@ -624,6 +631,13 @@ QUEEN_OF_THORNS_STORY = PresetStory(
                 "sanctum_dungeon": "The deepest level where true devotion is tested",
                 "preparation_chamber": "Where the Queen becomes the Goddess"
             },
+            "rooms": {
+                "main_stage_balcony": "Overlooks the ritual floor, reserved for the Queen's chosen confidants.",
+                "obsidian_throne": "The raised dais at the heart of the Sanctum where Lilith rules as goddess.",
+                "initiation_cells": "Soundproof rooms where first-time devotees surrender their stories.",
+            },
+            "building": "Velvet Sanctum Subterranean Complex",
+            **SAN_FRANCISCO_HIERARCHY,
             "schedule": {
                 "Monday": {"Evening": "open", "Night": "performances", "Late Night": "private sessions"},
                 "Tuesday": {"Evening": "closed", "Night": "private clients only"},
@@ -639,7 +653,13 @@ QUEEN_OF_THORNS_STORY = PresetStory(
             "type": "afterhours_venue",
             "description": "The same space when the music dies and shadows lengthen. Candles gutter, ghosts linger.",
             "atmosphere": "melancholic",
-            "unique_events": ["mask_removal", "vulnerability_moments"]
+            "unique_events": ["mask_removal", "vulnerability_moments"],
+            "rooms": {
+                "darkened_stage": "A hollow echo of performance nights, scattered with wax and rose stems.",
+                "confessional_booth": "Where whispered admissions hang in the air till dawn.",
+            },
+            "building": "Velvet Sanctum Subterranean Complex",
+            **SAN_FRANCISCO_HIERARCHY,
         },
         {
             "name": "Private Chambers",
@@ -650,7 +670,14 @@ QUEEN_OF_THORNS_STORY = PresetStory(
                 "writing_desk": "Where letters to ghosts pile like autumn leaves",
                 "bedroom": "Rarely used, too many memories in empty sheets",
                 "hidden_room": "The true heart of her pain"
-            }
+            },
+            "rooms": {
+                "mask_gallery": "A vaulted hall of porcelain visages cataloguing every persona she ever wielded.",
+                "ink_parlor": "Desk and shelves overflowing with half-written letters and crimson sealing wax.",
+                "ashen_bed": "Silk sheets disturbed only when she allows herself to collapse.",
+            },
+            "building": "Velvet Sanctum Private Residence",
+            **SAN_FRANCISCO_HIERARCHY,
         },
         {
             "name": "Safehouse Network",
@@ -661,7 +688,14 @@ QUEEN_OF_THORNS_STORY = PresetStory(
                 "transition_houses": "Where the saved learn to live again",
                 "medical_station": "For those who arrive broken",
                 "planning_room": "Where the Moth Queen wages her secret war"
-            }
+            },
+            "rooms": {
+                "somarail_waystation": "A transit hub tucked behind a shuttered streetcar repair bay.",
+                "healing_suite": "Warm, lamplit recovery apartment staffed by trusted healers.",
+                "operations_nexus": "Windowless command center charting the network's next extraction.",
+            },
+            "building": "Shadow Network Safehouse Grid",
+            **SAN_FRANCISCO_HIERARCHY,
         }
     ],
     
