@@ -2765,15 +2765,15 @@ class NewGameAgent:
         """Set up a standard 12-month calendar without LLM"""
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
-        
+
         # Standard calendar
         calendar_data = {
             "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-            "months": ["January", "February", "March", "April", "May", "June", 
+            "months": ["January", "February", "March", "April", "May", "June",
                        "July", "August", "September", "October", "November", "December"],
             "seasons": ["Spring", "Summer", "Autumn", "Winter"]
         }
-        
+
         # Store in database
         async with get_db_connection_context() as conn:
             await conn.execute("""
@@ -2782,9 +2782,172 @@ class NewGameAgent:
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value = EXCLUDED.value
             """, user_id, conversation_id, json.dumps(calendar_data))
-        
+
         return calendar_data
-    
+
+    @staticmethod
+    def _format_room_label(raw_label: Any) -> str:
+        """Convert raw room identifiers into a player-friendly label."""
+
+        if raw_label is None:
+            return ""
+        if isinstance(raw_label, str):
+            cleaned = " ".join(raw_label.replace("_", " ").replace("-", " ").split()).strip()
+        else:
+            cleaned = " ".join(str(raw_label).split()).strip()
+        if not cleaned:
+            return ""
+        return cleaned.title()
+
+    def _build_room_location_specs(
+        self,
+        base_name: str,
+        normalized_type: str,
+        metadata: Dict[str, Any],
+        rooms_map: Dict[str, Any],
+        areas_map: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Construct child location definitions for explicit room-level entries."""
+
+        specs: List[Dict[str, Any]] = []
+        seen_labels: Set[str] = set()
+
+        shared_meta: Dict[str, Any] = {}
+        for key in ("building", "district", "city", "region", "country", "atmosphere"):
+            value = metadata.get(key)
+            if value:
+                shared_meta[key] = value
+        shared_meta["parent_location"] = base_name
+
+        def _accumulate(container: Dict[str, Any]) -> None:
+            if not isinstance(container, dict):
+                return
+            for raw_label, raw_description in container.items():
+                label = self._format_room_label(raw_label)
+                if not label:
+                    continue
+                normalized_label = label.lower()
+                if normalized_label in seen_labels:
+                    continue
+                seen_labels.add(normalized_label)
+
+                description = (raw_description or "").strip()
+                if not description:
+                    description = f"{label} within {base_name}"
+
+                spec_name = f"{base_name} :: {label}"
+                spec_meta = dict(shared_meta)
+                spec_meta["room"] = label
+                spec_meta["display_name"] = spec_name
+                spec_meta["description"] = description
+                spec_meta.setdefault("location_type", metadata.get("location_type") or normalized_type)
+
+                specs.append(
+                    {
+                        "name": spec_name,
+                        "description": description,
+                        "location_type": metadata.get("location_type") or normalized_type,
+                        "metadata": spec_meta,
+                    }
+                )
+
+        _accumulate(rooms_map)
+        _accumulate(areas_map)
+
+        return specs
+
+    async def _persist_room_level_locations(
+        self,
+        ctx: RunContextWrapper[GameContext],
+        conn: asyncpg.Connection,
+        user_id: int,
+        conversation_id: int,
+        specs: List[Dict[str, Any]],
+        canonical_available: bool,
+        fallback_reason: Optional[str],
+    ) -> Tuple[List[str], bool, Optional[str]]:
+        """Persist sub-location entries derived from preset room/area data."""
+
+        created_names: List[str] = []
+        current_canonical = canonical_available
+        current_reason = fallback_reason
+
+        for spec in specs:
+            sub_name = spec.get("name") or "Unknown Room"
+            sub_description = spec.get("description") or f"Room within {sub_name}"
+            sub_type = spec.get("location_type") or "room"
+            sub_metadata = dict(spec.get("metadata") or {})
+
+            if current_canonical:
+                try:
+                    canonical_sub_name = await asyncio.wait_for(
+                        canon.find_or_create_location(
+                            ctx,
+                            conn,
+                            sub_name,
+                            description=sub_description,
+                            metadata=sub_metadata,
+                            location_type=sub_type,
+                        ),
+                        timeout=PRESET_LOCATION_CANON_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    current_canonical = False
+                    current_reason = current_reason or "timeout"
+                except Exception as exc:  # noqa: BLE001 - fall back to lightweight path
+                    current_canonical = False
+                    current_reason = current_reason or repr(exc)
+                    logger.exception(
+                        "preset_room_location_canon_failure",
+                        extra={
+                            "conversation_id": conversation_id,
+                            "user_id": user_id,
+                            "location_name": sub_name,
+                        },
+                    )
+                else:
+                    created_names.append(canonical_sub_name)
+                    continue
+
+            reason_to_log = current_reason or "lightweight_mode_active"
+            logger.info(
+                "preset_location_bootstrap_lightweight_path",
+                extra={
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "location_name": sub_name,
+                    "path": "lightweight",
+                    "reason": reason_to_log,
+                },
+            )
+
+            meta_payload: Dict[str, Any] = {
+                "display_name": sub_name,
+                "description": sub_description,
+                "location_type": sub_type,
+            }
+            meta_payload.update({k: v for k, v in sub_metadata.items() if v is not None})
+
+            candidate = Candidate(
+                place=Place(
+                    name=sub_name,
+                    level="venue",
+                    meta=meta_payload,
+                )
+            )
+
+            location_obj = await get_or_create_location(
+                conn,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                candidate=candidate,
+                scope="fictional",
+            )
+
+            created_names.append(location_obj.location_name)
+
+        return created_names, current_canonical, current_reason
+
     async def _create_preset_locations(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[str]:
         """Create preset locations with a lightweight fallback when canon is slow."""
         user_id = ctx.context["user_id"]
@@ -2821,16 +2984,22 @@ class NewGameAgent:
                     description = loc_data.get("description", "")
                     requested_type = loc_data.get("type")
 
-                    areas = loc_data.get("areas", {})
-                    schedule = loc_data.get("schedule", {})
+                    areas_map = loc_data.get("areas") if isinstance(loc_data.get("areas"), dict) else {}
+                    rooms_map = loc_data.get("rooms") if isinstance(loc_data.get("rooms"), dict) else {}
+                    schedule = loc_data.get("schedule") if isinstance(loc_data.get("schedule"), dict) else {}
                     atmosphere = loc_data.get("atmosphere", "")
 
                     metadata = {
                         "location_type": requested_type,
-                        "areas": areas,
+                        "areas": areas_map,
                         "schedule": schedule,
                         "atmosphere": atmosphere,
                     }
+                    if rooms_map:
+                        metadata["rooms"] = rooms_map
+                    primary_room = loc_data.get("room")
+                    if primary_room:
+                        metadata["room"] = primary_room
                     for hierarchy_key in LOCATION_HIERARCHY_META_KEYS:
                         if hierarchy_key in loc_data and loc_data[hierarchy_key] is not None:
                             metadata[hierarchy_key] = loc_data[hierarchy_key]
@@ -2857,6 +3026,16 @@ class NewGameAgent:
                 if not normalized_description:
                     normalized_description = f"The area known as {normalized_name}"
                 normalized_type = (requested_type or "settlement").strip() or "settlement"
+
+                room_location_specs = []
+                if isinstance(loc_data, dict):
+                    room_location_specs = self._build_room_location_specs(
+                        normalized_name,
+                        normalized_type,
+                        metadata,
+                        rooms_map,
+                        areas_map,
+                    )
 
                 open_hours_serialized: Optional[str] = None
                 if raw_open_hours is None:
@@ -2891,6 +3070,17 @@ class NewGameAgent:
                             timeout=PRESET_LOCATION_CANON_TIMEOUT,
                         )
                         location_names.append(canonical_name)
+                        if room_location_specs:
+                            created_rooms, canonical_available, fallback_reason = await self._persist_room_level_locations(
+                                ctx,
+                                conn,
+                                user_id,
+                                conversation_id,
+                                room_location_specs,
+                                canonical_available,
+                                fallback_reason,
+                            )
+                            location_names.extend(created_rooms)
                         continue
                     except asyncio.TimeoutError:
                         canonical_available = False
@@ -2952,6 +3142,18 @@ class NewGameAgent:
                 )
 
                 location_names.append(location_obj.location_name)
+
+                if room_location_specs:
+                    created_rooms, canonical_available, fallback_reason = await self._persist_room_level_locations(
+                        ctx,
+                        conn,
+                        user_id,
+                        conversation_id,
+                        room_location_specs,
+                        canonical_available,
+                        fallback_reason,
+                    )
+                    location_names.extend(created_rooms)
 
         return location_names
     

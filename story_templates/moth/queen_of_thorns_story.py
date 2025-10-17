@@ -624,6 +624,7 @@ QUEEN_OF_THORNS_STORY = PresetStory(
             "name": "Velvet Sanctum",
             "type": "nightclub_dungeon",
             "description": "An underground temple where pain becomes prayer, hidden beneath the city's skin",
+            "room": "Main Chamber",
             "areas": {
                 "main_stage": "Where the Queen holds court before her subjects",
                 "throne_room": "Her seat of power, draped in velvet and shadow",
@@ -654,6 +655,7 @@ QUEEN_OF_THORNS_STORY = PresetStory(
             "description": "The same space when the music dies and shadows lengthen. Candles gutter, ghosts linger.",
             "atmosphere": "melancholic",
             "unique_events": ["mask_removal", "vulnerability_moments"],
+            "room": "Darkened Stage",
             "rooms": {
                 "darkened_stage": "A hollow echo of performance nights, scattered with wax and rose stems.",
                 "confessional_booth": "Where whispered admissions hang in the air till dawn.",
@@ -665,6 +667,7 @@ QUEEN_OF_THORNS_STORY = PresetStory(
             "name": "Private Chambers",
             "type": "personal_space",
             "description": "Her private sanctuary where masks can finally fall. Moths dance against windows.",
+            "room": "Mask Gallery",
             "areas": {
                 "the_mask_room": "Walls lined with porcelain faces - each a broken promise",
                 "writing_desk": "Where letters to ghosts pile like autumn leaves",
@@ -683,6 +686,7 @@ QUEEN_OF_THORNS_STORY = PresetStory(
             "name": "Safehouse Network",
             "type": "secret_location",
             "description": "Hidden passages and safe rooms throughout the city",
+            "room": "Operations Nexus",
             "areas": {
                 "entrance_points": "Disguised as various businesses",
                 "transition_houses": "Where the saved learn to live again",
