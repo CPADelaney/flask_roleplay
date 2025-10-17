@@ -14,7 +14,12 @@ class MothFlameLoreIntegration:
         story_locations = [
             {
                 "name": "The Velvet Sanctum",
-                "district": "Underground District",
+                "district": "SoMa",
+                "city": "San Francisco",
+                "region": "California",
+                "country": "USA",
+                "building": "Velvet Sanctum Subterranean Complex",
+                "room": "Obsidian Throne",
                 "type": "bdsm_club",
                 "description": (
                     "Hidden beneath an innocent boutique, the Velvet Sanctum descends into "
