@@ -2,10 +2,12 @@
 from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
-from .types import PlaceQuery, SettingProfile, SettingKind, ResolutionResult
+
 from .anchors import derive_geo_anchor
-from .search import resolve_real
 from .fictional_resolver import resolve_fictional
+from .query import PlaceQuery
+from .search import resolve_real
+from .types import Anchor, Place, ResolveResult, Scope
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
 _GO_TO_RX = re.compile(r"\b(?:go|head|walk|run|drive|get|straight|toward|to)\s+(?:the\s+)?(.+)$", re.IGNORECASE)
@@ -23,23 +25,52 @@ def _parse_place_query(text: str) -> PlaceQuery:
     target = (m.group(1) if m else t).strip().rstrip(".!?")
     return PlaceQuery(raw_text=t, normalized=target.lower(), target=target)
 
-async def _setting_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> SettingProfile:
+async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> Anchor:
     world = (meta or {}).get("world") or {}
     kind_txt = (world.get("type") or world.get("kind") or "").strip().lower()
     if kind_txt in ("real", "modern_realistic", "realistic"):
-        kind = SettingKind.REAL
+        scope: Scope = "real"
     elif kind_txt in ("fiction", "fictional", "urban_fantasy"):
-        kind = SettingKind.FICTIONAL
+        scope = "fictional"
     else:
-        kind = SettingKind.HYBRID
-    a = await derive_geo_anchor(meta, user_id, conversation_id)
-    return SettingProfile(
-        kind=kind,
-        primary_city=a.city or world.get("primary_city"),
-        region=a.region or world.get("region"),
-        country=a.country or world.get("country"),
-        lat=a.lat, lon=a.lon, label=a.label,
+        scope = "hybrid"
+
+    geo = await derive_geo_anchor(meta, user_id, conversation_id)
+    primary_city = geo.city or world.get("primary_city")
+    region = geo.region or world.get("region")
+    country = geo.country or world.get("country")
+    label = geo.label or primary_city or world.get("name") or world.get("world_name")
+
+    focus: Optional[Place] = None
+    if primary_city:
+        focus = Place(
+            name=primary_city,
+            level="city",
+            key=(primary_city.lower().replace(" ", "_") or None),
+            lat=geo.lat,
+            lon=geo.lon,
+            address={
+                "city": primary_city,
+                "region": region,
+                "country": country,
+            },
+            meta={"source": "geo_anchor"},
+        )
+
+    return Anchor(
+        scope=scope,
+        focus=focus,
+        label=label,
+        lat=geo.lat,
+        lon=geo.lon,
+        primary_city=primary_city,
+        region=region,
+        country=country,
         world_name=world.get("name") or world.get("world_name"),
+        hints={
+            "world": world,
+            "geo_anchor": geo,
+        },
     )
 
 async def resolve_place_or_travel(
@@ -48,15 +79,18 @@ async def resolve_place_or_travel(
     store: Optional[ConversationSnapshotStore],
     user_id: str,
     conversation_id: str
-) -> ResolutionResult:
+) -> ResolveResult:
     if store is None:
         store = ConversationSnapshotStore()
-    setting = await _setting_from_meta(meta, user_id, conversation_id)
+    anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
-    if setting.kind == SettingKind.REAL or (setting.kind == SettingKind.HYBRID and setting.primary_city):
-        res = await resolve_real(q, setting, meta)
+    if anchor.scope == "real" or (anchor.scope == "hybrid" and anchor.primary_city):
+        res = await resolve_real(q, anchor, meta)
     else:
-        res = await resolve_fictional(q, setting, meta, store, user_id, conversation_id)
-    a = await derive_geo_anchor(meta, user_id, conversation_id)
-    res.anchor_used = a.label or a.city or None
+        res = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
+
+    if res.anchor is None:
+        res.anchor = anchor
+    if res.scope is None:
+        res.scope = anchor.scope
     return res
