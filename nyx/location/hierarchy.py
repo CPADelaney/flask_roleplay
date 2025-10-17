@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import asyncpg
 
-from .types import Candidate, PlaceEdge, Scope
+from .types import Anchor, Candidate, PlaceEdge, Scope
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -145,20 +145,36 @@ async def assign_hierarchy(
     candidate: Candidate,
     *,
     scope: Scope = "real",
+    anchor: Optional[Anchor] = None,
+    mint_policy: Optional[str] = None,
+    default_planet: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persist a candidate's hierarchy chain and return identifiers."""
 
     address = candidate.place.address or {}
     normalized = address.get("_normalized_admin_path") or {}
 
-    path_map: Dict[str, str] = {}
-    chain: List[Dict[str, Any]] = []
+    candidate.place.meta = dict(candidate.place.meta or {})
+    meta = candidate.place.meta
 
-    world_name = candidate.place.meta.get("world_name") if candidate.place.meta else None
+    if mint_policy and "resolver_mint_policy" not in meta:
+        meta["resolver_mint_policy"] = mint_policy
+
+    world_name = meta.get("world_name")
+    if not world_name and anchor and anchor.world_name:
+        world_name = anchor.world_name
+    if not world_name and default_planet:
+        world_name = default_planet
     if not world_name:
         world_name = "Earth" if scope == "real" else "Fictional World"
 
+    path_map: Dict[str, str] = {}
+    chain: List[Dict[str, Any]] = []
+
     path_map["world"] = world_name
+    meta.setdefault("world_name", world_name)
+    if default_planet and "default_planet" not in meta:
+        meta["default_planet"] = default_planet
     world_node = await _get_or_create_place(
         conn,
         scope=scope,
@@ -170,6 +186,16 @@ async def assign_hierarchy(
     chain.append({"level": "world", "name": world_name, **world_node})
 
     seen: set[Tuple[str, str]] = {("world", world_name.lower())}
+
+    # Use anchor hints for coarse geography before processing normalized address.
+    if anchor:
+        for level, value in (
+            ("country", anchor.country),
+            ("region", anchor.region),
+            ("city", anchor.primary_city),
+        ):
+            if value and level not in path_map:
+                path_map[level] = value
 
     for level, keys in _LEVEL_KEYS.items():
         name: Optional[str] = None
@@ -236,7 +262,12 @@ async def assign_hierarchy(
     candidate.place.meta.setdefault("place_key", place_node["place_key"])
     candidate.place.meta.setdefault("place_id", place_node["id"])
 
-    return {"chain": chain, "leaf": place_node}
+    return {
+        "chain": chain,
+        "leaf": place_node,
+        "world_name": world_name,
+        "mint_policy": mint_policy,
+    }
 
 
 __all__ = [
