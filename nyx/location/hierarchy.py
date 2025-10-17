@@ -73,6 +73,21 @@ def _serialize_admin_path(admin_path: Optional[Dict[str, str]]) -> str:
     return json.dumps(admin_path or {}, sort_keys=True)
 
 
+def _serialize_json_value(value: Any) -> Optional[str]:
+    """Serialize JSON-compatible values to text for asyncpg bindings."""
+
+    if value is None:
+        return None
+    if isinstance(value, (set, tuple)):
+        value = list(value)
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value)
+        except (TypeError, ValueError):
+            return None
+    return value
+
+
 async def _get_or_create_place(
     conn: asyncpg.Connection,
     *,
@@ -648,6 +663,10 @@ async def generate_and_persist_hierarchy(
     location_obj = Location(**location_kwargs)
     payload = location_obj.to_dict()
 
+    serialized_payload = dict(payload)
+    for field in ("open_hours", "notable_features", "hidden_aspects", "access_restrictions", "local_customs"):
+        serialized_payload[field] = _serialize_json_value(serialized_payload.get(field))
+
     row = await conn.fetchrow(
         """
         INSERT INTO Locations (
@@ -721,36 +740,36 @@ async def generate_and_persist_hierarchy(
             embedding = COALESCE(EXCLUDED.embedding, Locations.embedding)
         RETURNING *
         """,
-        payload["user_id"],
-        payload["conversation_id"],
-        payload["location_name"],
-        payload.get("description"),
-        payload.get("location_type"),
-        payload.get("parent_location"),
-        payload.get("room"),
-        payload.get("building"),
-        payload.get("district"),
-        payload.get("district_type"),
-        payload.get("city"),
-        payload.get("region"),
-        payload.get("country"),
-        payload.get("planet"),
-        payload.get("galaxy"),
-        payload.get("realm"),
-        payload.get("lat"),
-        payload.get("lon"),
-        payload.get("is_fictional"),
-        payload.get("open_hours"),
-        payload.get("controlling_faction"),
-        payload.get("cultural_significance"),
-        payload.get("economic_importance"),
-        payload.get("strategic_value"),
-        payload.get("population_density"),
-        payload.get("notable_features"),
-        payload.get("hidden_aspects"),
-        payload.get("access_restrictions"),
-        payload.get("local_customs"),
-        payload.get("embedding"),
+        serialized_payload["user_id"],
+        serialized_payload["conversation_id"],
+        serialized_payload["location_name"],
+        serialized_payload.get("description"),
+        serialized_payload.get("location_type"),
+        serialized_payload.get("parent_location"),
+        serialized_payload.get("room"),
+        serialized_payload.get("building"),
+        serialized_payload.get("district"),
+        serialized_payload.get("district_type"),
+        serialized_payload.get("city"),
+        serialized_payload.get("region"),
+        serialized_payload.get("country"),
+        serialized_payload.get("planet"),
+        serialized_payload.get("galaxy"),
+        serialized_payload.get("realm"),
+        serialized_payload.get("lat"),
+        serialized_payload.get("lon"),
+        serialized_payload.get("is_fictional"),
+        serialized_payload.get("open_hours"),
+        serialized_payload.get("controlling_faction"),
+        serialized_payload.get("cultural_significance"),
+        serialized_payload.get("economic_importance"),
+        serialized_payload.get("strategic_value"),
+        serialized_payload.get("population_density"),
+        serialized_payload.get("notable_features"),
+        serialized_payload.get("hidden_aspects"),
+        serialized_payload.get("access_restrictions"),
+        serialized_payload.get("local_customs"),
+        serialized_payload.get("embedding"),
     )
 
     if row is None:
