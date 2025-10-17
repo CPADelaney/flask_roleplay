@@ -697,6 +697,12 @@ def _matches_generic_venue_request(
     if not _is_modern_or_realistic_setting(setting_context):
         return False
 
+    normalized = (normalized_token or "").strip()
+    if normalized and normalized in BRAND_TERMS:
+        # Brand-specific venues should route through the real place resolver
+        # rather than being treated as generic venue placeholders.
+        return False
+
     candidate = _normalize_generic_venue_phrase(normalized_token)
     if not candidate:
         return False
