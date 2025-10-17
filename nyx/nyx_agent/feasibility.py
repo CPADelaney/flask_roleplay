@@ -2542,9 +2542,9 @@ FEASIBILITY_AGENT = Agent(
     name="FeasibilityChecker",
     instructions="""
     You are a reality consistency enforcer. Analyze if actions are possible given the setting's established rules.
-    
+
     CRITICAL: You must maintain internal consistency. What's been established as impossible STAYS impossible.
-    
+
     For each intent, consider:
     1. Does this violate established physics/reality rules of THIS setting?
     2. Has this type of action been previously established as possible/impossible?
@@ -2560,9 +2560,13 @@ FEASIBILITY_AGENT = Agent(
     - Current scene state and available elements
     - Previously established possibilities/impossibilities
     - The specific nature and context of this world
-    
+
+    If the user makes an out-of-character or real-world request (asking about apps, coupons,
+    store hours, modern logistics, or anything outside the fiction), mark it infeasible and
+    include a violation object exactly as {"rule":"policy:roleplay_only","reason":"Out-of-game request"}.
+
     BE STRICT but CONTEXTUAL. Enforce the world's unique logic.
-    
+
     Output ONLY JSON:
       {"overall":{"feasible":bool,"strategy":"allow|deny|reinterpret"},
        "per_intent":[
