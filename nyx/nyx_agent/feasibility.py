@@ -3599,6 +3599,39 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             elif key == 'CurrentLocation':
                 context["location"]["name"] = value
                 current_location_name = value
+                location_name = value
+                try:
+                    if isinstance(location_name, str):
+                        location_name = location_name.strip()
+                    if location_name:
+                        location_row = await conn.fetchrow(
+                            """
+                            SELECT * FROM Locations
+                            WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
+                            """,
+                            nyx_ctx.user_id,
+                            nyx_ctx.conversation_id,
+                            location_name,
+                        )
+                    else:
+                        location_row = None
+                except Exception:
+                    logger.exception("Failed to load current location record", exc_info=True)
+                    location_row = None
+
+                if location_row:
+                    try:
+                        location_obj = Location.from_record(
+                            location_row,
+                            user_id=nyx_ctx.user_id,
+                            conversation_id=nyx_ctx.conversation_id,
+                            location_name=location_name,
+                        )
+                    except Exception:
+                        logger.exception("Failed to instantiate Location from record", exc_info=True)
+                    else:
+                        context["_location_object"] = location_obj
+                        context["location_object"] = location_obj
             elif key == 'CurrentTime':
                 context["current_time"] = value
             elif key == 'InfrastructureFlags':
@@ -3668,26 +3701,6 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             )
         )
         context["caps_loaded"] = caps_loaded_flag
-
-        if current_location_name:
-            location_row = await conn.fetchrow(
-                """
-                SELECT * FROM Locations
-                WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
-                LIMIT 1
-                """,
-                nyx_ctx.user_id,
-                nyx_ctx.conversation_id,
-                current_location_name,
-            )
-            if location_row:
-                location_obj = Location(**dict(location_row))
-                context["_location_object"] = location_obj
-                try:
-                    context["location_object"] = location_obj.to_dict()
-                except Exception:
-                    logger.exception("Failed to convert Location object to dict", exc_info=True)
-                    context["location_object"] = dict(location_row)
 
         normalized_mode_policy = _normalize_mode_policy_value(context.get("mode_policy"))
         if normalized_mode_policy is None:
