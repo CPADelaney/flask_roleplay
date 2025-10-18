@@ -56,6 +56,7 @@ class FakeConnection:
             (other_record["user_id"], other_record["conversation_id"], other_record["location_name"]): other_record,
         }
         self.location_queries = []
+        self.known_location_queries = []
 
     async def fetch(self, query, *args):
         normalized = " ".join(query.split())
@@ -66,10 +67,14 @@ class FakeConnection:
         if normalized.startswith("SELECT item_name, equipped FROM PlayerInventory"):
             return []
         if normalized.startswith("SELECT location_name FROM Locations"):
+            assert "user_id=$1" in normalized and "conversation_id=$2" in normalized
             expected_user_id, expected_conversation_id = args
+            self.known_location_queries.append(args)
             assert expected_user_id == 101
             assert expected_conversation_id == 202
-            return [{"location_name": "Shared Base"}]
+            return [
+                {"location_name": "Shared Base"},
+            ]
         if normalized.startswith("SELECT npc_name FROM NPCStats"):
             return []
         if normalized.startswith("SELECT content FROM messages"):
@@ -79,6 +84,8 @@ class FakeConnection:
     async def fetchrow(self, query, *args):
         normalized = " ".join(query.split())
         if normalized.startswith("SELECT * FROM Locations"):
+            assert "user_id=$1" in normalized and "conversation_id=$2" in normalized
+            assert "location_name=$3" in normalized
             self.location_queries.append(args)
             return self._records.get((args[0], args[1], args[2]))
         if normalized.startswith("SELECT value FROM CurrentRoleplay"):
@@ -128,8 +135,10 @@ async def test_load_context_scopes_location_by_user(monkeypatch):
     context_bundle = await feasibility._load_comprehensive_context(ctx)
 
     assert connection.location_queries == [(101, 202, "Shared Base")]
+    assert connection.known_location_queries == [(101, 202)]
     location_obj = context_bundle["location_object"]
     assert location_obj is not None
     assert location_obj.user_id == 101
     assert location_obj.description == "User specific description"
     assert location_obj.planet == "Mars"
+    assert context_bundle["known_location_names"] == ["Shared Base"]
