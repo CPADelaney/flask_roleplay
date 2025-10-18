@@ -4,8 +4,11 @@ import math
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
+
 import httpx
+
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
+from nyx.location.types import Location
 
 logger = logging.getLogger(__name__)
 
@@ -139,3 +142,26 @@ def nearest_airport_label(anchor: GeoAnchor):
             return "San Francisco International Airport", 37.6213, -122.3790
         return "Nearest International Airport", anchor.lat + 0.09, anchor.lon + 0.09
     return "Nearest International Airport", 0.0, 0.0
+
+
+def derive_anchor_from_hierarchy(current_location: Location) -> Optional[str]:
+    """Return a human-readable anchor derived from a location hierarchy."""
+
+    if not isinstance(current_location, Location):
+        return None
+
+    if getattr(current_location, "is_fictional", False):
+        return None
+
+    parts = []
+    for attr in ("district", "city", "region", "country"):
+        value = getattr(current_location, attr, None)
+        if isinstance(value, str):
+            value = value.strip()
+        if value:
+            parts.append(value)
+
+    if parts:
+        return ", ".join(parts)
+
+    return None
