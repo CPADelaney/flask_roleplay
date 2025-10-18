@@ -198,6 +198,27 @@ IMPOSSIBLE_DEFAULT: Set[str] = {
     "demon_summoning",
     "necromancy",
 }
+
+
+def _context_payload_for_agent(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a JSON-safe copy of context for agent interactions."""
+
+    sanitized: Dict[str, Any] = {}
+    for key, value in context.items():
+        # Private/internal keys are excluded from serialized payloads.
+        if isinstance(key, str) and key.startswith("_"):
+            continue
+
+        if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
+            try:
+                sanitized[key] = value.to_dict()
+                continue
+            except Exception:
+                logger.exception("Failed to convert %s to dict during serialization", key)
+
+        sanitized[key] = value
+
+    return sanitized
 SAFE_BASELINE: Set[str] = {"mundane_action", "dialogue", "movement", "social", "trade"}
 
 
@@ -1706,7 +1727,11 @@ async def _resolve_location_candidate(
     near_fallback: Optional[str] = None
     current_location_obj = None
     if isinstance(setting_context, dict):
-        current_location_obj = setting_context.get("location_object")
+        current_location_obj = setting_context.get("_location_object")
+        if current_location_obj is None:
+            maybe_public_location = setting_context.get("location_object")
+            if isinstance(maybe_public_location, Location):
+                current_location_obj = maybe_public_location
         location_ctx = setting_context.get("location")
         if isinstance(location_ctx, dict):
             for key in ("name", "display_name", "label", "title"):
@@ -3468,6 +3493,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         "physics_caps": {},
         "location": {},
         "location_object": None,
+        "_location_object": None,
         "location_features": [],
         "scene": {},
         "established_impossibilities": [],
@@ -3643,7 +3669,13 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                 current_location_name,
             )
             if location_row:
-                context["location_object"] = Location(**dict(location_row))
+                location_obj = Location(**dict(location_row))
+                context["_location_object"] = location_obj
+                try:
+                    context["location_object"] = location_obj.to_dict()
+                except Exception:
+                    logger.exception("Failed to convert Location object to dict", exc_info=True)
+                    context["location_object"] = dict(location_row)
 
         normalized_mode_policy = _normalize_mode_policy_value(context.get("mode_policy"))
         if normalized_mode_policy is None:
@@ -3901,7 +3933,8 @@ async def _generate_contextual_alternatives(
         }
     }
     
-    run = await Runner.run(ALTERNATIVE_GENERATOR_AGENT, json.dumps(context))
+    sanitized_context = _context_payload_for_agent(context)
+    run = await Runner.run(ALTERNATIVE_GENERATOR_AGENT, json.dumps(sanitized_context))
     
     try:
         alternatives = json.loads(getattr(run, "final_output", "[]"))
@@ -4548,7 +4581,10 @@ async def detect_setting_type(nyx_ctx: NyxContext) -> Dict[str, Any]:
     
     try:
         run = await asyncio.wait_for(
-            Runner.run(SETTING_DETECTIVE_AGENT, json.dumps(context)),
+            Runner.run(
+                SETTING_DETECTIVE_AGENT,
+                json.dumps(_context_payload_for_agent(context)),
+            ),
             timeout=SETTING_DETECTION_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

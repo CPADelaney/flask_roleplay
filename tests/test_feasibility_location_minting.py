@@ -88,11 +88,12 @@ class _FakeConnection:
 
     async def fetchrow(self, query, *args):
         if "FROM Locations" in query:
-            location_name, conversation_id = args
+            user_id, conversation_id, location_name = args
             for row in self.locations:
                 if (
-                    row["location_name"] == location_name
+                    row["user_id"] == user_id
                     and row["conversation_id"] == conversation_id
+                    and row["location_name"] == location_name
                 ):
                     return {
                         "user_id": row["user_id"],
@@ -217,8 +218,10 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
 
     context_bundle = await feasibility._load_comprehensive_context(_DummyNyxContext(1, 2))
     assert normalized in context_bundle["known_location_names"]
-    assert isinstance(context_bundle.get("location_object"), LocationModel)
-    assert context_bundle["location_object"].location_name == normalized
+    assert isinstance(context_bundle.get("location_object"), dict)
+    assert context_bundle["location_object"]["location_name"] == normalized
+    assert isinstance(context_bundle.get("_location_object"), LocationModel)
+    assert context_bundle["_location_object"].location_name == normalized
 
     known_tokens = feasibility._build_known_location_tokens(
         set(),

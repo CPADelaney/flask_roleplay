@@ -162,7 +162,7 @@ def test_resolver_prefers_location_hierarchy_anchor(monkeypatch):
     }
     text_l = intent["raw_text"].lower()
     setting_context = _baseline_setting_context()
-    setting_context["location_object"] = Location(
+    location_obj = Location(
         user_id=1,
         conversation_id=1,
         location_name="Pier 39",
@@ -172,6 +172,8 @@ def test_resolver_prefers_location_hierarchy_anchor(monkeypatch):
         country="USA",
         is_fictional=False,
     )
+    setting_context["_location_object"] = location_obj
+    setting_context["location_object"] = location_obj.to_dict()
 
     unresolved = asyncio.run(
         feasibility._find_unresolved_location_targets(
