@@ -1724,32 +1724,44 @@ async def _resolve_location_candidate(
 
     # --- Updated anchor discovery ---
     use_near: Optional[str] = None
-    near_fallback: Optional[str] = None
+    near_hint: Optional[str] = None
+    anchor_candidate: Optional[str] = None
     current_location_obj = None
-    if isinstance(setting_context, dict):
-        current_location_obj = setting_context.get("_location_object")
+    context_dict: Dict[str, Any] = setting_context if isinstance(setting_context, dict) else {}
+
+    if context_dict:
+        current_location_obj = context_dict.get("_location_object")
         if current_location_obj is None:
-            maybe_public_location = setting_context.get("location_object")
+            maybe_public_location = context_dict.get("location_object")
             if isinstance(maybe_public_location, Location):
                 current_location_obj = maybe_public_location
-        location_ctx = setting_context.get("location")
+
+        location_ctx = context_dict.get("location")
         if isinstance(location_ctx, dict):
             for key in ("name", "display_name", "label", "title"):
                 value = location_ctx.get(key)
                 if isinstance(value, str) and value.strip():
-                    near_fallback = value.strip()
+                    near_hint = value.strip()
                     break
         elif isinstance(location_ctx, str) and location_ctx.strip():
-            near_fallback = location_ctx.strip()
+            near_hint = location_ctx.strip()
 
     if current_location_obj is not None:
         try:
-            use_near = derive_anchor_from_hierarchy(current_location_obj)
+            anchor_candidate = derive_anchor_from_hierarchy(current_location_obj)
         except Exception:
             logger.exception("Failed to derive anchor from location hierarchy", exc_info=True)
 
+    if near_hint:
+        normalized_hint = _normalize_location_phrase(near_hint)
+        if normalized_hint and _looks_like_real_world_toponym(near_hint, normalized_hint, context_dict):
+            use_near = near_hint
+
+    if not use_near and anchor_candidate:
+        use_near = anchor_candidate
+
     if not use_near:
-        use_near = _derive_near_string(setting_context, fallback=near_fallback)
+        use_near = _derive_near_string(setting_context, fallback=near_hint)
 
     score = float(await plausibility_score(original, near=use_near))
     minted = False
