@@ -26,6 +26,7 @@ from nyx.feas.archetypes.roman_empire import RomanEmpire
 from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
 from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
+from nyx.location.anchors import derive_anchor_from_hierarchy
 from nyx.geo.toponym import plausibility_score
 from nyx.location.config import LocationSettings
 from nyx.location.hierarchy import assign_hierarchy, get_or_create_location
@@ -1700,29 +1701,30 @@ async def _resolve_location_candidate(
 
     token_kind = (inferred_kind or _guess_requested_kind(original, setting_context) or "real_world").lower()
 
-    # --- Existing near-hint discovery (kept) ---
-    near_hint: Optional[str] = None
+    # --- Updated anchor discovery ---
+    use_near: Optional[str] = None
+    near_fallback: Optional[str] = None
+    current_location_obj = None
     if isinstance(setting_context, dict):
+        current_location_obj = setting_context.get("location_object")
         location_ctx = setting_context.get("location")
         if isinstance(location_ctx, dict):
             for key in ("name", "display_name", "label", "title"):
                 value = location_ctx.get(key)
                 if isinstance(value, str) and value.strip():
-                    near_hint = value.strip()
+                    near_fallback = value.strip()
                     break
         elif isinstance(location_ctx, str) and location_ctx.strip():
-            near_hint = location_ctx.strip()
+            near_fallback = location_ctx.strip()
 
-    # --- NEW: if near_hint looks fictional or is empty, upgrade to a real anchor ---
-    use_near = near_hint
-    try:
-        looks_real = bool(use_near and _looks_like_real_world_toponym(use_near, _normalize_location_phrase(use_near), setting_context))
-    except Exception:
-        looks_real = False
-    if not looks_real:
-        derived = _derive_near_string(setting_context)
-        if derived:
-            use_near = derived
+    if current_location_obj is not None:
+        try:
+            use_near = derive_anchor_from_hierarchy(current_location_obj)
+        except Exception:
+            logger.exception("Failed to derive anchor from location hierarchy", exc_info=True)
+
+    if not use_near:
+        use_near = _derive_near_string(setting_context, fallback=near_fallback)
 
     score = float(await plausibility_score(original, near=use_near))
     minted = False
