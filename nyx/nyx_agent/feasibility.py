@@ -3633,11 +3633,12 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             location_row = await conn.fetchrow(
                 """
                 SELECT * FROM Locations
-                WHERE location_name=$1 AND conversation_id=$2
+                WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
                 LIMIT 1
                 """,
-                current_location_name,
+                nyx_ctx.user_id,
                 nyx_ctx.conversation_id,
+                current_location_name,
             )
             if location_row:
                 context["location_object"] = Location(**dict(location_row))
