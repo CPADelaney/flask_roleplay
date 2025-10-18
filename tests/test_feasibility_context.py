@@ -1,6 +1,6 @@
 import asyncio
 import importlib
-import asyncio
+import json
 import os
 import sys
 import types
@@ -38,6 +38,8 @@ sys.modules["sentence_transformers"] = dummy_sentence_transformers
 sys.modules["sentence_transformers.models"] = dummy_models
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+from nyx.location.types import Location as LocationModel
 
 feasibility = importlib.import_module("nyx.nyx_agent.feasibility")
 
@@ -95,3 +97,77 @@ def test_load_context_uses_setting_kind_fallback(monkeypatch):
 
     asyncio.run(_run())
     assert run_calls["count"] == 0
+
+
+def test_load_context_serializes_location_object(monkeypatch):
+    class DummyConnection:
+        def __init__(self) -> None:
+            self.location_row = {
+                "user_id": 1,
+                "conversation_id": 2,
+                "location_name": "Atrium",
+                "district": "North Beach",
+                "city": "San Francisco",
+                "region": "California",
+                "country": "USA",
+                "is_fictional": False,
+            }
+
+        async def fetch(self, query, *args):
+            if "SELECT key, value FROM CurrentRoleplay" in query:
+                return [
+                    {"key": "CurrentLocation", "value": "Atrium"},
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                ]
+            if "SELECT location_name FROM Locations" in query:
+                return [{"location_name": self.location_row["location_name"]}]
+            if "FROM GameRules" in query:
+                return []
+            if "FROM PlayerInventory" in query:
+                return []
+            if "FROM NPCStats" in query:
+                return []
+            if "FROM messages" in query:
+                return []
+            return []
+
+        async def fetchrow(self, query, *args):
+            if "SELECT * FROM Locations" in query:
+                return dict(self.location_row)
+            if "SELECT value FROM CurrentRoleplay" in query:
+                return None
+            if "FROM PlayerStats" in query:
+                return None
+            return None
+
+        async def fetchval(self, *args, **kwargs):
+            return None
+
+    @asynccontextmanager
+    async def fake_db_context():
+        yield DummyConnection()
+
+    monkeypatch.setattr(feasibility, "get_db_connection_context", fake_db_context)
+
+    class DummyNyxContext:
+        def __init__(self, user_id: int, conversation_id: int):
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+
+    async def _run():
+        ctx = DummyNyxContext(user_id=1, conversation_id=2)
+        context = await feasibility._load_comprehensive_context(ctx)
+
+        assert isinstance(context.get("_location_object"), LocationModel)
+        assert context["_location_object"].location_name == "Atrium"
+        assert isinstance(context.get("location_object"), dict)
+        assert context["location_object"]["location_name"] == "Atrium"
+
+        sanitized = feasibility._context_payload_for_agent(context)
+        assert "_location_object" not in sanitized
+        assert sanitized["location_object"]["location_name"] == "Atrium"
+
+        # Ensure the sanitized payload remains JSON serializable for downstream calls.
+        json.dumps(sanitized)
+
+    asyncio.run(_run())
