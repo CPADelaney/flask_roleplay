@@ -1,18 +1,51 @@
+import importlib
 import os
 import sys
+import types
+import typing
+import typing_extensions
 from contextlib import asynccontextmanager
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+dummy_models = types.ModuleType("sentence_transformers.models")
+dummy_models.Transformer = lambda *args, **kwargs: None
+dummy_models.Pooling = lambda *args, **kwargs: None
+
+
+class _StubSentenceTransformer:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def encode(self, texts, **_kwargs):
+        return [[0.0] * 3 for _ in texts]
+
+    def get_sentence_embedding_dimension(self):
+        return 3
+
+
+dummy_sentence_transformers = types.ModuleType("sentence_transformers")
+dummy_sentence_transformers.SentenceTransformer = _StubSentenceTransformer
+dummy_sentence_transformers.models = dummy_models
+
+sys.modules["sentence_transformers"] = dummy_sentence_transformers
+sys.modules["sentence_transformers.models"] = dummy_models
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+typing.TypedDict = typing_extensions.TypedDict
+
 from nyx.location.types import Location as LocationModel
-from nyx.nyx_agent import feasibility
+
+feasibility = importlib.import_module("nyx.nyx_agent.feasibility")
 
 
 class _FakeConnection:
     def __init__(self):
         self.locations = []
+        self.current_roleplay = []
 
     def upsert_location(self, user_id: int, conversation_id: int, location_name: str) -> None:
         existing = next(
@@ -42,9 +75,30 @@ class _FakeConnection:
                 for row in self.locations
                 if row["user_id"] == user_id and row["conversation_id"] == conversation_id
             ]
+        if "SELECT key, value FROM CurrentRoleplay" in query:
+            user_id, conversation_id, keys = args
+            return [
+                {"key": entry["key"], "value": entry["value"]}
+                for entry in self.current_roleplay
+                if entry["user_id"] == user_id
+                and entry["conversation_id"] == conversation_id
+                and entry["key"] in (keys or [])
+            ]
         return []
 
-    async def fetchrow(self, *args, **kwargs):
+    async def fetchrow(self, query, *args):
+        if "FROM Locations" in query:
+            location_name, conversation_id = args
+            for row in self.locations:
+                if (
+                    row["location_name"] == location_name
+                    and row["conversation_id"] == conversation_id
+                ):
+                    return {
+                        "user_id": row["user_id"],
+                        "conversation_id": row["conversation_id"],
+                        "location_name": row["location_name"],
+                    }
         return None
 
     async def fetchval(self, *args, **kwargs):
@@ -95,10 +149,10 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
     minted_name = "Shadow Citadel"
     normalized = "shadow citadel"
 
-    async def fake_resolver(*_args, **_kwargs):
+    async def fake_resolver(original, normalized, _setting_context, resolver_cache, **_kwargs):
         nonlocal minted_call_count
         minted_call_count += 1
-        return {
+        decision = {
             "decision": "allow",
             "reason": "minted",
             "score": 0.9,
@@ -108,6 +162,8 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
             "branch": "fictional",
             "minted": True,
         }
+        resolver_cache[normalized or original.lower()] = decision
+        return decision
 
     monkeypatch.setattr(feasibility, "_resolve_location_candidate", fake_resolver)
 
@@ -150,8 +206,19 @@ async def test_minted_location_persisted_and_reused(monkeypatch):
 
     assert stored_candidates
 
+    fake_conn.current_roleplay.append(
+        {
+            "user_id": 1,
+            "conversation_id": 2,
+            "key": "CurrentLocation",
+            "value": normalized,
+        }
+    )
+
     context_bundle = await feasibility._load_comprehensive_context(_DummyNyxContext(1, 2))
     assert normalized in context_bundle["known_location_names"]
+    assert isinstance(context_bundle.get("location_object"), LocationModel)
+    assert context_bundle["location_object"].location_name == normalized
 
     known_tokens = feasibility._build_known_location_tokens(
         set(),

@@ -3465,6 +3465,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         "economy_flags": {},
         "physics_caps": {},
         "location": {},
+        "location_object": None,
         "location_features": [],
         "scene": {},
         "established_impossibilities": [],
@@ -3505,6 +3506,8 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         setting_era = context.get("setting_era")
         technology_level_from_db = False
         setting_era_from_db = False
+
+        current_location_name: Optional[str] = None
 
         for row in setting_data:
             key = row['key']
@@ -3555,6 +3558,7 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
                 context["environment_history"] = value
             elif key == 'CurrentLocation':
                 context["location"]["name"] = value
+                current_location_name = value
             elif key == 'CurrentTime':
                 context["current_time"] = value
             elif key == 'InfrastructureFlags':
@@ -3624,6 +3628,19 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
             )
         )
         context["caps_loaded"] = caps_loaded_flag
+
+        if current_location_name:
+            location_row = await conn.fetchrow(
+                """
+                SELECT * FROM Locations
+                WHERE location_name=$1 AND conversation_id=$2
+                LIMIT 1
+                """,
+                current_location_name,
+                nyx_ctx.conversation_id,
+            )
+            if location_row:
+                context["location_object"] = Location(**dict(location_row))
 
         normalized_mode_policy = _normalize_mode_policy_value(context.get("mode_policy"))
         if normalized_mode_policy is None:
