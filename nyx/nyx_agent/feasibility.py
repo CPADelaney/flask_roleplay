@@ -26,7 +26,6 @@ from nyx.feas.archetypes.roman_empire import RomanEmpire
 from nyx.feas.archetypes.underwater_scifi import UnderwaterSciFi
 from nyx.feas.capabilities import merge_caps
 from nyx.feas.context import build_affordance_index
-from nyx.location.anchors import derive_anchor_from_hierarchy
 from nyx.geo.toponym import plausibility_score
 from nyx.location.config import LocationSettings
 from nyx.location.hierarchy import assign_hierarchy, get_or_create_location
@@ -1340,32 +1339,6 @@ def _guess_requested_kind(
         return "fictional"
 
     return "real_world"
-
-
-def _resolver_feedback_for_token(
-    token: str, resolver_cache: Dict[str, Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
-    if not resolver_cache:
-        return None
-
-    raw = (token or "").strip().lower()
-    normalized = _normalize_location_phrase(token)
-    for candidate in filter(None, {normalized, raw}):
-        verdict = resolver_cache.get(candidate)
-        if verdict:
-            return verdict
-    return None
-
-
-def _is_plausible_location_token(
-    token: str, resolver_cache: Dict[str, Dict[str, Any]]
-) -> bool:
-    verdict = _resolver_feedback_for_token(token, resolver_cache)
-    if verdict:
-        return verdict.get("decision") == "allow"
-    return False
-
-
 def _format_admin_preview(path: Optional[Dict[str, Any]]) -> Tuple[Optional[str], List[str]]:
     if not isinstance(path, dict):
         return None, []
@@ -1450,382 +1423,6 @@ def _coerce_resolve_result(result: Any) -> Optional[ResolveResult]:
     )
 
 
-def _scope_from_resolver_decision(decision: Dict[str, Any]) -> Scope:
-    branch = str(decision.get("branch") or "").lower()
-    allow_fictional = bool(decision.get("allow_fictional"))
-    is_real_branch = bool(decision.get("is_real_branch"))
-
-    if "hybrid" in branch:
-        return "hybrid"
-    if is_real_branch:
-        return "real"
-    if any(token in branch for token in ("fiction", "fantasy", "sci", "space")):
-        return "fictional"
-    if allow_fictional and not is_real_branch:
-        return "fictional"
-    return "real"
-
-
-def _extract_coordinates(payload: Any) -> Tuple[Optional[float], Optional[float]]:
-    if not isinstance(payload, dict):
-        return None, None
-
-    def _coerce(value: Any) -> Optional[float]:
-        try:
-            if value is None:
-                return None
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    lat = None
-    lon = None
-
-    for key in ("lat", "latitude"):
-        lat = _coerce(payload.get(key))
-        if lat is not None:
-            break
-    for key in ("lon", "long", "longitude"):
-        lon = _coerce(payload.get(key))
-        if lon is not None:
-            break
-
-    coords = payload.get("coords") or payload.get("coordinates")
-    if isinstance(coords, dict):
-        if lat is None:
-            for key in ("lat", "latitude"):
-                lat = _coerce(coords.get(key))
-                if lat is not None:
-                    break
-        if lon is None:
-            for key in ("lon", "long", "longitude"):
-                lon = _coerce(coords.get(key))
-                if lon is not None:
-                    break
-
-    return lat, lon
-
-
-def _anchor_from_setting_context(
-    setting_context: Optional[Dict[str, Any]],
-    *,
-    scope: Scope,
-    label: Optional[str] = None,
-) -> Optional[Anchor]:
-    if not isinstance(setting_context, dict):
-        return None
-
-    location_payload = setting_context.get("location") or {}
-    hints = _extract_geo_hints_from_location(location_payload)
-    lat, lon = _extract_coordinates(location_payload)
-
-    label_value = (
-        label
-        or location_payload.get("display_name")
-        or location_payload.get("name")
-        or location_payload.get("label")
-        or setting_context.get("setting_name")
-        or None
-    )
-
-    world_name: Optional[str] = None
-    search_payloads: List[Dict[str, Any]] = []
-    world_model = setting_context.get("world_model")
-    if isinstance(world_model, dict):
-        search_payloads.append(world_model)
-    for key in ("world", "world_meta", "world_info"):
-        payload = setting_context.get(key)
-        if isinstance(payload, dict):
-            search_payloads.append(payload)
-
-    for payload in search_payloads:
-        for candidate_key in ("world_name", "name", "label", "title"):
-            value = payload.get(candidate_key)
-            if isinstance(value, str) and value.strip():
-                world_name = value.strip()
-                break
-        if world_name:
-            break
-
-    focus: Optional[Place] = None
-    if hints.get("city"):
-        focus = Place(
-            name=hints["city"],
-            level="city",
-            lat=lat,
-            lon=lon,
-            address={k: v for k, v in hints.items() if v},
-            meta={"source": "feasibility_anchor"},
-        )
-
-    hints_payload = {
-        "location": location_payload,
-        "world_model": world_model,
-    }
-
-    return Anchor(
-        scope=scope,
-        focus=focus,
-        label=label_value,
-        lat=lat,
-        lon=lon,
-        primary_city=hints.get("city"),
-        region=hints.get("region"),
-        country=hints.get("country"),
-        world_name=world_name,
-        hints=hints_payload,
-    )
-
-
-def _build_minted_candidate(
-    name: str,
-    normalized: Optional[str],
-    decision: Dict[str, Any],
-    setting_context: Optional[Dict[str, Any]],
-    *,
-    anchor: Optional[Anchor],
-    scope: Scope,
-) -> Candidate:
-    token = (normalized or name or "").strip().lower()
-
-    def _has_any(markers: Iterable[str]) -> bool:
-        return any(marker in token for marker in markers)
-
-    if _has_any({"district", "quarter", "ward", "borough", "neighborhood"}):
-        level = "district"
-    elif _has_any({"city", "town", "village", "metropolis", "capital"}):
-        level = "city"
-    elif _has_any({"region", "province", "state", "kingdom", "realm", "empire", "territory"}):
-        level = "region"
-    else:
-        level = "venue"
-
-    hints = (
-        _extract_geo_hints_from_location(setting_context.get("location"))
-        if isinstance(setting_context, dict)
-        else {"district": None, "city": None, "region": None, "country": None}
-    )
-
-    address: Dict[str, Any] = {
-        key: value
-        for key, value in (
-            ("district", hints.get("district")),
-            ("city", hints.get("city")),
-            ("region", hints.get("region")),
-            ("country", hints.get("country")),
-        )
-        if value
-    }
-
-    if anchor:
-        if anchor.primary_city and "city" not in address:
-            address["city"] = anchor.primary_city
-        if anchor.region and "region" not in address:
-            address["region"] = anchor.region
-        if anchor.country and "country" not in address:
-            address["country"] = anchor.country
-
-    lat, lon = None, None
-    location_payload = setting_context.get("location") if isinstance(setting_context, dict) else {}
-    loc_lat, loc_lon = _extract_coordinates(location_payload)
-    if anchor and anchor.lat is not None:
-        lat = anchor.lat
-    elif loc_lat is not None:
-        lat = loc_lat
-    if anchor and anchor.lon is not None:
-        lon = anchor.lon
-    elif loc_lon is not None:
-        lon = loc_lon
-
-    key_candidate = (normalized or name or "").strip().lower().replace(" ", "_")
-    place_key = key_candidate or None
-
-    meta: Dict[str, Any] = {
-        "source": "feasibility_resolver",
-        "display_name": name,
-        "resolver_branch": decision.get("branch"),
-        "resolver_score": decision.get("score"),
-        "minted": True,
-        "minted_at": datetime.utcnow().isoformat(),
-        "category": decision.get("kind"),
-        "normalized_token": normalized,
-    }
-
-    if anchor and anchor.world_name:
-        meta["world_name"] = anchor.world_name
-    if scope != "real":
-        meta["is_fictional_branch"] = True
-    if isinstance(location_payload, dict):
-        parent_name = (
-            location_payload.get("name")
-            or location_payload.get("display_name")
-            or location_payload.get("label")
-        )
-        if parent_name:
-            meta.setdefault("parent_location", parent_name)
-
-    for key, value in address.items():
-        if value and key not in meta:
-            meta[key] = value
-
-    confidence = float(decision.get("score") or 0.0)
-
-    place = Place(
-        name=name,
-        level=level,  # type: ignore[arg-type]
-        key=place_key,
-        lat=lat,
-        lon=lon,
-        address=address,
-        meta=meta,
-    )
-
-    return Candidate(place=place, confidence=confidence)
-
-
-async def _resolve_location_candidate(
-    original: str,
-    normalized: Optional[str],
-    setting_context: Optional[Dict[str, Any]],
-    resolver_cache: Dict[str, Dict[str, Any]],
-    inferred_kind: Optional[str] = None,
-) -> Dict[str, Any]:
-    existing = _resolver_feedback_for_token(normalized or original, resolver_cache)
-    if existing:
-        return existing
-
-    world_model, branch, is_real_branch, allow_fictional = _world_model_branch(setting_context)
-    resolver_cfg: Dict[str, Any] = {}
-    if isinstance(world_model.get("resolver"), dict):
-        resolver_cfg = dict(world_model["resolver"])
-    elif isinstance(world_model.get("location_resolver"), dict):
-        resolver_cfg = dict(world_model["location_resolver"])
-
-    allow_threshold = _coerce_float(
-        resolver_cfg.get("allow_threshold"),
-        LOCATION_RESOLVER_ALLOW_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ALLOW_THRESHOLD,
-    )
-    ask_threshold = _coerce_float(
-        resolver_cfg.get("ask_threshold"),
-        LOCATION_RESOLVER_ASK_THRESHOLD if is_real_branch else FICTIONAL_RESOLVER_ASK_THRESHOLD,
-    )
-    if ask_threshold >= allow_threshold:
-        ask_threshold = max(min(allow_threshold * 0.75, allow_threshold - 0.05), 0.0)
-
-    fictional_policy = str(
-        resolver_cfg.get("fictional_policy")
-        or world_model.get("fictional_location_policy")
-        or ("allow" if allow_fictional else "deny")
-    ).strip().lower()
-    if fictional_policy not in {"allow", "ask", "deny"}:
-        fictional_policy = "allow" if allow_fictional else "deny"
-
-    token_kind = (inferred_kind or _guess_requested_kind(original, setting_context) or "real_world").lower()
-
-    # --- Updated anchor discovery ---
-    use_near: Optional[str] = None
-    near_hint: Optional[str] = None
-    anchor_candidate: Optional[str] = None
-    current_location_obj = None
-    context_dict: Dict[str, Any] = setting_context if isinstance(setting_context, dict) else {}
-
-    if context_dict:
-        current_location_obj = context_dict.get("_location_object")
-        if current_location_obj is None:
-            maybe_public_location = context_dict.get("location_object")
-            if isinstance(maybe_public_location, Location):
-                current_location_obj = maybe_public_location
-
-        location_ctx = context_dict.get("location")
-        if isinstance(location_ctx, dict):
-            for key in ("name", "display_name", "label", "title"):
-                value = location_ctx.get(key)
-                if isinstance(value, str) and value.strip():
-                    near_hint = value.strip()
-                    break
-        elif isinstance(location_ctx, str) and location_ctx.strip():
-            near_hint = location_ctx.strip()
-
-    if current_location_obj is not None:
-        try:
-            anchor_candidate = derive_anchor_from_hierarchy(current_location_obj)
-        except Exception:
-            logger.exception("Failed to derive anchor from location hierarchy", exc_info=True)
-
-    if near_hint:
-        normalized_hint = _normalize_location_phrase(near_hint)
-        if normalized_hint and _looks_like_real_world_toponym(near_hint, normalized_hint, context_dict):
-            use_near = near_hint
-
-    if not use_near and anchor_candidate:
-        use_near = anchor_candidate
-
-    if not use_near:
-        use_near = _derive_near_string(setting_context, fallback=near_hint)
-
-    score = float(await plausibility_score(original, near=use_near))
-    minted = False
-
-    decision = "deny"
-    reason = ""
-
-    if token_kind != "fictional" and is_real_branch:
-        if score >= allow_threshold:
-            decision = "allow"
-            reason = f"Resolver recognized '{original}' (score {score:.2f})."
-        elif score >= ask_threshold:
-            decision = "ask"
-            reason = f"Resolver is unsure about '{original}' (score {score:.2f})."
-        else:
-            decision = "deny"
-            reason = f"Resolver rejected '{original}' (score {score:.2f})."
-    else:
-        if score >= allow_threshold:
-            decision = "allow"
-            reason = f"Resolver recognized '{original}' (score {score:.2f})."
-        elif allow_fictional and fictional_policy == "allow":
-            decision = "allow"
-            minted = True
-            reason = (
-                f"Resolver minted '{original}' for the {branch or 'fictional'} branch."
-            )
-        elif allow_fictional and fictional_policy == "ask":
-            decision = "ask"
-            reason = (
-                f"Resolver can mint '{original}' if you confirm it belongs in this story."
-            )
-        elif score >= ask_threshold:
-            decision = "ask"
-            reason = f"Resolver is unsure about '{original}' (score {score:.2f})."
-        else:
-            decision = "deny"
-            if allow_fictional:
-                reason = (
-                    f"Resolver rejected '{original}' because minting is disabled for this branch (score {score:.2f})."
-                )
-            else:
-                reason = f"Resolver rejected '{original}' (score {score:.2f})."
-
-    payload = {
-        "decision": decision,
-        "reason": reason,
-        "score": score,
-        "kind": token_kind,
-        "token": original,
-        "normalized": normalized,
-        "branch": branch,
-        "minted": minted,
-        "near_used": use_near,  # helpful for logs
-        "allow_fictional": allow_fictional,
-        "is_real_branch": is_real_branch,
-    }
-
-    for candidate in filter(None, {normalized, (original or "").strip().lower()}):
-        resolver_cache[candidate] = payload
-
-    return payload
-
-
 async def _find_unresolved_location_targets(
     intent: Dict[str, Any],
     text_l: str,
@@ -1838,21 +1435,10 @@ async def _find_unresolved_location_targets(
     *,
     user_id: Optional[int] = None,
     conversation_id: Optional[int] = None,
-) -> List[str]:
+) -> Tuple[List[str], Optional[ResolveResult]]:
     candidate_tokens = _extract_candidate_location_tokens(intent)
     if not _intent_requests_location_move(intent, text_l, candidate_tokens):
-        return []
-
-    resolver_cache: Dict[str, Dict[str, Any]] = {}
-    minted_locations: List[str] = []
-    if isinstance(setting_context, dict):
-        resolver_cache = setting_context.setdefault("location_resolver_cache", {})
-        existing_minted = setting_context.setdefault("resolver_minted_locations", [])
-        if isinstance(existing_minted, list):
-            minted_locations = existing_minted
-        else:
-            minted_locations = []
-            setting_context["resolver_minted_locations"] = minted_locations
+        return [], None
 
     unresolved: List[str] = []
     for token in candidate_tokens:
@@ -1892,104 +1478,38 @@ async def _find_unresolved_location_targets(
         if matches_known:
             continue
 
-        inferred_kind = _guess_requested_kind(original, setting_context)
-        decision = await _resolve_location_candidate(
-            original,
-            normalized,
-            setting_context,
-            resolver_cache,
-            inferred_kind=inferred_kind,
-        )
+        unresolved_token = normalized or raw or original
+        if unresolved_token:
+            unresolved.append(unresolved_token)
 
-        if _is_plausible_location_token(original, resolver_cache):
-            if decision.get("minted"):
-                minted_name = decision.get("token") or original
-                minted_key = decision.get("normalized") or normalized or raw
-                identifiers = [
-                    candidate
-                    for candidate in {minted_name, minted_key}
-                    if candidate
-                ]
+    if not unresolved:
+        return [], None
 
-                if isinstance(setting_context, dict):
-                    known_names = setting_context.setdefault("known_location_names", [])
-                    for candidate_name in identifiers:
-                        if candidate_name not in known_names:
-                            known_names.append(candidate_name)
+    resolve_result: Optional[ResolveResult] = None
+    try:
+        from nyx.location.router import resolve_place_or_travel  # type: ignore
+    except Exception:
+        resolve_place_or_travel = None  # type: ignore
 
-                for candidate_name in identifiers:
-                    known_location_tokens.add(candidate_name)
-                    if candidate_name not in minted_locations:
-                        minted_locations.append(candidate_name)
+    if resolve_place_or_travel:
+        query_text = unresolved[0]
+        meta = setting_context if isinstance(setting_context, dict) else {}
+        user_key = str(user_id) if user_id is not None else ""
+        convo_key = str(conversation_id) if conversation_id is not None else ""
+        try:
+            resolve_result = await resolve_place_or_travel(
+                query_text,
+                meta,
+                None,
+                user_key,
+                convo_key,
+            )
+        except Exception:
+            logger.exception(
+                "Location router failed for token", extra={"token": query_text}
+            )
 
-                location_obj: Optional[Location] = None
-                candidate_model: Optional[Candidate] = None
-
-                if minted_name and user_id is not None and conversation_id is not None:
-                    scope = _scope_from_resolver_decision(decision)
-                    anchor = _anchor_from_setting_context(
-                        setting_context,
-                        scope=scope,
-                        label=minted_name,
-                    )
-                    policy_meta = resolver_policy_for_context(setting_context, anchor=anchor)
-                    candidate_model = _build_minted_candidate(
-                        minted_name,
-                        minted_key,
-                        decision,
-                        setting_context,
-                        anchor=anchor,
-                        scope=scope,
-                    )
-
-                    try:
-                        async with get_db_connection_context() as conn:
-                            location_obj = await get_or_create_location(
-                                conn,
-                                user_id=int(user_id),
-                                conversation_id=int(conversation_id),
-                                candidate=candidate_model,
-                                scope=scope,
-                                anchor=anchor,
-                                mint_policy=policy_meta.get("mint_policy") if policy_meta else None,
-                                default_planet=policy_meta.get("default_planet") if policy_meta else None,
-                                default_galaxy=policy_meta.get("default_galaxy") if policy_meta else None,
-                                default_realm=policy_meta.get("default_realm") if policy_meta else None,
-                            )
-                    except Exception:
-                        logger.exception(
-                            "Failed to mint location hierarchy",
-                            extra={
-                                "user_id": user_id,
-                                "conversation_id": conversation_id,
-                                "minted_name": minted_name,
-                            },
-                        )
-                    else:
-                        decision["location"] = location_obj
-                        decision["candidate"] = candidate_model
-                        if location_obj and location_obj.location_name:
-                            normalized_token = location_obj.location_name
-                            decision["normalized"] = normalized_token
-                            if normalized_token not in minted_locations:
-                                minted_locations.append(normalized_token)
-                            known_location_tokens.add(normalized_token)
-                            if isinstance(setting_context, dict):
-                                known_names = setting_context.setdefault("known_location_names", [])
-                                if normalized_token not in known_names:
-                                    known_names.append(normalized_token)
-                            resolver_cache[normalized_token] = decision
-            continue
-
-        unresolved_token = (
-            decision.get("normalized")
-            or normalized
-            or raw
-            or str(token)
-        )
-        unresolved.append(unresolved_token)
-
-    return unresolved
+    return unresolved, resolve_result
 
 
 def _matches_ambient_debris_token(token: str) -> bool:
@@ -3221,7 +2741,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
                 cats = inferred
         inferred_categories.append(cats)
 
-        missing_location_tokens = await _find_unresolved_location_targets(
+        missing_location_tokens, resolver_result = await _find_unresolved_location_targets(
             intent,
             text_l,
             location_aliases,
@@ -3236,40 +2756,23 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         if not missing_location_tokens:
             continue
 
-        missing_location_phrase = _format_missing_names(missing_location_tokens)
-        resolver_cache = (
-            setting_context.get("location_resolver_cache", {})
-            if isinstance(setting_context, dict)
-            else {}
-        )
-        resolver_decisions = [
-            _resolver_feedback_for_token(token, resolver_cache)
-            for token in missing_location_tokens
-        ]
-        deny_decision = next(
-            (d for d in resolver_decisions if d and d.get("decision") == "deny"),
-            None,
-        )
-        ask_decision = next(
-            (d for d in resolver_decisions if d and d.get("decision") == "ask"),
-            None,
-        )
+        result_obj = _coerce_resolve_result(resolver_result) if resolver_result else None
+        status = result_obj.status if result_obj else None
+        if result_obj and status == STATUS_EXACT:
+            continue
 
-        if deny_decision:
-            decision_strategy = "deny"
-            violation_reason = (
-                deny_decision.get("reason")
-                or f"{missing_location_phrase} isn't an established location right now."
-            )
-        elif ask_decision:
+        missing_location_phrase = _format_missing_names(missing_location_tokens)
+        if result_obj and status in {STATUS_MULTIPLE, STATUS_ASK, STATUS_TRAVEL_PLAN}:
             decision_strategy = "ask"
-            violation_reason = ask_decision.get("reason") or (
-                f"{missing_location_phrase} needs a quick description before I can add it."
+            violation_reason = (
+                result_obj.message
+                or f"{missing_location_phrase} needs a quick description before I can add it."
             )
         else:
             decision_strategy = "deny"
             violation_reason = (
-                f"{missing_location_phrase} isn't an established location right now."
+                result_obj.message
+                or f"{missing_location_phrase} isn't an established location right now."
             )
         lead_candidates = _scene_alternatives(
             _display_scene_values(scene_npcs),
@@ -3277,6 +2780,8 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             _display_scene_values(location_features),
             time_phase,
         )
+        if result_obj and result_obj.choices:
+            lead_candidates = list(result_obj.choices)
         if decision_strategy == "ask":
             logger.info(
                 "[FEASIBILITY] Resolver ASK for location -> %s",
@@ -5494,7 +4999,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             if inferred:
                 cats = inferred
 
-        missing_location_tokens = await _find_unresolved_location_targets(
+        missing_location_tokens, resolver_result = await _find_unresolved_location_targets(
             intent,
             text_l,
             location_aliases,
@@ -5509,7 +5014,6 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
         
         # --- BEGIN: Updated location resolver integration ---
         if missing_location_tokens:
-            # Check if this is a place query (venue request or real-world toponym)
             is_place_query = any(
                 _matches_generic_venue_request(
                     token,
@@ -5526,286 +5030,207 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 for token in missing_location_tokens
             )
 
-            if is_place_query:
-                try:
-                    from nyx.location.router import resolve_place_or_travel  # type: ignore
-                except Exception:
-                    resolve_place_or_travel = None  # type: ignore
+            if resolver_result and is_place_query:
+                result_obj = _coerce_resolve_result(resolver_result)
+                status = result_obj.status if result_obj else None
 
-                if resolve_place_or_travel:
-                    query_text = missing_location_tokens[0]
+                candidates = list(result_obj.candidates) if result_obj else []
+                anchor = result_obj.anchor if result_obj else None
+                scope = result_obj.scope or (
+                    anchor.scope if isinstance(anchor, Anchor) and anchor.scope else "real"
+                )
+                policy_meta = resolver_policy_for_context(setting_context, anchor=anchor)
+                mint_policy = policy_meta.get("mint_policy") if policy_meta else None
+                default_planet = policy_meta.get("default_planet") if policy_meta else None
+                default_galaxy = policy_meta.get("default_galaxy") if policy_meta else None
+                default_realm = policy_meta.get("default_realm") if policy_meta else None
+
+                hierarchy_payload: Optional[Dict[str, Any]] = None
+                location_obj = result_obj.location if result_obj else None
+                chosen_candidate = candidates[0] if candidates else None
+                if (
+                    chosen_candidate
+                    and user_id is not None
+                    and conversation_id is not None
+                ):
                     try:
-                        try:
-                            result = await resolve_place_or_travel(
-                                query_text,
-                                setting_context,
-                                None,
-                                str(user_id),
-                                str(conversation_id),
+                        async with get_db_connection_context() as conn:
+                            hierarchy_payload = await assign_hierarchy(
+                                conn,
+                                chosen_candidate,
+                                scope=scope or "real",
+                                anchor=anchor,
+                                mint_policy=mint_policy,
+                                default_planet=default_planet,
                             )
-                        except TypeError:
-                            # Older signatures may omit store argument; fall back gracefully.
-                            result = await resolve_place_or_travel(
-                                query_text,
-                                setting_context,
-                                None,
-                                str(user_id),
-                                str(conversation_id),
+                            location_obj = await get_or_create_location(
+                                conn,
+                                user_id=int(user_id),
+                                conversation_id=int(conversation_id),
+                                candidate=chosen_candidate,
+                                scope=scope or "real",
+                                anchor=anchor,
+                                mint_policy=mint_policy,
+                                default_planet=default_planet,
+                                default_galaxy=default_galaxy,
+                                default_realm=default_realm,
                             )
-
-                        result_obj = _coerce_resolve_result(result)
-                        status = result_obj.status if result_obj else (
-                            getattr(result, "status", None)
-                            if not isinstance(result, dict)
-                            else result.get("status")
+                    except Exception:
+                        logger.exception(
+                            "[FEASIBILITY] Failed to persist resolver candidate",
+                            extra={"tokens": missing_location_tokens, "status": status},
                         )
 
-                        if status in {STATUS_EXACT, STATUS_MULTIPLE, STATUS_ASK, STATUS_TRAVEL_PLAN}:
-                            message = result_obj.message if result_obj else (
-                                getattr(result, "message", None)
-                                if not isinstance(result, dict)
-                                else result.get("message")
-                            )
-                            operations = list(result_obj.operations if result_obj else (
-                                getattr(result, "operations", None)
-                                or getattr(result, "canonical_ops", None)
-                                or (result.get("operations") if isinstance(result, dict) else [])
-                                or (result.get("canonical_ops") if isinstance(result, dict) else [])
-                            ) or [])
-                            choices = list(result_obj.choices if result_obj else (
-                                getattr(result, "choices", None)
-                                if not isinstance(result, dict)
-                                else result.get("choices")
-                            ) or [])
+                if result_obj and location_obj:
+                    result_obj.location = location_obj
 
-                            candidates = list(result_obj.candidates) if result_obj else []
-                            anchor = result_obj.anchor if result_obj else None
-                            scope = result_obj.scope if result_obj and result_obj.scope else (
-                                anchor.scope if isinstance(anchor, Anchor) and anchor.scope else "real"
-                            )
+                operations = list(result_obj.operations if result_obj else [])
+                travel_payload = operations if status == STATUS_TRAVEL_PLAN else []
 
-                            policy_meta = resolver_policy_for_context(setting_context, anchor=anchor)
-                            mint_policy = policy_meta.get("mint_policy")
-                            default_planet = policy_meta.get("default_planet")
+                candidate_previews = [
+                    preview
+                    for preview in (
+                        _resolver_candidate_preview(candidate)
+                        for candidate in candidates
+                    )
+                    if preview
+                ]
 
-                            hierarchy_payload: Optional[Dict[str, Any]] = None
-                            chosen_candidate = candidates[0] if candidates else None
-                            if chosen_candidate:
-                                try:
-                                    async with get_db_connection_context() as conn:
-                                        hierarchy_payload = await assign_hierarchy(
-                                            conn,
-                                            chosen_candidate,
-                                            scope=scope or "real",
-                                            anchor=anchor,
-                                            mint_policy=mint_policy,
-                                            default_planet=default_planet,
-                                        )
-                                except Exception:
-                                    logger.exception(
-                                        "[FEASIBILITY] Failed to assign hierarchy for resolver candidate",
-                                        extra={"query": query_text, "status": status},
-                                    )
+                if status == STATUS_EXACT:
+                    payload = {
+                        "feasible": True,
+                        "strategy": "allow",
+                        "categories": sorted(cats),
+                        "location_resolved": True,
+                        "resolver_result": operations,
+                    }
+                    if hierarchy_payload:
+                        leaf = hierarchy_payload.get("leaf") or {}
+                        payload["resolver_hierarchy"] = hierarchy_payload
+                        payload["resolver_place_id"] = leaf.get("id")
+                        payload["resolver_place_key"] = leaf.get("place_key")
+                        payload["resolver_world_name"] = hierarchy_payload.get("world_name")
+                        payload["resolver_mint_policy"] = (
+                            hierarchy_payload.get("mint_policy") or mint_policy
+                        )
+                    if travel_payload:
+                        payload["resolver_travel_plan"] = travel_payload
+                    if candidate_previews:
+                        payload["resolver_candidates"] = candidate_previews
+                    if location_obj:
+                        payload["resolver_location_name"] = location_obj.location_name
+                    per_intent.append(payload)
+                    continue
 
-                            candidate_previews = [
-                                preview
-                                for preview in (
-                                    _resolver_candidate_preview(candidate)
-                                    for candidate in candidates
-                                )
-                                if preview
-                            ]
+                lead_candidates = _scene_alternatives(
+                    _display_scene_values(scene_npcs),
+                    _display_scene_values(scene_items),
+                    _display_scene_values(location_features),
+                    time_phase,
+                )
 
-                            travel_payload = operations if status == STATUS_TRAVEL_PLAN else []
+                message = result_obj.message if result_obj else None
+                choices = list(result_obj.choices if result_obj else [])
+                suggested: List[str] = []
+                for preview in candidate_previews[:3]:
+                    label = preview["name"]
+                    admin_path = preview.get("admin_path")
+                    if admin_path:
+                        label = f"{label} — {admin_path}"
+                    suggested.append(label)
 
-                            logger.info(
-                                "[FEASIBILITY] Location resolver found results for %r -> status=%s",
-                                query_text,
-                                status,
-                            )
+                fallback_choices = choices or lead_candidates
+                if len(suggested) < 3:
+                    for option in fallback_choices:
+                        if option not in suggested:
+                            suggested.append(option)
+                        if len(suggested) >= 3:
+                            break
 
-                            if status == STATUS_EXACT:
-                                payload = {
-                                    "feasible": True,
-                                    "strategy": "allow",
-                                    "categories": sorted(cats),
-                                    "location_resolved": True,
-                                    "resolver_result": operations,
-                                }
-                                if hierarchy_payload:
-                                    leaf = hierarchy_payload.get("leaf") or {}
-                                    payload["resolver_hierarchy"] = hierarchy_payload
-                                    payload["resolver_place_id"] = leaf.get("id")
-                                    payload["resolver_place_key"] = leaf.get("place_key")
-                                    payload["resolver_world_name"] = hierarchy_payload.get("world_name")
-                                    payload["resolver_mint_policy"] = (
-                                        hierarchy_payload.get("mint_policy") or mint_policy
-                                    )
-                                if travel_payload:
-                                    payload["resolver_travel_plan"] = travel_payload
-                                if candidate_previews:
-                                    payload["resolver_candidates"] = candidate_previews
-                                per_intent.append(payload)
-                                continue
+                missing_location_phrase = _format_missing_names(missing_location_tokens)
+                reason_text = message or (
+                    f"{missing_location_phrase} isn't an established location right now."
+                )
+                strategy = (
+                    "ask"
+                    if status in {STATUS_MULTIPLE, STATUS_ASK, STATUS_TRAVEL_PLAN}
+                    else "deny"
+                )
 
-                            lead_candidates = _scene_alternatives(
-                                _display_scene_values(scene_npcs),
-                                _display_scene_values(scene_items),
-                                _display_scene_values(location_features),
-                                time_phase,
-                            )
+                ask_payload = {
+                    "feasible": False,
+                    "strategy": strategy,
+                    "violations": [
+                        {
+                            "rule": f"location_resolver:{strategy}",
+                            "reason": reason_text,
+                        }
+                    ],
+                    "narrator_guidance": (
+                        f"{reason_text} Give me a quick sense of the place or pick one of the known options."
+                        if strategy == "ask"
+                        else f"{reason_text} Stick to known locations or introduce it in-scene first."
+                    ),
+                    "suggested_alternatives": suggested[:3] if suggested else fallback_choices[:3],
+                    "categories": sorted(cats),
+                    "location_resolved": True,
+                }
+                if hierarchy_payload:
+                    leaf = hierarchy_payload.get("leaf") or {}
+                    ask_payload["resolver_hierarchy"] = hierarchy_payload
+                    ask_payload["resolver_place_id"] = leaf.get("id")
+                    ask_payload["resolver_place_key"] = leaf.get("place_key")
+                    ask_payload["resolver_world_name"] = hierarchy_payload.get("world_name")
+                    ask_payload["resolver_mint_policy"] = (
+                        hierarchy_payload.get("mint_policy") or mint_policy
+                    )
+                if travel_payload:
+                    ask_payload["resolver_travel_plan"] = travel_payload
+                if candidate_previews:
+                    ask_payload["resolver_candidates"] = candidate_previews
+                if location_obj:
+                    ask_payload["resolver_location_name"] = location_obj.location_name
 
-                            suggested: List[str] = []
-                            for preview in candidate_previews[:3]:
-                                label = preview["name"]
-                                admin_path = preview.get("admin_path")
-                                if admin_path:
-                                    label = f"{label} — {admin_path}"
-                                suggested.append(label)
+                per_intent.append(ask_payload)
+                if strategy == "ask":
+                    any_ask = True
+                else:
+                    any_hard_block = True
+                continue
 
-                            fallback_choices = choices or lead_candidates
-                            if len(suggested) < 3:
-                                for option in fallback_choices:
-                                    if option not in suggested:
-                                        suggested.append(option)
-                                    if len(suggested) >= 3:
-                                        break
-
-                            ask_payload = {
-                                "feasible": False,
-                                "strategy": "ask",
-                                "violations": [],
-                                "narrator_guidance": message or "Which one do you mean?",
-                                "suggested_alternatives": suggested[:3] if suggested else fallback_choices[:3],
-                                "categories": sorted(cats),
-                                "location_resolved": True,
-                            }
-                            if hierarchy_payload:
-                                leaf = hierarchy_payload.get("leaf") or {}
-                                ask_payload["resolver_hierarchy"] = hierarchy_payload
-                                ask_payload["resolver_place_id"] = leaf.get("id")
-                                ask_payload["resolver_place_key"] = leaf.get("place_key")
-                                ask_payload["resolver_world_name"] = hierarchy_payload.get("world_name")
-                                ask_payload["resolver_mint_policy"] = (
-                                    hierarchy_payload.get("mint_policy") or mint_policy
-                                )
-                            if travel_payload:
-                                ask_payload["resolver_travel_plan"] = travel_payload
-                            if candidate_previews:
-                                ask_payload["resolver_candidates"] = candidate_previews
-
-                            per_intent.append(ask_payload)
-                            any_ask = True
-                            continue
-                    except Exception as e:
-                        logger.debug(f"[FEASIBILITY] Location resolver failed softly: {e}")
-            
-            # Fall through to original resolver cache logic if resolver didn't handle it
             missing_location_phrase = _format_missing_names(missing_location_tokens)
-            resolver_cache = (
-                setting_context.get("location_resolver_cache", {})
-                if isinstance(setting_context, dict)
-                else {}
-            )
-            resolver_decisions = [
-                _resolver_feedback_for_token(token, resolver_cache)
-                for token in missing_location_tokens
-            ]
-            deny_decision = next(
-                (d for d in resolver_decisions if d and d.get("decision") == "deny"),
-                None,
-            )
-            ask_decision = next(
-                (d for d in resolver_decisions if d and d.get("decision") == "ask"),
-                None,
-            )
             lead_candidates = _scene_alternatives(
                 _display_scene_values(scene_npcs),
                 _display_scene_values(scene_items),
                 _display_scene_values(location_features),
                 time_phase,
             )
-            if deny_decision:
-                reason_text = (
-                    deny_decision.get("reason")
-                    or f"{missing_location_phrase} isn't an established location right now."
-                )
-                logger.info(
-                    "[FEASIBILITY] Hard deny - fabricated location -> %s",
-                    missing_location_tokens,
-                )
-                per_intent.append(
-                    {
-                        "feasible": False,
-                        "strategy": "deny",
-                        "violations": [
-                            {
-                                "rule": "location_resolver:deny",
-                                "reason": reason_text,
-                            }
-                        ],
-                        "narrator_guidance": (
-                            f"{reason_text} Stick to known locations or introduce it in-scene first."
-                        ),
-                        "suggested_alternatives": lead_candidates,
-                        "leads": lead_candidates,
-                        "categories": sorted(cats),
-                    }
-                )
-                any_hard_block = True
-            elif ask_decision:
-                reason_text = ask_decision.get("reason") or (
-                    f"{missing_location_phrase} needs a quick description before I can add it."
-                )
-                logger.info(
-                    "[FEASIBILITY] Resolver ASK for location -> %s", missing_location_tokens
-                )
-                per_intent.append(
-                    {
-                        "feasible": False,
-                        "strategy": "ask",
-                        "violations": [
-                            {
-                                "rule": "location_resolver:ask",
-                                "reason": reason_text,
-                            }
-                        ],
-                        "narrator_guidance": (
-                            f"{reason_text} Give me a quick sense of the place or pick one of the known options."
-                        ),
-                        "suggested_alternatives": lead_candidates,
-                        "leads": lead_candidates,
-                        "categories": sorted(cats),
-                    }
-                )
-                any_ask = True
-            else:
-                reason_text = (
-                    f"{missing_location_phrase} isn't an established location right now."
-                )
-                logger.info(
-                    "[FEASIBILITY] Hard deny - fabricated location -> %s",
-                    missing_location_tokens,
-                )
-                per_intent.append(
-                    {
-                        "feasible": False,
-                        "strategy": "deny",
-                        "violations": [
-                            {
-                                "rule": "location_resolver:deny",
-                                "reason": reason_text,
-                            }
-                        ],
-                        "narrator_guidance": (
-                            f"{reason_text} Stick to known locations or introduce it in-scene first."
-                        ),
-                        "suggested_alternatives": lead_candidates,
-                        "leads": lead_candidates,
-                        "categories": sorted(cats),
-                    }
-                )
-                any_hard_block = True
+            reason_text = (
+                f"{missing_location_phrase} isn't an established location right now."
+            )
+            logger.info(
+                "[FEASIBILITY] Hard deny - fabricated location -> %s",
+                missing_location_tokens,
+            )
+            per_intent.append(
+                {
+                    "feasible": False,
+                    "strategy": "deny",
+                    "violations": [
+                        {
+                            "rule": "location_resolver:deny",
+                            "reason": reason_text,
+                        }
+                    ],
+                    "narrator_guidance": (
+                        f"{reason_text} Stick to known locations or introduce it in-scene first."
+                    ),
+                    "suggested_alternatives": lead_candidates,
+                    "leads": lead_candidates,
+                    "categories": sorted(cats),
+                }
+            )
+            any_hard_block = True
             continue
         # --- END: Updated location resolver integration ---
 
