@@ -2842,7 +2842,7 @@ class LoreOrchestrator:
             # Add any world-level facts from cache
             if self.config.enable_cache and self._cache_system:
                 for tag in tags[:3]:
-                    cached = await self._cache_system.get(f"world_lore_{tag}")
+                    cached = await self._cache_system.get("world_lore", tag)
                     if cached:
                         tagged_lore[tag] = cached
             
@@ -3504,8 +3504,7 @@ class LoreOrchestrator:
             # Add cached lore if available
             if self.config.enable_cache and self._cache_system:
                 for tag in tags:
-                    cache_key = f"lore_tag_{tag}"
-                    cached = await self._cache_system.get(cache_key)
+                    cached = await self._cache_system.get("lore_tag", tag)
                     if cached and tag not in tagged_lore:
                         tagged_lore[tag] = cached
 

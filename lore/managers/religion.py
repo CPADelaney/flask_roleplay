@@ -708,7 +708,12 @@ class ReligionManager(BaseLoreManager):
                 ctx, conn, **practice_data_package, embedding_text=embed_text
             )
 
-        GLOBAL_LORE_CACHE.invalidate_pattern("practice")
+        await GLOBAL_LORE_CACHE.invalidate_pattern(
+            "practice",
+            ".*",
+            self.user_id,
+            self.conversation_id
+        )
         return practice_id
 
     @function_tool(strict_mode=True)
@@ -747,7 +752,12 @@ class ReligionManager(BaseLoreManager):
                 ctx, conn, **site_data_package, embedding_text=embed_text
             )
 
-        GLOBAL_LORE_CACHE.invalidate_pattern("site")
+        await GLOBAL_LORE_CACHE.invalidate_pattern(
+            "site",
+            ".*",
+            self.user_id,
+            self.conversation_id
+        )
         return site_id
 
     @function_tool(strict_mode=True)
@@ -783,7 +793,12 @@ class ReligionManager(BaseLoreManager):
                 ctx, conn, **text_data_package, embedding_text=embed_text
             )
 
-        GLOBAL_LORE_CACHE.invalidate_pattern("text")
+        await GLOBAL_LORE_CACHE.invalidate_pattern(
+            "text",
+            ".*",
+            self.user_id,
+            self.conversation_id
+        )
         return text_id
 
     @function_tool(strict_mode=True)
@@ -822,7 +837,12 @@ class ReligionManager(BaseLoreManager):
                 ctx, conn, **order_data_package, embedding_text=embed_text
             )
 
-        GLOBAL_LORE_CACHE.invalidate_pattern("order")
+        await GLOBAL_LORE_CACHE.invalidate_pattern(
+            "order",
+            ".*",
+            self.user_id,
+            self.conversation_id
+        )
         return order_id
 
 
@@ -859,7 +879,12 @@ class ReligionManager(BaseLoreManager):
                 ctx, conn, **conflict_data_package, embedding_text=embed_text
             )
 
-        GLOBAL_LORE_CACHE.invalidate_pattern("conflict")
+        await GLOBAL_LORE_CACHE.invalidate_pattern(
+            "conflict",
+            ".*",
+            self.user_id,
+            self.conversation_id
+        )
         return conflict_id
 
     # ===========================
@@ -1959,8 +1984,14 @@ class ReligionManager(BaseLoreManager):
     )
     async def get_nation_religion(self, ctx, nation_id: int) -> Dict[str, Any]:
         """Get comprehensive religious information about a nation."""
-        cache_key = f"nation_religion_{nation_id}_{self.user_id}_{self.conversation_id}"
-        cached = GLOBAL_LORE_CACHE.get(cache_key)
+        cache_namespace = "nation_religion"
+        cache_key = f"{nation_id}_{self.user_id}_{self.conversation_id}"
+        cached = await GLOBAL_LORE_CACHE.get(
+            cache_namespace,
+            cache_key,
+            self.user_id,
+            self.conversation_id
+        )
         if cached:
             return cached
 
@@ -2030,8 +2061,15 @@ class ReligionManager(BaseLoreManager):
                 except:
                     pass
 
-            GLOBAL_LORE_CACHE.set(cache_key, result)
-            return result
+        await GLOBAL_LORE_CACHE.set(
+            cache_namespace,
+            cache_key,
+            result,
+            None,
+            self.user_id,
+            self.conversation_id
+        )
+        return result
 
     # Helper methods for complex operations
     async def _generate_regional_practices(
