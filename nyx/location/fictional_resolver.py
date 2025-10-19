@@ -842,7 +842,7 @@ async def _fetch_fictional_venues(
                   AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
                   AND ($3::TEXT IS NULL OR LOWER(COALESCE(district, parent_location, '')) = LOWER($3))
                   AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
-                ORDER BY id
+                ORDER BY location_id
                 """,
                 user_key,
                 conversation_key,
@@ -860,7 +860,7 @@ async def _fetch_fictional_venues(
                   AND is_fictional = TRUE
                   AND ($3::TEXT IS NULL OR LOWER(COALESCE(district, parent_location, '')) = LOWER($3))
                   AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
-                ORDER BY id
+                ORDER BY location_id
                 """,
                 user_key,
                 conversation_key,
