@@ -28,12 +28,10 @@ def _parse_place_query(text: str) -> PlaceQuery:
 async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> Anchor:
     world = (meta or {}).get("world") or {}
     kind_txt = (world.get("type") or world.get("kind") or "").strip().lower()
-    if kind_txt in ("real", "modern_realistic", "realistic"):
+    if kind_txt in {"real", "modern_realistic", "realistic", "historical", "modern"}:
         scope: Scope = "real"
-    elif kind_txt in ("fiction", "fictional", "urban_fantasy"):
-        scope = "fictional"
     else:
-        scope = "hybrid"
+        scope = "fictional"
 
     geo = await derive_geo_anchor(meta, user_id, conversation_id)
     primary_city = geo.city or world.get("primary_city")
@@ -84,7 +82,7 @@ async def resolve_place_or_travel(
         store = ConversationSnapshotStore()
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
-    if anchor.scope == "real" or (anchor.scope == "hybrid" and anchor.primary_city):
+    if anchor.scope == "real":
         res = await resolve_real(q, anchor, meta)
     else:
         res = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)

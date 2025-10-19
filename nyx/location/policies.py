@@ -6,6 +6,17 @@ from typing import Any, Dict, Optional
 
 from .types import Anchor, Scope, DEFAULT_REALM
 
+_REAL_SCOPE_HINTS = {
+    "real",
+    "realistic",
+    "modern",
+    "modern_realistic",
+    "historical",
+    "earth",
+    "mundane",
+    "normal",
+}
+
 _ALLOWED_POLICIES = {"allow", "ask", "deny"}
 
 
@@ -17,14 +28,33 @@ def _clean(value: Any) -> Optional[str]:
     return None
 
 
+def _normalize_scope_hint(value: Any) -> Optional[Scope]:
+    cleaned = _clean(value)
+    if cleaned is None:
+        return None
+    lowered = cleaned.lower()
+    if lowered in _REAL_SCOPE_HINTS:
+        return "real"
+    return "fictional"
+
+
 def _infer_scope(anchor: Optional[Anchor], setting_context: Optional[Dict[str, Any]]) -> Scope:
     if anchor and anchor.scope:
         return anchor.scope
     if isinstance(setting_context, dict):
-        scope = setting_context.get("scope") or setting_context.get("kind") or setting_context.get("type")
-        cleaned = _clean(scope)
-        if cleaned in {"real", "fictional", "hybrid"}:
-            return cleaned  # type: ignore[return-value]
+        hint_keys = ("scope", "kind", "type")
+        for key in hint_keys:
+            hint = _normalize_scope_hint(setting_context.get(key))
+            if hint:
+                return hint
+        nested_candidates = ("world", "world_model", "world_meta", "world_info")
+        for nested_key in nested_candidates:
+            payload = setting_context.get(nested_key)
+            if isinstance(payload, dict):
+                for key in hint_keys:
+                    hint = _normalize_scope_hint(payload.get(key))
+                    if hint:
+                        return hint
     return "real"
 
 
