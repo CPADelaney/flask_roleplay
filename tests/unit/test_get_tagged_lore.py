@@ -9,6 +9,7 @@ import os
 import pathlib
 import sys
 from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -311,3 +312,57 @@ async def test_get_tagged_lore_queries_existing_columns(monkeypatch):
     assert not any("from religions" in query for query in lowered_queries)
 
     assert any(params[0] == "religions" for _, params in fake_connection.fetchval_queries)
+
+
+async def test_fetch_world_lore_uses_namespaced_cache(monkeypatch):
+    """World lore fetches should request cached data with namespace and key."""
+
+    orchestrator = LoreOrchestrator(
+        user_id=7,
+        conversation_id=9,
+        config=OrchestratorConfig(enable_cache=True),
+    )
+
+    cache_get = AsyncMock(return_value=None)
+    orchestrator._cache_system = SimpleNamespace(get=cache_get)
+
+    cached_lore = {"valor": [{"name": "Valor Tales"}]}
+    monkeypatch.setattr(
+        orchestrator,
+        "get_tagged_lore",
+        AsyncMock(return_value=cached_lore),
+    )
+
+    result = await orchestrator._fetch_world_lore_for_bundle(["valor"])
+
+    assert result == cached_lore
+    cache_get.assert_awaited_with("world_lore", "valor")
+
+
+async def test_get_tagged_lore_uses_namespaced_cache(monkeypatch):
+    """Tagged lore retrieval should consult cache using namespace + key arguments."""
+
+    orchestrator = LoreOrchestrator(
+        user_id=3,
+        conversation_id=5,
+        config=OrchestratorConfig(enable_cache=True),
+    )
+
+    empty_connection = FakeConnection(
+        table_exists={"nations": False, "religions": False, "events": False},
+        data={},
+    )
+
+    def fake_get_db_connection_context(*args: Any, **kwargs: Any):  # pragma: no cover - passthrough
+        return FakeConnectionContext(empty_connection)
+
+    monkeypatch.setattr(_lore_module, "get_db_connection_context", fake_get_db_connection_context)
+
+    cached_payload = [{"type": "cached", "name": "Lore"}]
+    cache_get = AsyncMock(return_value=cached_payload)
+    orchestrator._cache_system = SimpleNamespace(get=cache_get)
+
+    results = await orchestrator.get_tagged_lore(["Valor"])
+
+    assert results == {"Valor": cached_payload}
+    cache_get.assert_awaited_with("lore_tag", "Valor")
