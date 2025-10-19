@@ -3096,64 +3096,223 @@ class LoreOrchestrator:
     async def _get_canonical_rules_for_scope(self, scope: Any) -> List[str]:
         """Get canonical consistency rules relevant to the scope."""
         try:
-            rules = []
-            
+            rules: List[str] = []
+
             # Get canon module and validation (ensure initialized)
-            canon = await self._get_canon_module()
+            await self._get_canon_module()
             validator = await self._get_canon_validation()
-            
-            # Add location-specific canonical rules
-            if hasattr(scope, 'location_id') and scope.location_id:
+
+            MAX_PER_FIELD = 2
+
+            def _normalize_entries(values: Any) -> List[Any]:
+                if values is None:
+                    return []
+                if isinstance(values, (list, tuple, set)):
+                    return [v for v in values if v is not None]
+                return [values]
+
+            def _stringify_value(value: Any) -> str:
+                if value is None:
+                    return ""
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, (int, float)):
+                    return str(value)
+                if isinstance(value, bool):
+                    return "true" if value else "false"
+                if isinstance(value, dict):
+                    name = value.get('name') or value.get('title') or value.get('label')
+                    description = (
+                        value.get('description')
+                        or value.get('details')
+                        or value.get('summary')
+                        or value.get('text')
+                    )
+                    if name and description:
+                        return f"{name}: {description}"
+                    if name:
+                        return str(name)
+                    if description:
+                        return str(description)
+                    return json.dumps(value, ensure_ascii=False)
+                if isinstance(value, (list, tuple, set)):
+                    parts = [part for part in (_stringify_value(item) for item in value) if part]
+                    return ", ".join(parts)
+                return str(value)
+
+            def _trim_text(text: str, limit: int = 160) -> str:
+                cleaned = " ".join(str(text).split())
+                if len(cleaned) <= limit:
+                    return cleaned
+                return cleaned[: limit - 1].rstrip() + "…"
+
+            def _format_entries(values: Any, label: Optional[str] = None, limit: int = MAX_PER_FIELD) -> List[str]:
+                formatted: List[str] = []
+                for value in _normalize_entries(values):
+                    rendered = _trim_text(_stringify_value(value))
+                    if not rendered:
+                        continue
+                    formatted.append(f"{label}: {rendered}" if label else rendered)
+                    if len(formatted) >= max(1, limit):
+                        break
+                return formatted
+
+            location_rules: List[str] = []
+            fallback_rules: List[str] = []
+            location_name: Optional[str] = None
+            requested_nation_ids: List[int] = []
+            nation_rule_presence: Dict[int, bool] = {}
+            nation_names: Dict[int, Optional[str]] = {}
+
+            needs_location = bool(getattr(scope, 'location_id', None))
+            raw_nation_ids = list(getattr(scope, 'nation_ids', []) or [])
+            needs_nations = bool(raw_nation_ids)
+
+            if needs_nations:
+                requested_nation_ids = raw_nation_ids[:2]
+
+            if needs_location or needs_nations:
                 async with get_db_connection_context() as conn:
-                    # Get location governance rules
-                    location_rules = await conn.fetchval("""
-                        SELECT canonical_rules
-                        FROM Locations
-                        WHERE COALESCE(id, location_id) = $1
-                    """, scope.location_id)
-                    
-                    if location_rules:
-                        if isinstance(location_rules, list):
-                            rules.extend(location_rules[:3])
-                        elif isinstance(location_rules, str):
-                            rules.append(location_rules)
-            
-            # Add nation-specific rules if nations in scope
-            if hasattr(scope, 'nation_ids') and scope.nation_ids:
-                async with get_db_connection_context() as conn:
-                    for nation_id in list(scope.nation_ids)[:2]:
-                        nation_rules = await conn.fetchval("""
-                            SELECT governance_rules 
-                            FROM Nations 
-                            WHERE COALESCE(id, nation_id) = $1
-                        """, nation_id)
-                        
-                        if nation_rules:
-                            if isinstance(nation_rules, dict):
-                                # Extract key rules from governance structure
-                                if 'laws' in nation_rules:
-                                    rules.append(f"Nation {nation_id}: {nation_rules['laws'][:100]}")
-            
-            # Add global canonical rules from validator
-            if hasattr(validator, 'get_global_rules'):
-                global_rules = await validator.get_global_rules()
-                rules.extend(global_rules[:2])
+                    if needs_location:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT
+                                location_name,
+                                COALESCE(notable_features, '[]'::jsonb) AS notable_features,
+                                COALESCE(hidden_aspects, '[]'::jsonb) AS hidden_aspects,
+                                COALESCE(access_restrictions, '[]'::jsonb) AS access_restrictions,
+                                COALESCE(local_customs, '[]'::jsonb) AS local_customs
+                            FROM Locations
+                            WHERE id = $1
+                            """,
+                            scope.location_id,
+                        )
+
+                        if row:
+                            location_name = row.get('location_name')
+                            location_rules.extend(
+                                _format_entries(row.get('notable_features'), 'Location feature')
+                            )
+                            location_rules.extend(
+                                _format_entries(row.get('hidden_aspects'), 'Hidden aspect')
+                            )
+                            location_rules.extend(
+                                _format_entries(row.get('access_restrictions'), 'Access rule')
+                            )
+                            location_rules.extend(
+                                _format_entries(row.get('local_customs'), 'Local custom')
+                            )
+
+                    if needs_nations and requested_nation_ids:
+                        nation_rows = await conn.fetch(
+                            """
+                            SELECT
+                                id,
+                                name,
+                                COALESCE(cultural_traits, '[]'::jsonb) AS cultural_traits,
+                                COALESCE(major_resources, '[]'::jsonb) AS major_resources,
+                                COALESCE(major_cities, '[]'::jsonb) AS major_cities,
+                                COALESCE(neighboring_nations, '[]'::jsonb) AS neighboring_nations,
+                                notable_features
+                            FROM Nations
+                            WHERE id = ANY($1::int[])
+                            """,
+                            requested_nation_ids,
+                        )
+
+                        for nation_row in nation_rows or []:
+                            nation_id = nation_row.get('id')
+                            if nation_id is None:
+                                continue
+                            nation_name = nation_row.get('name') or f"Nation {nation_id}"
+                            nation_names[nation_id] = nation_row.get('name')
+
+                            field_rules: List[str] = []
+                            field_rules.extend(
+                                _format_entries(
+                                    nation_row.get('cultural_traits'),
+                                    f"{nation_name} cultural trait",
+                                )
+                            )
+                            field_rules.extend(
+                                _format_entries(
+                                    nation_row.get('major_resources'),
+                                    f"{nation_name} resource",
+                                )
+                            )
+                            field_rules.extend(
+                                _format_entries(
+                                    nation_row.get('major_cities'),
+                                    f"{nation_name} major city",
+                                )
+                            )
+                            field_rules.extend(
+                                _format_entries(
+                                    nation_row.get('neighboring_nations'),
+                                    f"{nation_name} neighbor",
+                                )
+                            )
+                            field_rules.extend(
+                                _format_entries(
+                                    nation_row.get('notable_features'),
+                                    f"{nation_name} feature",
+                                    limit=1,
+                                )
+                            )
+
+                            if field_rules:
+                                rules.extend(field_rules)
+                                nation_rule_presence[nation_id] = True
+                            else:
+                                nation_rule_presence.setdefault(nation_id, False)
+
+            rules.extend(location_rules)
+
+            if needs_location and not location_rules:
+                fallback_name = location_name or f"location {scope.location_id}"
+                fallback_rules.append(f"Preserve established canon for {fallback_name}.")
+
+            if needs_nations:
+                for nation_id in requested_nation_ids:
+                    has_rules = nation_rule_presence.get(nation_id, False)
+                    if not has_rules:
+                        nation_label = nation_names.get(nation_id) or f"nation {nation_id}"
+                        fallback_rules.append(f"Maintain known canon for {nation_label}.")
+
+            if fallback_rules:
+                rules = fallback_rules + rules
+
+            global_rules: List[str] = []
+            if validator and hasattr(validator, 'get_global_rules'):
+                try:
+                    candidate_rules = await validator.get_global_rules()
+                    global_rules = _format_entries(candidate_rules, limit=2)
+                except Exception as exc:
+                    logger.debug(f"Global canonical rules lookup failed: {exc}")
+
+            if global_rules:
+                rules.extend(global_rules)
             else:
-                # Default canonical rules
-                rules.extend([
-                    "Maintain timeline consistency",
-                    "Respect established character relationships",
-                    "Honor location governance structures"
-                ])
-            
-            # Deduplicate and limit
-            seen = set()
-            unique_rules = []
+                rules.extend(
+                    [
+                        "Maintain timeline consistency",
+                        "Respect established character relationships",
+                        "Honor location governance structures",
+                    ]
+                )
+
+            # Deduplicate, coerce to strings, and limit results
+            seen: Set[str] = set()
+            unique_rules: List[str] = []
             for rule in rules:
-                if rule not in seen:
-                    seen.add(rule)
-                    unique_rules.append(rule)
-            
+                if not isinstance(rule, str):
+                    continue
+                normalized = rule.strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                unique_rules.append(normalized)
+
             return unique_rules[:5]  # Limit to top 5 rules
         except Exception as e:
             logger.debug(f"Could not fetch canonical rules: {e}")
