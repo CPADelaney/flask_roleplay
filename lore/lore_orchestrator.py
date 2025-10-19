@@ -299,12 +299,15 @@ class LoreOrchestrator:
         self._content_validator = None
         self._relationship_mapper = None
         self._unified_trace_system = None
-        
+
         # Data access components (lazy loaded)
         self._npc_data_access = None
         self._location_data_access = None
         self._faction_data_access = None
         self._knowledge_access = None
+
+        # Cached table schemas for defensive SQL generation
+        self._table_columns_cache: Dict[str, Set[str]] = {}
         
         # Metrics
         self.metrics = {
@@ -2009,75 +2012,108 @@ class LoreOrchestrator:
             self._pool = await asyncpg.create_pool(dsn=DB_DSN)
         return self._pool
 
+    async def _get_table_columns(self, conn: asyncpg.Connection, table_name: str) -> Set[str]:
+        """Fetch and cache the available columns for a table."""
+        cache_key = table_name.lower()
+        cached = self._table_columns_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = $1
+                """,
+                cache_key,
+            )
+            columns = {row['column_name'] for row in rows}
+            self._table_columns_cache[cache_key] = columns
+            return columns
+        except Exception as exc:
+            logger.debug(f"Column lookup failed for {table_name}: {exc}")
+            self._table_columns_cache[cache_key] = set()
+            return set()
+
     async def get_location_context(self, location_ref: Union[int, str]) -> Dict[str, Any]:
         try:
             async with get_db_connection_context() as conn:
+                location_columns = await self._get_table_columns(conn, "locations")
+                required_columns = {"id", "location_name"}
+                if not required_columns.issubset(location_columns):
+                    return {}
+
+                column_order = [
+                    "id",
+                    "location_name",
+                    "description",
+                    "location_type",
+                    "parent_location",
+                    "cultural_significance",
+                    "economic_importance",
+                    "strategic_value",
+                    "population_density",
+                    "notable_features",
+                    "hidden_aspects",
+                    "access_restrictions",
+                    "local_customs",
+                    "room",
+                    "building",
+                    "district_type",
+                    "planet",
+                    "galaxy",
+                    "realm",
+                    "lat",
+                    "lon",
+                    "is_fictional",
+                    "open_hours",
+                    "controlling_faction",
+                ]
+                column_expressions = {
+                    "notable_features": "COALESCE(notable_features, '[]'::jsonb) AS notable_features",
+                    "hidden_aspects": "COALESCE(hidden_aspects, '[]'::jsonb) AS hidden_aspects",
+                    "access_restrictions": "COALESCE(access_restrictions, '[]'::jsonb) AS access_restrictions",
+                    "local_customs": "COALESCE(local_customs, '[]'::jsonb) AS local_customs",
+                    "open_hours": "COALESCE(open_hours, '{}'::jsonb) AS open_hours",
+                }
+
+                select_columns = [
+                    column_expressions.get(column, column)
+                    for column in column_order
+                    if column in location_columns
+                ]
+
+                if not select_columns:
+                    return {}
+
+                select_clause = ",\n                            ".join(select_columns)
+
                 if isinstance(location_ref, int):
-                    row = await conn.fetchrow("""
+                    query = f"""
                         SELECT
-                            id,
-                            location_name,
-                            description,
-                            location_type,
-                            parent_location,
-                            cultural_significance,
-                            economic_importance,
-                            strategic_value,
-                            population_density,
-                            notable_features,
-                            hidden_aspects,
-                            access_restrictions,
-                            local_customs,
-                            room,
-                            building,
-                            district_type,
-                            planet,
-                            galaxy,
-                            realm,
-                            lat,
-                            lon,
-                            is_fictional,
-                            open_hours,
-                            controlling_faction
+                            {select_clause}
                         FROM Locations
                         WHERE id = $1
                         LIMIT 1
-                    """, location_ref)
+                    """
+                    row = await conn.fetchrow(query, location_ref)
                 else:
-                    row = await conn.fetchrow("""
+                    if "location_name" not in location_columns:
+                        return {}
+                    query = f"""
                         SELECT
-                            id,
-                            location_name,
-                            description,
-                            location_type,
-                            parent_location,
-                            cultural_significance,
-                            economic_importance,
-                            strategic_value,
-                            population_density,
-                            notable_features,
-                            hidden_aspects,
-                            access_restrictions,
-                            local_customs,
-                            room,
-                            building,
-                            district_type,
-                            planet,
-                            galaxy,
-                            realm,
-                            lat,
-                            lon,
-                            is_fictional,
-                            open_hours,
-                            controlling_faction
+                            {select_clause}
                         FROM Locations
                         WHERE location_name = $1
                         LIMIT 1
-                    """, location_ref)
-    
+                    """
+                    row = await conn.fetchrow(query, location_ref)
+
                 if not row:
                     return {}
-    
+
                 row_data = dict(row)
 
                 data: Dict[str, Any] = {
@@ -2087,19 +2123,23 @@ class LoreOrchestrator:
                 }
 
                 optional_fields = [
-                    'location_type',
-                    'parent_location',
-                    'cultural_significance',
-                    'economic_importance',
-                    'strategic_value',
-                    'population_density',
-                    'controlling_faction',
-                    'room',
-                    'building',
-                    'district_type',
-                    'planet',
-                    'galaxy',
-                    'realm'
+                    field
+                    for field in [
+                        'location_type',
+                        'parent_location',
+                        'cultural_significance',
+                        'economic_importance',
+                        'strategic_value',
+                        'population_density',
+                        'controlling_faction',
+                        'room',
+                        'building',
+                        'district_type',
+                        'planet',
+                        'galaxy',
+                        'realm'
+                    ]
+                    if field in location_columns
                 ]
                 for field in optional_fields:
                     value = row_data.get(field)
@@ -2107,22 +2147,26 @@ class LoreOrchestrator:
                         data[field] = value
 
                 json_fields = [
-                    'notable_features',
-                    'hidden_aspects',
-                    'access_restrictions',
-                    'local_customs',
-                    'open_hours'
+                    field
+                    for field in [
+                        'notable_features',
+                        'hidden_aspects',
+                        'access_restrictions',
+                        'local_customs',
+                        'open_hours'
+                    ]
+                    if field in location_columns
                 ]
                 for field in json_fields:
                     value = row_data.get(field)
                     if value:
                         data[field] = value
 
-                if row_data.get('is_fictional') is not None:
+                if 'is_fictional' in location_columns and row_data.get('is_fictional') is not None:
                     data['is_fictional'] = row_data['is_fictional']
 
-                lat = row_data.get('lat')
-                lon = row_data.get('lon')
+                lat = row_data.get('lat') if 'lat' in location_columns else None
+                lon = row_data.get('lon') if 'lon' in location_columns else None
                 if lat is not None or lon is not None:
                     coords = {}
                     if lat is not None:
@@ -3174,19 +3218,26 @@ class LoreOrchestrator:
             if needs_location or needs_nations:
                 async with get_db_connection_context() as conn:
                     if needs_location:
-                        row = await conn.fetchrow(
+                        location_columns = await self._get_table_columns(conn, "locations")
+                        column_map = {
+                            "location_name": "location_name",
+                            "notable_features": "COALESCE(notable_features, '[]'::jsonb) AS notable_features",
+                            "hidden_aspects": "COALESCE(hidden_aspects, '[]'::jsonb) AS hidden_aspects",
+                            "access_restrictions": "COALESCE(access_restrictions, '[]'::jsonb) AS access_restrictions",
+                            "local_customs": "COALESCE(local_customs, '[]'::jsonb) AS local_customs",
+                        }
+                        select_parts = [
+                            expr for column, expr in column_map.items() if column in location_columns
+                        ]
+                        row = None
+                        if select_parts:
+                            query = f"""
+                                SELECT
+                                    {', '.join(select_parts)}
+                                FROM Locations
+                                WHERE id = $1
                             """
-                            SELECT
-                                location_name,
-                                COALESCE(notable_features, '[]'::jsonb) AS notable_features,
-                                COALESCE(hidden_aspects, '[]'::jsonb) AS hidden_aspects,
-                                COALESCE(access_restrictions, '[]'::jsonb) AS access_restrictions,
-                                COALESCE(local_customs, '[]'::jsonb) AS local_customs
-                            FROM Locations
-                            WHERE id = $1
-                            """,
-                            scope.location_id,
-                        )
+                            row = await conn.fetchrow(query, scope.location_id)
 
                         if row:
                             location_name = row.get('location_name')
@@ -3204,21 +3255,28 @@ class LoreOrchestrator:
                             )
 
                     if needs_nations and requested_nation_ids:
-                        nation_rows = await conn.fetch(
+                        nation_columns = await self._get_table_columns(conn, "nations")
+                        column_map = {
+                            "id": "id",
+                            "name": "name",
+                            "cultural_traits": "COALESCE(cultural_traits, '[]'::jsonb) AS cultural_traits",
+                            "major_resources": "COALESCE(major_resources, '[]'::jsonb) AS major_resources",
+                            "major_cities": "COALESCE(major_cities, '[]'::jsonb) AS major_cities",
+                            "neighboring_nations": "COALESCE(neighboring_nations, '[]'::jsonb) AS neighboring_nations",
+                            "notable_features": "notable_features",
+                        }
+                        select_parts = [
+                            expr for column, expr in column_map.items() if column in nation_columns
+                        ]
+                        nation_rows = []
+                        if select_parts and 'id' in nation_columns:
+                            query = f"""
+                                SELECT
+                                    {', '.join(select_parts)}
+                                FROM Nations
+                                WHERE id = ANY($1::int[])
                             """
-                            SELECT
-                                id,
-                                name,
-                                COALESCE(cultural_traits, '[]'::jsonb) AS cultural_traits,
-                                COALESCE(major_resources, '[]'::jsonb) AS major_resources,
-                                COALESCE(major_cities, '[]'::jsonb) AS major_cities,
-                                COALESCE(neighboring_nations, '[]'::jsonb) AS neighboring_nations,
-                                notable_features
-                            FROM Nations
-                            WHERE id = ANY($1::int[])
-                            """,
-                            requested_nation_ids,
-                        )
+                            nation_rows = await conn.fetch(query, requested_nation_ids)
 
                         for nation_row in nation_rows or []:
                             nation_id = nation_row.get('id')
@@ -3370,23 +3428,47 @@ class LoreOrchestrator:
 
                     if nations_available:
                         try:
-                            nations = await conn.fetch(
-                                """
-                                SELECT id, name, description, cultural_traits,
-                                       major_resources, major_cities, neighboring_nations,
-                                       notable_features
-                                FROM nations
-                                WHERE LOWER(name) LIKE $1
-                                   OR LOWER(COALESCE(description, '')) LIKE $1
-                                   OR LOWER(COALESCE(notable_features, '')) LIKE $1
-                                   OR LOWER(COALESCE(cultural_traits::text, '')) LIKE $1
-                                   OR LOWER(COALESCE(major_resources::text, '')) LIKE $1
-                                   OR LOWER(COALESCE(major_cities::text, '')) LIKE $1
-                                   OR LOWER(COALESCE(neighboring_nations::text, '')) LIKE $1
-                                LIMIT 2
-                                """,
-                                search_pattern,
-                            )
+                            nation_columns = await self._get_table_columns(conn, "nations")
+                            nations = []
+                            if {'id', 'name'}.issubset(nation_columns):
+                                select_fields = [
+                                    field for field in [
+                                        'id',
+                                        'name',
+                                        'description',
+                                        'cultural_traits',
+                                        'major_resources',
+                                        'major_cities',
+                                        'neighboring_nations',
+                                        'notable_features',
+                                    ]
+                                    if field in nation_columns
+                                ]
+
+                                where_clauses = []
+                                if 'name' in nation_columns:
+                                    where_clauses.append("LOWER(name) LIKE $1")
+                                if 'description' in nation_columns:
+                                    where_clauses.append("LOWER(COALESCE(description, '')) LIKE $1")
+                                if 'notable_features' in nation_columns:
+                                    where_clauses.append("LOWER(COALESCE(notable_features::text, '')) LIKE $1")
+                                if 'cultural_traits' in nation_columns:
+                                    where_clauses.append("LOWER(COALESCE(cultural_traits::text, '')) LIKE $1")
+                                if 'major_resources' in nation_columns:
+                                    where_clauses.append("LOWER(COALESCE(major_resources::text, '')) LIKE $1")
+                                if 'major_cities' in nation_columns:
+                                    where_clauses.append("LOWER(COALESCE(major_cities::text, '')) LIKE $1")
+                                if 'neighboring_nations' in nation_columns:
+                                    where_clauses.append("LOWER(COALESCE(neighboring_nations::text, '')) LIKE $1")
+
+                                if select_fields and where_clauses:
+                                    query = f"""
+                                        SELECT {', '.join(select_fields)}
+                                        FROM nations
+                                        WHERE {' OR '.join(where_clauses)}
+                                        LIMIT 2
+                                    """
+                                    nations = await conn.fetch(query, search_pattern)
                             for nation_record in nations:
                                 nation = dict(nation_record)
                                 details = {
