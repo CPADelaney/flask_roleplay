@@ -19,6 +19,7 @@ from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
 from logic.aggregator_sdk import fallback_get_context
 from nyx.nyx_agent.context import NyxContext
+from nyx.location.router import resolve_place_or_travel
 
 from nyx.feas.actions.mundane import evaluate_mundane
 from nyx.feas.archetypes.modern_baseline import ModernBaseline
@@ -556,6 +557,30 @@ def _is_modern_or_realistic_setting(setting_context: Optional[Dict[str, Any]]) -
         if any(hint in marker for hint in ("modern", "realistic", "contemporary", "urban")):
             return True
     return False
+
+def _travel_plan_consequences(operations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Extracts total travel time and method from a travel plan operation."""
+    if not operations:
+        return None
+
+    total_minutes = 0
+    methods = set()
+
+    for op in operations:
+        if op.get("op") == "travel.plan" and op.get("legs"):
+            for leg in op["legs"]:
+                total_minutes += leg.get("estimate_min", 0)
+                methods.add(leg.get("kind", "travel"))
+        elif op.get("op") == "poi.navigate":
+            total_minutes += op.get("travel_time_min", 0)
+            methods.add("local")
+
+    if total_minutes > 0:
+        return {
+            "time_passes_minutes": int(total_minutes),
+            "travel_method": "transit" if "flight" in methods or "transit" in methods else "walking",
+        }
+    return None
 
 
 def _looks_like_real_world_toponym(
@@ -2653,10 +2678,10 @@ except Exception:
 
 async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dict[str, Any]:
     """
-    Dynamically assess if an action is feasible in the current setting context.
+    Dynamically assess if an action is feasible, prioritizing location resolution for movement.
     Generates unique, contextual responses for every rejection.
     """
-
+    # --- Step 0: Initial Setup (OOC checks, intent parsing) ---
     policy_sources: List[Any] = []
 
     def _extend_policy_sources_from(candidate: Any) -> None:
@@ -2743,7 +2768,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         if _policy_roleplay_only_enabled(*policy_candidates):
             return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
 
-    # Load comprehensive setting context
+    # --- Step 1: Load Comprehensive Context ---
     setting_context = await _load_comprehensive_context(nyx_ctx)
     _log_caps_snapshot(setting_context.get("capabilities"))
 
@@ -2768,6 +2793,7 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     if fail_open:
         return _finalize_result(fail_open)
 
+    # Build impossible_logged set from established impossibilities
     impossible_logged: Set[str] = set()
     for imp in setting_context.get("established_impossibilities", []):
         try:
@@ -2781,7 +2807,8 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             sorted(impossible_logged),
         )
 
-    # Early guard: fabricated location changes
+    # --- Step 2: Prepare Scene Data for Checks ---
+    # This data is needed for all checks and fallbacks
     scene = setting_context.get("scene") if isinstance(setting_context.get("scene"), dict) else {}
     location_payload = setting_context.get("location") or {}
     location_name: Optional[str]
@@ -2819,210 +2846,136 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     scene_npc_tokens = _tokenize_scene_values(scene_npcs)
     scene_item_tokens = _tokenize_scene_values(scene_items)
 
+    # --- Step 3: Core Feasibility Logic (REFACTORED WITH MOVEMENT-FIRST) ---
+    per_intent_results: List[Dict[str, Any]] = []
     intents_sequence = intents or [{}]
-    inferred_categories: List[Set[str]] = []
-    location_blocks: Dict[int, Dict[str, Any]] = {}
 
-    for idx, intent in enumerate(intents_sequence):
+    for intent in intents_sequence:
         cats = set(intent.get("categories") or [])
         if not cats:
             inferred = _infer_categories_from_text(text_l)
             if inferred:
                 cats = inferred
-        inferred_categories.append(cats)
 
-        missing_location_tokens, resolver_result = await _find_unresolved_location_targets(
-            intent,
-            text_l,
-            location_aliases,
-            location_context_tokens,
-            known_location_tokens,
-            scene_npc_tokens,
-            scene_item_tokens,
-            setting_context,
-            user_id=nyx_ctx.user_id,
-            conversation_id=nyx_ctx.conversation_id,
-        )
-        if not missing_location_tokens:
-            continue
+        candidate_tokens = _extract_candidate_location_tokens(intent)
+        is_movement = _intent_requests_location_move(intent, text_l, candidate_tokens)
+        
+        result_for_this_intent: Optional[Dict[str, Any]] = None
 
-        result_obj = _coerce_resolve_result(resolver_result) if resolver_result else None
-        status = result_obj.status if result_obj else None
-        if result_obj and status == STATUS_EXACT:
-            continue
+        # --- MOVEMENT-FIRST LOGIC ---
+        if is_movement:
+            result: Optional[ResolveResult] = None
+            try:
+                result = await resolve_place_or_travel(
+                    user_input,
+                    _context_payload_for_agent(setting_context),
+                    None,
+                    str(nyx_ctx.user_id),
+                    str(nyx_ctx.conversation_id),
+                )
+            except Exception as e:
+                logger.error(f"Location router failed: {e}", exc_info=True)
 
-        missing_location_phrase = _format_missing_names(missing_location_tokens)
-        if result_obj and status in {STATUS_MULTIPLE, STATUS_ASK, STATUS_TRAVEL_PLAN}:
-            decision_strategy = "ask"
-            violation_reason = (
-                result_obj.message
-                or f"{missing_location_phrase} needs a quick description before I can add it."
-            )
-        else:
-            decision_strategy = "deny"
-            violation_reason = (
-                result_obj.message
-                or f"{missing_location_phrase} isn't an established location right now."
-            )
-        lead_candidates = _scene_alternatives(
-            _display_scene_values(scene_npcs),
-            _display_scene_values(scene_items),
-            _display_scene_values(location_features),
-            time_phase,
-        )
-        if result_obj and result_obj.choices:
-            lead_candidates = list(result_obj.choices)
-        if decision_strategy == "ask":
-            logger.info(
-                "[FEASIBILITY] Resolver ASK for location -> %s",
-                missing_location_tokens,
-            )
-        else:
-            logger.info(
-                "[FEASIBILITY] Hard deny - fabricated location -> %s",
-                missing_location_tokens,
-            )
-        location_blocks[idx] = {
-            "feasible": False,
-            "strategy": decision_strategy,
-            "violations": [
-                {
-                    "rule": f"location_resolver:{decision_strategy}",
-                    "reason": violation_reason,
+            if result and result.status in {STATUS_EXACT, STATUS_TRAVEL_PLAN}:
+                consequences = _travel_plan_consequences(result.operations)
+                result_for_this_intent = {
+                    "feasible": True, 
+                    "strategy": "allow",
+                    "consequences": consequences, 
+                    "resolver_result": result.operations,
+                    "categories": sorted(cats),
                 }
-            ],
-            "narrator_guidance": (
-                f"{violation_reason} Give me a quick sense of the place or pick one of the known options."
-                if decision_strategy == "ask"
-                else f"{violation_reason} Stick to known locations or work with the narrator to introduce it first."
-            ),
-            "suggested_alternatives": lead_candidates,
-            "leads": lead_candidates,
-            "categories": sorted(cats),
-        }
 
-    if location_blocks:
-        per_intent = []
-        has_ask = False
-        has_deny = False
-        for idx, cats in enumerate(inferred_categories):
-            if idx in location_blocks:
-                block = location_blocks[idx]
-                per_intent.append(block)
-                strategy = (block or {}).get("strategy")
-                if strategy == "deny":
-                    has_deny = True
-                elif strategy == "ask":
-                    has_ask = True
-            else:
-                per_intent.append(
-                    {
-                        "feasible": True,
-                        "strategy": "allow",
-                        "categories": sorted(cats),
-                    }
+            elif result and result.status in {STATUS_MULTIPLE, STATUS_ASK}:
+                lead_candidates = list(result.choices) if result.choices else _scene_alternatives(
+                    _display_scene_values(scene_npcs),
+                    _display_scene_values(scene_items),
+                    _display_scene_values(location_features),
+                    time_phase,
                 )
+                result_for_this_intent = {
+                    "feasible": False, 
+                    "strategy": "ask",
+                    "violations": [{"rule": "location_ambiguous", "reason": result.message}],
+                    "narrator_guidance": (
+                        f"{result.message} Give me a quick sense of the place or pick one of the known options."
+                    ),
+                    "suggested_alternatives": lead_candidates,
+                    "categories": sorted(cats),
+                }
 
-        overall_strategy = "deny" if has_deny else ("ask" if has_ask else "deny")
-        return _finalize_result(
-            {
-                "overall": {"feasible": False, "strategy": overall_strategy},
-                "per_intent": per_intent,
-            }
-        )
-
-    # Quick check against hard rules
-    quick_check = await _quick_feasibility_check(setting_context, intents)
-
-    violations = quick_check.get("violations", [])
-    missing_only_indices: List[int] = []
-    for idx, violation_list in enumerate(violations):
-        if not violation_list:
-            continue
-        has_missing = any(v.get("rule") == "missing_prereq" for v in violation_list)
-        if not has_missing:
-            continue
-        if all(v.get("rule") == "missing_prereq" for v in violation_list):
-            missing_only_indices.append(idx)
-        else:
-            missing_only_indices = []
-            break
-
-    if missing_only_indices:
-        logger.info(
-            "[FEASIBILITY] Deferring due to missing prerequisites for intents %s",
-            missing_only_indices,
-        )
-        per_intent = []
-        for idx, intent in enumerate(intents):
-            cats = intent.get("categories", [])
-            if idx in missing_only_indices:
-                violation_entry = violations[idx] if idx < len(violations) else []
+        # --- FALLBACK & NON-MOVEMENT LOGIC ---
+        # If movement logic didn't produce a result, proceed with standard validation
+        if not result_for_this_intent:
+            # Check for missing NPCs/items (prerequisite check)
+            prereq_ok, prereq_reason = await _check_prerequisites(intent, setting_context)
+            if not prereq_ok:
                 categories_norm = _normalize_categories(cats)
-                guidance = "No vendor here. Try heading to the market or corner shop nearby."
-                if not ({"trade", "mundane_action"} & categories_norm):
-                    fallback_reason = "Required elements are not present right now."
-                    if violation_entry:
-                        fallback_reason = violation_entry[0].get("reason", fallback_reason)
-                    guidance = fallback_reason
-                per_intent.append(
-                    {
-                        "feasible": False,
-                        "strategy": "defer",
-                        "narrator_guidance": guidance,
-                        "violations": violation_entry,
-                        "categories": cats,
-                    }
-                )
-            else:
-                per_intent.append(
-                    {
-                        "feasible": True,
-                        "strategy": "allow",
-                        "categories": cats,
-                    }
-                )
+                guidance = prereq_reason
+                
+                # Special handling for trade actions
+                if {"trade", "mundane_action"} & categories_norm:
+                    guidance = "No vendor here. Try heading to the market or corner shop nearby."
+                
+                result_for_this_intent = {
+                    "feasible": False, 
+                    "strategy": "defer",
+                    "violations": [{"rule": "missing_prereq", "reason": prereq_reason}],
+                    "narrator_guidance": guidance,
+                    "suggested_alternatives": _scene_alternatives(
+                        _display_scene_values(scene_npcs), 
+                        _display_scene_values(scene_items),
+                        _display_scene_values(location_features), 
+                        time_phase
+                    ),
+                    "categories": sorted(cats),
+                }
 
-        return _finalize_result(
-            {"overall": {"feasible": False, "strategy": "defer"}, "per_intent": per_intent}
-        )
-
-    if quick_check.get("hard_blocked"):
-        # Generate dynamic, unique rejections for blocked actions
-        per_intent = []
-        for i, intent in enumerate(intents):
-            if not quick_check["intent_feasible"][i]:
-                # Generate completely unique rejection
+        # Check against hard rules if still not handled
+        if not result_for_this_intent:
+            allow_cats = _get_allowed_categories(setting_context)
+            hard_bans = (cats & impossible_logged) - allow_cats
+            
+            if hard_bans:
+                # Generate dynamic, unique rejection for blocked actions
                 rejection = await generate_dynamic_rejection(
                     setting_context, 
-                    {**intent, "raw_text": user_input, "violations": quick_check["violations"][i]},
+                    {**intent, "raw_text": user_input, "violations": _reasons_for(hard_bans)},
                     nyx_ctx
                 )
                 
-                per_intent.append({
-                    "feasible": False,
+                result_for_this_intent = {
+                    "feasible": False, 
                     "strategy": "deny",
-                    "violations": quick_check["violations"][i],
-                    "reality_response": rejection["reality_response"],
-                    "narrator_guidance": rejection["narrator_guidance"],
-                    "suggested_alternatives": rejection["suggested_alternatives"],
+                    "violations": _reasons_for(hard_bans),
+                    "reality_response": rejection.get("reality_response", ""),
+                    "narrator_guidance": rejection.get("narrator_guidance", 
+                        _compose_guidance(setting_context.get("kind"), location_name, hard_bans)
+                    ),
+                    "suggested_alternatives": rejection.get("suggested_alternatives", 
+                        _scene_alternatives(
+                            _display_scene_values(scene_npcs), 
+                            _display_scene_values(scene_items),
+                            _display_scene_values(location_features), 
+                            time_phase
+                        )
+                    ),
                     "metaphor": rejection.get("metaphor", ""),
-                    "categories": intent.get("categories", [])
-                })
-            else:
-                per_intent.append({
-                    "feasible": True,
-                    "strategy": "allow",
-                    "categories": intent.get("categories", [])
-                })
-        
-        return _finalize_result(
-            {
-                "overall": {"feasible": False, "strategy": "deny"},
-                "per_intent": per_intent,
-            }
-        )
+                    "categories": sorted(cats),
+                }
 
+        # If all checks pass, the action is allowed
+        if not result_for_this_intent:
+            result_for_this_intent = {
+                "feasible": True, 
+                "strategy": "allow", 
+                "categories": sorted(cats)
+            }
+        
+        # Single append point for all paths
+        per_intent_results.append(result_for_this_intent)
+
+    # --- Step 4: Check for mundane actions that need special handling ---
     mundane_eval = await _evaluate_mundane_actions(nyx_ctx, setting_context, intents)
 
     if mundane_eval and mundane_eval.get("all_handled"):
@@ -3042,9 +2995,28 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
             }
         )
 
-    # Full AI-powered assessment for nuanced cases
+    # --- Step 5: Check if any intents need full AI-powered assessment ---
+    needs_full_assessment = any(
+        result.get("strategy") not in {"allow", "defer"} 
+        for result in per_intent_results
+    )
+    
+    # Check if all results are straightforward allow/deny/defer
+    all_straightforward = all(
+        result.get("strategy") in {"allow", "deny", "defer", "ask"}
+        for result in per_intent_results
+    )
+
+    # If we have clear decisions for all intents, return them
+    if all_straightforward and not needs_full_assessment:
+        overall_result = _combine_overall(per_intent_results)
+        final_payload = {"overall": overall_result, "per_intent": per_intent_results}
+        return _finalize_result(final_payload)
+
+    # --- Step 6: Full AI-powered assessment for nuanced cases ---
     full_result = await _full_dynamic_assessment(nyx_ctx, user_input, intents, setting_context)
 
+    # Apply mundane overrides if present
     if mundane_eval and mundane_eval.get("overrides"):
         full_result = _apply_mundane_overrides(full_result, intents, mundane_eval["overrides"])
 
