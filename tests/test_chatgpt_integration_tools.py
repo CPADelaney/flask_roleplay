@@ -34,12 +34,12 @@ setattr(nyx_core_stub, "orchestrator", nyx_orchestrator_stub)
 from logic.chatgpt_integration import ToolSchemaManager
 
 
-def test_all_tools_have_top_level_name_matching_schema():
+def test_responses_tools_use_function_payload_schema():
     tools = ToolSchemaManager.get_all_tools()
     assert tools, "Expected at least one tool schema to be registered"
 
     for tool in tools:
-        assert "name" in tool, "Tool is missing top-level 'name'"
+        assert tool.get("type") == "function", "Tool payload must use Responses function type"
         assert "function" in tool, "Tool is missing nested 'function' schema"
 
         function_schema = tool["function"]
@@ -48,6 +48,4 @@ def test_all_tools_have_top_level_name_matching_schema():
         schema_name = function_schema.get("name")
         assert schema_name, "Function schema is missing its 'name'"
 
-        assert (
-            tool["name"] == schema_name
-        ), "Top-level tool name must match nested function schema name"
+        assert "name" not in tool, "Responses tool should not duplicate function name at top level"
