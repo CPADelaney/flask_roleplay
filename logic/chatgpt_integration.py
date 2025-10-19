@@ -624,19 +624,49 @@ def _calculate_token_usage(response) -> int:
 
 
 def _to_responses_tools(functions: list[dict]) -> list[dict]:
-    """Wrap Chat Completions-style functions into Responses tools."""
+    """Normalize legacy Chat Completions functions for the Responses API."""
+
     tools: list[dict] = []
     for schema in functions:
         if not isinstance(schema, dict):
             raise ValueError(
                 f"Function schema must be a dict, got {type(schema)!r}: {schema}"
             )
+
         name = schema.get("name")
         if not name:
             raise ValueError(
                 f"Function schema missing required 'name' field: {schema}"
             )
-        tools.append({"type": "function", "function": schema})
+
+        parameters = schema.get("parameters")
+        if not isinstance(parameters, dict):
+            parameters = {
+                "type": "object",
+                "properties": {},
+            }
+        else:
+            # Ensure minimum structural fields are present for Responses API.
+            parameters = parameters.copy()
+            parameters.setdefault("type", "object")
+            parameters.setdefault("properties", {})
+
+        tool_entry: dict[str, Any] = {
+            "type": "function",
+            "name": name,
+            "parameters": parameters,
+        }
+
+        description = schema.get("description")
+        if description:
+            tool_entry["description"] = description
+
+        # Preserve optional strict flag if provided on the schema.
+        if "strict" in schema:
+            tool_entry["strict"] = schema["strict"]
+
+        tools.append(tool_entry)
+
     return tools
 
 
@@ -665,12 +695,48 @@ def _extract_first_tool_call(resp) -> tuple[str | None, str | dict | None]:
     return None, None
 
 
-def _get_tool_choice(tool_name: str) -> dict:
-    """
-    Get tool_choice dict for forcing a specific tool.
-    Returns the explicit function structure required by the API.
-    """
-    return {"type": "function", "function": {"name": tool_name}}
+def _get_tool_choice(
+    tool_name: str,
+    available_tools: Sequence[dict] | None = None,
+) -> dict | str:
+    """Return a Responses-compatible tool selection or ``"auto"``."""
+
+    if not tool_name:
+        return "auto"
+
+    if available_tools is None:
+        try:
+            available_tools = ToolSchemaManager.get_all_tools()
+        except Exception:
+            available_tools = []
+
+    tool_names = {
+        tool.get("name")
+        for tool in (available_tools or [])
+        if isinstance(tool, dict)
+    }
+
+    if tool_name in tool_names:
+        return {"type": "tool", "name": tool_name}
+    return "auto"
+
+
+async def _responses_create_with_retry(client, params: dict[str, Any]):
+    """Call ``client.responses.create`` with optional schema fallback."""
+
+    try:
+        return await client.responses.create(**params)
+    except APIStatusError as error:
+        if "tool_choice" in params and params.get("tool_choice") != "auto":
+            message = str(error).lower()
+            if "schema" in message or "tool" in message:
+                logger.warning(
+                    "Responses API rejected tool_choice (%s); retrying without forced tool",
+                    error,
+                )
+                params.pop("tool_choice", None)
+                return await client.responses.create(**params)
+        raise
 
 
 # =====================================================
@@ -1336,14 +1402,20 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
             messages[0]['content'] = primary_system_prompt
 
         model = "gpt-5-nano"
-        
-        response = await client.responses.create(
-            model=model,
-            input=messages,  # Changed from 'messages' to 'input'
-            tools=ToolSchemaManager.get_all_tools(),  # Use centralized tool manager
-            tool_choice=_get_tool_choice("apply_universal_update"),  # Use helper for tool choice
-            max_output_tokens=2048,  # Changed from 'max_tokens' to 'max_output_tokens'
-        )
+
+        tools = ToolSchemaManager.get_all_tools()
+        params = {
+            "model": model,
+            "input": messages,  # Changed from 'messages' to 'input'
+            "max_output_tokens": 2048,  # Changed from 'max_tokens' to 'max_output_tokens'
+        }
+        if tools:
+            params["tools"] = tools
+            tool_choice = _get_tool_choice("apply_universal_update", tools)
+            if tool_choice != "auto":
+                params["tool_choice"] = tool_choice
+
+        response = await _responses_create_with_retry(client, params)
 
         tool_name, tool_args = _extract_first_tool_call(response)
         tokens_used = _calculate_token_usage(response)
@@ -1413,11 +1485,12 @@ DO NOT produce user-facing text here; only the JSON.
             }
         ]
 
-        reflection_response = await client.responses.create(
-            model="gpt-5-nano",
-            input=reflection_messages,  # Changed from 'messages' to 'input'
-            max_output_tokens=1024  # Changed from 'max_tokens' to 'max_output_tokens'
-        )
+        reflection_params = {
+            "model": "gpt-5-nano",
+            "input": reflection_messages,  # Changed from 'messages' to 'input'
+            "max_output_tokens": 1024,  # Changed from 'max_tokens' to 'max_output_tokens'
+        }
+        reflection_response = await _responses_create_with_retry(client, reflection_params)
         reflection_msg = reflection_response.output_text or ""
         reflection_tokens_used = _calculate_token_usage(reflection_response)
 
@@ -1466,14 +1539,20 @@ DO NOT produce user-facing text here; only the JSON.
         ]
 
         model = "gpt-5-nano"
-        
-        final_response = await client.responses.create(
-            model=model,
-            input=final_messages,  # Changed from 'messages' to 'input'
-            tools=ToolSchemaManager.get_all_tools(),  # Use centralized tool manager
-            tool_choice=_get_tool_choice("apply_universal_update"),  # Use helper for tool choice
-            max_output_tokens=2048,  # Changed from 'max_tokens' to 'max_output_tokens'
-        )
+
+        final_tools = ToolSchemaManager.get_all_tools()
+        final_params = {
+            "model": model,
+            "input": final_messages,  # Changed from 'messages' to 'input'
+            "max_output_tokens": 2048,  # Changed from 'max_tokens' to 'max_output_tokens'
+        }
+        if final_tools:
+            final_params["tools"] = final_tools
+            final_tool_choice = _get_tool_choice("apply_universal_update", final_tools)
+            if final_tool_choice != "auto":
+                final_params["tool_choice"] = final_tool_choice
+
+        final_response = await _responses_create_with_retry(client, final_params)
         
         tool_name, tool_args = _extract_first_tool_call(final_response)
         final_tokens_used = _calculate_token_usage(final_response)
@@ -1903,7 +1982,7 @@ async def generate_text_completion(
             """Call the Responses API, expanding max_output_tokens when truncated."""
 
             while True:
-                response_inner = await client.responses.create(**params)
+                response_inner = await _responses_create_with_retry(client, params)
 
                 if not _is_max_token_incomplete(response_inner):
                     return response_inner
@@ -2319,7 +2398,7 @@ async def _responses_json_call(
     if response_format == "json":
         params["response_format"] = {"type": "json_object"}  # Responses JSON mode
     
-    resp = await client.responses.create(**params)
+    resp = await _responses_create_with_retry(client, params)
 
     # Accept both new (`output_text`) and legacy (`output`) attributes
     raw_text = getattr(resp, "output_text", None) or getattr(resp, "output", "")
