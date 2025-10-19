@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -420,6 +421,402 @@ def _venue_matches_district(venue: Mapping[str, Any], *, key: str, label: str) -
     if isinstance(v_label, str) and v_label == label:
         return True
     return False
+
+
+def _extract_world_seed_context(location: Location) -> Dict[str, Any]:
+    context: Dict[str, Any] = {}
+
+    core_fields = {
+        "city": location.city or location.parent_location,
+        "region": location.region,
+        "country": location.country,
+        "planet": location.planet,
+        "galaxy": location.galaxy,
+        "realm": location.realm,
+        "description": location.description,
+    }
+    for key, value in core_fields.items():
+        if value:
+            context[key] = value
+
+    for entry in location.local_customs or []:
+        if isinstance(entry, Mapping):
+            kind = str(entry.get("kind") or "").lower()
+            if kind in {"world_seed", "world_seed_snapshot", "world_profile", "world_context"}:
+                for key, value in entry.items():
+                    if key == "kind":
+                        continue
+                    if value:
+                        context.setdefault(key, value)
+
+    features = _normalize_feature_list(location.notable_features)
+    if features:
+        context.setdefault("district_features", features)
+
+    return context
+
+
+_BEARING_DEGREES: Dict[str, float] = {
+    "e": 0.0,
+    "east": 0.0,
+    "ne": 45.0,
+    "northeast": 45.0,
+    "n": 90.0,
+    "north": 90.0,
+    "nw": 135.0,
+    "northwest": 135.0,
+    "w": 180.0,
+    "west": 180.0,
+    "sw": 225.0,
+    "southwest": 225.0,
+    "s": 270.0,
+    "south": 270.0,
+    "se": 315.0,
+    "southeast": 315.0,
+}
+
+
+def _bearing_to_radians(label: Optional[str]) -> Optional[float]:
+    if not label:
+        return None
+    label = label.strip().lower()
+    if not label:
+        return None
+    if label in _BEARING_DEGREES:
+        return math.radians(_BEARING_DEGREES[label])
+    try:
+        value = float(label)
+    except (TypeError, ValueError):
+        return None
+    return math.radians(value % 360.0)
+
+
+def _normalize_generated_pois(payload: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    pois: Any = payload
+    if isinstance(payload, Mapping):
+        for key in ("pois", "venues", "points_of_interest", "results"):
+            if key in payload:
+                pois = payload.get(key)
+                break
+        else:
+            pois = payload
+
+    if not isinstance(pois, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in pois:
+        if not isinstance(entry, Mapping):
+            continue
+
+        name = _stringify(entry.get("name"))
+        if not name:
+            continue
+
+        description = _stringify(entry.get("description") or entry.get("summary"))
+        category = _stringify(entry.get("category") or entry.get("type") or "venue")
+        features = _normalize_feature_list(entry.get("notable_features") or entry.get("features"))
+        lore = _stringify(entry.get("lore") or entry.get("hook") or entry.get("story"))
+
+        travel_info = entry.get("travel") if isinstance(entry.get("travel"), Mapping) else {}
+        if not travel_info:
+            travel_info = entry if isinstance(entry, Mapping) else {}
+
+        travel_modes = _normalize_feature_list(
+            (entry.get("travel_modes") if isinstance(entry, Mapping) else [])
+            or (travel_info.get("modes") if isinstance(travel_info, Mapping) else [])
+            or (travel_info.get("transport") if isinstance(travel_info, Mapping) else [])
+        )
+        travel_time = _coerce_float(
+            (travel_info.get("time_minutes") if isinstance(travel_info, Mapping) else None)
+            or (travel_info.get("duration_minutes") if isinstance(travel_info, Mapping) else None)
+            or entry.get("travel_time_minutes")
+            or entry.get("travel_time")
+        )
+        travel_note = _stringify(
+            (travel_info.get("narrative") if isinstance(travel_info, Mapping) else None)
+            or (travel_info.get("hook") if isinstance(travel_info, Mapping) else None)
+            or (travel_info.get("notes") if isinstance(travel_info, Mapping) else None)
+            or entry.get("travel_hook")
+            or entry.get("travel_note")
+        )
+
+        coords_payload: Mapping[str, Any] = {}
+        if isinstance(entry.get("coordinates"), Mapping):
+            coords_payload = entry["coordinates"]
+        elif isinstance(entry.get("offset"), Mapping):
+            coords_payload = entry["offset"]
+        elif isinstance(entry.get("offsets"), Mapping):
+            coords_payload = entry["offsets"]
+
+        dx_m = _coerce_float(
+            (coords_payload.get("dx_m") if isinstance(coords_payload, Mapping) else None)
+            or (coords_payload.get("x") if isinstance(coords_payload, Mapping) else None)
+            or (coords_payload.get("east_m") if isinstance(coords_payload, Mapping) else None)
+        )
+        dy_m = _coerce_float(
+            (coords_payload.get("dy_m") if isinstance(coords_payload, Mapping) else None)
+            or (coords_payload.get("y") if isinstance(coords_payload, Mapping) else None)
+            or (coords_payload.get("north_m") if isinstance(coords_payload, Mapping) else None)
+        )
+
+        if (dx_m is None or dy_m is None) and isinstance(coords_payload, Mapping):
+            distance = _coerce_float(
+                coords_payload.get("distance_m")
+                or coords_payload.get("distance")
+                or coords_payload.get("radius_m")
+            )
+            bearing = _stringify(coords_payload.get("bearing") or coords_payload.get("direction"))
+            if distance is not None:
+                angle = _bearing_to_radians(bearing)
+                if angle is None:
+                    angle = random.Random(f"poi-bearing:{name}").uniform(0.0, 2 * math.pi)
+                dx_m = distance * math.cos(angle)
+                dy_m = distance * math.sin(angle)
+
+        normalized.append(
+            {
+                "name": name,
+                "description": description,
+                "category": category or "venue",
+                "features": features,
+                "lore": lore,
+                "travel_modes": travel_modes,
+                "travel_time_minutes": travel_time,
+                "travel_note": travel_note,
+                "dx_m": dx_m,
+                "dy_m": dy_m,
+                "raw": dict(entry),
+            }
+        )
+
+    return normalized
+
+
+def _offset_coordinates(
+    base_lat: Optional[float],
+    base_lon: Optional[float],
+    *,
+    dx_m: Optional[float],
+    dy_m: Optional[float],
+    seed_key: str,
+) -> Tuple[float, float, float, float]:
+    lat = base_lat if base_lat is not None else 0.0
+    lon = base_lon if base_lon is not None else 0.0
+
+    if dx_m is None or dy_m is None:
+        rng = random.Random(seed_key)
+        radius = rng.uniform(60.0, 220.0)
+        angle = rng.uniform(0.0, 2 * math.pi)
+        dx_m = radius * math.cos(angle)
+        dy_m = radius * math.sin(angle)
+
+    lat_offset = (dy_m or 0.0) / 111_111.0
+    cos_lat = math.cos(math.radians(lat))
+    if abs(cos_lat) < 1e-6:
+        cos_lat = 1e-6
+    lon_offset = (dx_m or 0.0) / (111_111.0 * cos_lat)
+
+    return round(lat + lat_offset, 6), round(lon + lon_offset, 6), dx_m or 0.0, dy_m or 0.0
+
+
+async def generate_pois_for_district(district: Location, query: str) -> List[Location]:
+    normalized_query = unicodedata.normalize("NFKC", query or "").strip()
+    pattern = f"%{normalized_query.lower()}%" if normalized_query else None
+
+    district_key = district.location_name
+    if not district_key:
+        raise ValueError("District must have a location_name for POI generation")
+
+    user_id = int(district.user_id)
+    conversation_id = int(district.conversation_id)
+
+    async with get_db_connection_context() as conn:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1
+                  AND conversation_id = $2
+                  AND LOWER(COALESCE(district, parent_location, '')) = LOWER($3)
+                  AND COALESCE(LOWER(location_type), '') = 'venue'
+                  AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
+                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(metadata::TEXT, '')) LIKE $4)
+                ORDER BY id
+                """,
+                user_id,
+                conversation_id,
+                district_key,
+                pattern,
+            )
+        except asyncpg.UndefinedColumnError:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1
+                  AND conversation_id = $2
+                  AND LOWER(COALESCE(district, parent_location, '')) = LOWER($3)
+                  AND COALESCE(LOWER(location_type), '') = 'venue'
+                  AND is_fictional = TRUE
+                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4)
+                ORDER BY id
+                """,
+                user_id,
+                conversation_id,
+                district_key,
+                pattern,
+            )
+
+    if rows:
+        return [Location.from_record(row) for row in rows]
+
+    profile = _district_profile_from_location(district)
+    world_context = _extract_world_seed_context(district)
+
+    profile_text = json.dumps(
+        {
+            key: value
+            for key, value in profile.items()
+            if key in {"name", "vibe", "layout", "theme", "summary"} and value
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+    world_seed_text = (
+        json.dumps(world_context, indent=2, ensure_ascii=False)
+        if world_context
+        else "No explicit world seed guidance available."
+    )
+
+    prompt = (
+        f"Design evocative fictional points of interest within the district \"{profile.get('name', district_key)}\".\n"
+        f"Player query: {normalized_query or 'general exploration request'}.\n"
+        f"District profile:\n{profile_text}\n\n"
+        f"World seed guidance:\n{world_seed_text}\n\n"
+        "Respond with JSON only. Return an object with a `pois` array. Each POI must include: "
+        "name, category, description, lore, travel (with modes array and time_minutes number), notable_features, "
+        "and coordinates with `dx_m` and `dy_m` offsets in meters from the district center."
+    )
+
+    try:
+        llm_payload = await call_gpt_json(
+            conversation_id,
+            context=f"Fictional POIs for {profile.get('name', district_key)}",
+            prompt=prompt,
+            model="gpt-5-nano",
+            temperature=0.45,
+            max_retries=3,
+        )
+    except Exception as exc:
+        logger.error("Fictional POI generation call failed for %s: %s", district_key, exc, exc_info=True)
+        llm_payload = {}
+
+    specs = _normalize_generated_pois(llm_payload if isinstance(llm_payload, Mapping) else {})
+    if not specs:
+        logger.info("LLM did not return usable POIs for %s", district_key)
+        return []
+
+    persisted: List[Location] = []
+    async with get_db_connection_context() as conn:
+        async with conn.transaction():
+            for spec in specs:
+                try:
+                    lat, lon, dx_m, dy_m = _offset_coordinates(
+                        district.lat,
+                        district.lon,
+                        dx_m=spec.get("dx_m"),
+                        dy_m=spec.get("dy_m"),
+                        seed_key=f"{user_id}:{conversation_id}:{district_key}:{spec['name']}",
+                    )
+
+                    address: Dict[str, Any] = {"district": district.location_name}
+                    if district.city:
+                        address["city"] = district.city
+                    if district.region:
+                        address["region"] = district.region
+                    if district.country:
+                        address["country"] = district.country
+
+                    travel_payload: Dict[str, Any] = {
+                        "query": normalized_query,
+                        "modes": spec.get("travel_modes") or [],
+                        "time_minutes": spec.get("travel_time_minutes"),
+                        "note": spec.get("travel_note"),
+                        "offset_meters": {"dx_m": dx_m, "dy_m": dy_m},
+                    }
+
+                    local_customs = [
+                        {
+                            "kind": "fictional_poi_profile",
+                            "name": spec["name"],
+                            "category": spec.get("category"),
+                            "lore": spec.get("lore"),
+                            "travel": travel_payload,
+                            "district": district.location_name,
+                        }
+                    ]
+
+                    meta: Dict[str, Any] = {
+                        "source": "fictional",
+                        "display_name": spec["name"],
+                        "description": spec.get("description"),
+                        "location_type": "venue",
+                        "district": district.location_name,
+                        "parent_location": district.location_name,
+                        "city": district.city,
+                        "region": district.region,
+                        "country": district.country,
+                        "planet": district.planet,
+                        "galaxy": district.galaxy,
+                        "realm": district.realm,
+                        "is_fictional": True,
+                        "notable_features": spec.get("features") or [],
+                        "local_customs": local_customs,
+                        "travel_modes": spec.get("travel_modes") or [],
+                        "travel_time_minutes": spec.get("travel_time_minutes"),
+                        "travel_note": spec.get("travel_note"),
+                        "poi_category": spec.get("category"),
+                        "poi_lore": spec.get("lore"),
+                        "poi_query": normalized_query,
+                        "poi_offset": {"dx_m": dx_m, "dy_m": dy_m},
+                    }
+
+                    place = Place(
+                        name=spec["name"],
+                        level="venue",
+                        lat=lat,
+                        lon=lon,
+                        address=address,
+                        meta=meta,
+                    )
+
+                    candidate = Candidate(
+                        place=place,
+                        confidence=0.75,
+                        rationale="fictional_district_poi",
+                        raw={"query": normalized_query, "spec": spec.get("raw", {})},
+                    )
+
+                    location = await generate_and_persist_hierarchy(
+                        conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        candidate=candidate,
+                        scope="fictional",
+                    )
+                    persisted.append(location)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to persist fictional POI '%s' for district %s: %s",
+                        spec.get("name"),
+                        district_key,
+                        exc,
+                        exc_info=True,
+                    )
+
+    return persisted
 
 
 async def get_or_generate_districts(
