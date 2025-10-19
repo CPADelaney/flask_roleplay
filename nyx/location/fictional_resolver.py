@@ -1205,7 +1205,7 @@ async def get_or_generate_districts(
                   AND LOWER(COALESCE(city, parent_location, '')) = LOWER($3)
                   AND COALESCE(LOWER(location_type), '') = 'district'
                   AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
-                ORDER BY id
+                ORDER BY location_id
                 """,
                 user_key,
                 conversation_key,
@@ -1221,7 +1221,7 @@ async def get_or_generate_districts(
                   AND LOWER(COALESCE(city, parent_location, '')) = LOWER($3)
                   AND COALESCE(LOWER(location_type), '') = 'district'
                   AND is_fictional = TRUE
-                ORDER BY id
+                ORDER BY location_id
                 """,
                 user_key,
                 conversation_key,
