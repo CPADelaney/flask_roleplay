@@ -6,6 +6,7 @@ import httpx
 
 from .anchors import GeoAnchor, build_nominatim_params_for_poi, derive_geo_anchor, nearest_airport_label
 from .config import DEFAULT_LOCATION_SETTINGS as _LS
+from .gemini_maps_adapter import resolve_location_with_gemini
 from .nominatim_map import nominatim_to_admin_path
 from .providers.gazetteer import candidate_from_nominatim
 from .query import PlaceQuery
@@ -339,6 +340,17 @@ async def resolve_real(query: PlaceQuery, anchor: Anchor, meta: Dict[str, Any]) 
             anchor=anchor,
             scope=anchor.scope,
         )
+
+    try:
+        gemini_result = await resolve_location_with_gemini(query, anchor)
+    except Exception:
+        gemini_result = None
+
+    if gemini_result and (
+        (gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE})
+        or (gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations)
+    ):
+        return gemini_result
 
     radius_km = _LS.search_radius_km
     widen_km = _LS.widen_radius_km
