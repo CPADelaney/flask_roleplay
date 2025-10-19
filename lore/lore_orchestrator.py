@@ -3329,71 +3329,178 @@ class LoreOrchestrator:
             Dictionary of tagged lore elements
         """
         try:
-            tagged_lore = {}
-            
+            if not tags:
+                return {}
+
+            tagged_lore: Dict[str, List[Dict[str, Any]]] = {}
+
             async with get_db_connection_context() as conn:
+                table_cache: Dict[str, bool] = {}
+
+                async def table_exists(table_name: str) -> bool:
+                    cached = table_cache.get(table_name)
+                    if cached is not None:
+                        return cached
+                    try:
+                        exists = await conn.fetchval(
+                            """
+                            SELECT EXISTS (
+                                SELECT 1
+                                FROM information_schema.tables
+                                WHERE table_schema = 'public'
+                                  AND table_name = $1
+                            )
+                            """,
+                            table_name.lower(),
+                        )
+                        table_cache[table_name] = bool(exists)
+                    except Exception as exc:
+                        logger.debug(f"Table existence check failed for {table_name}: {exc}")
+                        table_cache[table_name] = False
+                    return table_cache[table_name]
+
+                nations_available = await table_exists("nations")
+                religions_available = await table_exists("religions")
+                events_available = await table_exists("events")
+
                 # Search across multiple lore tables for tagged content
                 for tag in tags[:10]:  # Limit to 10 tags
-                    tag_lower = tag.lower()
-                    lore_items = []
-                    
-                    # Search in Nations
-                    nations = await conn.fetch("""
-                        SELECT nation_id, nation_name, culture, lore_context
-                        FROM Nations
-                        WHERE LOWER(culture::text) LIKE $1 
-                           OR LOWER(lore_context::text) LIKE $1
-                        LIMIT 2
-                    """, f'%{tag_lower}%')
-                    
-                    for nation in nations:
-                        lore_items.append({
-                            'type': 'nation',
-                            'id': nation['nation_id'],
-                            'name': nation['nation_name'],
-                            'relevance': 0.8
-                        })
-                    
-                    # Search in Religions
-                    religions = await conn.fetch("""
-                        SELECT religion_id, religion_name, core_beliefs
-                        FROM Religions
-                        WHERE LOWER(core_beliefs::text) LIKE $1
-                           OR LOWER(religion_name) LIKE $1
-                        LIMIT 2
-                    """, f'%{tag_lower}%')
-                    
-                    for religion in religions:
-                        lore_items.append({
-                            'type': 'religion',
-                            'id': religion['religion_id'],
-                            'name': religion['religion_name'],
-                            'relevance': 0.7
-                        })
-                    
-                    # Search in historical events (if table exists)
-                    try:
-                        events = await conn.fetch("""
-                            SELECT event_id, event_name, description
-                            FROM Events
-                            WHERE LOWER(description::text) LIKE $1
-                               OR LOWER(event_name) LIKE $1
-                            LIMIT 2
-                        """, f'%{tag_lower}%')
-                        
-                        for event in events:
-                            lore_items.append({
-                                'type': 'event',
-                                'id': event['event_id'],
-                                'name': event['event_name'],
-                                'relevance': 0.6
-                            })
-                    except:
-                        pass  # Events table might not exist
-                    
+                    search_pattern = f"%{tag.lower()}%"
+                    lore_items: List[Dict[str, Any]] = []
+
+                    if nations_available:
+                        try:
+                            nations = await conn.fetch(
+                                """
+                                SELECT id, name, description, cultural_traits,
+                                       major_resources, major_cities, neighboring_nations,
+                                       notable_features
+                                FROM nations
+                                WHERE LOWER(name) LIKE $1
+                                   OR LOWER(COALESCE(description, '')) LIKE $1
+                                   OR LOWER(COALESCE(notable_features, '')) LIKE $1
+                                   OR LOWER(COALESCE(cultural_traits::text, '')) LIKE $1
+                                   OR LOWER(COALESCE(major_resources::text, '')) LIKE $1
+                                   OR LOWER(COALESCE(major_cities::text, '')) LIKE $1
+                                   OR LOWER(COALESCE(neighboring_nations::text, '')) LIKE $1
+                                LIMIT 2
+                                """,
+                                search_pattern,
+                            )
+                            for nation_record in nations:
+                                nation = dict(nation_record)
+                                details = {
+                                    "description": nation.get("description"),
+                                    "cultural_traits": nation.get("cultural_traits"),
+                                    "major_resources": nation.get("major_resources"),
+                                    "major_cities": nation.get("major_cities"),
+                                    "neighboring_nations": nation.get("neighboring_nations"),
+                                    "notable_features": nation.get("notable_features"),
+                                }
+                                filtered_details = {
+                                    key: value
+                                    for key, value in details.items()
+                                    if value not in (None, [], {}, "")
+                                }
+                                lore_items.append(
+                                    {
+                                        "type": "nation",
+                                        "id": nation.get("id"),
+                                        "name": nation.get("name"),
+                                        "details": filtered_details,
+                                        "relevance": 0.8,
+                                    }
+                                )
+                        except Exception as exc:
+                            logger.debug(f"Nation lookup failed for tag {tag}: {exc}")
+
+                    if religions_available:
+                        try:
+                            religions = await conn.fetch(
+                                """
+                                SELECT id, name, core_beliefs
+                                FROM religions
+                                WHERE LOWER(name) LIKE $1
+                                   OR LOWER(COALESCE(core_beliefs::text, '')) LIKE $1
+                                LIMIT 2
+                                """,
+                                search_pattern,
+                            )
+                            for religion_record in religions:
+                                religion = dict(religion_record)
+                                details = {
+                                    "core_beliefs": religion.get("core_beliefs"),
+                                }
+                                filtered_details = {
+                                    key: value
+                                    for key, value in details.items()
+                                    if value not in (None, [], {}, "")
+                                }
+                                lore_items.append(
+                                    {
+                                        "type": "religion",
+                                        "id": religion.get("id"),
+                                        "name": religion.get("name"),
+                                        "details": filtered_details,
+                                        "relevance": 0.7,
+                                    }
+                                )
+                        except Exception as exc:
+                            logger.debug(f"Religion lookup failed for tag {tag}: {exc}")
+
+                    if events_available:
+                        try:
+                            events = await conn.fetch(
+                                """
+                                SELECT id, event_name, description, location,
+                                       year, month, day, time_of_day
+                                FROM events
+                                WHERE LOWER(COALESCE(event_name, '')) LIKE $1
+                                   OR LOWER(COALESCE(description, '')) LIKE $1
+                                   OR LOWER(COALESCE(location, '')) LIKE $1
+                                LIMIT 2
+                                """,
+                                search_pattern,
+                            )
+                            for event_record in events:
+                                event = dict(event_record)
+                                date_details = {
+                                    "year": event.get("year"),
+                                    "month": event.get("month"),
+                                    "day": event.get("day"),
+                                    "time_of_day": event.get("time_of_day"),
+                                }
+                                date_details = {
+                                    key: value
+                                    for key, value in date_details.items()
+                                    if value not in (None, "")
+                                }
+                                details = {
+                                    "description": event.get("description"),
+                                    "location": event.get("location"),
+                                }
+                                if date_details:
+                                    details["date"] = date_details
+                                filtered_details = {
+                                    key: value
+                                    for key, value in details.items()
+                                    if value not in (None, [], {}, "")
+                                }
+                                lore_items.append(
+                                    {
+                                        "type": "event",
+                                        "id": event.get("id"),
+                                        "name": event.get("event_name"),
+                                        "details": filtered_details,
+                                        "relevance": 0.6,
+                                    }
+                                )
+                        except Exception as exc:
+                            logger.debug(f"Event lookup failed for tag {tag}: {exc}")
+
                     if lore_items:
                         tagged_lore[tag] = lore_items
-            
+
             # Add cached lore if available
             if self.config.enable_cache and self._cache_system:
                 for tag in tags:
@@ -3401,9 +3508,9 @@ class LoreOrchestrator:
                     cached = await self._cache_system.get(cache_key)
                     if cached and tag not in tagged_lore:
                         tagged_lore[tag] = cached
-            
+
             return tagged_lore
-            
+
         except Exception as e:
             logger.error(f"Error fetching tagged lore: {e}")
             return {}
