@@ -1068,8 +1068,8 @@ def _intent_requests_location_move(intent: Dict[str, Any], text_l: str, candidat
             return True
 
     text_l = text_l or ""
-    if not any(marker in text_l for marker in LOCATION_MOVE_TEXT_MARKERS):
-        return False
+    if any(marker in text_l for marker in LOCATION_MOVE_TEXT_MARKERS):
+        return True
 
     normalized_candidates: Set[str] = set()
     for token in candidate_tokens:

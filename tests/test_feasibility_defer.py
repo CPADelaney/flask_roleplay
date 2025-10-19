@@ -37,6 +37,7 @@ sys.modules["sentence_transformers.models"] = dummy_models
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
+from nyx.location.types import Anchor, ResolveResult, STATUS_ASK
 from nyx.nyx_agent import feasibility
 from nyx.nyx_agent._feasibility_helpers import (
     DeferPromptContext,
@@ -727,6 +728,97 @@ async def test_fast_feasibility_allows_location_reference_tokens(monkeypatch, di
     per_intent = result["per_intent"][0]
     assert per_intent["strategy"] == "allow"
     assert not any(v.get("rule") == "npc_absent" for v in per_intent.get("violations", []))
+
+
+@pytest.mark.anyio
+async def test_movement_intent_uses_location_resolver_for_unknown_venue(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["movement"],
+                "direct_object": ["Fisherman's Wharf"],
+                "instruments": [],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": ["bartender"],
+        "items": ["bar stool"],
+        "location_features": ["oak bar", "framed map"],
+        "time_phase": "day",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Tavern"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"technology": "modern"})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            if "Locations" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    from nyx.location import router as location_router
+
+    captured: dict = {}
+
+    async def fake_resolve_place_or_travel(query_text, meta, store, user_key, convo_key):
+        captured["resolver_query"] = query_text
+        return ResolveResult(
+            status=STATUS_ASK,
+            message="Need more detail",
+            choices=["Fisherman's Wharf (San Francisco)"],
+            candidates=[],
+            operations=[],
+            anchor=Anchor(scope="real"),
+            scope="real",
+        )
+
+    monkeypatch.setattr(location_router, "resolve_place_or_travel", fake_resolve_place_or_travel)
+
+    original_find = feasibility._find_unresolved_location_targets
+
+    async def capture_find(*args, **kwargs):
+        tokens, resolver_result = await original_find(*args, **kwargs)
+        captured["missing_tokens"] = tokens
+        captured["resolver_result"] = resolver_result
+        return tokens, resolver_result
+
+    monkeypatch.setattr(feasibility, "_find_unresolved_location_targets", capture_find)
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=42,
+        conversation_id=7,
+        text="Go to Fisherman's Wharf.",
+    )
+
+    assert captured.get("resolver_query") == "fisherman's wharf"
+    assert captured.get("missing_tokens") == ["fisherman's wharf"]
+    assert captured.get("resolver_result") is not None
+
+    per_intent = result["per_intent"][0]
+    violations = per_intent.get("violations", [])
+    assert per_intent["strategy"] in {"ask", "deny"}
+    assert any(v.get("rule", "").startswith("location_resolver") for v in violations)
+    assert "location_resolver:deny" in {v.get("rule") for v in violations}
+    assert "npc_absent" not in {v.get("rule") for v in violations}
 
 
 @pytest.mark.anyio
