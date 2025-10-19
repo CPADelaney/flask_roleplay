@@ -291,15 +291,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
     # ------------------------------------------------------------------
     # 1) Generating Core Principles with Pydantic Model
     # ------------------------------------------------------------------
-    @function_tool
-    async def generate_core_principles(self) -> CorePrinciples:
-        """
-        Dynamically generate a set of 'core principles' for a femdom/matriarchal world,
-        returning a structured CorePrinciples object.
-
-        Returns:
-            A CorePrinciples object representing the newly generated principles.
-        """
+    async def _generate_core_principles_impl(self) -> CorePrinciples:
         prompt = (
             "Generate a JSON object describing the core principles of a strongly matriarchal (femdom) world. "
             "Include sections like 'power_dynamics', 'societal_norms', and 'symbolic_representations'. "
@@ -323,39 +315,46 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
         principles_agent = self.transformation_agent.clone(
             output_type=CorePrinciples
         )
-        
+
         run_ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
             "purpose": "generating core principles"
         })
-        
+
         run_cfg = RunConfig(
             workflow_name="GenerateCorePrinciples",
             trace_metadata=self.trace_metadata
         )
-        
+
         result = await Runner.run(
             principles_agent,
             prompt,
             context=run_ctx.context,
             run_config=run_cfg
         )
-        
+
         return result.final_output_as(CorePrinciples)
+
+    @function_tool
+    async def generate_core_principles(self) -> CorePrinciples:
+        """
+        Dynamically generate a set of 'core principles' for a femdom/matriarchal world,
+        returning a structured CorePrinciples object.
+
+        Returns:
+            A CorePrinciples object representing the newly generated principles.
+        """
+        return await self._generate_core_principles_impl()
+
+    async def generate_core_principles_async(self) -> CorePrinciples:
+        """Plain async wrapper for generating core principles outside the tool context."""
+        return await self._generate_core_principles_impl()
 
     # ------------------------------------------------------------------
     # 2) Generating Hierarchical Constraints with Pydantic Model
     # ------------------------------------------------------------------
-    @function_tool
-    async def generate_hierarchical_constraints(self) -> HierarchicalConstraint:
-        """
-        Use the LLM to produce an immersive, narrative-heavy HierarchicalConstraint object that 
-        describes the hierarchical constraints in a matriarchal setting.
-
-        Returns:
-            A HierarchicalConstraint object describing hierarchy_type, power_expressions, roles, etc.
-        """
+    async def _generate_hierarchical_constraints_impl(self) -> HierarchicalConstraint:
         prompt = (
             "Produce a JSON object describing hierarchical constraints in a femdom/matriarchal world. "
             "It must include items such as:\n"
@@ -374,44 +373,58 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
         constraints_agent = self.transformation_agent.clone(
             output_type=HierarchicalConstraint
         )
-        
+
         run_ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
             "purpose": "generating hierarchical constraints"
         })
-        
+
         run_cfg = RunConfig(
             workflow_name="GenerateHierarchicalConstraints",
             trace_metadata=self.trace_metadata
         )
-        
+
         result = await Runner.run(
             constraints_agent,
             prompt,
             context=run_ctx.context,
             run_config=run_cfg
         )
-        
+
         return result.final_output_as(HierarchicalConstraint)
+
+    @function_tool
+    async def generate_hierarchical_constraints(self) -> HierarchicalConstraint:
+        """
+        Use the LLM to produce an immersive, narrative-heavy HierarchicalConstraint object that
+        describes the hierarchical constraints in a matriarchal setting.
+
+        Returns:
+            A HierarchicalConstraint object describing hierarchy_type, power_expressions, roles, etc.
+        """
+        return await self._generate_hierarchical_constraints_impl()
+
+    async def generate_hierarchical_constraints_async(self) -> HierarchicalConstraint:
+        """Plain async wrapper for generating hierarchical constraints outside the tool context."""
+        return await self._generate_hierarchical_constraints_impl()
 
     # ------------------------------------------------------------------
     # 3) LENS APPLICATION WITH SPECIALIZED HANDOFFS
     # ------------------------------------------------------------------
-    @function_tool(strict_mode=False)  # Disable strict schema to allow flexible data
-    async def apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _apply_power_lens_impl(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply a matriarchal lens to the foundation lore, using specialized narrative
         transformation agents based on content type.
-        
+
         Args:
             foundation_data: The foundation lore data to transform
-            
+
         Returns:
             Transformed foundation data with matriarchal themes applied
         """
         result = foundation_data.copy()
-        
+
         run_ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
@@ -482,16 +495,18 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             
         return result
 
+    @function_tool(strict_mode=False)  # Disable strict schema to allow flexible data
+    async def apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._apply_power_lens_impl(foundation_data)
+
+    async def apply_power_lens_async(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Plain async wrapper for applying the power lens outside the tool context."""
+        return await self._apply_power_lens_impl(foundation_data)
+
     # ------------------------------------------------------------------
     # 4) Generating Power Expressions with Pydantic Models
     # ------------------------------------------------------------------
-    @function_tool
-    async def generate_power_expressions(self) -> List[PowerExpression]:
-        """
-        Generate a list of power expressions describing ways in which 
-        female authority and male submission manifest in the world.
-        Returns a list of PowerExpression objects.
-        """
+    async def _generate_power_expressions_impl(self) -> List[PowerExpression]:
         prompt = (
             "Generate a JSON array, each item describing a unique 'power expression' in a "
             "femdom/matriarchal fantasy world. Include fields:\n"
@@ -505,34 +520,46 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
         expressions_agent = self.transformation_agent.clone(
             output_type=List[PowerExpression]
         )
-        
+
         run_ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
             "purpose": "generating power expressions"
         })
-        
+
         run_cfg = RunConfig(
             workflow_name="GeneratePowerExpressions",
             trace_metadata=self.trace_metadata
         )
-        
+
         result = await Runner.run(
             expressions_agent,
             prompt,
             context=run_ctx.context,
             run_config=run_cfg
         )
-        
+
         return result.final_output_as(List[PowerExpression])
+
+    @function_tool
+    async def generate_power_expressions(self) -> List[PowerExpression]:
+        """
+        Generate a list of power expressions describing ways in which
+        female authority and male submission manifest in the world.
+        Returns a list of PowerExpression objects.
+        """
+        return await self._generate_power_expressions_impl()
+
+    async def generate_power_expressions_async(self) -> List[PowerExpression]:
+        """Plain async wrapper for generating power expressions outside the tool context."""
+        return await self._generate_power_expressions_impl()
     
     # ------------------------------------------------------------------
     # 5) Dialogue-based narrative development
     # ------------------------------------------------------------------
-    @function_tool
-    async def develop_narrative_through_dialogue(
-        self, 
-        narrative_theme: str, 
+    async def _develop_narrative_through_dialogue_impl(
+        self,
+        narrative_theme: str,
         initial_scene: str
     ) -> AsyncGenerator[str, None]:
         """
@@ -628,6 +655,24 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
         yield f"Consistency: {evaluation.consistency}/10\n"
         yield f"Engagement: {evaluation.engagement}/10\n"
         yield f"Improvement Suggestions: {', '.join(evaluation.improvements)}\n"
+
+    @function_tool
+    async def develop_narrative_through_dialogue(
+        self,
+        narrative_theme: str,
+        initial_scene: str
+    ) -> AsyncGenerator[str, None]:
+        async for chunk in self._develop_narrative_through_dialogue_impl(narrative_theme, initial_scene):
+            yield chunk
+
+    async def develop_narrative_through_dialogue_async(
+        self,
+        narrative_theme: str,
+        initial_scene: str
+    ) -> AsyncGenerator[str, None]:
+        """Plain async wrapper for developing a narrative outside the tool context."""
+        async for chunk in self._develop_narrative_through_dialogue_impl(narrative_theme, initial_scene):
+            yield chunk
 
     async def register_with_governance(self) -> bool:
         """Register the framework with Nyx governance."""

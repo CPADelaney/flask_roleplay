@@ -4182,38 +4182,38 @@ class LoreOrchestrator:
     
     async def mpf_generate_core_principles(self) -> Dict[str, Any]:
         mpf = await self._get_matriarchal_power_framework()
-        out = await mpf.generate_core_principles()
+        out = await mpf.generate_core_principles_async()
         try:
             return out.dict()
         except Exception:
             # If it’s already a dict
             return out
-    
+
     async def mpf_generate_hierarchical_constraints(self) -> Dict[str, Any]:
         mpf = await self._get_matriarchal_power_framework()
-        out = await mpf.generate_hierarchical_constraints()
+        out = await mpf.generate_hierarchical_constraints_async()
         try:
             return out.dict()
         except Exception:
             return out
-    
+
     async def mpf_generate_power_expressions(self, limit: int = 5) -> List[Dict[str, Any]]:
         mpf = await self._get_matriarchal_power_framework()
-        out = await mpf.generate_power_expressions()
+        out = await mpf.generate_power_expressions_async()
         if hasattr(out, "__iter__"):
             try:
                 return [e.dict() if hasattr(e, "dict") else e for e in out][:limit]
             except Exception:
                 return list(out)[:limit]
         return []
-    
+
     async def mpf_apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
         mpf = await self._get_matriarchal_power_framework()
-        return await mpf.apply_power_lens(foundation_data)
-    
+        return await mpf.apply_power_lens_async(foundation_data)
+
     async def mpf_develop_narrative_through_dialogue(self, narrative_theme: str, initial_scene: str) -> AsyncGenerator[str, None]:
         mpf = await self._get_matriarchal_power_framework()
-        async for chunk in mpf.develop_narrative_through_dialogue(narrative_theme, initial_scene):
+        async for chunk in mpf.develop_narrative_through_dialogue_async(narrative_theme, initial_scene):
             yield chunk
     
     # ===== CORE LORE OPERATIONS =====
@@ -4237,14 +4237,14 @@ class LoreOrchestrator:
         # If matriarchal theme is enabled, enhance with the framework
         if use_matriarchal:
             mpf = await self._get_matriarchal_power_framework()
-            
+
             # Apply matriarchal lens to the generated world
-            result = await mpf.apply_power_lens(result)
-            
+            result = await mpf.apply_power_lens_async(result)
+
             # Add matriarchal-specific elements
-            result['matriarchal_principles'] = await mpf.generate_core_principles()
-            result['power_expressions'] = await mpf.generate_power_expressions()
-            result['hierarchical_constraints'] = await mpf.generate_hierarchical_constraints()
+            result['matriarchal_principles'] = await mpf.generate_core_principles_async()
+            result['power_expressions'] = await mpf.generate_power_expressions_async()
+            result['hierarchical_constraints'] = await mpf.generate_hierarchical_constraints_async()
     
         self.metrics["operations"] += 1
         self.metrics["last_operation"] = "generate_world"
