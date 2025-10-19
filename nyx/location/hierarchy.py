@@ -360,7 +360,7 @@ async def generate_and_persist_hierarchy(
             FROM Locations
             WHERE user_id = $1 AND conversation_id = $2 AND city IS NOT NULL
                   AND LOWER(city) = LOWER($3)
-            ORDER BY id DESC
+            ORDER BY location_id DESC
             LIMIT 1
             """,
             int(user_id),
@@ -373,7 +373,7 @@ async def generate_and_persist_hierarchy(
                 SELECT city, region, country, planet, galaxy, realm
                 FROM Locations
                 WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY id DESC
+                ORDER BY location_id DESC
                 LIMIT 1
                 """,
                 int(user_id),
@@ -385,7 +385,7 @@ async def generate_and_persist_hierarchy(
             SELECT city, region, country, planet, galaxy, realm
             FROM Locations
             WHERE user_id = $1 AND conversation_id = $2
-            ORDER BY id DESC
+            ORDER BY location_id DESC
             LIMIT 1
             """,
             int(user_id),
@@ -812,7 +812,7 @@ async def get_or_create_location(
         SELECT *
         FROM Locations
         WHERE user_id = $1 AND conversation_id = $2 AND location_name = $3
-        ORDER BY id DESC
+        ORDER BY location_id DESC
         LIMIT 1
         """,
         int(user_id),
