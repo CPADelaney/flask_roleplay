@@ -634,6 +634,7 @@ async def generate_and_persist_hierarchy(
         "planet": planet,
         "galaxy": galaxy,
         "realm": realm,
+        "scope": scope,
         "lat": lat,
         "lon": lon,
         "is_fictional": bool(meta.get("is_fictional") or is_fictional_branch),

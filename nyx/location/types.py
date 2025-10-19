@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import MISSING, dataclass, field, fields
-from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, cast
 
 DEFAULT_REALM = os.getenv("NYX_DEFAULT_REALM", "Prime Material")
 
@@ -149,6 +149,7 @@ class Location:
     planet: str = "Earth"
     galaxy: str = "Milky Way"
     realm: Optional[str] = DEFAULT_REALM
+    scope: Optional[Scope] = None
     lat: Optional[float] = None
     lon: Optional[float] = None
     is_fictional: bool = False
@@ -186,6 +187,12 @@ class Location:
         self.lat = self._coerce_float(self.lat)
         self.lon = self._coerce_float(self.lon)
         self.is_fictional = bool(self.is_fictional)
+        try:
+            resolved_scope = self._resolve_scope(self.scope, self.is_fictional)
+        except ValueError as exc:
+            raise ValueError("scope must be either 'real' or 'fictional'") from exc
+        self.scope = resolved_scope
+        self.is_fictional = self.scope == "fictional"
         self.notable_features = self._coerce_list(self.notable_features)
         self.hidden_aspects = self._coerce_list(self.hidden_aspects)
         self.access_restrictions = self._coerce_list(self.access_restrictions)
@@ -262,10 +269,36 @@ class Location:
             return out or None
         return None
 
+    @staticmethod
+    def _resolve_scope(scope_value: Any, is_fictional_value: Any) -> Scope:
+        default_scope: Scope = "fictional" if bool(is_fictional_value) else "real"
+        if scope_value is None:
+            return default_scope
+        if isinstance(scope_value, str):
+            normalized = scope_value.strip().lower()
+            if not normalized:
+                return default_scope
+            if normalized in {"true", "false"}:
+                return "fictional" if normalized == "true" else "real"
+            if normalized in {"real", "fictional"}:
+                return cast(Scope, normalized)
+        if isinstance(scope_value, bool):
+            return "fictional" if scope_value else "real"
+        if isinstance(scope_value, (int, float)):
+            if scope_value == 0:
+                return "real"
+            if scope_value == 1:
+                return "fictional"
+        raise ValueError(f"Invalid scope value: {scope_value!r}")
+
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any], **overrides: Any) -> "Location":
         data: Dict[str, Any] = dict(mapping)
         data.update(overrides)
+        if "scope" in data:
+            data["scope"] = cls._resolve_scope(data.get("scope"), data.get("is_fictional"))
+        else:
+            data["scope"] = cls._resolve_scope(None, data.get("is_fictional"))
         init_kwargs: Dict[str, Any] = {}
         for field_def in fields(cls):
             if field_def.name in data:
@@ -305,6 +338,7 @@ class Location:
             "planet": self.planet,
             "galaxy": self.galaxy,
             "realm": self.realm,
+            "scope": self.scope,
             "lat": self.lat,
             "lon": self.lon,
             "is_fictional": self.is_fictional,
