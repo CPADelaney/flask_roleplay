@@ -40,12 +40,12 @@ def test_responses_tools_use_function_payload_schema():
 
     for tool in tools:
         assert tool.get("type") == "function", "Tool payload must use Responses function type"
-        assert "function" in tool, "Tool is missing nested 'function' schema"
+        assert "function" not in tool, "Legacy function wrapper should not remain in Responses tool payload"
 
-        function_schema = tool["function"]
-        assert isinstance(function_schema, dict), "Function schema must be a dict"
+        schema_name = tool.get("name")
+        assert schema_name, "Responses tool is missing its 'name'"
 
-        schema_name = function_schema.get("name")
-        assert schema_name, "Function schema is missing its 'name'"
-
-        assert "name" not in tool, "Responses tool should not duplicate function name at top level"
+        parameters = tool.get("parameters")
+        assert isinstance(parameters, dict), "Responses tool must include parameters object"
+        assert parameters.get("type") == "object", "Parameters must default to object type"
+        assert "properties" in parameters, "Parameters must expose properties map"
