@@ -625,7 +625,15 @@ def _calculate_token_usage(response) -> int:
 
 def _to_responses_tools(functions: list[dict]) -> list[dict]:
     """Wrap Chat Completions-style functions into Responses tools."""
-    return [{"type": "function", "function": f} for f in functions]
+    tools: list[dict] = []
+    for schema in functions:
+        name = schema.get("name") if isinstance(schema, dict) else None
+        if not name:
+            raise ValueError(
+                f"Function schema missing required 'name' field: {schema}"
+            )
+        tools.append({"type": "function", "name": name, "function": schema})
+    return tools
 
 
 def _extract_first_tool_call(resp) -> tuple[str | None, str | dict | None]:
