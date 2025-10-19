@@ -238,6 +238,65 @@ def test_fast_feasibility_allows_location_reference(monkeypatch, action_text):
     assert per_intent.get("strategy") == "allow"
 
 
+def test_apply_travel_plan_metadata_adds_consequences():
+    travel_operations = [
+        {
+            "op": "travel.plan",
+            "legs": [
+                {
+                    "kind": "flight",
+                    "dest_label": "Paris Charles de Gaulle",
+                    "estimate_min": 600,
+                },
+                {
+                    "kind": "train",
+                    "dest_label": "Paris Central",
+                    "estimate_min": 45,
+                },
+            ],
+        }
+    ]
+
+    payload: dict[str, typing.Any] = {}
+    feasibility._apply_travel_plan_metadata(payload, travel_operations)
+
+    assert payload["resolver_travel_plan"] == travel_operations
+    consequences = payload.get("consequences") or []
+    assert len(consequences) == 2
+    first, second = consequences
+    assert first["method"] == "flight"
+    assert first["destination"] == "Paris Charles de Gaulle"
+    assert first["duration_minutes"] == pytest.approx(600.0)
+    assert second["method"] == "train"
+    assert second["destination"] == "Paris Central"
+    assert second["duration_minutes"] == pytest.approx(45.0)
+
+
+def test_apply_travel_plan_metadata_preserves_existing_consequences():
+    travel_operations = [
+        {
+            "op": "travel.plan",
+            "legs": [
+                {
+                    "kind": "shuttle",
+                    "dest_label": "Orbital Platform",
+                    "estimate_min": 30,
+                }
+            ],
+        }
+    ]
+
+    payload: dict[str, typing.Any] = {"consequences": [{"method": "existing"}]}
+    feasibility._apply_travel_plan_metadata(payload, travel_operations)
+
+    assert payload["resolver_travel_plan"] == travel_operations
+    consequences = payload.get("consequences") or []
+    assert consequences[0] == {"method": "existing"}
+    assert consequences[1]["method"] == "shuttle"
+    assert consequences[1]["destination"] == "Orbital Platform"
+    assert consequences[1]["duration_minutes"] == pytest.approx(30.0)
+
+
 @pytest.mark.parametrize("action_text", ["Go to the hidden moon base."])
 def test_fast_feasibility_blocks_unknown_location(monkeypatch, action_text):
     fake_conn = FakeConnection()
