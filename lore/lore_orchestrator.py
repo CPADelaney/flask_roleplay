@@ -4147,20 +4147,34 @@ class LoreOrchestrator:
         if not hasattr(self, "_mpf"):
             from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
             self._mpf = MatriarchalPowerStructureFramework(self.user_id, self.conversation_id)
-            
+
             # Initialize if it has the method
             if hasattr(self._mpf, 'ensure_initialized'):
                 await self._mpf.ensure_initialized()
-            
+
             # Register with governance if available
+            governor = None
             try:
                 governor = await get_central_governance(self.user_id, self.conversation_id)
-                self._mpf.governor = governor
-                if hasattr(self._mpf, "register_with_governance"):
-                    await self._mpf.register_with_governance()
-            except Exception as e:
-                logger.debug(f"Could not attach/register governance to Matriarchal framework: {e}")
-            
+            except Exception as exc:
+                logger.debug("Failed to fetch central governance for Matriarchal framework: %s", exc)
+
+            if governor:
+                try:
+                    self._mpf.set_governor(governor)
+                except Exception as exc:
+                    logger.warning("Unable to attach governor to Matriarchal framework: %s", exc)
+                else:
+                    if hasattr(self._mpf, "register_with_governance"):
+                        try:
+                            registered = await self._mpf.register_with_governance()
+                            if not registered:
+                                logger.warning("Matriarchal framework governance registration returned False")
+                        except Exception as exc:
+                            logger.warning("Matriarchal framework failed to register with governance: %s", exc)
+            else:
+                logger.debug("Governor unavailable; Matriarchal framework will operate without governance registration")
+
             logger.info("MatriarchalPowerStructureFramework initialized")
         return self._mpf
 

@@ -19,6 +19,9 @@ from agents import (
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
 
+# Governance
+from nyx.nyx_governance import AgentType, DirectivePriority
+
 # Project-specific import
 from lore.managers.base_manager import BaseLoreManager
 
@@ -625,3 +628,16 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
         yield f"Consistency: {evaluation.consistency}/10\n"
         yield f"Engagement: {evaluation.engagement}/10\n"
         yield f"Improvement Suggestions: {', '.join(evaluation.improvements)}\n"
+
+    async def register_with_governance(self) -> bool:
+        """Register the framework with Nyx governance."""
+        return await super().register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="matriarchal_power_framework",
+            directive_text=(
+                "Define, reinforce, and audit matriarchal power structures across lore "
+                "content, ensuring feminine authority remains central."
+            ),
+            scope="world_building",
+            priority=DirectivePriority.MEDIUM,
+        )
