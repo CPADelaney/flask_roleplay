@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -20,6 +21,7 @@ class _StubAgent:
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+        self.name = kwargs.get("name", "")
 
     def clone(self, **kwargs):
         return self
@@ -273,3 +275,113 @@ def test_matriarchal_framework_registers_with_governance_successfully():
         assert registered_id == "matriarchal_power_framework"
 
     asyncio.run(_run())
+
+
+def test_plain_async_wrappers_return_structured_data(monkeypatch):
+    class _DummyResult:
+        def __init__(self, final_output: str, typed_output=None):
+            self.final_output = final_output
+            self._typed_output = typed_output
+
+        def final_output_as(self, schema):
+            if self._typed_output is not None:
+                return self._typed_output
+            raise AssertionError(f"Unexpected schema request: {schema}")
+
+    prompts = []
+
+    async def _fake_runner_run(starting_agent, input=None, *, context=None, run_config=None, **_ignored):
+        prompt = input
+        agent_name = getattr(starting_agent, "name", "")
+        prompt_text = str(prompt).lower()
+        workflow_name = getattr(run_config, "workflow_name", None)
+        if workflow_name is None and run_config is not None:
+            workflow_name = getattr(run_config, "config", {}).get("workflow_name")
+        prompts.append(str(prompt))
+
+        if agent_name == "MatriarchalTransformationAgent":
+            if workflow_name == "GenerateCorePrinciples" or "core principles" in prompt_text:
+                principles = matriarchal_module.CorePrinciples(
+                    power_dynamics={"dominant_gender": "female"},
+                    societal_norms={"obedience": "expected"},
+                    symbolic_representations={"icon": "moon"},
+                )
+                return _DummyResult(json.dumps(principles.model_dump()), principles)
+
+            if workflow_name == "GenerateHierarchicalConstraints" or "hierarchical constraints" in prompt_text:
+                constraints = matriarchal_module.HierarchicalConstraint(
+                    dominant_hierarchy_type="matriarchy",
+                    description="Women lead all councils",
+                    power_expressions=["ritual oaths"],
+                    masculine_roles=["attendant"],
+                    leadership_domains=["council"],
+                    property_rights="matrilineal",
+                    status_markers=["silver torque"],
+                    relationship_structure="polyandry",
+                    enforcement_mechanisms=["oath binding"],
+                )
+                return _DummyResult(json.dumps(constraints.model_dump()), constraints)
+
+            if workflow_name == "GeneratePowerExpressions" or "power expression" in prompt_text:
+                expressions = [
+                    matriarchal_module.PowerExpression(
+                        domain="political",
+                        title="Queen's Edict",
+                        description="Royal decrees delivered in ceremonial courts",
+                        male_role="advisor",
+                    )
+                ]
+                return _DummyResult(json.dumps([item.model_dump() for item in expressions]), expressions)
+
+            if "original text" in prompt_text or "transform this" in prompt_text:
+                return _DummyResult("matriarchal rewrite")
+
+            return _DummyResult("matriarchal rewrite")
+
+        if agent_name == "NarrativeEvaluationAgent":
+            evaluation = matriarchal_module.NarrativeEvaluation(
+                matriarchal_strength=8,
+                narrative_quality=8,
+                consistency=8,
+                engagement=8,
+                improvements=["highlight lunar rites"],
+            )
+            return _DummyResult(json.dumps(evaluation.model_dump()), evaluation)
+
+        return _DummyResult(f"{agent_name}-transformed")
+
+    async def _run():
+        monkeypatch.setattr(matriarchal_module.Runner, "run", staticmethod(_fake_runner_run))
+
+        framework = MatriarchalPowerStructureFramework(user_id=7, conversation_id=13)
+
+        principles = await framework.generate_core_principles_async()
+        assert isinstance(principles, matriarchal_module.CorePrinciples)
+        assert principles.power_dynamics["dominant_gender"] == "female"
+
+        constraints = await framework.generate_hierarchical_constraints_async()
+        assert isinstance(constraints, matriarchal_module.HierarchicalConstraint)
+        assert constraints.dominant_hierarchy_type == "matriarchy"
+
+        expressions = await framework.generate_power_expressions_async()
+        assert expressions and isinstance(expressions[0], matriarchal_module.PowerExpression)
+
+        foundation = {
+            "social_structure": "clan circles",
+            "cosmology": "sky mother",
+            "magic_system": "hearth flames",
+            "world_history": "ancient queens",
+            "calendar_system": "lunar cycles",
+        }
+        lens_result = await framework.apply_power_lens_async(foundation)
+        assert set(lens_result.keys()) == set(foundation.keys())
+
+        chunks = []
+        async for chunk in framework.develop_narrative_through_dialogue_async("rebellion", "The queen calls court"):
+            chunks.append(chunk)
+
+        assert chunks, "Expected streamed narrative chunks"
+        assert any("Improvement Suggestions" in chunk for chunk in chunks)
+
+    asyncio.run(_run())
+    assert any("core principles" in p.lower() for p in prompts), "Expected core principles prompt to be issued"
