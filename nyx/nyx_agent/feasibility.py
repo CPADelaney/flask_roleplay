@@ -12,7 +12,7 @@ import re
 import unicodedata
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from agents import Agent, Runner
 from db.connection import get_db_connection_context
@@ -1383,6 +1383,96 @@ def _resolver_candidate_preview(candidate: Candidate) -> Optional[Dict[str, Any]
         "place_key": meta.get("place_key") or candidate.place.key,
         "place_id": meta.get("place_id"),
     }
+
+
+def _travel_plan_consequences(travel_ops: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Translate travel-plan operations into lightweight consequence entries."""
+
+    def _normalize_destination(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple, set)):
+            tokens = [str(item).strip() for item in value if str(item).strip()]
+            if tokens:
+                return ", ".join(tokens)
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _extract_duration(value: Any) -> Optional[float]:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                return float(stripped)
+            except ValueError:
+                return None
+        return None
+
+    def _leg_consequence(leg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        method = leg.get("kind") or leg.get("mode") or leg.get("method")
+        destination = (
+            _normalize_destination(leg.get("dest_label"))
+            or _normalize_destination(leg.get("destination"))
+            or _normalize_destination(leg.get("label"))
+        )
+        duration = (
+            _extract_duration(leg.get("estimate_min"))
+            or _extract_duration(leg.get("duration_minutes"))
+            or _extract_duration(leg.get("duration_min"))
+            or _extract_duration(leg.get("travel_time_min"))
+        )
+
+        consequence: Dict[str, Any] = {}
+        if isinstance(method, str) and method.strip():
+            consequence["method"] = method.strip()
+        if duration is not None:
+            consequence["duration_minutes"] = duration
+        if destination:
+            consequence["destination"] = destination
+
+        return consequence or None
+
+    consequences: List[Dict[str, Any]] = []
+    for op in travel_ops or []:
+        if not isinstance(op, dict):
+            continue
+        op_name = str(op.get("op") or "").strip().lower()
+        if not op_name.startswith("travel."):
+            continue
+
+        legs = op.get("legs")
+        if isinstance(legs, Sequence):
+            for leg in legs:
+                if not isinstance(leg, dict):
+                    continue
+                entry = _leg_consequence(leg)
+                if entry:
+                    consequences.append(entry)
+            continue
+
+        entry = _leg_consequence(op)
+        if entry:
+            consequences.append(entry)
+
+    return consequences
+
+
+def _apply_travel_plan_metadata(
+    target: Dict[str, Any], travel_ops: List[Dict[str, Any]]
+) -> None:
+    """Attach travel metadata and derived consequences to a payload."""
+
+    if not travel_ops:
+        return
+
+    target["resolver_travel_plan"] = travel_ops
+    consequences = _travel_plan_consequences(travel_ops)
+    if consequences:
+        target.setdefault("consequences", []).extend(consequences)
 
 
 def _coerce_resolve_result(result: Any) -> Optional[ResolveResult]:
@@ -5113,8 +5203,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                         payload["resolver_mint_policy"] = (
                             hierarchy_payload.get("mint_policy") or mint_policy
                         )
-                    if travel_payload:
-                        payload["resolver_travel_plan"] = travel_payload
+                    _apply_travel_plan_metadata(payload, travel_payload)
                     if candidate_previews:
                         payload["resolver_candidates"] = candidate_previews
                     if location_obj:
@@ -5184,8 +5273,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     ask_payload["resolver_mint_policy"] = (
                         hierarchy_payload.get("mint_policy") or mint_policy
                     )
-                if travel_payload:
-                    ask_payload["resolver_travel_plan"] = travel_payload
+                _apply_travel_plan_metadata(ask_payload, travel_payload)
                 if candidate_previews:
                     ask_payload["resolver_candidates"] = candidate_previews
                 if location_obj:
