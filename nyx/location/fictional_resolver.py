@@ -12,6 +12,14 @@ import asyncpg
 
 from db.connection import get_db_connection_context
 from logic.gpt_utils import call_gpt_json
+
+import unicodedata
+from pathlib import Path
+from typing import Any, Dict, List
+
+from logic.chatgpt_integration import ALLOWS_TEMPERATURE, OpenAIClientManager
+from logic.json_helpers import safe_json_loads
+
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
 from .anchors import derive_geo_anchor
