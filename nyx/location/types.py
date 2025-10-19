@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 DEFAULT_REALM = os.getenv("NYX_DEFAULT_REALM", "Prime Material")
 
-Scope = Literal["real", "fictional", "hybrid"]
+Scope = Literal["real", "fictional"]
 
 PlaceLevel = Literal[
     "world",
