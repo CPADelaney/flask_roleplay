@@ -2014,68 +2014,167 @@ class LoreOrchestrator:
             async with get_db_connection_context() as conn:
                 if isinstance(location_ref, int):
                     row = await conn.fetchrow("""
-                        SELECT 
-                            COALESCE(id, location_id) AS id,
-                            COALESCE(location_name, name) AS name,
-                            description, nation_id, governance, culture, population,
-                            canonical_rules, tags
+                        SELECT
+                            id,
+                            location_name,
+                            description,
+                            location_type,
+                            parent_location,
+                            cultural_significance,
+                            economic_importance,
+                            strategic_value,
+                            population_density,
+                            notable_features,
+                            hidden_aspects,
+                            access_restrictions,
+                            local_customs,
+                            room,
+                            building,
+                            district_type,
+                            planet,
+                            galaxy,
+                            realm,
+                            lat,
+                            lon,
+                            is_fictional,
+                            open_hours,
+                            controlling_faction
                         FROM Locations
-                        WHERE COALESCE(id, location_id) = $1
+                        WHERE id = $1
                         LIMIT 1
                     """, location_ref)
                 else:
                     row = await conn.fetchrow("""
-                        SELECT 
-                            COALESCE(id, location_id) AS id,
-                            COALESCE(location_name, name) AS name,
-                            description, nation_id, governance, culture, population,
-                            canonical_rules, tags
+                        SELECT
+                            id,
+                            location_name,
+                            description,
+                            location_type,
+                            parent_location,
+                            cultural_significance,
+                            economic_importance,
+                            strategic_value,
+                            population_density,
+                            notable_features,
+                            hidden_aspects,
+                            access_restrictions,
+                            local_customs,
+                            room,
+                            building,
+                            district_type,
+                            planet,
+                            galaxy,
+                            realm,
+                            lat,
+                            lon,
+                            is_fictional,
+                            open_hours,
+                            controlling_faction
                         FROM Locations
-                        WHERE COALESCE(location_name, name) = $1
+                        WHERE location_name = $1
                         LIMIT 1
                     """, location_ref)
     
                 if not row:
                     return {}
     
-                data = {
-                    'id': row['id'],
-                    'name': row['name'],
-                    'description': (row['description'] or '')[:200],
-                    'nation_id': row['nation_id'],
-                    'governance': row['governance'] or {},
-                    'culture': row['culture'] or {},
-                    'population': row['population'] or 0,
-                    'canonical_rules': row['canonical_rules'] or [],
-                    'tags': row['tags'] or []
+                row_data = dict(row)
+
+                data: Dict[str, Any] = {
+                    'id': row_data['id'],
+                    'name': row_data['location_name'],
+                    'description': (row_data.get('description') or '')[:200]
                 }
-    
+
+                optional_fields = [
+                    'location_type',
+                    'parent_location',
+                    'cultural_significance',
+                    'economic_importance',
+                    'strategic_value',
+                    'population_density',
+                    'controlling_faction',
+                    'room',
+                    'building',
+                    'district_type',
+                    'planet',
+                    'galaxy',
+                    'realm'
+                ]
+                for field in optional_fields:
+                    value = row_data.get(field)
+                    if value is not None:
+                        data[field] = value
+
+                json_fields = [
+                    'notable_features',
+                    'hidden_aspects',
+                    'access_restrictions',
+                    'local_customs',
+                    'open_hours'
+                ]
+                for field in json_fields:
+                    value = row_data.get(field)
+                    if value:
+                        data[field] = value
+
+                if row_data.get('is_fictional') is not None:
+                    data['is_fictional'] = row_data['is_fictional']
+
+                lat = row_data.get('lat')
+                lon = row_data.get('lon')
+                if lat is not None or lon is not None:
+                    coords = {}
+                    if lat is not None:
+                        coords['lat'] = lat
+                    if lon is not None:
+                        coords['lon'] = lon
+                    data['coordinates'] = coords
+
                 landmarks = await conn.fetch("""
-                    SELECT landmark_id AS id, name, significance
+                    SELECT id, name, landmark_type, description, historical_significance, current_use
                     FROM Landmarks
                     WHERE location_id = $1
-                    ORDER BY significance DESC
+                    ORDER BY id ASC
                     LIMIT 3
-                """, row['id'])
+                """, row_data['id'])
                 if landmarks:
                     data['landmarks'] = [
-                        {'id': lm['id'], 'name': lm['name'], 'significance': lm['significance']}
+                        {
+                            'id': lm['id'],
+                            'name': lm['name'],
+                            'type': lm.get('landmark_type'),
+                            'description': (lm.get('description') or '')[:120],
+                            'historical_significance': lm.get('historical_significance'),
+                            'current_use': lm.get('current_use')
+                        }
                         for lm in landmarks
                     ]
-    
+
                 events = await conn.fetch("""
-                    SELECT event_name AS name, description, event_date
+                    SELECT
+                        id,
+                        event_name,
+                        description,
+                        start_time,
+                        end_time,
+                        time_of_day
                     FROM Events
                     WHERE location = $1
-                    ORDER BY event_date DESC
+                    ORDER BY
+                        COALESCE(NULLIF(end_time, ''), NULLIF(start_time, ''), '') DESC,
+                        id DESC
                     LIMIT 2
-                """, row['name'])
+                """, row_data['location_name'])
                 if events:
                     data['recent_events'] = [
                         {
-                            'name': e['name'],
+                            'id': e['id'],
+                            'name': e['event_name'],
                             'description': (e['description'] or '')[:100],
-                            'date': e['event_date'].isoformat() if e['event_date'] else None
+                            'start_time': e.get('start_time'),
+                            'end_time': e.get('end_time'),
+                            'time_of_day': e.get('time_of_day')
                         }
                         for e in events
                     ]
