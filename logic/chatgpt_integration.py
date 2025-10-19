@@ -668,12 +668,9 @@ def _extract_first_tool_call(resp) -> tuple[str | None, str | dict | None]:
 def _get_tool_choice(tool_name: str) -> dict:
     """
     Get tool_choice dict for forcing a specific tool.
-    Tries "tool" type first, can fallback to "function" if needed.
+    Returns the explicit function structure required by the API.
     """
-    # Default to "tool" type (newer format)
-    # If you get "invalid tool_choice" errors, change this to:
-    # return {"type": "function", "name": tool_name}
-    return {"type": "tool", "name": tool_name}
+    return {"type": "function", "function": {"name": tool_name}}
 
 
 # =====================================================
