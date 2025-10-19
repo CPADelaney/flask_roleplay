@@ -5,9 +5,18 @@ from typing import Any, Dict, Optional
 
 from .anchors import derive_geo_anchor
 from .fictional_resolver import resolve_fictional
+from .gemini_maps_adapter import resolve_location_with_gemini
 from .query import PlaceQuery
 from .search import resolve_real
-from .types import Anchor, Place, ResolveResult, Scope
+from .types import (
+    Anchor,
+    Place,
+    ResolveResult,
+    Scope,
+    STATUS_EXACT,
+    STATUS_MULTIPLE,
+    STATUS_TRAVEL_PLAN,
+)
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
 _GO_TO_RX = re.compile(r"\b(?:go|head|walk|run|drive|get|straight|toward|to)\s+(?:the\s+)?(.+)$", re.IGNORECASE)
@@ -83,7 +92,19 @@ async def resolve_place_or_travel(
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
     if anchor.scope == "real":
-        res = await resolve_real(q, anchor, meta)
+        gemini_result: Optional[ResolveResult] = None
+        try:
+            gemini_result = await resolve_location_with_gemini(q, anchor)
+        except Exception:
+            gemini_result = None
+
+        if gemini_result and (
+            (gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE})
+            or (gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations)
+        ):
+            res = gemini_result
+        else:
+            res = await resolve_real(q, anchor, meta)
     else:
         res = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
 
