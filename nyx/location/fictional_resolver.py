@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import random
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -15,11 +14,6 @@ from db.connection import get_db_connection_context
 from logic.gpt_utils import call_gpt_json
 
 import unicodedata
-from pathlib import Path
-from typing import Any, Dict, List
-
-from logic.chatgpt_integration import ALLOWS_TEMPERATURE, OpenAIClientManager
-from logic.json_helpers import safe_json_loads
 
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
@@ -33,11 +27,8 @@ from .types import (
     Place,
     ResolveResult,
     STATUS_ASK,
-    STATUS_AMBIGUOUS,
     STATUS_EXACT,
 )
-
-_CONTENT_PATH = os.environ.get("NYX_CITY_CONTENT", "nyx_data/city_archetypes.json")
 
 logger = logging.getLogger(__name__)
 
@@ -97,40 +88,6 @@ _DEFAULT_DISTRICT_FALLBACKS: List[Dict[str, Any]] = [
         ],
     },
 ]
-
-def _load_pack() -> Dict[str, Any]:
-    if os.path.exists(_CONTENT_PATH):
-        try:
-            with open(_CONTENT_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"districts": [], "archetypes": [], "lexicon": {}}
-
-def _synth_name(patterns: List[str], lexicon: Dict[str, List[str]], rng: random.Random) -> str:
-    if not patterns:
-        return "The " + "".join(rng.choice("BCDFGHJKLMNPQRSTVWXYZ") + rng.choice("aeiou") for _ in range(3))
-    pat = rng.choice(patterns)
-    def repl(tok: str) -> str:
-        key = tok.strip("{}").lower()
-        choices = lexicon.get(key) or [key.title()]
-        return rng.choice(choices)
-    out, cur, buf = [], False, ""
-    for ch in pat:
-        if ch == "{":
-            if cur: buf += ch
-            else:
-                cur = True; buf = "{"
-        elif ch == "}":
-            if cur:
-                buf += "}"; out.append(repl(buf)); cur = False; buf = ""
-            else:
-                out.append("}")
-        else:
-            if cur: buf += ch
-            else: out.append(ch)
-    if cur: out.append(buf)
-    return "".join(out).strip()
 
 
 def _slugify_token(value: str, *, default: str = "district") -> str:
@@ -456,6 +413,172 @@ def _extract_world_seed_context(location: Location) -> Dict[str, Any]:
     return context
 
 
+def _merge_seed_payload(base: Dict[str, Any], payload: Mapping[str, Any]) -> Dict[str, Any]:
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if isinstance(value, Mapping):
+            existing = base.get(key)
+            if isinstance(existing, Mapping):
+                base[key] = _merge_seed_payload(dict(existing), value)
+            elif key not in base or not base[key]:
+                base[key] = dict(value)
+        elif key not in base or base[key] in (None, "", [], {}):
+            base[key] = value
+    return base
+
+
+def _normalize_search_token(value: Optional[str]) -> str:
+    text = _stringify(value).lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _extract_poi_profile(location: Location) -> Dict[str, Any]:
+    for entry in location.local_customs or []:
+        if isinstance(entry, Mapping) and str(entry.get("kind") or "").lower() == "fictional_poi_profile":
+            return dict(entry)
+    return {}
+
+
+def _display_name_for_location(location: Location, profile: Optional[Mapping[str, Any]] = None) -> str:
+    if profile is None:
+        profile = _extract_poi_profile(location)
+    name = _stringify(profile.get("name") if isinstance(profile, Mapping) else None)
+    if name:
+        return name
+    if location.description:
+        first_line = location.description.splitlines()[0]
+        return _stringify(first_line)
+    raw = location.location_name.replace("_", " ")
+    return raw.title()
+
+
+def _score_location_match(
+    location: Location,
+    profile: Mapping[str, Any],
+    phrase_tokens: List[str],
+    word_tokens: List[str],
+) -> float:
+    display_name = _normalize_search_token(_display_name_for_location(location, profile))
+    description = _normalize_search_token(location.description)
+    lore = _normalize_search_token(profile.get("lore")) if profile else ""
+    category = _normalize_search_token(profile.get("category")) if profile else ""
+    features = [_normalize_search_token(item) for item in location.notable_features or []]
+    score = 0.1
+
+    for phrase in phrase_tokens:
+        if not phrase:
+            continue
+        if phrase == display_name:
+            score += 6.0
+        elif phrase in display_name:
+            score += 3.5
+        if phrase and phrase in description:
+            score += 2.0
+        if phrase and phrase in lore:
+            score += 1.5
+        for feat in features:
+            if phrase and phrase in feat:
+                score += 1.0
+
+    for token in word_tokens:
+        if not token:
+            continue
+        if token in display_name:
+            score += 0.75
+        if token in description:
+            score += 0.5
+        if token in lore:
+            score += 0.4
+        if category and token in category:
+            score += 0.45
+        for feat in features:
+            if token in feat:
+                score += 0.25
+
+    return score
+
+
+def _build_candidate_from_location(location: Location) -> Tuple[Candidate, Dict[str, Any]]:
+    profile = _extract_poi_profile(location)
+    display_name = _display_name_for_location(location, profile)
+    address: Dict[str, Any] = {}
+    for key in ("district", "city", "region", "country", "planet", "galaxy", "realm"):
+        value = getattr(location, key, None)
+        if value:
+            address[key] = value
+
+    district_key = profile.get("key") if isinstance(profile, Mapping) else None
+    if district_key:
+        address.setdefault("district_key", district_key)
+
+    place_meta: Dict[str, Any] = {
+        "source": "fictional",
+        "is_fictional": True,
+        "location_id": location.id,
+        "notable_features": list(location.notable_features or []),
+    }
+    if profile:
+        for meta_key in ("category", "lore", "travel", "features"):
+            if profile.get(meta_key) is not None:
+                place_meta[meta_key] = profile.get(meta_key)
+        display_name_value = _stringify(profile.get("name"))
+        if display_name_value:
+            place_meta.setdefault("display_name", display_name_value)
+
+    place = Place(
+        name=display_name,
+        level="venue",
+        lat=location.lat,
+        lon=location.lon,
+        address=address,
+        meta=place_meta,
+    )
+
+    candidate = Candidate(
+        place=place,
+        confidence=0.85,
+        rationale="fictional_poi_lookup",
+        raw={
+            "location_id": location.id,
+            "district": location.district,
+            "city": location.city,
+        },
+    )
+
+    return candidate, profile
+
+
+def _build_navigation_operations(
+    location: Location,
+    display_name: str,
+    profile: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    lore_payload: Dict[str, Any] = {
+        "district": location.district,
+        "city": location.city,
+        "features": list(location.notable_features or []),
+    }
+    if isinstance(profile, Mapping):
+        if profile.get("lore"):
+            lore_payload["lore"] = profile.get("lore")
+        if profile.get("travel"):
+            lore_payload["travel"] = profile.get("travel")
+        if profile.get("category"):
+            lore_payload["category"] = profile.get("category")
+
+    op = {
+        "op": "poi.navigate",
+        "label": display_name,
+        "lat": location.lat,
+        "lon": location.lon,
+        "category": profile.get("category") if isinstance(profile, Mapping) else location.location_type,
+        "lore": lore_payload,
+    }
+    return [op]
+
+
 _BEARING_DEGREES: Dict[str, float] = {
     "e": 0.0,
     "east": 0.0,
@@ -618,6 +741,241 @@ def _offset_coordinates(
     lon_offset = (dx_m or 0.0) / (111_111.0 * cos_lat)
 
     return round(lat + lat_offset, 6), round(lon + lon_offset, 6), dx_m or 0.0, dy_m or 0.0
+
+
+async def load_or_generate_world_seed(
+    anchor: Anchor,
+    meta: Mapping[str, Any],
+    store: ConversationSnapshotStore,
+    user_id: str,
+    conversation_id: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    snapshot = store.get(user_id, conversation_id) or {}
+    working_snapshot = dict(snapshot)
+
+    seed: Dict[str, Any] = {}
+
+    existing_seed = working_snapshot.get("world_seed")
+    if isinstance(existing_seed, Mapping):
+        seed = _merge_seed_payload(seed, existing_seed)
+
+    world_payload = (meta or {}).get("world") if isinstance(meta, Mapping) else None
+    if isinstance(world_payload, Mapping):
+        seed = _merge_seed_payload(seed, world_payload)
+
+    supplemental_keys = ("world_seed", "world_seed_snapshot", "world_profile", "world_context")
+    for key in supplemental_keys:
+        payload = meta.get(key) if isinstance(meta, Mapping) else None
+        if isinstance(payload, Mapping):
+            seed = _merge_seed_payload(seed, payload)
+
+    scene_scope = meta.get("scene_scope") if isinstance(meta, Mapping) else None
+    if isinstance(scene_scope, Mapping):
+        world_scope = scene_scope.get("world")
+        if isinstance(world_scope, Mapping):
+            seed = _merge_seed_payload(seed, world_scope)
+
+    anchor_hints = anchor.hints if isinstance(getattr(anchor, "hints", None), Mapping) else {}
+    world_hint = anchor_hints.get("world") if isinstance(anchor_hints, Mapping) else None
+    if isinstance(world_hint, Mapping):
+        seed = _merge_seed_payload(seed, world_hint)
+
+    if anchor.primary_city:
+        seed.setdefault("primary_city", anchor.primary_city)
+    if anchor.region:
+        seed.setdefault("region", anchor.region)
+    if anchor.country:
+        seed.setdefault("country", anchor.country)
+
+    geo_seed = dict(seed.get("geo_anchor") or {})
+    if anchor.lat is not None:
+        geo_seed.setdefault("lat", anchor.lat)
+    if anchor.lon is not None:
+        geo_seed.setdefault("lon", anchor.lon)
+    if anchor.primary_city and anchor.primary_city.strip():
+        geo_seed.setdefault("city", anchor.primary_city)
+    if geo_seed:
+        seed["geo_anchor"] = geo_seed
+
+    world_name = (
+        seed.get("name")
+        or seed.get("world_name")
+        or anchor.world_name
+        or anchor.label
+        or "Fictional World"
+    )
+    seed.setdefault("name", world_name)
+    seed.setdefault("world_name", world_name)
+
+    working_snapshot["world_seed"] = seed
+    store.put(user_id, conversation_id, working_snapshot)
+
+    return seed, working_snapshot
+
+
+async def _fetch_fictional_venues(
+    user_id: str,
+    conversation_id: str,
+    *,
+    district: Optional[Location],
+    query_text: str,
+) -> List[Location]:
+    try:
+        user_key = int(user_id)
+        conversation_key = int(conversation_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("user_id and conversation_id must be convertible to int") from exc
+
+    normalized_query = _normalize_search_token(query_text)
+    pattern = f"%{normalized_query}%" if normalized_query else None
+    district_name = _stringify(district.district or district.location_name) if district else None
+
+    async with get_db_connection_context() as conn:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1
+                  AND conversation_id = $2
+                  AND COALESCE(LOWER(location_type), '') = 'venue'
+                  AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
+                  AND ($3::TEXT IS NULL OR LOWER(COALESCE(district, parent_location, '')) = LOWER($3))
+                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
+                ORDER BY id
+                """,
+                user_key,
+                conversation_key,
+                district_name,
+                pattern,
+            )
+        except asyncpg.UndefinedColumnError:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1
+                  AND conversation_id = $2
+                  AND COALESCE(LOWER(location_type), '') = 'venue'
+                  AND is_fictional = TRUE
+                  AND ($3::TEXT IS NULL OR LOWER(COALESCE(district, parent_location, '')) = LOWER($3))
+                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
+                ORDER BY id
+                """,
+                user_key,
+                conversation_key,
+                district_name,
+                pattern,
+            )
+
+    return [Location.from_record(row) for row in rows]
+
+
+def _select_target_district(
+    districts: List[Location],
+    query: PlaceQuery,
+    anchor: Anchor,
+    meta: Mapping[str, Any],
+) -> Optional[Location]:
+    if not districts:
+        return None
+
+    phrase = _normalize_search_token(query.target or query.normalized)
+    if phrase:
+        for district in districts:
+            profile = _district_profile_from_location(district)
+            candidate_tokens = {
+                _normalize_search_token(profile.get("name")),
+                _normalize_search_token(profile.get("key")),
+                _normalize_search_token(district.location_name),
+                _normalize_search_token(district.district),
+            }
+            if any(token and token in phrase for token in candidate_tokens):
+                return district
+
+    scene_scope = meta.get("scene_scope") if isinstance(meta, Mapping) else None
+    if isinstance(scene_scope, Mapping):
+        for hint_key in ("district", "neighborhood", "area"):
+            hint = _normalize_search_token(scene_scope.get(hint_key))
+            if hint:
+                for district in districts:
+                    profile = _district_profile_from_location(district)
+                    candidate_tokens = {
+                        _normalize_search_token(profile.get("name")),
+                        _normalize_search_token(profile.get("key")),
+                        _normalize_search_token(district.location_name),
+                        _normalize_search_token(district.district),
+                    }
+                    if any(token and (token == hint or hint in token or token in hint) for token in candidate_tokens):
+                        return district
+
+    anchor_hint: Optional[str] = None
+    if anchor and isinstance(anchor.hints, Mapping):
+        geo_anchor = anchor.hints.get("geo_anchor")
+        if geo_anchor is not None:
+            anchor_hint = getattr(geo_anchor, "neighborhood", None) or getattr(geo_anchor, "district", None)
+    if not anchor_hint and anchor and anchor.focus and anchor.focus.meta:
+        anchor_hint = anchor.focus.meta.get("district")
+
+    normalized_hint = _normalize_search_token(anchor_hint)
+    if normalized_hint:
+        for district in districts:
+            profile = _district_profile_from_location(district)
+            candidate_tokens = {
+                _normalize_search_token(profile.get("name")),
+                _normalize_search_token(profile.get("key")),
+                _normalize_search_token(district.location_name),
+                _normalize_search_token(district.district),
+            }
+            if any(token and (token == normalized_hint or normalized_hint in token) for token in candidate_tokens):
+                return district
+
+    return districts[0]
+
+
+def _update_city_graph_snapshot(
+    store: ConversationSnapshotStore,
+    user_id: str,
+    conversation_id: str,
+    snapshot: Dict[str, Any],
+    districts: List[Location],
+    venues: List[Location],
+) -> None:
+    graph_districts: List[Dict[str, Any]] = []
+    for district in districts:
+        profile = _district_profile_from_location(district)
+        graph_districts.append(
+            {
+                "key": profile.get("key"),
+                "label": profile.get("name"),
+                "vibe": profile.get("vibe"),
+                "lat": district.lat,
+                "lon": district.lon,
+            }
+        )
+
+    graph_venues: List[Dict[str, Any]] = []
+    for venue in venues:
+        profile = _extract_poi_profile(venue)
+        graph_venues.append(
+            {
+                "name": _display_name_for_location(venue, profile),
+                "district": venue.district,
+                "district_key": profile.get("key") if isinstance(profile, Mapping) else None,
+                "lat": venue.lat,
+                "lon": venue.lon,
+                "category": profile.get("category") if isinstance(profile, Mapping) else None,
+                "location_id": venue.id,
+            }
+        )
+
+    snapshot_payload = dict(snapshot)
+    snapshot_payload["city_graph"] = {
+        "districts": graph_districts,
+        "venues": graph_venues,
+        "pack_loaded": True,
+    }
+    store.put(user_id, conversation_id, snapshot_payload)
 
 
 async def generate_pois_for_district(district: Location, query: str) -> List[Location]:
@@ -1037,37 +1395,6 @@ async def get_or_generate_districts(
 
     return persisted
 
-def _spawn_archetype(graph: Dict[str, Any], slot: str, pack: Dict[str, Any], rng: random.Random, near_key: str) -> Dict[str, Any]:
-    venues = graph.setdefault("venues", [])
-    for existing in venues:
-        if existing.get("slot") == slot:
-            return existing
-
-    districts = graph.setdefault("districts", [])
-    if not districts:
-        districts.append({"key": "central", "label": "Central District", "lat": 0.0, "lon": 0.0, "venues": []})
-
-    dist = next((d for d in districts if d.get("key") == near_key), districts[0])
-    dist.setdefault("venues", [])
-
-    arch = next((a for a in pack.get("archetypes", []) if a.get("slot") == slot), None)
-    name = _synth_name(arch.get("name_patterns", []) if arch else [], pack.get("lexicon", {}), rng)
-    category = (arch or {}).get("category") or "place"
-    base_lat = dist.get("lat") or 0.0
-    base_lon = dist.get("lon") or 0.0
-    venue = {
-        "slot": slot,
-        "name": name,
-        "lat": base_lat + rng.uniform(-0.002, 0.002),
-        "lon": base_lon + rng.uniform(-0.002, 0.002),
-        "category": category,
-        "district": dist.get("label"),
-        "district_key": dist.get("key"),
-    }
-    venues.append(venue)
-    dist["venues"].append(venue)
-    return venue
-
 async def resolve_fictional(
     query: PlaceQuery,
     anchor: Anchor,
@@ -1084,149 +1411,102 @@ async def resolve_fictional(
         except Exception:
             pass
 
-    world_meta = meta.get("world") or {}
-    world_name = anchor.world_name or world_meta.get("name") or world_meta.get("world_name") or "Fictional City"
-    world_seed = dict(world_meta)
+    user_key = str(user_id)
+    conv_key = str(conversation_id)
+    world_seed, snapshot = await load_or_generate_world_seed(anchor, meta, store, user_key, conv_key)
 
-    city_name = anchor.primary_city or world_meta.get("primary_city") or world_name
-    if city_name:
-        world_seed.setdefault("primary_city", city_name)
-    if anchor.region and not world_seed.get("region"):
-        world_seed["region"] = anchor.region
-    if anchor.country and not world_seed.get("country"):
-        world_seed["country"] = anchor.country
-    if anchor.lat is not None or anchor.lon is not None:
-        geo_seed = dict(world_seed.get("geo_anchor") or {})
-        if anchor.lat is not None:
-            geo_seed.setdefault("lat", anchor.lat)
-        if anchor.lon is not None:
-            geo_seed.setdefault("lon", anchor.lon)
-        if geo_seed:
-            world_seed["geo_anchor"] = geo_seed
+    city_name = (
+        world_seed.get("primary_city")
+        or anchor.primary_city
+        or world_seed.get("name")
+        or world_seed.get("world_name")
+        or anchor.world_name
+        or "Fictional City"
+    )
 
     districts = await get_or_generate_districts(
         world_seed,
-        user_id=str(user_id),
-        conversation_id=str(conversation_id),
+        user_id=user_key,
+        conversation_id=conv_key,
         city_name=city_name,
     )
 
-    user_key = str(user_id)
-    conv_key = str(conversation_id)
-    snapshot = store.get(user_key, conv_key) or {}
-    existing_graph = snapshot.get("city_graph") or {}
-    existing_venues = list(existing_graph.get("venues") or [])
-
-    pack = _load_pack()
-    pack_loaded = bool(existing_graph.get("pack_loaded")) or bool(pack.get("districts"))
-
-    district_entries: List[Dict[str, Any]] = []
-    for location in districts:
-        profile = _district_profile_from_location(location)
-        label = profile.get("name") or (location.district or location.location_name.title())
-        key = profile.get("key") or _slugify_token(label)
-        venues_for_district = [
-            venue for venue in existing_venues if _venue_matches_district(venue, key=key, label=label)
-        ]
-        district_entries.append(
-            {
-                "key": key,
-                "label": label,
-                "vibe": profile.get("vibe", ""),
-                "lat": location.lat,
-                "lon": location.lon,
-                "venues": venues_for_district,
-            }
-        )
-
-    if not district_entries:
-        for fallback in _fallback_districts(city_name):
-            label = fallback["name"]
-            key = fallback["key"]
-            district_entries.append(
-                {
-                    "key": key,
-                    "label": label,
-                    "vibe": fallback.get("vibe", ""),
-                    "lat": None,
-                    "lon": None,
-                    "venues": [
-                        venue for venue in existing_venues if _venue_matches_district(venue, key=key, label=label)
-                    ],
-                }
-            )
-
-    graph = {
-        "districts": district_entries,
-        "venues": existing_venues,
-        "pack_loaded": pack_loaded,
-    }
-    snapshot["city_graph"] = graph
-    store.put(user_key, conv_key, snapshot)
-
-    rng = random.Random(f"{user_id}:{conversation_id}:{world_name}")
-
-    target = (query.target or "").lower().strip()
-    if not target:
-        return ResolveResult(status=STATUS_AMBIGUOUS, message="What kind of place are you seeking?", anchor=anchor, scope=anchor.scope)
-
-    if any(k in target for k in ["chocolate","sweets","confection","ghirardelli","square"]):
-        v = _spawn_archetype(graph, "landmark_sweets", pack, rng, near_key="old_port")
-        snapshot["city_graph"] = graph
-        store.put(user_key, conv_key, snapshot)
-        place = Place(
-            name=v["name"],
-            level="venue",
-            lat=v.get("lat"),
-            lon=v.get("lon"),
-            address={"district": v.get("district")},
-            meta={"category": v.get("category"), "source": "fictional"},
-        )
-        cand = Candidate(place=place, confidence=0.9, rationale="fictional_archetype")
+    if not (query.target or query.normalized):
         return ResolveResult(
-            status=STATUS_EXACT,
-            candidates=[cand],
-            operations=[{"op":"poi.navigate","label":v["name"],"lat":v.get("lat"),"lon":v.get("lon"),"category":v.get("category"),"lore":{"district": v.get("district")}}],
-            message=f"Heading to {v['name']} in {v['district']}.",
+            status=STATUS_ASK,
+            message=f"In {city_name}, what kind of place are you seeking?",
             anchor=anchor,
-            scope=anchor.scope,
+            scope="fictional",
         )
 
-    if any(k in target for k in ["dim sum","dumpling","yum cha","yank sing"]):
-        v = _spawn_archetype(graph, "dim_sum", pack, rng, near_key="arts")
-        snapshot["city_graph"] = graph
-        store.put(user_key, conv_key, snapshot)
-        place = Place(
-            name=v["name"],
-            level="venue",
-            lat=v.get("lat"),
-            lon=v.get("lon"),
-            address={"district": v.get("district")},
-            meta={"category": v.get("category"), "source": "fictional"},
-        )
-        cand = Candidate(place=place, confidence=0.9, rationale="fictional_archetype")
+    target_district = _select_target_district(districts, query, anchor, meta)
+    if target_district is None:
         return ResolveResult(
-            status=STATUS_EXACT,
-            candidates=[cand],
-            operations=[{"op":"poi.navigate","label":v["name"],"lat":v.get("lat"),"lon":v.get("lon"),"category":v.get("category"),"lore":{"district": v.get("district")}}],
-            message=f"Steam curls from {v['name']} in {v['district']}—let’s go.",
+            status=STATUS_ASK,
+            message="I can shape the city further—do you have a district or vibe in mind?",
             anchor=anchor,
-            scope=anchor.scope,
+            scope="fictional",
         )
 
-    choices: List[str] = []
-    base_label = graph["districts"][0]["label"] if graph.get("districts") else city_name
-    if pack.get("archetypes") and graph.get("districts"):
-        for a in pack["archetypes"][:3]:
-            pretty = a.get("slot", "place").replace("_", " ").title()
-            choices.append(f"{pretty} in {base_label}")
-    else:
-        choices = ["night market", "waterfront sweets hall", "residential dunes on the west side"]
+    venues = await _fetch_fictional_venues(
+        user_key,
+        conv_key,
+        district=target_district,
+        query_text=query.target or query.normalized or "",
+    )
+
+    if not venues:
+        await generate_pois_for_district(target_district, query.target or query.normalized or "")
+        venues = await _fetch_fictional_venues(
+            user_key,
+            conv_key,
+            district=target_district,
+            query_text=query.target or query.normalized or "",
+        )
+
+    if not venues:
+        return ResolveResult(
+            status=STATUS_ASK,
+            message="I couldn't find a spot like that yet—want to try a different style or district?",
+            anchor=anchor,
+            scope="fictional",
+        )
+
+    phrase_candidates: List[str] = []
+    if query.target:
+        phrase_candidates.append(_normalize_search_token(query.target))
+    if query.normalized and query.normalized != query.target:
+        phrase_candidates.append(_normalize_search_token(query.normalized))
+    phrase_candidates = [phrase for phrase in phrase_candidates if phrase]
+
+    word_tokens: List[str] = []
+    for phrase in phrase_candidates:
+        word_tokens.extend(token for token in phrase.split(" ") if token)
+    word_tokens = list({token for token in word_tokens if token})
+
+    scored: List[Tuple[float, Location]] = []
+    for venue in venues:
+        profile = _extract_poi_profile(venue)
+        score = _score_location_match(venue, profile, phrase_candidates, word_tokens)
+        scored.append((score, venue))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best_location = scored[0][1]
+    candidate, profile = _build_candidate_from_location(best_location)
+    display_name = _display_name_for_location(best_location, profile)
+    operations = _build_navigation_operations(best_location, display_name, profile)
+
+    _update_city_graph_snapshot(store, user_key, conv_key, snapshot, districts, venues)
+
+    message_context = best_location.district or target_district.district or city_name
+    message = f"Heading to {display_name} in {message_context}."
 
     return ResolveResult(
-        status=STATUS_ASK,
-        message=f"In {world_name}, what kind of place do you want—food, landmark, district, or festival?",
-        choices=choices,
+        status=STATUS_EXACT,
+        message=message,
+        candidates=[candidate],
+        operations=operations,
         anchor=anchor,
-        scope=anchor.scope,
+        scope="fictional",
+        location=best_location,
     )
