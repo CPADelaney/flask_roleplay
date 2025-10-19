@@ -627,12 +627,16 @@ def _to_responses_tools(functions: list[dict]) -> list[dict]:
     """Wrap Chat Completions-style functions into Responses tools."""
     tools: list[dict] = []
     for schema in functions:
-        name = schema.get("name") if isinstance(schema, dict) else None
+        if not isinstance(schema, dict):
+            raise ValueError(
+                f"Function schema must be a dict, got {type(schema)!r}: {schema}"
+            )
+        name = schema.get("name")
         if not name:
             raise ValueError(
                 f"Function schema missing required 'name' field: {schema}"
             )
-        tools.append({"type": "function", "name": name, "function": schema})
+        tools.append({"type": "function", "function": schema})
     return tools
 
 

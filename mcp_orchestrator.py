@@ -25,6 +25,24 @@ from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_tool_name(tool: Any) -> Optional[str]:
+    """Return the canonical name for a tool configuration."""
+    if not isinstance(tool, dict):
+        return None
+
+    function_payload = tool.get("function")
+    if isinstance(function_payload, dict):
+        func_name = function_payload.get("name")
+        if isinstance(func_name, str) and func_name:
+            return func_name
+
+    name = tool.get("name")
+    if isinstance(name, str) and name:
+        return name
+
+    return None
+
 class TaskPurpose(str, Enum):
     """Enumeration of possible task purposes"""
     ANALYZE = "analyze"
@@ -1002,7 +1020,11 @@ class MCPOrchestrator:
             "agent_name": agent.name,
             "agent_config": agent_config,
             "requirements": task_requirements.dict(),
-            "tools_assigned": [tool["name"] for tool in agent_config["tools"]]
+            "tools_assigned": [
+                name
+                for name in (_extract_tool_name(tool) for tool in agent_config["tools"])
+                if name
+            ]
         }
     
     async def complete_task(self, 
@@ -1148,7 +1170,9 @@ class MCPOrchestrator:
         # Add additional tools for the escalation
         for tool_name, tool in self.tool_registry.tools.items():
             if tool.status == "healthy" and any(cap in task_requirements.tools_required for cap in tool.capabilities):
-                if not any(t["name"] == tool_name for t in agent_config["tools"]):
+                if not any(
+                    _extract_tool_name(t) == tool_name for t in agent_config["tools"]
+                ):
                     agent_config["tools"].append(tool.as_agent_tool())
         
         # Track the escalated task
@@ -1172,7 +1196,11 @@ class MCPOrchestrator:
             "agent_config": agent_config,
             "original_task_id": task_id,
             "requirements": task_requirements.dict(),
-            "tools_assigned": [tool["name"] for tool in agent_config["tools"]]
+            "tools_assigned": [
+                name
+                for name in (_extract_tool_name(tool) for tool in agent_config["tools"])
+                if name
+            ]
         }
     
     async def register_new_agent(self, agent_data: Dict[str, Any]) -> Dict[str, Any]:
