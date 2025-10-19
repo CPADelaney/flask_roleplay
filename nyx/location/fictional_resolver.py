@@ -1,8 +1,17 @@
 # nyx/location/fictional_resolver.py
 from __future__ import annotations
-import json, os, random
+
+import json
+import logging
+import os
+import random
+import re
+import unicodedata
+from pathlib import Path
 from typing import Any, Dict, List
 
+from logic.chatgpt_integration import ALLOWS_TEMPERATURE, OpenAIClientManager
+from logic.json_helpers import safe_json_loads
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
 from .anchors import derive_geo_anchor
@@ -18,6 +27,280 @@ from .types import (
 )
 
 _CONTENT_PATH = os.environ.get("NYX_CITY_CONTENT", "nyx_data/city_archetypes.json")
+
+LOGGER = logging.getLogger(__name__)
+
+_WORLD_SEED_MODEL = os.getenv("NYX_WORLD_SEED_MODEL", "gpt-4o-mini")
+_WORLD_SEED_DIR = Path(os.getenv("NYX_WORLD_SEED_DIR", "nyx_data/world_seeds"))
+try:
+    _WORLD_SEED_MAX_TOKENS = int(os.getenv("NYX_WORLD_SEED_MAX_TOKENS", "1100"))
+except ValueError:
+    _WORLD_SEED_MAX_TOKENS = 1100
+try:
+    _WORLD_SEED_TEMPERATURE = float(os.getenv("NYX_WORLD_SEED_TEMPERATURE", "0.2"))
+except ValueError:
+    _WORLD_SEED_TEMPERATURE = 0.2
+
+_WORLD_SEED_PROMPT = """You are Nyx's city architect.
+Design a fictional urban world seed for collaborative roleplay.
+
+Respond with JSON only, following this schema:
+{
+  "rules": ["string", ...],
+  "themes": ["string", ...],
+  "default_travel": {
+    "mode": "string",
+    "notes": "string",
+    "average_minutes": number
+  },
+  "districts": [
+    {"name": "string", "vibe": "string", "signature": "string"}
+  ],
+  "landmarks": [
+    {"name": "string", "hook": "string"}
+  ],
+  "narrative_hooks": ["string", ...]
+}
+
+Concept: {concept}
+
+Keep strings short and game-ready. Include at least three rules and themes.
+Do not include markdown fences or commentary.
+"""
+
+_OPENAI_MANAGER = OpenAIClientManager()
+
+
+class WorldSeedGenerationError(RuntimeError):
+    """Raised when the world seed cannot be generated or parsed."""
+
+
+def _slugify_concept(value: str) -> str:
+    normalised = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", normalised.lower()).strip("-")
+    return slug or "world"
+
+
+def _seed_path_for_slug(slug: str) -> Path:
+    return _WORLD_SEED_DIR / f"{slug}.json"
+
+
+def _strip_json_markers(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    fence = re.match(r"```(?:json)?(.*)```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    if text.lower().startswith("json"):
+        text = text[4:].lstrip()
+    return text
+
+
+def _extract_response_text(response: Any) -> str:
+    if getattr(response, "output_json", None):
+        return json.dumps(response.output_json, ensure_ascii=False)
+    if getattr(response, "output_text", None):
+        text = response.output_text.strip()
+        if text:
+            return text
+    for message in getattr(response, "output", []) or []:
+        for part in getattr(message, "content", []) or []:
+            part_type = getattr(part, "type", None)
+            if part_type == "output_json" and getattr(part, "json", None) is not None:
+                return json.dumps(part.json, ensure_ascii=False)
+            if part_type == "output_text":
+                text = getattr(part, "text", "").strip()
+                if text:
+                    return text
+    for call in getattr(response, "tool_calls", []) or []:
+        fn = getattr(call, "function", None)
+        if fn and getattr(fn, "arguments", None):
+            return json.dumps(fn.arguments, ensure_ascii=False)
+    raise WorldSeedGenerationError("World seed LLM response did not contain parsable output.")
+
+
+def _parse_seed_payload(raw_text: str) -> Dict[str, Any]:
+    cleaned = _strip_json_markers(raw_text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        fallback = safe_json_loads(cleaned)
+        if fallback:
+            return fallback
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            snippet = match.group(0)
+            try:
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                fallback = safe_json_loads(snippet)
+                if fallback:
+                    return fallback
+        raise WorldSeedGenerationError(
+            f"World seed JSON parsing failed: {exc}. Snippet: {cleaned[:200]}"
+        ) from exc
+
+
+def _coerce_string_list(values: Any, *, field: str) -> List[str]:
+    if not isinstance(values, list):
+        raise WorldSeedGenerationError(f"World seed '{field}' must be a list of strings.")
+    items: List[str] = []
+    for value in values:
+        if isinstance(value, str):
+            candidate = value.strip()
+        elif isinstance(value, dict) and "text" in value:
+            candidate = str(value["text"]).strip()
+        else:
+            candidate = str(value).strip()
+        if candidate:
+            items.append(candidate)
+    if not items:
+        raise WorldSeedGenerationError(f"World seed '{field}' cannot be empty.")
+    return items
+
+
+def _normalise_default_travel(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise WorldSeedGenerationError("World seed 'default_travel' must be an object.")
+    mode = (
+        payload.get("mode")
+        or payload.get("method")
+        or payload.get("type")
+        or payload.get("style")
+    )
+    if not mode or not str(mode).strip():
+        raise WorldSeedGenerationError("World seed 'default_travel' requires a mode description.")
+    details: Dict[str, Any] = {"mode": str(mode).strip()}
+    notes = payload.get("notes") or payload.get("description") or payload.get("summary")
+    if notes and str(notes).strip():
+        details["notes"] = str(notes).strip()
+    avg_minutes = None
+    for key in ("average_minutes", "average_time_minutes", "travel_minutes", "duration_minutes"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            avg_minutes = float(value)
+            break
+        except (TypeError, ValueError):
+            continue
+    if avg_minutes is not None:
+        details["average_minutes"] = avg_minutes
+    for extra_key, extra_value in payload.items():
+        if extra_key in {
+            "mode",
+            "method",
+            "type",
+            "style",
+            "notes",
+            "description",
+            "summary",
+            "average_minutes",
+            "average_time_minutes",
+            "travel_minutes",
+            "duration_minutes",
+        }:
+            continue
+        details.setdefault("extra", {})[extra_key] = extra_value
+    return details
+
+
+def _normalise_seed(payload: Dict[str, Any], *, concept: str, slug: str) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise WorldSeedGenerationError("World seed payload must be a JSON object.")
+    rules = _coerce_string_list(payload.get("rules"), field="rules")
+    themes = _coerce_string_list(payload.get("themes"), field="themes")
+    default_travel = _normalise_default_travel(payload.get("default_travel"))
+    seed: Dict[str, Any] = {
+        "concept": concept,
+        "slug": slug,
+        "rules": rules,
+        "themes": themes,
+        "default_travel": default_travel,
+    }
+    for key, value in payload.items():
+        if key in {"rules", "themes", "default_travel", "concept", "slug"}:
+            continue
+        seed[key] = value
+    return seed
+
+
+async def generate_world_seed(
+    concept: str,
+    *,
+    model: str | None = None,
+    temperature: float | None = None,
+) -> Dict[str, Any]:
+    """Generate and persist a fictional world seed for the provided concept."""
+
+    if not concept or not concept.strip():
+        raise WorldSeedGenerationError("Concept must be a non-empty string.")
+    concept_text = concept.strip()
+    slug = _slugify_concept(concept_text)
+    prompt = _WORLD_SEED_PROMPT.format(concept=concept_text)
+    instructions = (
+        "You curate immersive fictional cities for Nyx. "
+        "Always answer with strict JSON that matches the requested schema."
+    )
+
+    client = _OPENAI_MANAGER.async_client
+    params: Dict[str, Any] = {
+        "model": model or _WORLD_SEED_MODEL,
+        "instructions": instructions,
+        "input": [{"role": "user", "content": prompt}],
+        "max_output_tokens": _WORLD_SEED_MAX_TOKENS,
+    }
+    resolved_temperature = _WORLD_SEED_TEMPERATURE if temperature is None else temperature
+    if resolved_temperature is not None and params["model"] in ALLOWS_TEMPERATURE:
+        params["temperature"] = resolved_temperature
+
+    try:
+        response = await client.responses.create(**params)
+    except Exception as exc:  # pragma: no cover - network failure guard
+        LOGGER.exception("World seed request failed", exc_info=exc)
+        raise WorldSeedGenerationError(f"World seed request failed: {exc}") from exc
+
+    raw_text = _extract_response_text(response)
+    parsed = _parse_seed_payload(raw_text)
+    seed = _normalise_seed(parsed, concept=concept_text, slug=slug)
+
+    cache_path = _seed_path_for_slug(slug)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w", encoding="utf-8") as handle:
+        json.dump(seed, handle, ensure_ascii=False, indent=2)
+
+    return seed
+
+
+async def load_world_seed(
+    concept: str,
+    *,
+    model: str | None = None,
+    force_refresh: bool = False,
+    temperature: float | None = None,
+) -> Dict[str, Any]:
+    """Load a cached world seed or generate it on-demand."""
+
+    if not concept or not concept.strip():
+        raise WorldSeedGenerationError("Concept must be a non-empty string.")
+    concept_text = concept.strip()
+    slug = _slugify_concept(concept_text)
+    cache_path = _seed_path_for_slug(slug)
+
+    if cache_path.exists() and not force_refresh:
+        try:
+            with cache_path.open("r", encoding="utf-8") as handle:
+                cached = json.load(handle)
+            return _normalise_seed(cached, concept=concept_text, slug=slug)
+        except Exception as exc:
+            LOGGER.warning("Failed to load cached world seed '%s': %s", slug, exc)
+
+    return await generate_world_seed(
+        concept_text,
+        model=model,
+        temperature=temperature,
+    )
 
 def _load_pack() -> Dict[str, Any]:
     if os.path.exists(_CONTENT_PATH):
