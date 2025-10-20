@@ -33,7 +33,12 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0, max_retri
 
         try:
             # Now calling the async function directly
-            result = await get_chatgpt_response(conversation_id, context, prompt)
+            result = await get_chatgpt_response(
+                conversation_id,
+                context,
+                prompt,
+                use_nyx_integration=False,
+            )
             logging.info("GPT returned response on attempt %d: %s", attempt, result)
             return result  # success
 
