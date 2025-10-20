@@ -171,6 +171,26 @@ class BackgroundConflictOrchestrator:
             )
         return self._evolution_agent
     
+    async def _get_safe_current_game_day(self) -> int:
+        """
+        Safely gets the current game day number, handling dict or int responses from time_cycle.
+        Defaults to 1 on failure.
+        """
+        try:
+            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
+            if isinstance(game_day_info, dict):
+                # Handles new return type: {'day': 123, 'year_name': '...'}
+                return int(game_day_info.get('day', 1))
+            elif isinstance(game_day_info, int):
+                # Handles old return type: 123
+                return game_day_info
+            else:
+                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
+                return 1
+        except Exception as e:
+            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
+            return 1
+            
     async def generate_background_conflict(self) -> Optional[BackgroundConflict]:
         """Generate a new background conflict"""
         # First check if we need a new conflict
@@ -249,7 +269,8 @@ class BackgroundConflictOrchestrator:
                 json.dumps({
                     "potential_hooks": data.get("potential_hooks", []),
                     "estimated_duration": data.get("estimated_duration", 30),
-                    "created_at": datetime.utcnow().isoformat()
+                    "created_at": datetime.utcnow().isoformat(),
+                    "daily_life_impacts": data.get("daily_life_impacts", [])
                 }),
                 0,  # news_count
                 None  # last_news_generation
@@ -264,7 +285,7 @@ class BackgroundConflictOrchestrator:
                 """,
                 conflict_id,
                 data["initial_development"],
-                await get_current_game_day(self.user_id, self.conversation_id)
+                await self._get_safe_current_game_day()
             )
         
         conflict = BackgroundConflict(
@@ -377,7 +398,7 @@ class BackgroundConflictOrchestrator:
                 """,
                 conflict.conflict_id,
                 data["description"],
-                await get_current_game_day(self.user_id, self.conversation_id)
+                await self._get_safe_current_game_day()
             )
             
             # Handle opportunity creation
@@ -391,7 +412,7 @@ class BackgroundConflictOrchestrator:
                     """,
                     conflict.conflict_id,
                     data.get("opportunity_description", "An opportunity arises"),
-                    await get_current_game_day(self.user_id, self.conversation_id) + 7,
+                    await self._get_safe_current_game_day() + 7,
                     'available',
                     self.user_id,
                     self.conversation_id
@@ -462,6 +483,26 @@ class BackgroundNewsGenerator:
                 model="gpt-5-nano",
             )
         return self._news_generator
+
+    async def _get_safe_current_game_day(self) -> int:
+        """
+        Safely gets the current game day number, handling dict or int responses from time_cycle.
+        Defaults to 1 on failure.
+        """
+        try:
+            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
+            if isinstance(game_day_info, dict):
+                # Handles new return type: {'day': 123, 'year_name': '...'}
+                return int(game_day_info.get('day', 1))
+            elif isinstance(game_day_info, int):
+                # Handles old return type: 123
+                return game_day_info
+            else:
+                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
+                return 1
+        except Exception as e:
+            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
+            return 1
     
     async def generate_news_item(
         self,
@@ -511,7 +552,7 @@ class BackgroundNewsGenerator:
         response = await Runner.run(self.news_generator, prompt)
         news_data = json.loads(extract_runner_response(response))
         
-        current_day = await get_current_game_day(self.user_id, self.conversation_id)
+        current_day = await self._get_safe_current_game_day()
         
         # Store in DB
         async with get_db_connection_context() as conn:
@@ -602,6 +643,26 @@ class BackgroundConflictRipples:
                 model="gpt-5-nano",
             )
         return self._opportunity_creator
+
+    async def _get_safe_current_game_day(self) -> int:
+        """
+        Safely gets the current game day number, handling dict or int responses from time_cycle.
+        Defaults to 1 on failure.
+        """
+        try:
+            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
+            if isinstance(game_day_info, dict):
+                # Handles new return type: {'day': 123, 'year_name': '...'}
+                return int(game_day_info.get('day', 1))
+            elif isinstance(game_day_info, int):
+                # Handles old return type: 123
+                return game_day_info
+            else:
+                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
+                return 1
+        except Exception as e:
+            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
+            return 1
     
     async def generate_daily_ripples(
         self,
@@ -655,7 +716,7 @@ class BackgroundConflictRipples:
                 """,
                 most_intense.conflict_id,
                 json.dumps(ripple_data),
-                await get_current_game_day(self.user_id, self.conversation_id),
+                await self._get_safe_current_game_day(),
                 self.user_id,
                 self.conversation_id
             )
@@ -752,7 +813,27 @@ class BackgroundConflictSubsystem:
         # Caches
         self._context_cache = {}
         self._cache_ttl = 300  # 5 minutes
-    
+
+    async def _get_safe_current_game_day(self) -> int:
+        """
+        Safely gets the current game day number, handling dict or int responses from time_cycle.
+        Defaults to 1 on failure.
+        """
+        try:
+            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
+            if isinstance(game_day_info, dict):
+                # Handles new return type: {'day': 123, 'year_name': '...'}
+                return int(game_day_info.get('day', 1))
+            elif isinstance(game_day_info, int):
+                # Handles old return type: 123
+                return game_day_info
+            else:
+                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
+                return 1
+        except Exception as e:
+            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
+            return 1
+
     @property
     def subsystem_type(self):
         """Return the subsystem type"""
@@ -994,7 +1075,7 @@ class BackgroundConflictSubsystem:
             )
     
         except Exception as e:
-            logger.error(f"Error handling event {event.event_type}: {e}")
+            logger.error(f"Error handling event {event.event_type}: {e}", exc_info=True)
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
@@ -1022,8 +1103,8 @@ class BackgroundConflictSubsystem:
     async def daily_background_update(self, generate_new: bool = False) -> Dict[str, Any]:
         """Daily update of all background conflicts - optionally generate new content"""
         
-        # Check cache first
-        cache_key = f"daily_update_{await get_current_game_day(self.user_id, self.conversation_id)}"
+        current_day = await self._get_safe_current_game_day()
+        cache_key = f"daily_update_{current_day}"
         if cache_key in self._context_cache and not generate_new:
             cached = self._context_cache[cache_key]
             if datetime.utcnow().timestamp() - cached['timestamp'] < self._cache_ttl:
@@ -1072,19 +1153,19 @@ class BackgroundConflictSubsystem:
         ripples_obj = {'ripples': {}}
         if active_conflicts:
             # Use cached ripples if available
-            ripple_key = "daily_ripples"
+            ripple_key = f"daily_ripples_{current_day}"
             if ripple_key in self._context_cache:
                 cached_ripple = self._context_cache[ripple_key]
                 if datetime.utcnow().timestamp() - cached_ripple['timestamp'] < 3600:
                     ripples_obj = cached_ripple['data']
-                elif generate_new:
-                    ripple_result = await self.ripple_manager.generate_daily_ripples(active_conflicts)
-                    ripples = ripple_result.get('ripples', {})
-                    ripples_obj = {'ripples': ripples}
-                    self._context_cache[ripple_key] = {
-                        'timestamp': datetime.utcnow().timestamp(),
-                        'data': ripples_obj
-                    }
+            elif generate_new: # Only generate new if not in cache and permitted
+                ripple_result = await self.ripple_manager.generate_daily_ripples(active_conflicts)
+                ripples = ripple_result.get('ripples', {})
+                ripples_obj = {'ripples': ripples}
+                self._context_cache[ripple_key] = {
+                    'timestamp': datetime.utcnow().timestamp(),
+                    'data': ripples_obj
+                }
         
         # Check for opportunities (rarely)
         opportunities = []
@@ -1112,32 +1193,22 @@ class BackgroundConflictSubsystem:
     
     async def get_conversation_topics(self) -> List[str]:
         """Get background conflict topics for NPC conversations"""
+        current_day = await self._get_safe_current_game_day()
         async with get_db_connection_context() as conn:
             recent_news = await conn.fetch(
                 """
-                SELECT headline, content FROM BackgroundNews
+                SELECT headline FROM BackgroundNews
                 WHERE user_id = $1 AND conversation_id = $2
-                  AND game_day > (
-                    SELECT CAST(value AS INTEGER) FROM CurrentRoleplay
-                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentDay'
-                  ) - 7
-                ORDER BY game_day DESC
-                LIMIT 10
+                  AND game_day > $3 - 7
+                ORDER BY game_day DESC, id DESC
+                LIMIT 5
                 """,
                 self.user_id,
                 self.conversation_id,
+                current_day
             )
         
-        topics: List[str] = []
-        for news in recent_news:
-            headline = news["headline"]
-            topics.append(f"Did you hear about {headline}?")
-            
-            # Only add first 5 topics to avoid spam
-            if len(topics) >= 5:
-                break
-                
-        return topics
+        return [f"Did you hear about {news['headline']}?" for news in recent_news]
     
     async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
         # Background is always somewhat relevant for atmosphere
@@ -1156,14 +1227,33 @@ class BackgroundConflictSubsystem:
         return random.random() < 0.3
     
     async def _get_active_background_conflicts(self) -> List[Dict[str, Any]]:
-        """Get active background conflicts from database"""
+        """Get active background conflicts from database, including recent developments."""
         async with get_db_connection_context() as conn:
             conflicts = await conn.fetch(
                 """
-                SELECT * FROM BackgroundConflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND status = 'active'
-                ORDER BY updated_at DESC
+                WITH RankedDevelopments AS (
+                    SELECT
+                        conflict_id,
+                        development,
+                        ROW_NUMBER() OVER(PARTITION BY conflict_id ORDER BY game_day DESC, id DESC) as rn
+                    FROM BackgroundDevelopments
+                    WHERE conflict_id IN (
+                        SELECT id FROM BackgroundConflicts
+                        WHERE user_id = $1 AND conversation_id = $2 AND status = 'active'
+                    )
+                )
+                SELECT
+                    bc.*,
+                    COALESCE(
+                        (SELECT jsonb_agg(rd.development ORDER BY rd.rn DESC)
+                         FROM RankedDevelopments rd
+                         WHERE rd.conflict_id = bc.id AND rd.rn <= 3),
+                        '[]'::jsonb
+                    ) as recent_developments
+                FROM BackgroundConflicts bc
+                WHERE bc.user_id = $1 AND bc.conversation_id = $2
+                AND bc.status = 'active'
+                ORDER BY bc.updated_at DESC
                 """,
                 self.user_id,
                 self.conversation_id
@@ -1172,18 +1262,19 @@ class BackgroundConflictSubsystem:
     
     def _db_to_background_conflict(self, data: Dict[str, Any]) -> BackgroundConflict:
         """Convert database row to BackgroundConflict object"""
+        metadata = json.loads(data.get('metadata', '{}'))
         return BackgroundConflict(
             conflict_id=data['id'],
             conflict_type=GrandConflictType[data['conflict_type'].upper()],
             name=data['name'],
             description=data['description'],
             intensity=BackgroundIntensity[data['intensity'].upper()],
-            progress=data['progress'],
+            progress=float(data.get('progress', 0.0)),
             factions=json.loads(data['factions']),
             current_state=data['current_state'],
-            recent_developments=json.loads(data.get('recent_developments', '[]')),
-            impact_on_daily_life=json.loads(data.get('impacts', '[]')),
-            player_awareness_level=data.get('awareness', 0.1),
+            recent_developments=data.get('recent_developments', []), # This is now a list from the DB
+            impact_on_daily_life=metadata.get('daily_life_impacts', []),
+            player_awareness_level=float(data.get('awareness', 0.1)),
             last_news_generation=data.get('last_news_generation'),
             news_count=data.get('news_count', 0)
         )
@@ -1256,37 +1347,32 @@ async def get_daily_background_flavor(
             if response.subsystem == SubsystemType.BACKGROUND:
                 update = response.data.get('background_update', {}) or {}
                 
-                # Extract with proper defaults
                 world_tension = float(update.get('world_tension', 0.0))
-                news = update.get('news') or []
-                if not isinstance(news, list):
-                    news = [str(news)] if news else []
                 
-                # Extract only headlines from news items
-                news_headlines = []
-                for item in news:
-                    if isinstance(item, dict):
-                        news_headlines.append(item.get('headline', ''))
-                    else:
-                        news_headlines.append(str(item))
-                
-                ripples = ((update.get('ripple_effects') or {}).get('ripples') or {})
-                ambient = ripples.get('ambient_mood') or []
-                if not isinstance(ambient, list):
-                    ambient = [str(ambient)] if ambient else []
-                
-                overheard_snippets = ripples.get('overheard_snippets', [])
+                news_items = update.get('news', []) or []
+                news_headlines = [
+                    item.get('headline', str(item)) 
+                    for item in news_items if item
+                ]
+
+                ripple_effects = update.get('ripple_effects', {}) or {}
+                ripples = ripple_effects.get('ripples', {}) or {}
+                ambient_effects = ripples.get('ambient_mood', []) or []
+                if not isinstance(ambient_effects, list):
+                    ambient_effects = [str(ambient_effects)] if ambient_effects else []
+
+                overheard_snippets = ripples.get('overheard_snippets', []) or []
                 overheard = overheard_snippets[0] if overheard_snippets else ""
                 
-                opportunities = update.get('optional_opportunities') or []
+                opportunities = update.get('optional_opportunities', []) or []
                 optional_hook = ""
-                if opportunities and len(opportunities) > 0:
+                if opportunities:
                     optional_hook = opportunities[0].get('title', '')
                 
                 return {
                     'world_tension': world_tension,
                     'background_news': news_headlines,
-                    'ambient_effects': ambient,
+                    'ambient_effects': ambient_effects,
                     'overheard': overheard,
                     'optional_hook': optional_hook
                 }
