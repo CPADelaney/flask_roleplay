@@ -3267,7 +3267,7 @@ class LoreOrchestrator:
                                 SELECT
                                     {', '.join(select_parts)}
                                 FROM Locations
-                                WHERE id = $1
+                                WHERE location_id = $1
                             """
                             row = await conn.fetchrow(query, scope.location_id)
 
@@ -3289,7 +3289,7 @@ class LoreOrchestrator:
                     if needs_nations and requested_nation_ids:
                         nation_columns = await self._get_table_columns(conn, "nations")
                         column_map = {
-                            "id": "id",
+                            "location_id": "location_id",
                             "name": "name",
                             "cultural_traits": "COALESCE(cultural_traits, '[]'::jsonb) AS cultural_traits",
                             "major_resources": "COALESCE(major_resources, '[]'::jsonb) AS major_resources",
@@ -3301,17 +3301,17 @@ class LoreOrchestrator:
                             expr for column, expr in column_map.items() if column in nation_columns
                         ]
                         nation_rows = []
-                        if select_parts and 'id' in nation_columns:
+                        if select_parts and 'location_id' in nation_columns:
                             query = f"""
                                 SELECT
                                     {', '.join(select_parts)}
                                 FROM Nations
-                                WHERE id = ANY($1::int[])
+                                WHERE location_id = ANY($1::int[])
                             """
                             nation_rows = await conn.fetch(query, requested_nation_ids)
 
                         for nation_row in nation_rows or []:
-                            nation_id = nation_row.get('id')
+                            nation_id = nation_row.get('location_id')
                             if nation_id is None:
                                 continue
                             nation_name = nation_row.get('name') or f"Nation {nation_id}"
