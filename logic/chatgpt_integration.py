@@ -8,8 +8,8 @@ Migration Cheatsheet:
 Chat Completions API → Responses API
 - chat.completions.create() → responses.create()
 - messages=[...] → input=[...]
-- functions=[...] → tools=[{"type":"function", "function": {...}}]
-- function_call={"name":"..."} → tool_choice={"type":"tool","name":"..."}
+- functions=[...] → tools=[{"type":"function", "name": "...", "parameters": {...}, "description": "..."}]
+- function_call={"name":"..."} → tool_choice={"type":"function","name":"..."}
 - max_tokens → max_output_tokens
 - choices[0].message.content → response.output_text
 - usage.total_tokens → usage.input_tokens + usage.output_tokens
@@ -1428,18 +1428,9 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
         # Define the correct tool structure based on the schema manager
         all_tools_definitions = ToolSchemaManager.get_all_tools()
-        tools_payload = []
+        tools_payload = all_tools_definitions  # already in Responses API shape
         if all_tools_definitions:
             for tool_def in all_tools_definitions:
-                # The schema manager likely returns a dict that needs to be wrapped
-                tools_payload.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool_def.get("name"),
-                        "description": tool_def.get("description"),
-                        "parameters": tool_def.get("parameters")
-                    }
-                })
 
         params = {
             "model": model,
@@ -1449,12 +1440,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
         if tools_payload:
             params["tools"] = tools_payload
-            # Define the correct tool_choice structure
-            tool_choice_payload = {
-                "type": "function",
-                "function": {"name": "apply_universal_update"}
-            }
-            params["tool_choice"] = tool_choice_payload
+            params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
 
         try:
             response = await _responses_create_with_retry(client, params)
@@ -1587,18 +1573,8 @@ DO NOT produce user-facing text here; only the JSON.
         model = "gpt-5-nano"
 
         final_tools_definitions = ToolSchemaManager.get_all_tools()
-        final_tools_payload = []
-        if final_tools_definitions:
-            for tool_def in final_tools_definitions:
-                final_tools_payload.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool_def.get("name"),
-                        "description": tool_def.get("description"),
-                        "parameters": tool_def.get("parameters")
-                    }
-                })
-
+        final_tools_payload = final_tools_definitions  # already correct
+        
         final_params = {
             "model": model,
             "input": final_messages,
@@ -1606,11 +1582,8 @@ DO NOT produce user-facing text here; only the JSON.
         }
         if final_tools_payload:
             final_params["tools"] = final_tools_payload
-            final_tool_choice_payload = {
-                "type": "function",
-                "function": {"name": "apply_universal_update"}
-            }
-            final_params["tool_choice"] = final_tool_choice_payload
+            final_params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
+
 
         final_response = await _responses_create_with_retry(client, final_params)
         
