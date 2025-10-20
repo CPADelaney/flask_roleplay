@@ -1426,19 +1426,42 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
         model = "gpt-5-nano"
 
-        tools = ToolSchemaManager.get_all_tools()
+        # Define the correct tool structure based on the schema manager
+        all_tools_definitions = ToolSchemaManager.get_all_tools()
+        tools_payload = []
+        if all_tools_definitions:
+            for tool_def in all_tools_definitions:
+                # The schema manager likely returns a dict that needs to be wrapped
+                tools_payload.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool_def.get("name"),
+                        "description": tool_def.get("description"),
+                        "parameters": tool_def.get("parameters")
+                    }
+                })
+
         params = {
             "model": model,
-            "input": messages,  # Changed from 'messages' to 'input'
-            "max_output_tokens": 2048,  # Changed from 'max_tokens' to 'max_output_tokens'
+            "input": messages,
+            "max_output_tokens": 2048,
         }
-        if tools:
-            params["tools"] = tools
-            tool_choice = _get_tool_choice("apply_universal_update", tools)
-            if tool_choice != "auto":
-                params["tool_choice"] = tool_choice
 
-        response = await _responses_create_with_retry(client, params)
+        if tools_payload:
+            params["tools"] = tools_payload
+            # Define the correct tool_choice structure
+            tool_choice_payload = {
+                "type": "function",
+                "function": {"name": "apply_universal_update"}
+            }
+            params["tool_choice"] = tool_choice_payload
+
+        try:
+            response = await _responses_create_with_retry(client, params)
+        except openai.BadRequestError as e:
+            logger.warning("Responses API rejected tool_choice (%s); retrying without forced tool", e)
+            params.pop("tool_choice", None) # Remove the failing parameter
+            response = await _responses_create_with_retry(client, params)
 
         tool_name, tool_args = _extract_first_tool_call(response)
         tokens_used = _calculate_token_usage(response)
@@ -1563,17 +1586,31 @@ DO NOT produce user-facing text here; only the JSON.
 
         model = "gpt-5-nano"
 
-        final_tools = ToolSchemaManager.get_all_tools()
+        final_tools_definitions = ToolSchemaManager.get_all_tools()
+        final_tools_payload = []
+        if final_tools_definitions:
+            for tool_def in final_tools_definitions:
+                final_tools_payload.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool_def.get("name"),
+                        "description": tool_def.get("description"),
+                        "parameters": tool_def.get("parameters")
+                    }
+                })
+
         final_params = {
             "model": model,
-            "input": final_messages,  # Changed from 'messages' to 'input'
-            "max_output_tokens": 2048,  # Changed from 'max_tokens' to 'max_output_tokens'
+            "input": final_messages,
+            "max_output_tokens": 2048,
         }
-        if final_tools:
-            final_params["tools"] = final_tools
-            final_tool_choice = _get_tool_choice("apply_universal_update", final_tools)
-            if final_tool_choice != "auto":
-                final_params["tool_choice"] = final_tool_choice
+        if final_tools_payload:
+            final_params["tools"] = final_tools_payload
+            final_tool_choice_payload = {
+                "type": "function",
+                "function": {"name": "apply_universal_update"}
+            }
+            final_params["tool_choice"] = final_tool_choice_payload
 
         final_response = await _responses_create_with_retry(client, final_params)
         
