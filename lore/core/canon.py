@@ -4091,7 +4091,7 @@ async def sync_embeddings_to_memory_system(ctx, conn):
     
     # Sync Locations
     locations = await conn.fetch("""
-        SELECT id, location_name, description, location_type
+        SELECT location_id, location_name, description, location_type
         FROM Locations
         WHERE user_id = $1 AND conversation_id = $2
     """, ctx.user_id, ctx.conversation_id)
