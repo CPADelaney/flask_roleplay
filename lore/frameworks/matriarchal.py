@@ -57,9 +57,23 @@ class SymbolicRepresentations(BaseModel):
 
 class CorePrinciples(BaseModel):
     """Core principles of a matriarchal power structure."""
-    power_dynamics: Dict[str, Any]
-    societal_norms: Dict[str, Any]
-    symbolic_representations: Dict[str, Any]
+    power_dynamics: PowerDynamics
+    societal_norms: SocietalNorms
+    symbolic_representations: SymbolicRepresentations
+
+
+class PropertyRights(BaseModel):
+    """Defined structure for property rights within the hierarchy."""
+    ownership_structure: str
+    inheritance_rules: List[str]
+    male_limitations: List[str]
+
+
+class StatusMarker(BaseModel):
+    """Markers that communicate status within the hierarchy."""
+    name: str
+    symbolism: str
+    criteria: List[str]
 
 class HierarchicalConstraint(BaseModel):
     """Hierarchical constraints in a matriarchal setting."""
@@ -68,8 +82,8 @@ class HierarchicalConstraint(BaseModel):
     power_expressions: List[str]
     masculine_roles: List[str]
     leadership_domains: List[str]
-    property_rights: Any
-    status_markers: Any
+    property_rights: PropertyRights
+    status_markers: List[StatusMarker]
     relationship_structure: str
     enforcement_mechanisms: List[str]
 
@@ -363,8 +377,8 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             "- 'power_expressions': an array of unique ways female power is exerted.\n"
             "- 'masculine_roles': an array describing how men fit into each expression.\n"
             "- 'leadership_domains': an array listing spheres where women hold undisputed authority.\n"
-            "- 'property_rights': an array or statement about how ownership is allocated.\n"
-            "- 'status_markers': how men achieve or lose status.\n"
+            "- 'property_rights': an object with 'ownership_structure', 'inheritance_rules', and 'male_limitations'.\n"
+            "- 'status_markers': an array of objects with 'name', 'symbolism', and 'criteria'.\n"
             "- 'relationship_structure': e.g., polygyny, polyandry, etc.\n"
             "- 'enforcement_mechanisms': how rules are enforced.\n\n"
             "Make it interesting, unique, and fully valid JSON with no wrapping text."
