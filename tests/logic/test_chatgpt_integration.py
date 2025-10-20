@@ -108,3 +108,52 @@ async def _run_nyx_string_response_test(monkeypatch):
 
 def test_get_chatgpt_response_nyx_string_narrative(monkeypatch):
     asyncio.run(_run_nyx_string_response_test(monkeypatch))
+
+
+def test_convert_response_to_array_format_preserves_pre_normalized_lists():
+    roleplay_updates = [{"key": "CurrentYear", "value": 2088}]
+    chase_schedule = [
+        {
+            "key": "Monday",
+            "value": {
+                "Morning": "Train",
+                "Afternoon": "Work",
+                "Evening": "Patrol",
+                "Night": "Rest",
+            },
+        }
+    ]
+    stat_updates = [{"key": "Courage", "value": 5}]
+    npc_schedule = [{"key": "Tuesday", "value": {"Morning": "Plan"}}]
+    npc_schedule_updates = [{"key": "Wednesday", "value": {"Morning": "Scout"}}]
+
+    response = {
+        "narrative": "Pre-normalized payload",
+        "universal_updates": {
+            "roleplay_updates": roleplay_updates,
+            "ChaseSchedule": chase_schedule,
+            "character_stat_updates": {
+                "player_name": "Chase",
+                "stats": stat_updates,
+            },
+            "npc_creations": [
+                {
+                    "npc_id": 1,
+                    "schedule": npc_schedule,
+                    "schedule_updates": npc_schedule_updates,
+                }
+            ],
+        },
+    }
+
+    function_args = chatgpt.convert_response_to_array_format(response)
+
+    assert function_args["roleplay_updates"] is roleplay_updates
+    assert function_args["ChaseSchedule"] is chase_schedule
+    assert (
+        function_args["character_stat_updates"]["stats"] is stat_updates
+    )
+    assert function_args["npc_creations"][0]["schedule"] is npc_schedule
+    assert (
+        function_args["npc_creations"][0]["schedule_updates"] is npc_schedule_updates
+    )
