@@ -4102,7 +4102,7 @@ async def sync_embeddings_to_memory_system(ctx, conn):
             text=text,
             metadata={
                 "entity_type": "location",
-                "location_id": loc['id'],
+                "location_id": loc['location_id'],
                 "location_name": loc['location_name'],
                 "user_id": ctx.user_id,
                 "conversation_id": ctx.conversation_id
