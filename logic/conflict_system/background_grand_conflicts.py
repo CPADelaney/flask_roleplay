@@ -197,7 +197,7 @@ class BackgroundConflictOrchestrator:
         async with get_db_connection_context() as conn:
             count = await conn.fetchval(
                 """
-                SELECT COUNT(*) FROM BackgroundConflicts
+                SELECT COUNT(*) FROM backgroundconflicts
                 WHERE user_id = $1 AND conversation_id = $2 AND status = 'active'
                 """,
                 self.user_id, self.conversation_id
@@ -249,7 +249,7 @@ class BackgroundConflictOrchestrator:
         async with get_db_connection_context() as conn:
             conflict_id = await conn.fetchval(
                 """
-                INSERT INTO BackgroundConflicts
+                INSERT INTO backgroundconflicts
                 (user_id, conversation_id, conflict_type, name, description,
                  factions, current_state, intensity, progress, status,
                  metadata, news_count, last_news_generation)
@@ -279,7 +279,7 @@ class BackgroundConflictOrchestrator:
             # Store initial development
             await conn.execute(
                 """
-                INSERT INTO BackgroundDevelopments
+                INSERT INTO backgrounddevelopments
                 (conflict_id, development, game_day)
                 VALUES ($1, $2, $3)
                 """,
@@ -366,7 +366,7 @@ class BackgroundConflictOrchestrator:
         async with get_db_connection_context() as conn:
             await conn.execute(
                 """
-                UPDATE BackgroundConflicts
+                UPDATE backgroundconflicts
                 SET current_state = $1,
                     progress = $2,
                     intensity = $3,
@@ -392,7 +392,7 @@ class BackgroundConflictOrchestrator:
             # Store development
             await conn.execute(
                 """
-                INSERT INTO BackgroundDevelopments
+                INSERT INTO backgrounddevelopments
                 (conflict_id, development, game_day)
                 VALUES ($1, $2, $3)
                 """,
@@ -405,7 +405,7 @@ class BackgroundConflictOrchestrator:
             if data.get("creates_opportunity"):
                 await conn.execute(
                     """
-                    INSERT INTO ConflictOpportunities
+                    INSERT INTO conflictopportunities
                     (conflict_id, description, expires_on, status,
                      user_id, conversation_id)
                     VALUES ($1, $2, $3, $4, $5, $6)
@@ -558,7 +558,7 @@ class BackgroundNewsGenerator:
         async with get_db_connection_context() as conn:
             await conn.execute(
                 """
-                INSERT INTO BackgroundNews
+                INSERT INTO backgroundnews
                 (user_id, conversation_id, conflict_id, headline,
                  source, content, reliability, game_day)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -576,7 +576,7 @@ class BackgroundNewsGenerator:
             # Update conflict news tracking
             await conn.execute(
                 """
-                UPDATE BackgroundConflicts
+                UPDATE backgroundconflicts
                 SET news_count = news_count + 1,
                     last_news_generation = $1
                 WHERE id = $2
@@ -710,7 +710,7 @@ class BackgroundConflictRipples:
         async with get_db_connection_context() as conn:
             await conn.execute(
                 """
-                INSERT INTO ConflictRipples
+                INSERT INTO conflictripples
                 (conflict_id, ripple_data, game_day, user_id, conversation_id)
                 VALUES ($1, $2, $3, $4, $5)
                 """,
@@ -1140,7 +1140,7 @@ class BackgroundConflictSubsystem:
         async with get_db_connection_context() as conn:
             recent_news = await conn.fetch(
                 """
-                SELECT headline, source FROM BackgroundNews
+                SELECT headline, source FROM backgroundnews
                 WHERE user_id = $1 AND conversation_id = $2
                 ORDER BY game_day DESC
                 LIMIT 3
@@ -1197,7 +1197,7 @@ class BackgroundConflictSubsystem:
         async with get_db_connection_context() as conn:
             recent_news = await conn.fetch(
                 """
-                SELECT headline FROM BackgroundNews
+                SELECT headline FROM backgroundnews
                 WHERE user_id = $1 AND conversation_id = $2
                   AND game_day > $3 - 7
                 ORDER BY game_day DESC, id DESC
@@ -1236,9 +1236,9 @@ class BackgroundConflictSubsystem:
                         conflict_id,
                         development,
                         ROW_NUMBER() OVER(PARTITION BY conflict_id ORDER BY game_day DESC, id DESC) as rn
-                    FROM BackgroundDevelopments
+                    FROM backgrounddevelopments
                     WHERE conflict_id IN (
-                        SELECT id FROM BackgroundConflicts
+                        SELECT id FROM backgroundconflicts
                         WHERE user_id = $1 AND conversation_id = $2 AND status = 'active'
                     )
                 )
@@ -1250,7 +1250,7 @@ class BackgroundConflictSubsystem:
                          WHERE rd.conflict_id = bc.id AND rd.rn <= 3),
                         '[]'::jsonb
                     ) as recent_developments
-                FROM BackgroundConflicts bc
+                FROM backgroundconflicts bc
                 WHERE bc.user_id = $1 AND bc.conversation_id = $2
                 AND bc.status = 'active'
                 ORDER BY bc.updated_at DESC
