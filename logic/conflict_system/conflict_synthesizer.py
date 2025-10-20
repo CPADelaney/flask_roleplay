@@ -26,7 +26,7 @@ import os
 from typing import Dict, List, Any, Optional, Set, TYPE_CHECKING, Tuple
 from pydantic import BaseModel, Field, ConfigDict  
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict, is_dataclass
 from datetime import datetime
 from collections import defaultdict, OrderedDict
 import weakref
@@ -484,6 +484,8 @@ class ConflictSynthesizer:
         """
         Get conflict context optimized for current scene. Main entry for NyxContext.
         """
+        scene_info = self._scene_scope_to_mapping(scene_info) or {}
+
         # Stable, safe cache key (handles lists/dicts)
         try:
             key_str = json.dumps(scene_info, sort_keys=True, default=str)
@@ -618,27 +620,94 @@ class ConflictSynthesizer:
         return True, "allowed"
     
     
+    @staticmethod
+    def _scene_scope_to_mapping(scope: Any) -> Optional[Dict[str, Any]]:
+        """Normalize SceneScope/dataclass objects to plain dicts for payload safety."""
+        if scope is None:
+            return None
+
+        if isinstance(scope, dict):
+            return dict(scope)
+
+        to_dict = getattr(scope, "to_dict", None)
+        if callable(to_dict):
+            try:
+                data = to_dict()
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                logger.debug("Scene scope to_dict failed; falling back to attribute extraction", exc_info=True)
+
+        if is_dataclass(scope):
+            try:
+                data = asdict(scope)
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                normalized = {}
+                for key, value in data.items():
+                    if isinstance(value, set):
+                        normalized[key] = sorted(value)
+                    else:
+                        normalized[key] = value
+                return normalized
+
+        mapping: Dict[str, Any] = {}
+        for attr in (
+            "location_id",
+            "location",
+            "location_name",
+            "npc_ids",
+            "npcs",
+            "topics",
+            "lore_tags",
+            "conflict_ids",
+            "memory_anchors",
+            "nation_ids",
+            "time_window",
+            "link_hints",
+        ):
+            if hasattr(scope, attr):
+                value = getattr(scope, attr)
+                if isinstance(value, set):
+                    mapping[attr] = sorted(value)
+                else:
+                    mapping[attr] = value
+
+        if mapping:
+            return mapping
+
+        return {"raw": repr(scope)}
+
     async def _handle_scene_transition(self, old_scene, new_scene):
         """
         Internal method to handle scene transitions.
         """
-        if old_scene == new_scene:
+        normalized_old = self._scene_scope_to_mapping(old_scene)
+        normalized_new = self._scene_scope_to_mapping(new_scene)
+
+        if (normalized_old or {}) == (normalized_new or {}):
             return
-    
+
         context = await ConflictEventHooks.on_scene_transition(
-            self.user_id, self.conversation_id, old_scene, new_scene
+            self.user_id, self.conversation_id, normalized_old, normalized_new
         )
-    
+
         event = SystemEvent(
             event_id=f"scene_transition_{datetime.now().timestamp()}",
             event_type=EventType.SCENE_ENTER,
             source_subsystem=SubsystemType.ORCHESTRATOR,
-            payload={'old_scene': old_scene, 'new_scene': new_scene, 'context': context},
+            payload={
+                'old_scene': normalized_old,
+                'new_scene': normalized_new,
+                'scene_context': normalized_new or {},
+                'context': context
+            },
             target_subsystems={SubsystemType.BACKGROUND},
             requires_response=False,
             priority=6,
         )
-    
+
         try:
             self._event_queue.put_nowait(event)
         except asyncio.QueueFull:
