@@ -22,7 +22,9 @@ from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
     BackgroundConflictProcessor,
     ProcessingPriority,
-    ConflictContentLimits
+    ConflictContentLimits,
+    get_high_intensity_threshold,
+    resolve_intensity_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -1220,8 +1222,9 @@ class BackgroundConflictSubsystem:
             return True
     
         conflicts = await self._get_active_background_conflicts()
+        threshold = get_high_intensity_threshold()
         for conflict in conflicts:
-            if conflict.get('intensity') in ['visible_effects', 'ambient_tension']:
+            if resolve_intensity_value(conflict.get('intensity')) >= threshold:
                 return True
     
         return random.random() < 0.3
