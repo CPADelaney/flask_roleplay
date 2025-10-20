@@ -7,6 +7,7 @@ Moves heavy operations off the hot path into scheduled/on-demand execution.
 import logging
 import asyncio
 import json
+from functools import lru_cache
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timedelta
 from enum import Enum
@@ -16,6 +17,44 @@ from db.connection import get_db_connection_context
 from logic.time_cycle import get_current_game_day
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _intensity_metadata() -> tuple[float, Dict[str, float]]:
+    """Load intensity constants from the grand conflict module lazily."""
+    from logic.conflict_system.background_grand_conflicts import (  # noqa: WPS433
+        BackgroundIntensity,
+        INTENSITY_TO_FLOAT,
+    )
+
+    threshold = float(INTENSITY_TO_FLOAT[BackgroundIntensity.AMBIENT_TENSION])
+    lookup: Dict[str, float] = {}
+    for enum_member, value in INTENSITY_TO_FLOAT.items():
+        lookup[enum_member.value.upper()] = float(value)
+        lookup[enum_member.name.upper()] = float(value)
+    return threshold, lookup
+
+
+def get_high_intensity_threshold() -> float:
+    """Return the numeric threshold that marks high-intensity conflicts."""
+    threshold, _ = _intensity_metadata()
+    return threshold
+
+
+def resolve_intensity_value(raw_value: Any) -> float:
+    """Coerce stored intensity (float or label) into a numeric value."""
+    if raw_value is None:
+        return 0.0
+
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        label = str(raw_value or "").strip().upper()
+        if not label:
+            return 0.0
+
+        _, lookup = _intensity_metadata()
+        return lookup.get(label, 0.0)
 
 class ProcessingPriority(Enum):
     """Priority levels for background processing"""
@@ -129,7 +168,8 @@ class BackgroundConflictProcessor:
                 """,
                 self.user_id, self.conversation_id
             )
-            
+
+            high_intensity_threshold = get_high_intensity_threshold()
             for conflict in conflicts:
                 conflict_id = conflict['id']
                 
@@ -147,7 +187,8 @@ class BackgroundConflictProcessor:
                     results['news_generated'].append(conflict['name'])
                 
                 # Update conflict progress (small daily tick)
-                if conflict['intensity'] in ['visible_effects', 'ambient_tension']:
+                intensity_value = resolve_intensity_value(conflict['intensity'])
+                if intensity_value >= high_intensity_threshold:
                     await self._tick_conflict_progress(conn, conflict_id, 0.5)  # Small daily progress
                     results['conflicts_updated'] += 1
         
@@ -177,6 +218,8 @@ class BackgroundConflictProcessor:
             'ambient_effects': []
         }
     
+        threshold = get_high_intensity_threshold()
+
         async with get_db_connection_context() as conn:
             # NOTE: (metadata -> 'key') returns JSON; cast to text to keep existing json.loads pipeline
             conflicts = await conn.fetch(
@@ -188,12 +231,16 @@ class BackgroundConflictProcessor:
                 WHERE bc.user_id = $1
                   AND bc.conversation_id = $2
                   AND bc.status = 'active'
-                  AND bc.intensity IN ('visible_effects', 'ambient_tension')
+                  AND bc.intensity >= $3
                 """,
-                self.user_id, self.conversation_id
+                self.user_id, self.conversation_id, threshold
             )
-    
+
             for conflict in conflicts:
+                intensity_value = resolve_intensity_value(conflict.get('intensity'))
+                if intensity_value < threshold:
+                    continue
+
                 # Check location relevance
                 if self._is_location_affected(location, conflict):
                     # Only generate immediate context, not new content
