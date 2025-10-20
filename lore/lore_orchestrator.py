@@ -14,7 +14,19 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple, Set, AsyncGenerator, Protocol, Iterable
+from typing import (
+    Dict,
+    List,
+    Any,
+    Optional,
+    Union,
+    Tuple,
+    Set,
+    AsyncGenerator,
+    Protocol,
+    Iterable,
+    Awaitable,
+)
 from datetime import datetime, timedelta
 import json
 from enum import Enum
@@ -174,7 +186,14 @@ class SceneScope(Protocol):
 
 @dataclass
 class OrchestratorConfig:
-    """Configuration for the Lore Orchestrator"""
+    """Configuration for the Lore Orchestrator.
+
+    Attributes:
+        subfetch_timeout: Timeout used for lightweight metadata lookups inside the scene bundle builder.
+        mpf_subfetch_timeout: Dedicated timeout for matriarchal power framework (MPF) generation coroutines
+            that issue long-running LLM calls. ``None`` disables the cap so the awaitable can run to
+            completion.
+    """
     enable_matriarchal_theme: bool = True
     enable_governance: bool = True
     enable_metrics: bool = True
@@ -189,7 +208,8 @@ class OrchestratorConfig:
     redis_url: Optional[str] = None
     max_size_mb: float = 100
     bundle_ttl: float = 60.0  # TTL for scene bundles
-    subfetch_timeout: float = 1.5  # Timeout for individual fetch operations
+    subfetch_timeout: float = 1.5  # Timeout for lightweight fetch operations
+    mpf_subfetch_timeout: Optional[float] = 12.0  # Timeout for matriarchal power framework LLM calls
     
 
 @dataclass
@@ -495,7 +515,27 @@ class LoreOrchestrator:
         return type('MockContext', (object,), attributes)()
     
     # ===== SCENE BUNDLE METHODS (NEW) =====
-    
+
+    def _resolve_timeout_for_label(self, label: str) -> Optional[float]:
+        """Pick the timeout to apply for a scene bundle task."""
+        base_timeout = getattr(self.config, "subfetch_timeout", None)
+        if label.startswith("mpf_"):
+            mpf_timeout = getattr(self.config, "mpf_subfetch_timeout", None)
+            if mpf_timeout is not None and mpf_timeout > 0:
+                return mpf_timeout
+        return base_timeout if base_timeout and base_timeout > 0 else None
+
+    async def _wait_with_timeout(self, awaitable: Awaitable[Any], label: str) -> Any:
+        """Await a coroutine with the configured timeout policy."""
+        timeout = self._resolve_timeout_for_label(label)
+        if timeout is None:
+            return await awaitable
+        try:
+            return await asyncio.wait_for(awaitable, timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"{label} fetch timed out after {timeout}s")
+            return None
+
     async def get_scene_bundle(self, scope: Any) -> Dict[str, Any]:
         """
         Get scene-scoped lore bundle with canonical data prioritized.
@@ -527,17 +567,6 @@ class LoreOrchestrator:
             """Execute task with semaphore limit."""
             async with sem:
                 return await task_coro
-    
-        # Use configurable timeout
-        timeout = self.config.subfetch_timeout if hasattr(self.config, 'subfetch_timeout') else 1.5
-    
-        async def _with_timeout(coro, label):
-            """Wrap task with timeout to prevent tail latency."""
-            try:
-                return await asyncio.wait_for(coro, timeout)
-            except asyncio.TimeoutError:
-                logger.warning(f"{label} fetch timed out after {timeout}s")
-                return None
     
         # Build task list based on scope
         tasks = []
@@ -580,9 +609,12 @@ class LoreOrchestrator:
         try:
             # Create wrapped tasks with semaphore and timeout
             wrapped_tasks = [
-                (label, asyncio.create_task(
-                    _with_timeout(_fetch_with_semaphore(coro), label)
-                ))
+                (
+                    label,
+                    asyncio.create_task(
+                        self._wait_with_timeout(_fetch_with_semaphore(coro), label)
+                    ),
+                )
                 for label, coro in tasks
             ]
     
@@ -646,7 +678,7 @@ class LoreOrchestrator:
             # Add canonical consistency rules (after main fetches)
             if self.config.enable_validation:
                 try:
-                    canonical_rules = await _with_timeout(
+                    canonical_rules = await self._wait_with_timeout(
                         _fetch_with_semaphore(self._get_canonical_rules_for_scope(scope)),
                         'canonical_rules'
                     )
