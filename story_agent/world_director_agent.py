@@ -70,6 +70,11 @@ from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContex
 async def _invoke_tool_with_context(tool, ctx, **kwargs):
     """Invoke a FunctionTool across SDK variants."""
 
+    on_invoke = getattr(tool, "on_invoke_tool", None)
+    if callable(on_invoke):
+        payload = kwargs or {}
+        return await on_invoke(ctx, payload)
+
     if hasattr(tool, "invoke") and callable(getattr(tool, "invoke")):
         return await tool.invoke(ctx, **kwargs)
 
