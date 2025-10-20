@@ -1091,7 +1091,11 @@ class LoreOrchestrator:
     async def get_scene_brief(self, scope) -> Dict[str, Any]:
         brief: Dict[str, Any] = {"anchors": {}, "signals": {}, "links": {}}
         try:
-            brief["anchors"]["location_id"] = getattr(scope, "location_id", None)
+            raw_location_ref = getattr(scope, "location_id", None)
+            normalized_loc_id, lookup_location_name = self._normalize_location_reference(raw_location_ref)
+            brief["anchors"]["location_id"] = (
+                normalized_loc_id if normalized_loc_id is not None else raw_location_ref
+            )
 
             # canonical rules (best-effort & time-boxed by caller as well)
             try:
@@ -1101,15 +1105,18 @@ class LoreOrchestrator:
                 pass
 
             # quick nation from location
-            loc_id = getattr(scope, "location_id", None)
-            if isinstance(loc_id, int):
+            loc_id = normalized_loc_id
+            data: Optional[Dict[str, Any]] = None
+            if loc_id is not None:
                 data = await self.get_location_context(loc_id)
-                nid = (data or {}).get("nation_id")
-                if nid is not None:
-                    try:
-                        brief["anchors"]["nation_ids"] = [int(nid)]
-                    except Exception:
-                        pass
+            elif lookup_location_name:
+                data = await self.get_location_context(lookup_location_name)
+            nid = (data or {}).get("nation_id")
+            if nid is not None:
+                try:
+                    brief["anchors"]["nation_ids"] = [int(nid)]
+                except Exception:
+                    pass
 
             # surface lore tags if scope already has them
             lore_tags = list(getattr(scope, "lore_tags", []) or [])
@@ -2043,6 +2050,31 @@ class LoreOrchestrator:
         if not hasattr(self, '_pool'):
             self._pool = await asyncpg.create_pool(dsn=DB_DSN)
         return self._pool
+
+    @staticmethod
+    def _normalize_location_reference(location_ref: Any) -> Tuple[Optional[int], Optional[str]]:
+        """Normalize a location reference into an integer ID or lookup name."""
+        if location_ref is None:
+            return None, None
+
+        if isinstance(location_ref, int):
+            return location_ref, None
+
+        if isinstance(location_ref, float) and location_ref.is_integer():
+            return int(location_ref), None
+
+        if isinstance(location_ref, str):
+            candidate = location_ref.strip()
+            if not candidate:
+                return None, None
+            if candidate.isdigit():
+                try:
+                    return int(candidate), None
+                except ValueError:
+                    return None, None
+            return None, candidate
+
+        return None, None
 
     async def _get_table_columns(self, conn: asyncpg.Connection, table_name: str) -> Set[str]:
         """Fetch and cache the available columns for a table."""
@@ -3233,6 +3265,10 @@ class LoreOrchestrator:
                         break
                 return formatted
 
+            raw_location_ref = getattr(scope, 'location_id', None)
+            normalized_location_id, location_lookup_name = self._normalize_location_reference(raw_location_ref)
+            resolved_location_id = normalized_location_id
+
             location_rules: List[str] = []
             fallback_rules: List[str] = []
             location_name: Optional[str] = None
@@ -3240,7 +3276,7 @@ class LoreOrchestrator:
             nation_rule_presence: Dict[int, bool] = {}
             nation_names: Dict[int, Optional[str]] = {}
 
-            needs_location = bool(getattr(scope, 'location_id', None))
+            needs_location = bool(resolved_location_id is not None or location_lookup_name)
             raw_nation_ids = list(getattr(scope, 'nation_ids', []) or [])
             needs_nations = bool(raw_nation_ids)
 
@@ -3252,6 +3288,7 @@ class LoreOrchestrator:
                     if needs_location:
                         location_columns = await self._get_table_columns(conn, "locations")
                         column_map = {
+                            "location_id": "location_id",
                             "location_name": "location_name",
                             "notable_features": "COALESCE(notable_features, '[]'::jsonb) AS notable_features",
                             "hidden_aspects": "COALESCE(hidden_aspects, '[]'::jsonb) AS hidden_aspects",
@@ -3262,16 +3299,28 @@ class LoreOrchestrator:
                             expr for column, expr in column_map.items() if column in location_columns
                         ]
                         row = None
-                        if select_parts:
-                            query = f"""
-                                SELECT
-                                    {', '.join(select_parts)}
-                                FROM Locations
-                                WHERE location_id = $1
-                            """
-                            row = await conn.fetchrow(query, scope.location_id)
+                        if select_parts and (resolved_location_id is not None or location_lookup_name):
+                            select_clause = ', '.join(select_parts)
+                            if resolved_location_id is not None:
+                                query = f"""
+                                    SELECT
+                                        {select_clause}
+                                    FROM Locations
+                                    WHERE location_id = $1
+                                """
+                                row = await conn.fetchrow(query, resolved_location_id)
+                            elif location_lookup_name and "location_name" in location_columns:
+                                query = f"""
+                                    SELECT
+                                        {select_clause}
+                                    FROM Locations
+                                    WHERE LOWER(location_name) = LOWER($1)
+                                """
+                                row = await conn.fetchrow(query, location_lookup_name)
 
                         if row:
+                            if resolved_location_id is None:
+                                resolved_location_id = row.get('location_id')
                             location_name = row.get('location_name')
                             location_rules.extend(
                                 _format_entries(row.get('notable_features'), 'Location feature')
@@ -3359,7 +3408,12 @@ class LoreOrchestrator:
             rules.extend(location_rules)
 
             if needs_location and not location_rules:
-                fallback_name = location_name or f"location {scope.location_id}"
+                fallback_name = (
+                    location_name
+                    or (f"location {resolved_location_id}" if resolved_location_id is not None else None)
+                    or (location_lookup_name if location_lookup_name else None)
+                    or (f"location {raw_location_ref}" if raw_location_ref is not None else "the location")
+                )
                 fallback_rules.append(f"Preserve established canon for {fallback_name}.")
 
             if needs_nations:
