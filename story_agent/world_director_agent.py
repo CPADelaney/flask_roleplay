@@ -63,6 +63,32 @@ from story_agent.world_simulation_models import (
 from db.connection import get_db_connection_context
 from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContextWrapper
 
+# ------------------------------------------------------------------------------
+# Function tool invocation helper
+# ------------------------------------------------------------------------------
+
+async def _invoke_tool_with_context(tool, ctx, **kwargs):
+    """Invoke a FunctionTool across SDK variants."""
+
+    if hasattr(tool, "invoke") and callable(getattr(tool, "invoke")):
+        return await tool.invoke(ctx, **kwargs)
+
+    if hasattr(tool, "run") and callable(getattr(tool, "run")):
+        return await tool.run(ctx, **kwargs)
+
+    try:
+        from agents.run import Runner as _Runner
+
+        if hasattr(_Runner, "run_tool"):
+            return await _Runner.run_tool(tool, ctx=ctx, **kwargs)
+    except Exception:
+        pass
+
+    if callable(tool):
+        return await tool(ctx, **kwargs)
+
+    raise TypeError("Cannot invoke FunctionTool with this SDK build.")
+
 # ===============================================================================
 # COMPLETE SYSTEM INTEGRATIONS - NOTHING DROPPED
 # ===============================================================================
@@ -876,9 +902,11 @@ class CompleteWorldDirectorContext:
         # optional: emergent patterns (spawn in background to keep this call snappy)
         patterns_result = None
         try:
-            from agents import RunContextWrapper
             # fire-and-wait unless fast=True, then fire-and-forget
-            coro = check_all_emergent_patterns(RunContextWrapper(self))
+            coro = _invoke_tool_with_context(
+                check_all_emergent_patterns,
+                RunContextWrapper(self),
+            )
             if fast:
                 asyncio.create_task(coro)  # caller can get patterns on next call
             else:
@@ -962,8 +990,12 @@ class CompleteWorldDirectorContext:
         """
         try:
             # Prefetch patterns in the new scope in background
-            from agents import RunContextWrapper
-            asyncio.create_task(check_all_emergent_patterns(RunContextWrapper(self)))
+            asyncio.create_task(
+                _invoke_tool_with_context(
+                    check_all_emergent_patterns,
+                    RunContextWrapper(self),
+                )
+            )
     
             # Optional: ask the conflict system to pre-warm the likely next scene
             if self.conflict_synthesizer:
