@@ -59,6 +59,8 @@ from openai_integration.conversations import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_NARRATIVE_FALLBACK = "The scene continues..."
+
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
@@ -76,7 +78,16 @@ def _strip_code_fences(s: str) -> str:
             t = t.rsplit("```", 1)[0]
     return t.strip()
 
-def _to_updates_json(update_data: Any) -> str:
+def _ensure_narrative(payload: Dict[str, Any], fallback: str = DEFAULT_NARRATIVE_FALLBACK) -> Dict[str, Any]:
+    """Ensure a payload has a non-empty narrative value."""
+    if isinstance(payload, dict):
+        narrative = payload.get("narrative")
+        if not isinstance(narrative, str) or not narrative.strip():
+            payload["narrative"] = fallback
+    return payload
+
+
+def _to_updates_json(update_data: Any, fallback_narrative: str = DEFAULT_NARRATIVE_FALLBACK) -> str:
     """
     Accept pydantic v1/v2 models, dicts, lists, or JSON strings.
     Return a JSON string; raise ValueError if impossible.
@@ -84,13 +95,17 @@ def _to_updates_json(update_data: Any) -> str:
     # Pydantic v2
     if hasattr(update_data, "model_dump"):
         payload = update_data.model_dump(exclude_none=True)
+        _ensure_narrative(payload, fallback_narrative)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     # Pydantic v1
     if hasattr(update_data, "dict"):
         payload = update_data.dict()
+        _ensure_narrative(payload, fallback_narrative)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     # Raw dict/list
     if isinstance(update_data, (dict, list)):
+        if isinstance(update_data, dict):
+            _ensure_narrative(update_data, fallback_narrative)
         return json.dumps(update_data, ensure_ascii=False, separators=(",", ":"))
     # String-ish
     if isinstance(update_data, str):
@@ -379,7 +394,7 @@ class ImageGeneration(StrictBaseModel):
 class UniversalUpdateInput(StrictBaseModel):
     user_id: int
     conversation_id: int
-    narrative: str
+    narrative: Optional[str] = None
     roleplay_updates: List[KeyValuePair] = Field(default_factory=list)
     ChaseSchedule: List[ScheduleEntry] = Field(default_factory=list)
     MainQuest: Optional[str] = None
@@ -681,6 +696,9 @@ async def _apply_universal_updates_impl(ctx: RunContextWrapper, updates_json: st
             else:
                 return ApplyUpdatesResult(success=False, error=f"Invalid JSON: {(normalized and normalized.error) or 'Unknown error'}")
 
+    updates_payload: Dict[str, Any] = updates if isinstance(updates, dict) else {}
+    _ensure_narrative(updates_payload, DEFAULT_NARRATIVE_FALLBACK)
+
     try:
         preview = (s if isinstance(raw, str) else json.dumps(raw))[:200]
         logging.debug(f"[apply_universal_updates] Incoming updates preview: {preview}")
@@ -702,7 +720,10 @@ async def _apply_universal_updates_impl(ctx: RunContextWrapper, updates_json: st
 
     try:
         # **IMPORTANT**: unify array formats and mirror location to legacy keys
+        if isinstance(updates, dict):
+            updates = dict(updates_payload)
         db_updates = convert_updates_for_database(updates)
+        _ensure_narrative(db_updates, DEFAULT_NARRATIVE_FALLBACK)
         db_updates["user_id"] = user_id
         db_updates["conversation_id"] = conversation_id
 
@@ -898,10 +919,11 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
 
 def _build_min_skeleton(user_id: int, conversation_id: int, narrative: str) -> dict:
     """Return a valid, empty UniversalUpdateInput payload."""
+    narrative_fallback = narrative if narrative and narrative.strip() else DEFAULT_NARRATIVE_FALLBACK
     return {
         "user_id": user_id,
         "conversation_id": conversation_id,
-        "narrative": narrative or "",
+        "narrative": narrative_fallback,
         "roleplay_updates": [],
         "ChaseSchedule": [],
         "MainQuest": None,
@@ -934,7 +956,7 @@ async def process_universal_update(
 
     if not narrative or not narrative.strip():
         logger.warning("Empty narrative passed to universal updater, using fallback")
-        narrative = "The scene continues..."
+        narrative = DEFAULT_NARRATIVE_FALLBACK
 
     updater_context = UniversalUpdaterContext(user_id, conversation_id)
     await updater_context.initialize()
@@ -968,7 +990,7 @@ NARRATIVE:
             update_json = None
             if update_data:
                 try:
-                    update_json = _to_updates_json(update_data)
+                    update_json = _to_updates_json(update_data, fallback_narrative=narrative)
                 except Exception as e:
                     logger.error("Updater output could not be normalized to JSON: %s", e)
 
@@ -997,8 +1019,7 @@ NARRATIVE:
                 logger.error("Updater payload was not a JSON object: %s", exc)
                 payload_dict = _build_min_skeleton(int(user_id_str), int(conversation_id_str), narrative)
 
-            if not isinstance(payload_dict.get("narrative"), str) or not payload_dict["narrative"].strip():
-                payload_dict["narrative"] = narrative
+            _ensure_narrative(payload_dict, narrative)
 
             update_json = json.dumps(payload_dict, ensure_ascii=False, separators=(",", ":"))
 
