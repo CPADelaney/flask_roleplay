@@ -1429,8 +1429,6 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
         # Define the correct tool structure based on the schema manager
         all_tools_definitions = ToolSchemaManager.get_all_tools()
         tools_payload = all_tools_definitions  # already in Responses API shape
-        if all_tools_definitions:
-            for tool_def in all_tools_definitions:
 
         params = {
             "model": model,
