@@ -323,6 +323,77 @@ def _to_kv(obj) -> list[dict]:
     return [{"key": "value", "value": _kv_coerce_value(obj)}]
 
 
+def _decode_kv_value(value: Any) -> Any:
+    """Decode a KeyValue value, parsing JSON strings and nested containers."""
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped[0] in "[{":
+            try:
+                parsed = json.loads(stripped)
+            except (TypeError, ValueError):
+                return value
+            return _decode_kv_value(parsed)
+        return value
+    if isinstance(value, list):
+        return [_decode_kv_value(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _decode_kv_value(v) for k, v in value.items()}
+    return value
+
+
+def _iter_keyvalue_items(items: Optional[List[Any]]):
+    """Yield (key, value) pairs from List[KeyValue] or list of dicts."""
+
+    for item in items or []:
+        if isinstance(item, KeyValue):
+            key = item.key
+            value = item.value
+        elif isinstance(item, dict):
+            key = item.get("key")
+            value = item.get("value")
+        else:
+            continue
+        if key is None:
+            continue
+        yield str(key), _decode_kv_value(value)
+
+
+def keyvalue_items_to_dict(items: Optional[List[Any]]) -> Dict[str, Any]:
+    """Convert a List[KeyValue] into a dictionary with decoded values."""
+
+    return {key: value for key, value in _iter_keyvalue_items(items)}
+
+
+def keyvalue_items_to_list(items: Optional[List[Any]]) -> List[Any]:
+    """Convert a List[KeyValue] representing a sequence back into a list."""
+
+    mapping = keyvalue_items_to_dict(items)
+    if not mapping:
+        return []
+
+    numeric_items: List[Tuple[int, Any]] = []
+    for key, value in mapping.items():
+        try:
+            numeric_items.append((int(key), value))
+        except (TypeError, ValueError):
+            numeric_items = []
+            break
+
+    if numeric_items:
+        numeric_items.sort(key=lambda item: item[0])
+        return [value for _, value in numeric_items]
+
+    return list(mapping.values())
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ===============================================================================
 # COMPLETE World State Models with ALL Integrations
 # ===============================================================================
@@ -2522,7 +2593,12 @@ async def check_all_emergent_patterns(
 
     try:
         # 1) Memory patterns
-        recent = [m for m in (context.current_world_state.recent_memories or []) if isinstance(m, dict) and m.get('text')]
+        recent_raw = keyvalue_items_to_list(context.current_world_state.recent_memories)
+        if isinstance(recent_raw, dict):
+            recent_iterable = recent_raw.values()
+        else:
+            recent_iterable = recent_raw or []
+        recent = [m for m in recent_iterable if isinstance(m, dict) and m.get('text')]
         if len(recent) > 5:
             try:
                 embs = [await get_text_embedding(m['text']) for m in recent[:10]]
@@ -2542,39 +2618,66 @@ async def check_all_emergent_patterns(
 
         # 2) Relationship patterns
         try:
-            for npc in (context.current_world_state.active_npcs or [])[:5]:
-                rel = npc.get('relationship') if isinstance(npc, dict) else None
-                if isinstance(rel, dict):
-                    pats = rel.get('patterns') or []
-                    if pats:
-                        result.relationship_patterns.append(RelationshipPatternOut(
-                            npc=npc.get('npc_name', 'Unknown'),
-                            patterns=[str(p) for p in pats],
-                            archetype=str(rel.get('archetype', 'unknown'))
-                        ))
+            active_npcs = keyvalue_items_to_list(context.current_world_state.active_npcs)[:5]
+            for npc in active_npcs:
+                if not isinstance(npc, dict):
+                    continue
+                rel = npc.get('relationship')
+                if not isinstance(rel, dict):
+                    continue
+                patterns_raw = rel.get('patterns')
+                if isinstance(patterns_raw, list):
+                    patterns_list = [str(p) for p in patterns_raw if p is not None]
+                elif patterns_raw is not None:
+                    patterns_list = [str(patterns_raw)]
+                else:
+                    patterns_list = []
+                if not patterns_list:
+                    continue
+                archetype = rel.get('archetype', 'unknown')
+                result.relationship_patterns.append(RelationshipPatternOut(
+                    npc=str(npc.get('npc_name', 'Unknown')),
+                    patterns=patterns_list,
+                    archetype=str(archetype if archetype is not None else 'unknown')
+                ))
         except Exception as e:
             logger.error(f"Error analyzing relationship patterns: {e}")
 
         # 3) Addiction patterns
         try:
-            status = context.current_world_state.addiction_status or {}
-            if status.get('has_addictions'):
-                for a_type, data in (status.get('addictions') or {}).items():
-                    level = int(data.get('level', 0))
-                    traj = "escalating" if int(data.get('recent_increases', 0)) > 2 else "stable"
-                    if level >= 3:
-                        result.addiction_patterns.append(AddictionPatternOut(
-                            type=str(a_type), level=level, trajectory=traj
-                        ))
+            status = keyvalue_items_to_dict(context.current_world_state.addiction_status)
+            has_addictions = status.get('has_addictions')
+            if has_addictions:
+                addictions = status.get('addictions')
+                if isinstance(addictions, dict):
+                    for a_type, data in addictions.items():
+                        if not isinstance(data, dict):
+                            continue
+                        level = _safe_int(data.get('level', 0))
+                        traj = "escalating" if _safe_int(data.get('recent_increases', 0)) > 2 else "stable"
+                        if level >= 3:
+                            result.addiction_patterns.append(AddictionPatternOut(
+                                type=str(a_type), level=level, trajectory=traj
+                            ))
         except Exception as e:
             logger.error(f"Error analyzing addiction patterns: {e}")
 
         # 4) Stat combination patterns
         try:
-            for combo in (context.current_world_state.active_stat_combinations or []):
+            combinations = keyvalue_items_to_list(context.current_world_state.active_stat_combinations)
+            for combo in combinations:
+                if not isinstance(combo, dict):
+                    continue
+                behaviors_raw = combo.get('behaviors')
+                if isinstance(behaviors_raw, list):
+                    behaviors = [str(b) for b in behaviors_raw if b is not None]
+                elif behaviors_raw is not None:
+                    behaviors = [str(behaviors_raw)]
+                else:
+                    behaviors = []
                 result.stat_patterns.append(StatPatternOut(
                     combination=str(combo.get('name', 'unknown')),
-                    behaviors=[str(b) for b in (combo.get('behaviors') or [])]
+                    behaviors=behaviors
                 ))
         except Exception as e:
             logger.error(f"Error analyzing stat patterns: {e}")
@@ -2582,9 +2685,19 @@ async def check_all_emergent_patterns(
         # 5) Rule trigger patterns
         try:
             freq = {}
-            for eff in (context.current_world_state.triggered_effects or []):
-                rule_name = str((eff.get('rule') or {}).get('rule_name', 'unknown'))
-                freq[rule_name] = freq.get(rule_name, 0) + 1
+            effects = keyvalue_items_to_list(context.current_world_state.triggered_effects)
+            for eff in effects:
+                if not isinstance(eff, dict):
+                    continue
+                rule_obj = eff.get('rule')
+                if isinstance(rule_obj, dict):
+                    rule_name = rule_obj.get('rule_name', 'unknown')
+                else:
+                    rule_name = eff.get('rule_name', 'unknown')
+                if not rule_name:
+                    continue
+                rule_name_str = str(rule_name)
+                freq[rule_name_str] = freq.get(rule_name_str, 0) + 1
             for name, count in freq.items():
                 if count > 1:
                     result.rule_patterns.append(RulePatternOut(rule=name, frequency=int(count)))
