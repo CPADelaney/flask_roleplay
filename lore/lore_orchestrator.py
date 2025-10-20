@@ -3236,11 +3236,45 @@ class LoreOrchestrator:
             location_rules: List[str] = []
             fallback_rules: List[str] = []
             location_name: Optional[str] = None
+            normalized_location_id: Optional[int] = None
+            normalized_location_slug: Optional[str] = None
             requested_nation_ids: List[int] = []
             nation_rule_presence: Dict[int, bool] = {}
             nation_names: Dict[int, Optional[str]] = {}
 
-            needs_location = bool(getattr(scope, 'location_id', None))
+            def _coerce_location_identifier(value: Any) -> Tuple[Optional[int], Optional[str]]:
+                if value is None:
+                    return None, None
+                if isinstance(value, int):
+                    return value, None
+                if isinstance(value, str):
+                    stripped = value.strip()
+                    if not stripped:
+                        return None, None
+                    if stripped.isdigit():
+                        try:
+                            return int(stripped), None
+                        except ValueError:
+                            return None, None
+                    return None, stripped
+                return None, None
+
+            raw_location_id = getattr(scope, 'location_id', None)
+            raw_location_name = getattr(scope, 'location_name', None)
+
+            candidate_id, candidate_name = _coerce_location_identifier(raw_location_id)
+            if candidate_id is not None:
+                normalized_location_id = candidate_id
+            elif candidate_name:
+                normalized_location_slug = candidate_name
+
+            candidate_id, candidate_name = _coerce_location_identifier(raw_location_name)
+            if candidate_id is not None and normalized_location_id is None:
+                normalized_location_id = candidate_id
+            if candidate_name and not normalized_location_slug:
+                normalized_location_slug = candidate_name
+
+            needs_location = bool(normalized_location_id is not None or normalized_location_slug)
             raw_nation_ids = list(getattr(scope, 'nation_ids', []) or [])
             needs_nations = bool(raw_nation_ids)
 
@@ -3263,13 +3297,29 @@ class LoreOrchestrator:
                         ]
                         row = None
                         if select_parts:
-                            query = f"""
-                                SELECT
-                                    {', '.join(select_parts)}
-                                FROM Locations
-                                WHERE location_id = $1
-                            """
-                            row = await conn.fetchrow(query, scope.location_id)
+                            if normalized_location_id is not None:
+                                query = f"""
+                                    SELECT
+                                        {', '.join(select_parts)}
+                                    FROM Locations
+                                    WHERE id = $1
+                                """
+                                row = await conn.fetchrow(query, normalized_location_id)
+                            elif normalized_location_slug:
+                                query = f"""
+                                    SELECT
+                                        {', '.join(select_parts)}
+                                    FROM Locations
+                                    WHERE user_id = $1
+                                      AND conversation_id = $2
+                                      AND location_name = $3
+                                """
+                                row = await conn.fetchrow(
+                                    query,
+                                    self.user_id,
+                                    self.conversation_id,
+                                    normalized_location_slug,
+                                )
 
                         if row:
                             location_name = row.get('location_name')
@@ -3359,7 +3409,13 @@ class LoreOrchestrator:
             rules.extend(location_rules)
 
             if needs_location and not location_rules:
-                fallback_name = location_name or f"location {scope.location_id}"
+                fallback_name = location_name
+                if not fallback_name:
+                    if normalized_location_id is not None:
+                        fallback_name = f"location {normalized_location_id}"
+                    elif normalized_location_slug:
+                        fallback_name = normalized_location_slug
+                fallback_name = fallback_name or "the location"
                 fallback_rules.append(f"Preserve established canon for {fallback_name}.")
 
             if needs_nations:
