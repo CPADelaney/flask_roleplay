@@ -13,11 +13,13 @@ from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from datetime import datetime, timedelta
 from enum import Enum
 from dataclasses import dataclass, field
+
+import asyncpg
+
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
-from logic.time_cycle import get_current_game_day
 from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
     BackgroundConflictProcessor,
@@ -103,6 +105,39 @@ INTENSITY_TO_FLOAT = {
     BackgroundIntensity.VISIBLE_EFFECTS: 1.0,
 }
 
+
+async def _get_current_game_day(user_id: int, conversation_id: int) -> int:
+    """Return the current in-game day stored in CurrentRoleplay.
+
+    The helper queries the database directly for the ``CurrentDay`` entry so callers
+    always receive a plain integer. When the lookup fails because of a database
+    error, the function logs the failure and falls back to day ``1``. Missing or
+    non-integer values also return ``1`` without additional logging to avoid noise.
+    """
+
+    try:
+        async with get_db_connection_context() as conn:
+            raw_value = await conn.fetchval(
+                """
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
+                """,
+                user_id,
+                conversation_id,
+            )
+    except (asyncio.TimeoutError, asyncpg.PostgresError) as exc:
+        logger.warning(
+            "Could not retrieve current game day from database, defaulting to 1. Error: %s",
+            exc,
+        )
+        return 1
+
+    try:
+        return int(raw_value) if raw_value is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
 def adjust_intensity_value(current: float, change: str) -> float:
     """Adjust intensity value based on change direction"""
     if change == "increase":
@@ -173,26 +208,6 @@ class BackgroundConflictOrchestrator:
             )
         return self._evolution_agent
     
-    async def _get_safe_current_game_day(self) -> int:
-        """
-        Safely gets the current game day number, handling dict or int responses from time_cycle.
-        Defaults to 1 on failure.
-        """
-        try:
-            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
-            if isinstance(game_day_info, dict):
-                # Handles new return type: {'day': 123, 'year_name': '...'}
-                return int(game_day_info.get('day', 1))
-            elif isinstance(game_day_info, int):
-                # Handles old return type: 123
-                return game_day_info
-            else:
-                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
-                return 1
-        except Exception as e:
-            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
-            return 1
-            
     async def generate_background_conflict(self) -> Optional[BackgroundConflict]:
         """Generate a new background conflict"""
         # First check if we need a new conflict
@@ -287,7 +302,7 @@ class BackgroundConflictOrchestrator:
                 """,
                 conflict_id,
                 data["initial_development"],
-                await self._get_safe_current_game_day()
+                await _get_current_game_day(self.user_id, self.conversation_id)
             )
         
         conflict = BackgroundConflict(
@@ -400,7 +415,7 @@ class BackgroundConflictOrchestrator:
                 """,
                 conflict.conflict_id,
                 data["description"],
-                await self._get_safe_current_game_day()
+                await _get_current_game_day(self.user_id, self.conversation_id)
             )
             
             # Handle opportunity creation
@@ -414,7 +429,7 @@ class BackgroundConflictOrchestrator:
                     """,
                     conflict.conflict_id,
                     data.get("opportunity_description", "An opportunity arises"),
-                    await self._get_safe_current_game_day() + 7,
+                    (await _get_current_game_day(self.user_id, self.conversation_id)) + 7,
                     'available',
                     self.user_id,
                     self.conversation_id
@@ -486,26 +501,6 @@ class BackgroundNewsGenerator:
             )
         return self._news_generator
 
-    async def _get_safe_current_game_day(self) -> int:
-        """
-        Safely gets the current game day number, handling dict or int responses from time_cycle.
-        Defaults to 1 on failure.
-        """
-        try:
-            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
-            if isinstance(game_day_info, dict):
-                # Handles new return type: {'day': 123, 'year_name': '...'}
-                return int(game_day_info.get('day', 1))
-            elif isinstance(game_day_info, int):
-                # Handles old return type: 123
-                return game_day_info
-            else:
-                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
-                return 1
-        except Exception as e:
-            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
-            return 1
-    
     async def generate_news_item(
         self,
         conflict: BackgroundConflict,
@@ -554,7 +549,7 @@ class BackgroundNewsGenerator:
         response = await Runner.run(self.news_generator, prompt)
         news_data = json.loads(extract_runner_response(response))
         
-        current_day = await self._get_safe_current_game_day()
+        current_day = await _get_current_game_day(self.user_id, self.conversation_id)
         
         # Store in DB
         async with get_db_connection_context() as conn:
@@ -646,26 +641,6 @@ class BackgroundConflictRipples:
             )
         return self._opportunity_creator
 
-    async def _get_safe_current_game_day(self) -> int:
-        """
-        Safely gets the current game day number, handling dict or int responses from time_cycle.
-        Defaults to 1 on failure.
-        """
-        try:
-            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
-            if isinstance(game_day_info, dict):
-                # Handles new return type: {'day': 123, 'year_name': '...'}
-                return int(game_day_info.get('day', 1))
-            elif isinstance(game_day_info, int):
-                # Handles old return type: 123
-                return game_day_info
-            else:
-                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
-                return 1
-        except Exception as e:
-            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
-            return 1
-    
     async def generate_daily_ripples(
         self,
         active_conflicts: List[BackgroundConflict]
@@ -718,7 +693,7 @@ class BackgroundConflictRipples:
                 """,
                 most_intense.conflict_id,
                 json.dumps(ripple_data),
-                await self._get_safe_current_game_day(),
+                await _get_current_game_day(self.user_id, self.conversation_id),
                 self.user_id,
                 self.conversation_id
             )
@@ -815,26 +790,6 @@ class BackgroundConflictSubsystem:
         # Caches
         self._context_cache = {}
         self._cache_ttl = 300  # 5 minutes
-
-    async def _get_safe_current_game_day(self) -> int:
-        """
-        Safely gets the current game day number, handling dict or int responses from time_cycle.
-        Defaults to 1 on failure.
-        """
-        try:
-            game_day_info = await get_current_game_day(self.user_id, self.conversation_id)
-            if isinstance(game_day_info, dict):
-                # Handles new return type: {'day': 123, 'year_name': '...'}
-                return int(game_day_info.get('day', 1))
-            elif isinstance(game_day_info, int):
-                # Handles old return type: 123
-                return game_day_info
-            else:
-                logger.warning(f"Unexpected type for game day info: {type(game_day_info)}. Defaulting to 1.")
-                return 1
-        except Exception as e:
-            logger.warning(f"Could not retrieve current game day, defaulting to 1. Error: {e}")
-            return 1
 
     @property
     def subsystem_type(self):
@@ -1105,7 +1060,7 @@ class BackgroundConflictSubsystem:
     async def daily_background_update(self, generate_new: bool = False) -> Dict[str, Any]:
         """Daily update of all background conflicts - optionally generate new content"""
         
-        current_day = await self._get_safe_current_game_day()
+        current_day = await _get_current_game_day(self.user_id, self.conversation_id)
         cache_key = f"daily_update_{current_day}"
         if cache_key in self._context_cache and not generate_new:
             cached = self._context_cache[cache_key]
@@ -1195,7 +1150,7 @@ class BackgroundConflictSubsystem:
     
     async def get_conversation_topics(self) -> List[str]:
         """Get background conflict topics for NPC conversations"""
-        current_day = await self._get_safe_current_game_day()
+        current_day = await _get_current_game_day(self.user_id, self.conversation_id)
         async with get_db_connection_context() as conn:
             recent_news = await conn.fetch(
                 """
