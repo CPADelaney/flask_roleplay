@@ -1902,7 +1902,7 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     """Find or create a location with existence gate validation."""
     # First check if location exists
     existing = await conn.fetchrow("""
-        SELECT id, location_name, description
+        SELECT location_id, location_name, description
         FROM Locations
         WHERE LOWER(location_name) = LOWER($1)
         AND user_id = $2 AND conversation_id = $3
