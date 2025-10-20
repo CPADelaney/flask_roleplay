@@ -717,7 +717,7 @@ def _get_tool_choice(
     }
 
     if tool_name in tool_names:
-        return {"type": "tool", "name": tool_name}
+        return {"type": "function", "name": tool_name}
     return "auto"
 
 
