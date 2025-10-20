@@ -2109,7 +2109,7 @@ class MemoryOrchestrator:
                     async with get_db_connection_context() as conn:
                         row = await conn.fetchrow(
                             """
-                            SELECT id
+                            SELECT location_id
                             FROM Locations
                             WHERE user_id=$1
                               AND conversation_id=$2
@@ -2132,7 +2132,7 @@ class MemoryOrchestrator:
                     return None
 
                 try:
-                    location_id = row["id"]
+                    location_id = row["location_id"]
                 except (KeyError, TypeError):
                     try:
                         location_id = row[0]
