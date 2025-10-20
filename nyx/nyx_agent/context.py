@@ -1035,7 +1035,6 @@ class ContextBroker:
             redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
             self.redis_client = redis.from_url(
                 redis_url,
-                encoding=None,  # Handle bytes ourselves
                 decode_responses=False,
                 socket_connect_timeout=2.0
             )
