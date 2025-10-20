@@ -664,7 +664,7 @@ async def get_db_connection_context(
                     try:
                         await current_pool_to_use.release(active_conn_obj, timeout=release_timeout)
                         logger.debug("Released connection back to pool")
-                    except (asyncio.TimeoutError, asyncio.CancelledError) as release_err:
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
                         logger.error(
                             f"Timeout releasing connection after {release_timeout}s; terminating connection.",
                             exc_info=True,
@@ -674,8 +674,34 @@ async def get_db_connection_context(
                             logger.warning("Connection terminated due to release timeout")
                         except Exception:
                             logger.exception("Failed to terminate connection after release timeout")
-                    except Exception as release_err:
-                        logger.error(f"Error releasing connection: {release_err}", exc_info=True)
+                    except asyncpg.exceptions.ConnectionDoesNotExistError:
+                        logger.warning(
+                            "Connection missing from pool during release; terminating connection.",
+                        )
+                        logger.debug(
+                            "ConnectionDoesNotExistError encountered while releasing connection.",
+                            exc_info=True,
+                        )
+                        try:
+                            active_conn_obj.terminate()
+                            logger.debug("Connection terminated after missing pool release")
+                        except Exception:
+                            logger.exception("Failed to terminate connection after missing pool release")
+                    except AttributeError:
+                        logger.warning(
+                            "AttributeError raised while releasing connection; terminating connection.",
+                        )
+                        logger.debug(
+                            "AttributeError details from connection release.",
+                            exc_info=True,
+                        )
+                        try:
+                            active_conn_obj.terminate()
+                            logger.debug("Connection terminated after AttributeError during release")
+                        except Exception:
+                            logger.exception("Failed to terminate connection after AttributeError during release")
+                    except Exception:
+                        logger.error("Error releasing connection", exc_info=True)
                 else:
                     logger.warning("Connection was already closed")
             except Exception as release_err:
