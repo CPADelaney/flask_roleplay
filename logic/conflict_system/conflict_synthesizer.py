@@ -37,6 +37,7 @@ from logic.conflict_system.background_processor import (
 )
 
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+from logic.conflict_system.integration_hooks import ConflictEventHooks
 from agents import function_tool, RunContextWrapper, Runner
 
 if TYPE_CHECKING:
@@ -398,9 +399,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.enhanced_conflict_integration import EnhancedIntegrationSubsystem
             from logic.conflict_system.conflict_victory import ConflictVictorySubsystem
             from logic.conflict_system.multi_party_dynamics import MultiPartyConflictSubsystem
-            from logic.conflict_system.integration_hooks import ConflictEventHooks
 
-    
             subsystems = [
                 TensionSubsystem(self.user_id, self.conversation_id),
                 StakeholderAutonomySystem(self.user_id, self.conversation_id),
