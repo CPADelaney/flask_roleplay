@@ -819,7 +819,9 @@ def convert_npc_schedule_to_dict(npc_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def convert_response_to_array_format(response_data: Dict[str, Any]) -> Dict[str, Any]:
     """Convert Nyx/OpenAI response from dict format to array format for the schema."""
-    universal_updates = response_data.get("universal_updates", {})
+    universal_updates = response_data.get("universal_updates") or {}
+    if not isinstance(universal_updates, dict):
+        universal_updates = {}
     
     # Convert roleplay_updates
     roleplay_updates_obj = universal_updates.get("roleplay_updates", {})
@@ -830,7 +832,10 @@ def convert_response_to_array_format(response_data: Dict[str, Any]) -> Dict[str,
     chase_schedule_array = dict_to_array(chase_schedule_obj)
     
     # Convert character stats
-    char_stats_obj = universal_updates.get("character_stat_updates", {}).get("stats", {})
+    char_stats_container = universal_updates.get("character_stat_updates") or {}
+    if not isinstance(char_stats_container, dict):
+        char_stats_container = {}
+    char_stats_obj = char_stats_container.get("stats", {})
     char_stats_array = dict_to_array(char_stats_obj)
     
     # Process NPC creations and updates
@@ -857,7 +862,7 @@ def convert_response_to_array_format(response_data: Dict[str, Any]) -> Dict[str,
         "npc_creations": npc_creations,
         "npc_updates": npc_updates,
         "character_stat_updates": {
-            "player_name": universal_updates.get("character_stat_updates", {}).get("player_name", "Chase"),
+            "player_name": char_stats_container.get("player_name", "Chase"),
             "stats": char_stats_array
         },
         "relationship_updates": universal_updates.get("relationship_updates", []),
@@ -1321,7 +1326,25 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
             
             if nyx_result.get("success"):
                 response_data = nyx_result.get("response", {})
-                
+
+                # Normalize Nyx responses so downstream processing always
+                # receives a dictionary with the expected keys. Some Nyx
+                # flows may return just a narrative string.
+                if isinstance(response_data, str):
+                    response_data = {"narrative": response_data}
+                elif not isinstance(response_data, dict):
+                    logger.warning(
+                        "Unexpected Nyx response type %s; defaulting to empty dict",
+                        type(response_data)
+                    )
+                    response_data = {}
+
+                response_data.setdefault("narrative", "")
+                universal_updates = response_data.get("universal_updates")
+                if not isinstance(universal_updates, dict):
+                    universal_updates = {}
+                response_data["universal_updates"] = universal_updates
+
                 # Validate response if preset is active
                 if preset_info and context_data.get("preset_context"):
                     narrative = response_data.get("narrative", "")
