@@ -3272,6 +3272,8 @@ class LoreOrchestrator:
             location_rules: List[str] = []
             fallback_rules: List[str] = []
             location_name: Optional[str] = None
+            normalized_location_id: Optional[int] = None
+            normalized_location_slug: Optional[str] = None
             requested_nation_ids: List[int] = []
             nation_rule_presence: Dict[int, bool] = {}
             nation_names: Dict[int, Optional[str]] = {}

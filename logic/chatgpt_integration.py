@@ -799,12 +799,23 @@ def array_to_dict(array_data: List[Dict[str, Any]], key_name: str = "key", value
     return result
 
 
+def _ensure_array_from_mapping(value: Any) -> List[Dict[str, Any]]:
+    """Return ``value`` if it's already an array, otherwise convert dicts to array format."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return dict_to_array(value)
+    return []
+
+
 def convert_npc_schedule_to_array(npc_data: Dict[str, Any]) -> Dict[str, Any]:
     """Convert NPC schedule from dict to array format."""
-    if "schedule" in npc_data and isinstance(npc_data["schedule"], dict):
-        npc_data["schedule"] = dict_to_array(npc_data["schedule"])
-    if "schedule_updates" in npc_data and isinstance(npc_data["schedule_updates"], dict):
-        npc_data["schedule_updates"] = dict_to_array(npc_data["schedule_updates"])
+    if "schedule" in npc_data and isinstance(npc_data["schedule"], (dict, list)):
+        npc_data["schedule"] = _ensure_array_from_mapping(npc_data["schedule"])
+    if "schedule_updates" in npc_data and isinstance(npc_data["schedule_updates"], (dict, list)):
+        npc_data["schedule_updates"] = _ensure_array_from_mapping(
+            npc_data["schedule_updates"]
+        )
     return npc_data
 
 
@@ -824,19 +835,19 @@ def convert_response_to_array_format(response_data: Dict[str, Any]) -> Dict[str,
         universal_updates = {}
     
     # Convert roleplay_updates
-    roleplay_updates_obj = universal_updates.get("roleplay_updates", {})
-    roleplay_updates_array = dict_to_array(roleplay_updates_obj)
-    
+    roleplay_updates_obj = universal_updates.get("roleplay_updates")
+    roleplay_updates_array = _ensure_array_from_mapping(roleplay_updates_obj)
+
     # Convert ChaseSchedule
-    chase_schedule_obj = universal_updates.get("ChaseSchedule", {})
-    chase_schedule_array = dict_to_array(chase_schedule_obj)
-    
+    chase_schedule_obj = universal_updates.get("ChaseSchedule")
+    chase_schedule_array = _ensure_array_from_mapping(chase_schedule_obj)
+
     # Convert character stats
     char_stats_container = universal_updates.get("character_stat_updates") or {}
     if not isinstance(char_stats_container, dict):
         char_stats_container = {}
-    char_stats_obj = char_stats_container.get("stats", {})
-    char_stats_array = dict_to_array(char_stats_obj)
+    char_stats_obj = char_stats_container.get("stats")
+    char_stats_array = _ensure_array_from_mapping(char_stats_obj)
     
     # Process NPC creations and updates
     npc_creations = universal_updates.get("npc_creations", [])
