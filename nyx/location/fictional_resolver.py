@@ -1001,7 +1001,7 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
                   AND COALESCE(LOWER(location_type), '') = 'venue'
                   AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
                   AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(metadata::TEXT, '')) LIKE $4)
-                ORDER BY id
+                ORDER BY location_id
                 """,
                 user_id,
                 conversation_id,
@@ -1019,7 +1019,7 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
                   AND COALESCE(LOWER(location_type), '') = 'venue'
                   AND is_fictional = TRUE
                   AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4)
-                ORDER BY id
+                ORDER BY location_id
                 """,
                 user_id,
                 conversation_id,
@@ -1382,7 +1382,7 @@ async def get_or_generate_districts(
                       AND conversation_id = $2
                       AND LOWER(COALESCE(city, parent_location, '')) = LOWER($3)
                       AND COALESCE(LOWER(location_type), '') = 'district'
-                    ORDER BY id
+                    ORDER BY location_id
                     """,
                     user_key,
                     conversation_key,
