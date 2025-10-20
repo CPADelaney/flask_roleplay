@@ -3,7 +3,7 @@
 Memory Orchestrator with Scene Bundle Optimization
 Complete refactor for optimized context assembly pipeline
 """
-from __future__ import annotations
+from __future__ import annotations 
 
 import logging
 import asyncio
