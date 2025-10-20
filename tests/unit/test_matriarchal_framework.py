@@ -310,9 +310,21 @@ def test_plain_async_wrappers_return_structured_data(monkeypatch):
         if agent_name == "MatriarchalTransformationAgent":
             if workflow_name == "GenerateCorePrinciples" or "core principles" in prompt_text:
                 principles = matriarchal_module.CorePrinciples(
-                    power_dynamics={"dominant_gender": "female"},
-                    societal_norms={"obedience": "expected"},
-                    symbolic_representations={"icon": "moon"},
+                    power_dynamics=matriarchal_module.PowerDynamics(
+                        power_expressions=["ritual homage"],
+                        authority_sources=["matriarchal council"],
+                        submission_forms=["kneeling oaths"],
+                    ),
+                    societal_norms=matriarchal_module.SocietalNorms(
+                        gender_roles={"women": "rulers", "men": "attendants"},
+                        behavioral_expectations={"women": "command", "men": "comply"},
+                        social_structures={"clans": "led by elder mothers"},
+                    ),
+                    symbolic_representations=matriarchal_module.SymbolicRepresentations(
+                        symbols={"crest": "silver crescent"},
+                        rituals={"solstice": "crown anointment"},
+                        ceremonial_elements={"color": "deep indigo"},
+                    ),
                 )
                 return _DummyResult(json.dumps(principles.model_dump()), principles)
 
@@ -323,8 +335,18 @@ def test_plain_async_wrappers_return_structured_data(monkeypatch):
                     power_expressions=["ritual oaths"],
                     masculine_roles=["attendant"],
                     leadership_domains=["council"],
-                    property_rights="matrilineal",
-                    status_markers=["silver torque"],
+                    property_rights=matriarchal_module.PropertyRights(
+                        ownership_structure="matrilineal",
+                        inheritance_rules=["eldest daughter inherits"],
+                        male_limitations=["may steward but never own"],
+                    ),
+                    status_markers=[
+                        matriarchal_module.StatusMarker(
+                            name="silver torque",
+                            symbolism="service to the queen",
+                            criteria=["years of loyal service"],
+                        )
+                    ],
                     relationship_structure="polyandry",
                     enforcement_mechanisms=["oath binding"],
                 )
@@ -365,7 +387,7 @@ def test_plain_async_wrappers_return_structured_data(monkeypatch):
 
         principles = await framework.generate_core_principles_async()
         assert isinstance(principles, matriarchal_module.CorePrinciples)
-        assert principles.power_dynamics["dominant_gender"] == "female"
+        assert principles.power_dynamics.dominant_gender == "female"
 
         constraints = await framework.generate_hierarchical_constraints_async()
         assert isinstance(constraints, matriarchal_module.HierarchicalConstraint)
