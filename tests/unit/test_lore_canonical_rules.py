@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import typing
 from types import ModuleType, SimpleNamespace
 
 # Stub heavy optional dependencies before importing the orchestrator module.
@@ -225,6 +226,55 @@ async def test_canonical_rules_include_location_canon(monkeypatch):
     assert any("Floating stalls" in rule for rule in rules)
     assert any("Secret catacombs" in rule for rule in rules)
     assert any("Morning salute" in rule for rule in rules)
+
+
+@pytest.mark.unit
+async def test_canonical_rules_support_slug_lookup(monkeypatch):
+    orchestrator = LoreOrchestrator(user_id=5, conversation_id=6)
+
+    monkeypatch.setattr(LoreOrchestrator, "_get_canon_module", _noop_canon_module)
+    monkeypatch.setattr(LoreOrchestrator, "_get_canon_validation", _validator_factory)
+
+    orchestrator._table_columns_cache["locations"] = {
+        "location_name",
+        "notable_features",
+        "hidden_aspects",
+        "access_restrictions",
+        "local_customs",
+    }
+
+    observed: dict[str, typing.Any] = {}
+
+    class _Conn:
+        async def fetchrow(self, query, *args, **kwargs):
+            if "FROM Locations" in query:
+                observed["query"] = " ".join(query.split())
+                observed["args"] = args
+                return {
+                    "location_name": "Twilight Market",
+                    "notable_features": ["Starlit bazaar"],
+                    "hidden_aspects": [],
+                    "access_restrictions": [],
+                    "local_customs": [],
+                }
+            return None
+
+        async def fetch(self, query, *args, **kwargs):
+            return []
+
+    @asynccontextmanager
+    async def _ctx():
+        yield _Conn()
+
+    monkeypatch.setattr(_lore_module, "get_db_connection_context", _ctx)
+
+    scope = SimpleNamespace(location_id=None, location_name="twilight-market", nation_ids=set())
+
+    rules = await orchestrator._get_canonical_rules_for_scope(scope)
+
+    assert observed["args"] == (5, 6, "twilight-market")
+    assert "location_name = $3" in observed["query"]
+    assert any("Starlit bazaar" in rule for rule in rules)
 
 
 @pytest.mark.unit
