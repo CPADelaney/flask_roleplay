@@ -342,15 +342,37 @@ class BaseLoreManager:
             self._agent_type = agent_type
             self._agent_id = agent_id
 
-            # Register with the governor
-            result = await self.governor.register_agent(
+            # Register with the governor (queued submission - returns None)
+            await self.governor.register_agent(
                 agent_type=agent_type,
                 agent_instance=self,
                 agent_id=agent_id
             )
 
-            if result.get("success", False):
-                # Also register the directive
+            logger.info(
+                f"Queued governance registration for {self.__class__.__name__} as {agent_type}/{agent_id}"
+            )
+
+            registration_confirmed = False
+            if hasattr(self.governor, "is_agent_registered"):
+                try:
+                    loop = asyncio.get_running_loop()
+                    deadline = loop.time() + 5.0
+                    while loop.time() < deadline:
+                        if self.governor.is_agent_registered(agent_id, agent_type):
+                            registration_confirmed = True
+                            break
+                        await asyncio.sleep(0.1)
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    logger.debug(
+                        "Registration confirmation check failed for %s: %s",
+                        self.__class__.__name__,
+                        exc,
+                        exc_info=True
+                    )
+
+            if registration_confirmed:
+                # Also register the directive once the agent is confirmed
                 await self.governor.issue_directive(
                     agent_type=agent_type,
                     agent_id=agent_id,
@@ -363,11 +385,18 @@ class BaseLoreManager:
                     duration_minutes=60 * 24 * 365  # 1 year
                 )
 
-                logger.info(f"{self.__class__.__name__} registered with governance as {agent_type}/{agent_id}")
-                return True
+                logger.info(
+                    f"{self.__class__.__name__} registration confirmed; directive issued for {agent_type}/{agent_id}"
+                )
             else:
-                logger.error(f"Failed to register {self.__class__.__name__} with governance")
-                return False
+                logger.warning(
+                    "Governor registration for %s as %s/%s not confirmed; directive deferred",
+                    self.__class__.__name__,
+                    agent_type,
+                    agent_id
+                )
+
+            return True
 
         except Exception as e:
             logger.error(f"Error registering {self.__class__.__name__} with governance: {e}")

@@ -232,10 +232,17 @@ class _GovernorStub:
     def __init__(self):
         self.register_calls = []
         self.directive_calls = []
+        self._registered = set()
 
     async def register_agent(self, agent_type, agent_instance, agent_id):
         self.register_calls.append((agent_type, agent_id, agent_instance))
-        return {"success": True}
+        self._registered.add((agent_type, agent_id))
+        return None
+
+    def is_agent_registered(self, agent_id, agent_type=None):
+        if agent_type is None:
+            return any(registered_id == agent_id for _, registered_id in self._registered)
+        return (agent_type, agent_id) in self._registered
 
     async def issue_directive(
         self,
@@ -270,6 +277,7 @@ def test_matriarchal_framework_registers_with_governance_successfully():
 
         assert result is True
         assert governor.register_calls
+        assert governor.directive_calls
         registered_type, registered_id, _ = governor.register_calls[0]
         assert registered_type == AgentType.NARRATIVE_CRAFTER
         assert registered_id == "matriarchal_power_framework"
