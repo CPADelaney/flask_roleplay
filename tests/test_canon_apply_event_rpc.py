@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from uuid import UUID
 
+import json
 import pytest
 
 from db.rpc import CanonEventError, write_event
@@ -31,16 +32,23 @@ class _FakeTransaction:
 
 
 class _FakeConnection:
-    def __init__(self, result):
+    def __init__(self, result, *, expected_payload=None):
         self._result = result
         self.calls = []
         self.transaction_manager = _FakeTransaction()
+        self.expected_payload = expected_payload
+        self.decoded_payload = None
 
     def transaction(self):
         self.calls.append("transaction")
         return self.transaction_manager
 
     async def fetchrow(self, query, payload):
+        assert isinstance(payload, str)
+        decoded_payload = json.loads(payload)
+        if self.expected_payload is not None:
+            assert decoded_payload == self.expected_payload
+        self.decoded_payload = decoded_payload
         self.calls.append((query, payload))
         return {"result": self._result}
 
@@ -64,7 +72,10 @@ async def test_write_event_happy_path():
         },
     )
 
-    conn = _FakeConnection({"event_id": 5, "applied": True, "replayed": False})
+    conn = _FakeConnection(
+        {"event_id": 5, "applied": True, "replayed": False},
+        expected_payload=delta.model_dump(mode="json", by_alias=True),
+    )
     result = await write_event(conn, delta)
 
     assert result["event_id"] == 5
@@ -84,6 +95,7 @@ async def test_write_event_rejects_invalid_response():
 
     class _BadConnection(_FakeConnection):
         async def fetchrow(self, query, payload):
+            await super().fetchrow(query, payload)
             return None
 
     conn = _BadConnection(None)
@@ -101,7 +113,10 @@ async def test_write_event_idempotent_replay():
         request_id=UUID("11111111-1111-1111-1111-111111111111"),
     )
 
-    conn = _FakeConnection({"event_id": 42, "applied": False, "replayed": True})
+    conn = _FakeConnection(
+        {"event_id": 42, "applied": False, "replayed": True},
+        expected_payload=delta.model_dump(mode="json", by_alias=True),
+    )
     result = await write_event(conn, delta)
 
     assert result["replayed"] is True

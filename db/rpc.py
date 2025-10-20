@@ -33,13 +33,14 @@ async def write_event(conn: asyncpg.Connection, delta: UniversalDelta) -> Dict[s
         raise CanonEventError("database connection is required")
 
     payload = delta.model_dump(mode="json", by_alias=True)
+    payload_json = json.dumps(payload)
 
     logger.info("write_event invoked for request_id=%s", delta.request_id)
 
     try:
         async with conn.transaction():
             row = await conn.fetchrow(
-                "SELECT canon.apply_event($1::jsonb) AS result", payload
+                "SELECT canon.apply_event($1::jsonb) AS result", payload_json
             )
     except asyncpg.PostgresError as exc:  # pragma: no cover - passthrough safety
         logger.info(
