@@ -112,6 +112,7 @@ async def call_gpt_json(conversation_id, context, prompt, model="gpt-5-nano", te
                 return response.get("function_args", {})
             else:
                 raw_text = response.get("response", "").strip()
+                logging.info("RAW RESPONSE FROM GPT: ---BEGIN---\n%s\n---END---", raw_text)
                 parsed = parse_json_str(raw_text)
                 if parsed:
                     return parsed
