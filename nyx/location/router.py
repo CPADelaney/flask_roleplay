@@ -1,6 +1,8 @@
 # nyx/location/router.py
+
 from __future__ import annotations
 import re
+import logging  # --- CHANGE: Added logging import ---
 from typing import Any, Dict, Optional
 
 from .anchors import derive_geo_anchor
@@ -16,8 +18,12 @@ from .types import (
     STATUS_EXACT,
     STATUS_MULTIPLE,
     STATUS_TRAVEL_PLAN,
+    STATUS_ASK,          # --- CHANGE: Ensured these are imported ---
+    STATUS_NOT_FOUND,    # --- CHANGE: Ensured these are imported ---
 )
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
+
+logger = logging.getLogger(__name__)  # --- CHANGE: Added logger instance ---
 
 _GO_TO_RX = re.compile(r"\b(?:go|head|walk|run|drive|get|straight|toward|to)\s+(?:the\s+)?(.+)$", re.IGNORECASE)
 _FLY_TO_RX = re.compile(r"\b(?:fly|flight)\s+(?:to|for)\s+(.+)$", re.IGNORECASE)
@@ -91,7 +97,13 @@ async def resolve_place_or_travel(
         store = ConversationSnapshotStore()
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
+
+    # --- CHANGE STARTS HERE ---
+    # The original if/else block is replaced with this more advanced logic.
+    
+    res: ResolveResult
     if anchor.scope == "real":
+        # This part remains the same: handle real-world scopes directly.
         gemini_result: Optional[ResolveResult] = None
         try:
             gemini_result = await resolve_location_with_gemini(q, anchor)
@@ -106,7 +118,28 @@ async def resolve_place_or_travel(
         else:
             res = await resolve_real(q, anchor, meta)
     else:
-        res = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
+        # Fictional scope: try fictional first, then fallback to real.
+        res_fictional = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
+
+        # If the fictional search didn't find a conclusive match, try the real world.
+        if res_fictional.status in {STATUS_NOT_FOUND, STATUS_ASK}:
+            logger.info(f"Fictional resolve failed for '{q.target}'. Falling back to real-world search.")
+            
+            # Temporarily change the anchor's scope to perform a real-world search.
+            anchor.scope = "real"
+            res_real = await resolve_real(q, anchor, meta)
+
+            # If the real-world search found something, use its result.
+            if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                res = res_real
+            else:
+                # If both fictional and real searches fail, return the original (more thematic) fictional failure.
+                res = res_fictional
+        else:
+            # The fictional search succeeded, so use its result.
+            res = res_fictional
+
+    # --- CHANGE ENDS HERE ---
 
     if res.anchor is None:
         res.anchor = anchor
