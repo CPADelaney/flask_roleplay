@@ -46,7 +46,22 @@ class RoleplayEngine:
         )
         from logic.gpt_utils import call_gpt_json
 
-        result = await call_gpt_json(conversation_id, context, prompt)
+        aggregator_text = context.get("aggregatorText")
+        if not aggregator_text:
+            summary_context = {
+                key: value
+                for key, value in context.items()
+                if key != "aggregatorText"
+            }
+            try:
+                aggregator_text = json.dumps(summary_context, default=str)
+            except TypeError:
+                aggregator_text = str(summary_context)
+
+        if not isinstance(aggregator_text, str):
+            aggregator_text = str(aggregator_text)
+
+        result = await call_gpt_json(conversation_id, aggregator_text, prompt)
         narrative = result.get("narrative", "")
         updates = result.get("updates", {})
 
