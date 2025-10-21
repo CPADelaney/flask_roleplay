@@ -38,7 +38,7 @@ sys.modules["sentence_transformers.models"] = dummy_models
 
 import new_game_agent
 from nyx.location import hierarchy as location_hierarchy
-from nyx.location.types import Location
+from nyx.location.types import Location, DEFAULT_REALM
 
 
 def test_create_preset_locations_uses_factory(monkeypatch, caplog):
@@ -121,20 +121,33 @@ def test_create_preset_locations_uses_factory(monkeypatch, caplog):
 
     locations = asyncio.run(run_flow())
 
-    assert locations == ["quick plaza", "schedule hall"]
-    assert len(calls) == 2
-    assert all(call["scope"] == "fictional" for call in calls)
+    assert locations == ["quick plaza", "quick plaza :: gazebo", "schedule hall"]
+    assert len(calls) == len(locations)
+    assert all(call["scope"] == "real" for call in calls)
 
     first_meta = calls[0]["candidate"].place.meta
-    second_meta = calls[1]["candidate"].place.meta
+    room_meta = calls[1]["candidate"].place.meta
+    schedule_meta = calls[2]["candidate"].place.meta
 
     assert first_meta["description"] == "Central hub"
     assert first_meta["building"] == "Quick Plaza Pavilion"
     assert first_meta["district"] == "Central Commons"
     assert first_meta["rooms"]["gazebo"] == "Primary rendezvous point"
-    assert second_meta["open_hours"] == {"Mon": "09:00-17:00"}
-    assert second_meta["room"] == "Operations Desk"
-    assert second_meta["city"] == "Evergreen City"
+    assert first_meta["scope"] == "real"
+    assert first_meta["is_fictional"] is False
+    assert first_meta["planet"] == "Earth"
+    assert first_meta["galaxy"] == "Milky Way"
+    assert first_meta["realm"] == DEFAULT_REALM
+    assert room_meta["scope"] == "real"
+    assert room_meta["is_fictional"] is False
+    assert room_meta["parent_location"] == "Quick Plaza"
+    assert room_meta["room"] == "Gazebo"
+
+    assert schedule_meta["open_hours"] == {"Mon": "09:00-17:00"}
+    assert schedule_meta["room"] == "Operations Desk"
+    assert schedule_meta["city"] == "Evergreen City"
+    assert schedule_meta["scope"] == "real"
+    assert schedule_meta["is_fictional"] is False
 
     fallback_logs = [
         record
@@ -295,3 +308,91 @@ def test_create_preset_locations_handles_nested_open_hours(monkeypatch):
         value = fake_conn.insert_args[index]
         if value is not None:
             assert isinstance(value, str)
+
+
+def test_queen_of_thorns_locations_use_earth_defaults(monkeypatch):
+    agent = new_game_agent.NewGameAgent.__new__(new_game_agent.NewGameAgent)
+
+    class FakeConnection:
+        def __init__(self):
+            self.insert_args = None
+            self.insert_history = []
+
+        async def fetchrow(self, query, *args):
+            if "INSERT INTO Locations" in query:
+                self.insert_args = args
+                self.insert_history.append(args)
+                return {
+                    "id": 7,
+                    "user_id": args[0],
+                    "conversation_id": args[1],
+                    "location_name": args[2],
+                    "scope": "real",
+                    "planet": args[13],
+                    "galaxy": args[14],
+                    "realm": args[15],
+                    "is_fictional": args[18],
+                }
+            return None
+
+        async def execute(self, *_args, **_kwargs):
+            return "OK"
+
+    fake_conn = FakeConnection()
+
+    @asynccontextmanager
+    async def fake_connection_context():
+        yield fake_conn
+
+    async def slow_orchestrator(*_args, **_kwargs):
+        await asyncio.sleep(0.2)
+
+    async def forbidden_find_or_create(*_args, **_kwargs):
+        raise AssertionError("Canon path should not be invoked in fallback")
+
+    async def fake_assign_hierarchy(*_args, **_kwargs):
+        return {"chain": [], "leaf": {"id": 1}, "world_name": "Earth"}
+
+    monkeypatch.setattr(new_game_agent, "get_db_connection_context", fake_connection_context)
+    monkeypatch.setattr(new_game_agent.canon, "get_canon_memory_orchestrator", slow_orchestrator)
+    monkeypatch.setattr(new_game_agent.canon, "find_or_create_location", forbidden_find_or_create)
+    monkeypatch.setattr(new_game_agent, "PRESET_LOCATION_CANON_TIMEOUT", 0.05, raising=False)
+    monkeypatch.setattr(location_hierarchy, "assign_hierarchy", fake_assign_hierarchy)
+
+    ctx = types.SimpleNamespace(context={"user_id": 5, "conversation_id": 19})
+
+    preset_payload = {
+        "name": "Queen of Thorns",
+        "required_locations": [
+            {
+                "name": "Velvet Sanctum",
+                "description": "An underground temple hidden beneath San Francisco",
+                "type": "nightclub_dungeon",
+                "building": "Velvet Sanctum Subterranean Complex",
+                "areas": {"main_stage": "Where the Queen holds court"},
+                "city": "San Francisco",
+                "region": "California",
+                "country": "USA",
+            }
+        ],
+    }
+
+    async def run_flow():
+        return await new_game_agent.NewGameAgent._create_preset_locations(agent, ctx, preset_payload)
+
+    locations = asyncio.run(run_flow())
+
+    assert locations == ["velvet sanctum", "velvet sanctum :: main stage"]
+    assert fake_conn.insert_history
+
+    base_insert = fake_conn.insert_history[0]
+
+    planet_arg = base_insert[13]
+    galaxy_arg = base_insert[14]
+    realm_arg = base_insert[15]
+    is_fictional_arg = base_insert[18]
+
+    assert planet_arg == "Earth"
+    assert galaxy_arg == "Milky Way"
+    assert realm_arg == DEFAULT_REALM
+    assert is_fictional_arg is False

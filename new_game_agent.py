@@ -41,7 +41,7 @@ from nyx.governance_helpers import with_governance, with_governance_permission, 
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.location.hierarchy import get_or_create_location
-from nyx.location.types import Candidate, Place
+from nyx.location.types import Candidate, Place, DEFAULT_REALM
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
@@ -2799,6 +2799,60 @@ class NewGameAgent:
             return ""
         return cleaned.title()
 
+    def _derive_location_scope_defaults(self, loc_data: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Infer location scope and cosmic defaults for preset metadata."""
+
+        def _normalize_scope(value: Any) -> Optional[str]:
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"real", "fictional"}:
+                    return normalized
+            if isinstance(value, bool):
+                return "fictional" if value else "real"
+            return None
+
+        scope: str = "fictional"
+        explicit_scope = _normalize_scope(loc_data.get("scope"))
+        if explicit_scope:
+            scope = explicit_scope
+        else:
+            is_fictional_hint = loc_data.get("is_fictional")
+            normalized_bool: Optional[bool] = None
+            if isinstance(is_fictional_hint, bool):
+                normalized_bool = is_fictional_hint
+            elif isinstance(is_fictional_hint, str):
+                hint = is_fictional_hint.strip().lower()
+                if hint in {"true", "1", "yes", "y"}:
+                    normalized_bool = True
+                elif hint in {"false", "0", "no", "n"}:
+                    normalized_bool = False
+
+            if normalized_bool is not None:
+                scope = "fictional" if normalized_bool else "real"
+            else:
+                def _has_earth_geography(payload: Any) -> bool:
+                    if not isinstance(payload, dict):
+                        return False
+                    return all(payload.get(key) for key in ("city", "region", "country"))
+
+                if _has_earth_geography(loc_data) or _has_earth_geography(loc_data.get("hierarchy")):
+                    scope = "real"
+
+        defaults: Dict[str, Any] = {"scope": scope}
+        if scope == "real":
+            defaults.update(
+                {
+                    "is_fictional": False,
+                    "planet": "Earth",
+                    "galaxy": "Milky Way",
+                    "realm": DEFAULT_REALM,
+                }
+            )
+        else:
+            defaults.setdefault("is_fictional", True)
+
+        return scope, defaults
+
     def _build_room_location_specs(
         self,
         base_name: str,
@@ -2817,6 +2871,12 @@ class NewGameAgent:
             value = metadata.get(key)
             if value:
                 shared_meta[key] = value
+        for key in ("planet", "galaxy", "realm", "scope"):
+            value = metadata.get(key)
+            if value:
+                shared_meta[key] = value
+        if "is_fictional" in metadata:
+            shared_meta["is_fictional"] = metadata["is_fictional"]
         shared_meta["parent_location"] = base_name
 
         def _accumulate(container: Dict[str, Any]) -> None:
@@ -2863,6 +2923,7 @@ class NewGameAgent:
         user_id: int,
         conversation_id: int,
         specs: List[Dict[str, Any]],
+        scope: str,
         canonical_available: bool,
         fallback_reason: Optional[str],
     ) -> Tuple[List[str], bool, Optional[str]]:
@@ -2888,6 +2949,7 @@ class NewGameAgent:
                             description=sub_description,
                             metadata=sub_metadata,
                             location_type=sub_type,
+                            scope=scope,
                         ),
                         timeout=PRESET_LOCATION_CANON_TIMEOUT,
                     )
@@ -2927,6 +2989,8 @@ class NewGameAgent:
                 "location_type": sub_type,
             }
             meta_payload.update({k: v for k, v in sub_metadata.items() if v is not None})
+            meta_payload.setdefault("scope", scope)
+            meta_payload.setdefault("is_fictional", scope == "fictional")
 
             candidate = Candidate(
                 place=Place(
@@ -2941,7 +3005,7 @@ class NewGameAgent:
                 user_id=user_id,
                 conversation_id=conversation_id,
                 candidate=candidate,
-                scope="fictional",
+                scope=scope,
             )
 
             created_names.append(location_obj.location_name)
@@ -2979,6 +3043,9 @@ class NewGameAgent:
 
         async with get_db_connection_context() as conn:
             for loc_data in preset_data.get("required_locations", []):
+                location_scope = "fictional"
+                scope_defaults: Dict[str, Any] = {"scope": "fictional", "is_fictional": True}
+
                 if isinstance(loc_data, dict):
                     raw_name = loc_data.get("name", "Unknown Location")
                     description = loc_data.get("description", "")
@@ -3009,6 +3076,24 @@ class NewGameAgent:
                         for hierarchy_key, hierarchy_value in hierarchy_payload.items():
                             if hierarchy_value is not None and hierarchy_key not in metadata:
                                 metadata[hierarchy_key] = hierarchy_value
+
+                    for cosmic_key in ("planet", "galaxy", "realm"):
+                        cosmic_value = loc_data.get(cosmic_key)
+                        if cosmic_value is not None:
+                            metadata[cosmic_key] = cosmic_value
+                    if "scope" in loc_data and loc_data["scope"] is not None:
+                        metadata["scope"] = loc_data["scope"]
+                    if "is_fictional" in loc_data:
+                        metadata["is_fictional"] = loc_data["is_fictional"]
+
+                    location_scope, scope_defaults = self._derive_location_scope_defaults(loc_data)
+                    for key, value in scope_defaults.items():
+                        if key == "scope":
+                            continue
+                        if key not in metadata:
+                            metadata[key] = value
+                    metadata["scope"] = location_scope
+
                     raw_open_hours = (
                         loc_data.get("open_hours")
                         or loc_data.get("open_hours_json")
@@ -3018,8 +3103,15 @@ class NewGameAgent:
                     raw_name = str(loc_data)
                     description = f"A location in {preset_data['name']}"
                     requested_type = None
-                    metadata = {}
+                    metadata = {"scope": location_scope, "is_fictional": True}
                     raw_open_hours = None
+
+                for key, value in scope_defaults.items():
+                    if key == "scope":
+                        continue
+                    metadata.setdefault(key, value)
+                metadata.setdefault("scope", location_scope)
+                metadata["scope"] = location_scope
 
                 normalized_name = (raw_name or "Unknown Location").strip() or "Unknown Location"
                 normalized_description = (description or f"The area known as {normalized_name}").strip()
@@ -3066,6 +3158,7 @@ class NewGameAgent:
                                 description=normalized_description,
                                 metadata=metadata,
                                 location_type=normalized_type,
+                                scope=location_scope,
                             ),
                             timeout=PRESET_LOCATION_CANON_TIMEOUT,
                         )
@@ -3077,6 +3170,7 @@ class NewGameAgent:
                                 user_id,
                                 conversation_id,
                                 room_location_specs,
+                                location_scope,
                                 canonical_available,
                                 fallback_reason,
                             )
@@ -3115,6 +3209,8 @@ class NewGameAgent:
                     "location_type": normalized_type,
                 }
                 meta_payload.update({k: v for k, v in metadata.items() if v is not None})
+                meta_payload.setdefault("scope", location_scope)
+                meta_payload.setdefault("is_fictional", location_scope == "fictional")
 
                 if raw_open_hours is not None:
                     if isinstance(raw_open_hours, dict):
@@ -3138,7 +3234,7 @@ class NewGameAgent:
                     user_id=user_id,
                     conversation_id=conversation_id,
                     candidate=candidate,
-                    scope="fictional",
+                    scope=location_scope,
                 )
 
                 location_names.append(location_obj.location_name)
@@ -3150,6 +3246,7 @@ class NewGameAgent:
                         user_id,
                         conversation_id,
                         room_location_specs,
+                        location_scope,
                         canonical_available,
                         fallback_reason,
                     )
