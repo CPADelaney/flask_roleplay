@@ -77,27 +77,23 @@ def parse_json_str(text: str) -> dict:
             lines.pop()
         text = "\n".join(lines).strip()
 
+    normalized_text = normalize_smart_quotes(text)
+
     # Attempt direct parse
     try:
-        return json.loads(text)
+        return json.loads(normalized_text)
     except json.JSONDecodeError:
         pass
 
     # Attempt to extract first {...} block from the text via regex
-    match = re.search(r'(\{[\s\S]*\})', text)
+    match = re.search(r'(\{[\s\S]*\})', normalized_text)
     if match:
         snippet = match.group(1)
+        snippet = normalize_smart_quotes(snippet)
         try:
             return json.loads(snippet)
         except json.JSONDecodeError:
             pass
-
-    # Attempt naive replacement of fancy quotes => standard quotes
-    fix_quotes = text.replace(""", '"').replace(""", '"').replace("'", "'")
-    try:
-        return json.loads(fix_quotes)
-    except json.JSONDecodeError:
-        pass
 
     return {}
 
@@ -141,9 +137,17 @@ def normalize_smart_quotes(text):
     """
     if not text or not isinstance(text, str):
         return text
-    return (text
-            .replace("'", "'").replace("'", "'")
-            .replace(""", '"').replace(""", '"'))
+    translation_table = {
+        ord("\u2018"): "'",  # LEFT SINGLE QUOTATION MARK
+        ord("\u2019"): "'",  # RIGHT SINGLE QUOTATION MARK
+        ord("\u201A"): "'",  # SINGLE LOW-9 QUOTATION MARK
+        ord("\u201B"): "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+        ord("\u201C"): '"',  # LEFT DOUBLE QUOTATION MARK
+        ord("\u201D"): '"',  # RIGHT DOUBLE QUOTATION MARK
+        ord("\u201E"): '"',  # DOUBLE LOW-9 QUOTATION MARK
+        ord("\u201F"): '"',  # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+    }
+    return text.translate(translation_table)
 
 def extract_json_from_text(text: str) -> dict:
     """
