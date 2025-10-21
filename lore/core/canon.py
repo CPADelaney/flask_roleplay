@@ -41,7 +41,7 @@ from agents import Runner
 
 from memory.memory_orchestrator import get_memory_orchestrator, EntityType
 from nyx.location.hierarchy import get_or_create_location
-from nyx.location.types import Candidate, Place
+from nyx.location.types import Candidate, Place, DEFAULT_REALM
 
 # Import the new validation agent
 from lore.core.validation import CanonValidationAgent
@@ -1994,6 +1994,11 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     # Create new location (already passed existence gate)
     search_vector = await memory_orchestrator.generate_embedding(embedding_text)
 
+    metadata_payload = kwargs.get('metadata')
+    extra_metadata: Dict[str, Any] = {}
+    if isinstance(metadata_payload, dict):
+        extra_metadata = {k: v for k, v in metadata_payload.items() if v is not None}
+
     meta: Dict[str, Any] = {
         "display_name": location_name,
         "description": description,
@@ -2010,6 +2015,56 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         "embedding": search_vector,
     }
 
+    def _normalize_scope(value: Any) -> Optional[str]:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"real", "fictional"}:
+                return normalized
+        if isinstance(value, bool):
+            return "fictional" if value else "real"
+        return None
+
+    scope = _normalize_scope(kwargs.get("scope"))
+    if scope is None:
+        scope = _normalize_scope(extra_metadata.get("scope")) if extra_metadata else None
+
+    if scope is None:
+        is_fictional_hint: Any = kwargs.get("is_fictional")
+        if is_fictional_hint is None and extra_metadata:
+            is_fictional_hint = extra_metadata.get("is_fictional")
+        if isinstance(is_fictional_hint, str):
+            normalized_hint = is_fictional_hint.strip().lower()
+            if normalized_hint in {"true", "1", "yes", "y"}:
+                scope = "fictional"
+            elif normalized_hint in {"false", "0", "no", "n"}:
+                scope = "real"
+        elif isinstance(is_fictional_hint, bool):
+            scope = "fictional" if is_fictional_hint else "real"
+
+    if scope is None:
+        scope = "fictional"
+
+    if extra_metadata:
+        meta.update(extra_metadata)
+
+    if "is_fictional" in meta and isinstance(meta["is_fictional"], str):
+        normalized_flag = meta["is_fictional"].strip().lower()
+        if normalized_flag in {"true", "1", "yes", "y"}:
+            meta["is_fictional"] = True
+        elif normalized_flag in {"false", "0", "no", "n"}:
+            meta["is_fictional"] = False
+
+    meta["scope"] = scope
+    meta.setdefault("is_fictional", scope == "fictional")
+    if scope == "real":
+        meta.setdefault("planet", meta.get("planet") or "Earth")
+        meta.setdefault("galaxy", meta.get("galaxy") or "Milky Way")
+        meta.setdefault("realm", meta.get("realm") or DEFAULT_REALM)
+
+    default_planet = meta.get("planet")
+    default_galaxy = meta.get("galaxy")
+    default_realm = meta.get("realm")
+
     candidate = Candidate(
         place=Place(
             name=location_name,
@@ -2023,7 +2078,10 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         user_id=ctx.user_id,
         conversation_id=ctx.conversation_id,
         candidate=candidate,
-        scope='fictional',
+        scope=scope,
+        default_planet=default_planet,
+        default_galaxy=default_galaxy,
+        default_realm=default_realm,
     )
 
     location_id = location_record.id
