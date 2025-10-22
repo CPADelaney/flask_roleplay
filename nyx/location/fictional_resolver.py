@@ -382,7 +382,18 @@ def _venue_matches_district(venue: Mapping[str, Any], *, key: str, label: str) -
     return False
 
 
+import json
+from typing import Any, Dict, List, Mapping
+
+# Assuming _normalize_feature_list and Location are defined elsewhere in the file
+# def _normalize_feature_list(value: Any) -> List[str]: ...
+# class Location: ...
+
 def _extract_world_seed_context(location: Location) -> Dict[str, Any]:
+    """
+    Extracts world-building context from a Location object, ensuring that nested
+    JSON strings within features are correctly parsed.
+    """
     context: Dict[str, Any] = {}
 
     core_fields = {
@@ -408,12 +419,34 @@ def _extract_world_seed_context(location: Location) -> Dict[str, Any]:
                     if value:
                         context.setdefault(key, value)
 
-    features = _normalize_feature_list(location.notable_features)
-    if features:
-        context.setdefault("district_features", features)
+    # --- FIX STARTS HERE ---
+    
+    # The 'notable_features' field might contain a single string that is itself a JSON array.
+    # We need to parse it to prevent double-serialization in the prompt.
+    raw_features = location.notable_features or []
+    parsed_features: List[str] = []
+
+    if raw_features and isinstance(raw_features[0], str):
+        try:
+            # Attempt to parse the first element as a JSON list
+            maybe_list = json.loads(raw_features[0])
+            if isinstance(maybe_list, list):
+                # If successful, use this parsed list as the features
+                parsed_features = _normalize_feature_list(maybe_list)
+        except (json.JSONDecodeError, TypeError):
+            # If it's not a valid JSON string, or not a list,
+            # fall back to treating it as a normal list of strings.
+            parsed_features = _normalize_feature_list(raw_features)
+    else:
+        # If the list is empty or doesn't start with a string, process as normal.
+        parsed_features = _normalize_feature_list(raw_features)
+
+    if parsed_features:
+        context.setdefault("district_features", parsed_features)
+
+    # --- FIX ENDS HERE ---
 
     return context
-
 
 def _merge_seed_payload(base: Dict[str, Any], payload: Mapping[str, Any]) -> Dict[str, Any]:
     for key, value in payload.items():
