@@ -2396,7 +2396,7 @@ class ReligiousDistributionSystem:
                 holy_sites = await conn.fetch("""
                     SELECT h.* 
                     FROM HolySites h
-                    JOIN Locations l ON h.location_id = l.id
+                    JOIN Locations l ON h.location_id = COALESCE(l.id, l.location_id)
                     JOIN LoreConnections lc ON l.id = lc.target_id
                     JOIN Nations n ON lc.source_id = n.id
                     WHERE n.id = $1 AND lc.source_type = 'Nations' AND lc.target_type = 'Locations'

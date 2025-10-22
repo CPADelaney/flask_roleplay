@@ -404,7 +404,7 @@ class LocationDataAccess(BaseDataAccess):
             conditions = []
             
             if location_id is not None:
-                conditions.append(f"id = ${len(params) + 1}")
+                conditions.append(f"COALESCE(id, location_id) = ${len(params) + 1}")
                 params.append(location_id)
             
             if location_name is not None:
@@ -426,8 +426,14 @@ class LocationDataAccess(BaseDataAccess):
                 
                 if not row:
                     return {}
-                    
-                return dict(row)
+
+                result = dict(row)
+                if "id" not in result and "location_id" in result:
+                    result["id"] = result["location_id"]
+                if "location_id" not in result and "id" in result:
+                    result["location_id"] = result["id"]
+
+                return result
                     
         except Exception as e:
             logger.error(f"Error getting location details: {e}")
@@ -1051,7 +1057,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                         table = "HistoricalEvents"
                         columns = "id, name, date_description, description"
                     elif lore_type == "LocationLore":
-                        table = "LocationLore l JOIN Locations loc ON l.location_id = loc.id"
+                        table = "LocationLore l JOIN Locations loc ON l.location_id = COALESCE(loc.id, loc.location_id)"
                         columns = "l.location_id as id, loc.location_name as name, 'location' as type, loc.description"
                     else:
                         # Unknown lore type

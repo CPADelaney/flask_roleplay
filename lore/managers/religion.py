@@ -1103,7 +1103,9 @@ class ReligionManager(BaseLoreManager):
             """, pantheon_id)
 
             locations = await conn.fetch("""
-                SELECT id, location_name, description
+                SELECT COALESCE(id, location_id) AS id,
+                       location_name,
+                       description
                 FROM Locations LIMIT 10
             """)
 
@@ -2031,7 +2033,7 @@ class ReligionManager(BaseLoreManager):
             # Get holy sites in this nation
             holy_sites = await conn.fetch("""
                 SELECT h.* FROM HolySites h
-                JOIN Locations l ON h.location_id = l.id
+                JOIN Locations l ON h.location_id = COALESCE(l.id, l.location_id)
                 JOIN Nations n ON l.nation_id = n.id
                 WHERE n.id = $1
             """, nation_id)

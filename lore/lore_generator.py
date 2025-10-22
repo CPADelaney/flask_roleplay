@@ -1785,7 +1785,8 @@ class FactionGenerator(BaseGenerator):
                     """
                         UPDATE Locations
                         SET controlling_faction = $1
-                        WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                        WHERE COALESCE(id, location_id) = $2
+                          AND user_id = $3 AND conversation_id = $4
                     """,
                     canonical_name,
                     location_id,
@@ -1802,7 +1803,8 @@ class FactionGenerator(BaseGenerator):
 
                 location_name = await conn.fetchval(
                     """
-                        SELECT location_name FROM Locations WHERE id = $1
+                        SELECT location_name FROM Locations
+                        WHERE COALESCE(id, location_id) = $1
                     """,
                     location_id,
                 )

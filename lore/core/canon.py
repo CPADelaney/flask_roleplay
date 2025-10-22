@@ -1014,7 +1014,8 @@ async def _propagate_event_consequences(
     if 'destroyed' in event_text.lower() or 'burned' in event_text.lower():
         # Find locations mentioned
         locations = await conn.fetch("""
-            SELECT id, location_name FROM Locations
+            SELECT COALESCE(id, location_id) AS id, location_name
+            FROM Locations
             WHERE user_id=$1 AND conversation_id=$2
             AND position(LOWER(location_name) in LOWER($3)) > 0
         """, ctx.user_id, ctx.conversation_id, event_text)
@@ -1024,7 +1025,7 @@ async def _propagate_event_consequences(
             await conn.execute("""
                 UPDATE Locations
                 SET status='destroyed', destruction_event_id=$1
-                WHERE id=$2
+                WHERE COALESCE(id, location_id)=$2
             """, event_id, loc['id'])
             
             affected_entities.append(('location', loc['id']))
@@ -1799,7 +1800,13 @@ async def find_or_create_landmark(ctx, conn, **kwargs) -> int:
     landmark_type = kwargs['landmark_type']
     
     # Get location name for embedding
-    location = await conn.fetchrow("SELECT location_name FROM Locations WHERE id = $1", location_id)
+    location = await conn.fetchrow(
+        """
+            SELECT location_name FROM Locations
+            WHERE COALESCE(id, location_id) = $1
+        """,
+        location_id,
+    )
     if not location:
         raise ValueError(f"Location {location_id} not found")
     

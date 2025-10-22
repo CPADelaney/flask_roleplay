@@ -657,7 +657,10 @@ Keep them open-ended and atmospheric."""
         async with get_db_connection_context() as conn:
             for loc_id in location_ids[:3]:
                 name = await conn.fetchval(
-                    "SELECT location_name FROM Locations WHERE id = $1",
+                    """
+                        SELECT location_name FROM Locations
+                        WHERE COALESCE(id, location_id) = $1
+                    """,
                     loc_id
                 )
                 if name:

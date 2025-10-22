@@ -851,7 +851,13 @@ class LocalLoreManager(BaseLoreManager):
 
             # Verify location exists
             async with get_db_connection_context() as conn:
-                location = await conn.fetchrow("SELECT * FROM Locations WHERE id = $1", input.location_id)
+                location = await conn.fetchrow(
+                    """
+                        SELECT * FROM Locations
+                        WHERE COALESCE(id, location_id) = $1
+                    """,
+                    input.location_id,
+                )
                 if not location:
                     raise ValueError(f"Location with ID {input.location_id} not found")
 
@@ -1375,15 +1381,22 @@ Be historically plausible and culturally sensitive.
         async with self.db_connection() as conn:
             # Get location
             location = await conn.fetchrow("""
-            SELECT id, location_name, location_type, description
+            SELECT COALESCE(id, location_id) AS id,
+                   location_name,
+                   location_type,
+                   description
             FROM Locations
-            WHERE id = $1
+            WHERE COALESCE(id, location_id) = $1
             """, location_id)
 
             if not location:
                 raise ValueError(f"Location with ID {location_id} not found")
 
             location_data = dict(location)
+            if "location_id" not in location_data:
+                location_data["location_id"] = location_data.get("id")
+            if "id" not in location_data and "location_id" in location_data:
+                location_data["id"] = location_data["location_id"]
 
             # Get histories
             histories = await conn.fetch("""
@@ -2427,7 +2440,8 @@ Show specific differences in language, detail, and emphasis.
                 SELECT id
                 FROM UrbanMyths
                 WHERE origin_location = (
-                        SELECT location_name FROM Locations WHERE id = $1
+                        SELECT location_name FROM Locations
+                        WHERE COALESCE(id, location_id) = $1
                      )
                    OR $1 = ANY(regions_known)
                 """,
