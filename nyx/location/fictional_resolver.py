@@ -1066,8 +1066,6 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
             context=f"Fictional POIs for {profile.get('name', district_key)}",
             prompt=prompt,
             model="gpt-5-nano",
-            temperature=0.45,
-            max_retries=3,
         )
     except Exception as exc:
         logger.error("Fictional POI generation call failed for %s: %s", district_key, exc, exc_info=True)
@@ -1249,8 +1247,6 @@ async def get_or_generate_districts(
             context=f"World-building for {context_name}",
             prompt=prompt,
             model="gpt-5-nano",
-            temperature=0.35,
-            max_retries=3,
         )
     except Exception as exc:
         logger.warning("Fictional district generation call failed: %s", exc, exc_info=True)
