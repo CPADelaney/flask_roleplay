@@ -1051,14 +1051,36 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
     )
 
     prompt = (
-        f"Design evocative fictional points of interest within the district \"{profile.get('name', district_key)}\".\n"
-        f"Player query: {normalized_query or 'general exploration request'}.\n"
-        f"District profile:\n{profile_text}\n\n"
-        f"World seed guidance:\n{world_seed_text}\n\n"
-        "Respond with JSON only. Return an object with a `pois` array. Each POI must include: "
-        "name, category, description, lore, travel (with modes array and time_minutes number), notable_features, "
-        "and coordinates with `dx_m` and `dy_m` offsets in meters from the district center."
-    )
+            f"Design evocative fictional points of interest within the district \"{profile.get('name', district_key)}\".\n"
+            f"Player query: {normalized_query or 'general exploration request'}.\n"
+            f"District profile:\n{profile_text}\n\n"
+            f"World seed guidance:\n{world_seed_text}\n\n"
+            "Respond with JSON only. Return an object with a `pois` array. Each POI must include: "
+            "name, category, description, lore, travel (with modes array and time_minutes number), notable_features, "
+            "and coordinates with `dx_m` and `dy_m` offsets in meters from the district center.\n\n"
+            "### Example of the required JSON format:\n"
+            "```json\n"
+            "{\n"
+            '  "pois": [\n'
+            '    {\n'
+            '      "name": "The Gilded Compass",\n'
+            '      "category": "Tavern",\n'
+            '      "description": "A rowdy tavern built into the hull of a decommissioned airship, known for its smuggled spirits and whispered secrets.",\n'
+            '      "lore": "They say the captain of the ship, One-Eyed Maeve, still haunts the bar, searching for her lost treasure map.",\n'
+            '      "travel": {\n'
+            '        "modes": ["walk", "ferry"],\n'
+            '        "time_minutes": 15\n'
+            '      },\n'
+            '      "notable_features": ["Serves a glowing blue ale", "The bar is carved from a single piece of driftwood"],\n'
+            '      "coordinates": {\n'
+            '        "dx_m": -250,\n'
+            '        "dy_m": 120\n'
+            '      }\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        )
 
     try:
         llm_payload = await call_gpt_json(
@@ -1234,12 +1256,37 @@ async def get_or_generate_districts(
     seed_summary = _format_world_seed(seed, city)
     context_name = _extract_text_value(seed, _WORLD_NAME_PATHS) or city
     prompt = (
-        f"You are a meticulous world-builder designing distinct districts for the fictional city \"{city}\".\n"
-        f"World seed insights:\n{seed_summary}\n\n"
-        "Return a JSON object with a `districts` array containing three to five entries. "
-        "Each district must provide: key, name, vibe, layout, theme, summary, and a list of 2-4 distinctive features. "
-        "Focus on relative placement and differentiated vibes. Respond with JSON only."
-    )
+            f"You are a meticulous world-builder designing distinct districts for the fictional city \"{city}\".\n"
+            f"World seed insights:\n{seed_summary}\n\n"
+            "Return a JSON object with a `districts` array containing three to five entries. "
+            "Each district must provide: key, name, vibe, layout, theme, summary, and a list of 2-4 distinctive features. "
+            "Focus on relative placement and differentiated vibes. Respond with JSON only.\n\n"
+            "### Example of the required JSON format:\n"
+            "```json\n"
+            "{\n"
+            '  "districts": [\n'
+            '    {\n'
+            '      "key": "iron_quarter",\n'
+            '      "name": "The Iron Quarter",\n'
+            '      "vibe": "Industrial heart of the city, filled with smog and the clang of machinery.",\n'
+            '      "layout": "A rigid grid of warehouses and factories south of the river.",\n'
+            '      "theme": "Steampunk industry and labor movements",\n'
+            '      "summary": "Where the city\'s gears are forged and its workforce toils.",\n'
+            '      "features": ["Automated cargo trains", "Towering smokestacks"]\n'
+            '    },\n'
+            '    {\n'
+            '      "key": "whisperwood",\n'
+            '      "name": "Whisperwood",\n'
+            '      "vibe": "An ancient, overgrown park that has reclaimed the city\'s northern edge.",\n'
+            '      "layout": "A sprawling, untamed forest with winding paths and hidden clearings.",\n'
+            '      "theme": "Nature\'s resilience and forgotten magic",\n'
+            '      "summary": "A place of quiet mystery, rumored to be older than the city itself.",\n'
+            '      "features": ["Glowing flora at night", "The ruins of an old observatory"]\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        )
 
     try:
         llm_payload = await call_gpt_json(
