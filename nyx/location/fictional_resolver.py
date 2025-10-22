@@ -1,4 +1,5 @@
 # nyx/location/fictional_resolver.py
+
 from __future__ import annotations
 
 import json
@@ -28,6 +29,7 @@ from .types import (
     ResolveResult,
     STATUS_ASK,
     STATUS_EXACT,
+    STATUS_NOT_FOUND,  # --- CHANGE: Import STATUS_NOT_FOUND ---
 )
 
 logger = logging.getLogger(__name__)
@@ -1395,6 +1397,7 @@ async def get_or_generate_districts(
 
     return persisted
 
+
 async def resolve_fictional(
     query: PlaceQuery,
     anchor: Anchor,
@@ -1442,8 +1445,8 @@ async def resolve_fictional(
     target_district = _select_target_district(districts, query, anchor, meta)
     if target_district is None:
         return ResolveResult(
-            status=STATUS_ASK,
-            message="I can shape the city further—do you have a district or vibe in mind?",
+            status=STATUS_NOT_FOUND, # --- CHANGE: Return NOT_FOUND if no district can be determined ---
+            message="I can shape the city further—but couldn't determine a district from your request.",
             anchor=anchor,
             scope="fictional",
         )
@@ -1455,22 +1458,22 @@ async def resolve_fictional(
         query_text=query.target or query.normalized or "",
     )
 
+    # --- CHANGE STARTS HERE: Improved resilience for POI generation ---
     if not venues:
-        await generate_pois_for_district(target_district, query.target or query.normalized or "")
-        venues = await _fetch_fictional_venues(
-            user_key,
-            conv_key,
-            district=target_district,
-            query_text=query.target or query.normalized or "",
-        )
-
-    if not venues:
-        return ResolveResult(
-            status=STATUS_ASK,
-            message="I couldn't find a spot like that yet—want to try a different style or district?",
-            anchor=anchor,
-            scope="fictional",
-        )
+        # Attempt to generate POIs, and capture the result directly.
+        generated_venues = await generate_pois_for_district(target_district, query.target or query.normalized or "")
+        
+        # If generation fails to produce any venues, we have definitively not found the location.
+        if not generated_venues:
+            return ResolveResult(
+                status=STATUS_NOT_FOUND,
+                message=f"I couldn't find or create a location like '{query.target}' in {target_district.district or city_name}.",
+                anchor=anchor,
+                scope="fictional",
+            )
+        # If generation succeeds, use the newly created venues for the rest of this function.
+        venues = generated_venues
+    # --- CHANGE ENDS HERE ---
 
     phrase_candidates: List[str] = []
     if query.target:
@@ -1489,6 +1492,16 @@ async def resolve_fictional(
         profile = _extract_poi_profile(venue)
         score = _score_location_match(venue, profile, phrase_candidates, word_tokens)
         scored.append((score, venue))
+    
+    # --- CHANGE: Handle case where scoring produces no viable candidates ---
+    if not scored:
+        return ResolveResult(
+            status=STATUS_NOT_FOUND,
+            message=f"While I found some places, none seemed to match '{query.target}'.",
+            anchor=anchor,
+            scope="fictional",
+        )
+    # --- CHANGE ENDS HERE ---
 
     scored.sort(key=lambda item: item[0], reverse=True)
     best_location = scored[0][1]
