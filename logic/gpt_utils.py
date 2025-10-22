@@ -100,58 +100,31 @@ def parse_json_str(text: str) -> dict:
 
 
 def parse_json_from_response(raw_text: str) -> Optional[Dict[str, Any]]:
-    """
-    Robustly extracts and parses a JSON object from a raw LLM response string.
-
-    This function attempts to fix common LLM formatting errors by:
-    1. Looking for JSON within markdown code fences (```json ... ```).
-    2. If not found, finding the first '{' or '[' and the last '}' or ']'.
-    3. Stripping any text outside of the main JSON object/array.
-    4. Removing illegal trailing commas before parsing.
-    """
+    """Robustly extracts and parses a JSON object from a raw LLM response string."""
     if not raw_text:
         return None
-
-    # 1. Find JSON within markdown fences
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
     if match:
-        # If a markdown block is found, use its content as the primary source
         json_str = match.group(1)
     else:
-        # If no markdown, assume the JSON is somewhere in the raw text
         json_str = raw_text
-
-    # 2. Find the first opening brace/bracket and the last closing brace/bracket
     start_brace = json_str.find('{')
     start_bracket = json_str.find('[')
-    
-    # Determine the actual start of the JSON content
     if start_brace == -1:
         start_index = start_bracket
     elif start_bracket == -1:
         start_index = start_brace
     else:
         start_index = min(start_brace, start_bracket)
-
-    # If no JSON object or array is found, return None
     if start_index == -1:
         return None
-
     end_brace = json_str.rfind('}')
     end_bracket = json_str.rfind(']')
     end_index = max(end_brace, end_bracket)
-
     if end_index == -1:
         return None
-
-    # 3. Slice the string to get only the JSON part
     json_str = json_str[start_index : end_index + 1]
-
-    # 4. Remove illegal trailing commas
-    # This regex finds a comma, followed by optional whitespace, right before a closing bracket or brace
     json_str = re.sub(r",\s*([\}\]])", r"\1", json_str)
-
-    # 5. Try to parse the cleaned string
     try:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
@@ -164,7 +137,7 @@ async def call_gpt_json(
     context: str,
     prompt: str,
     model: str = "gpt-5-nano",
-    max_retries: int = 2  # Keep a low number of retries as a fallback
+    max_retries: int = 2
 ) -> Dict[str, Any]:
     """
     Calls GPT with the given context and prompt, robustly parsing JSON from the response.
@@ -173,19 +146,27 @@ async def call_gpt_json(
     for attempt in range(1, max_retries + 1):
         try:
             logging.info(f"[call_gpt_json] Attempt {attempt}/{max_retries}")
+            
+            # --- CHANGE: ADD DETAILED PROMPT LOGGING ---
+            logging.info(
+                f"[call_gpt_json] Sending request to model '{model}' with context '{context}'.\n"
+                f"--- PROMPT START ---\n{prompt}\n--- PROMPT END ---"
+            )
+            # --- END CHANGE ---
+
             response = await spaced_gpt_call(conversation_id, context, prompt, delay=1.0)
 
             if response.get("type") == "function_call":
                 return response.get("function_args", {})
             
             raw_text = response.get("response", "").strip()
+            
+            logging.info("RAW RESPONSE FROM GPT: ---BEGIN---\n%s\n---END---", raw_text)
+
             if not raw_text:
                 logging.warning(f"[call_gpt_json] GPT returned an empty response string on attempt {attempt}.")
                 continue
-
-            logging.info("RAW RESPONSE FROM GPT: ---BEGIN---\n%s\n---END---", raw_text)
             
-            # --- CHANGE: Use the new robust parsing function ---
             parsed_json = parse_json_from_response(raw_text)
             
             if parsed_json:
