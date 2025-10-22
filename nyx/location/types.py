@@ -157,6 +157,16 @@ class Location:
     embedding: Optional[List[float]] = None
     controlling_faction: Optional[str] = None
 
+    @property
+    def location_id(self) -> Optional[int]:
+        """Backward compatible alias for the primary key column."""
+
+        return self.id
+
+    @location_id.setter
+    def location_id(self, value: Optional[int]) -> None:
+        self.id = value
+
     def __post_init__(self) -> None:
         try:
             self.user_id = int(self.user_id)
@@ -295,6 +305,8 @@ class Location:
     def from_mapping(cls, mapping: Mapping[str, Any], **overrides: Any) -> "Location":
         data: Dict[str, Any] = dict(mapping)
         data.update(overrides)
+        if "id" not in data and "location_id" in data:
+            data["id"] = data["location_id"]
         if "scope" in data:
             data["scope"] = cls._resolve_scope(data.get("scope"), data.get("is_fictional"))
         else:
