@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import re
-import logging  # --- CHANGE: Added logging import ---
+import logging
 from typing import Any, Dict, Optional
 
 from .anchors import derive_geo_anchor
@@ -18,31 +18,37 @@ from .types import (
     STATUS_EXACT,
     STATUS_MULTIPLE,
     STATUS_TRAVEL_PLAN,
-    STATUS_ASK,          # --- CHANGE: Ensured these are imported ---
-    STATUS_NOT_FOUND,    # --- CHANGE: Ensured these are imported ---
+    STATUS_ASK,
+    STATUS_NOT_FOUND,
 )
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
-logger = logging.getLogger(__name__)  # --- CHANGE: Added logger instance ---
+logger = logging.getLogger(__name__)
 
+# Regular expressions to parse user intent for movement or travel.
 _GO_TO_RX = re.compile(r"\b(?:go|head|walk|run|drive|get|straight|toward|to)\s+(?:the\s+)?(.+)$", re.IGNORECASE)
 _FLY_TO_RX = re.compile(r"\b(?:fly|flight)\s+(?:to|for)\s+(.+)$", re.IGNORECASE)
 
 def _parse_place_query(text: str) -> PlaceQuery:
+    """Parses raw user text to extract a target location and travel hints."""
     t = (text or "").strip()
     if not t:
         return PlaceQuery(raw_text="", normalized="")
+    
     m2 = _FLY_TO_RX.search(t)
     if m2:
         target = m2.group(1).strip().rstrip(".!?")
         return PlaceQuery(raw_text=t, normalized=target.lower(), is_travel=True, target=target, transport_hint="fly")
+    
     m = _GO_TO_RX.search(t)
     target = (m.group(1) if m else t).strip().rstrip(".!?")
     return PlaceQuery(raw_text=t, normalized=target.lower(), target=target)
 
 async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> Anchor:
+    """Constructs a location resolution anchor from conversation metadata."""
     world = (meta or {}).get("world") or {}
     kind_txt = (world.get("type") or world.get("kind") or "").strip().lower()
+    
     if kind_txt in {"real", "modern_realistic", "realistic", "historical", "modern"}:
         scope: Scope = "real"
     else:
@@ -93,17 +99,19 @@ async def resolve_place_or_travel(
     user_id: str,
     conversation_id: str
 ) -> ResolveResult:
+    """
+    Main entry point for location resolution. Determines scope (real/fictional)
+    and routes the query, with a fallback from fictional to real-world search on failure.
+    """
     if store is None:
         store = ConversationSnapshotStore()
+    
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
 
-    # --- CHANGE STARTS HERE ---
-    # The original if/else block is replaced with this more advanced logic.
-    
     res: ResolveResult
     if anchor.scope == "real":
-        # This part remains the same: handle real-world scopes directly.
+        # Handle real-world scopes directly, trying Gemini first.
         gemini_result: Optional[ResolveResult] = None
         try:
             gemini_result = await resolve_location_with_gemini(q, anchor)
@@ -118,10 +126,10 @@ async def resolve_place_or_travel(
         else:
             res = await resolve_real(q, anchor, meta)
     else:
-        # Fictional scope: try fictional first, then fallback to real.
+        # Fictional scope: try fictional resolver first.
         res_fictional = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
 
-        # If the fictional search didn't find a conclusive match, try the real world.
+        # If the fictional search fails, fall back to a real-world search.
         if res_fictional.status in {STATUS_NOT_FOUND, STATUS_ASK}:
             logger.info(f"Fictional resolve failed for '{q.target}'. Falling back to real-world search.")
             
@@ -133,16 +141,16 @@ async def resolve_place_or_travel(
             if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
                 res = res_real
             else:
-                # If both fictional and real searches fail, return the original (more thematic) fictional failure.
+                # If both fictional and real searches fail, return the original fictional failure.
                 res = res_fictional
         else:
             # The fictional search succeeded, so use its result.
             res = res_fictional
 
-    # --- CHANGE ENDS HERE ---
-
+    # Ensure the final result has the anchor and scope attached.
     if res.anchor is None:
         res.anchor = anchor
     if res.scope is None:
         res.scope = anchor.scope
+        
     return res
