@@ -1230,10 +1230,20 @@ async def get_chatgpt_response(
     aggregator_text: str, 
     user_input: str,
     reflection_enabled: bool = False,
-    use_nyx_integration: bool = True
+    use_nyx_integration: bool = True,
+    force_json_response: bool = False  # The key parameter to control behavior
 ) -> dict[str, Any]:
     """
     Get a response from OpenAI with optional Nyx integration and preset story support.
+
+    Args:
+        conversation_id: The ID of the conversation.
+        aggregator_text: Aggregated context for the model.
+        user_input: The user's latest input text.
+        reflection_enabled: Whether to perform a two-step reflection call.
+        use_nyx_integration: Whether to process through the full Nyx agent SDK.
+        force_json_response: If True, instructs the model to return a raw JSON object
+                             without forcing a specific tool. Ideal for world-building.
     """
     
     # Get user_id from conversation
@@ -1437,25 +1447,31 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
         model = "gpt-5-nano"
 
-        # Define the correct tool structure based on the schema manager
-        all_tools_definitions = ToolSchemaManager.get_all_tools()
-        tools_payload = all_tools_definitions  # already in Responses API shape
-
         params = {
             "model": model,
             "input": messages,
             "max_output_tokens": 2048,
         }
 
-        if tools_payload:
-            params["tools"] = tools_payload
-            params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
+        # --- This is the core fix ---
+        if force_json_response:
+            # For world-building: request a direct JSON object.
+            logger.debug("Requesting direct JSON object response (force_json_response=True)")
+            params["response_format"] = {"type": "json_object"}
+        else:
+            # For game actions: force the universal update tool.
+            tools_payload = ToolSchemaManager.get_all_tools()
+            if tools_payload:
+                params["tools"] = tools_payload
+                params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
+        # --- End of fix ---
 
         try:
             response = await _responses_create_with_retry(client, params)
         except openai.BadRequestError as e:
-            logger.warning("Responses API rejected tool_choice (%s); retrying without forced tool", e)
-            params.pop("tool_choice", None) # Remove the failing parameter
+            logger.warning("Responses API rejected call (%s); retrying without forced tool/format", e)
+            params.pop("tool_choice", None)
+            params.pop("response_format", None)
             response = await _responses_create_with_retry(client, params)
 
         tool_name, tool_args = _extract_first_tool_call(response)
@@ -1490,12 +1506,14 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
         else:
+            # Logic for a direct text response (which should be our JSON for world-building)
+            raw_text_response = (response.output_text or "")
             return {
                 "type": "input_text",
                 "function_name": None,
                 "function_args": None,
-                "response": (response.output_text or ""),  # Use output_text for text
-                "tokens_used": tokens_used,  # Already calculated above
+                "response": raw_text_response,
+                "tokens_used": tokens_used,
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
 
@@ -1528,8 +1546,8 @@ DO NOT produce user-facing text here; only the JSON.
 
         reflection_params = {
             "model": "gpt-5-nano",
-            "input": reflection_messages,  # Changed from 'messages' to 'input'
-            "max_output_tokens": 1024,  # Changed from 'max_tokens' to 'max_output_tokens'
+            "input": reflection_messages,
+            "max_output_tokens": 1024,
         }
         reflection_response = await _responses_create_with_retry(client, reflection_params)
         reflection_msg = reflection_response.output_text or ""
@@ -1581,20 +1599,29 @@ DO NOT produce user-facing text here; only the JSON.
 
         model = "gpt-5-nano"
 
-        final_tools_definitions = ToolSchemaManager.get_all_tools()
-        final_tools_payload = final_tools_definitions  # already correct
-        
         final_params = {
             "model": model,
             "input": final_messages,
             "max_output_tokens": 2048,
         }
-        if final_tools_payload:
-            final_params["tools"] = final_tools_payload
-            final_params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
+        
+        # Apply the same force_json_response logic for reflection path
+        if force_json_response:
+            logger.debug("Requesting direct JSON object response (force_json_response=True) for reflection final step")
+            final_params["response_format"] = {"type": "json_object"}
+        else:
+            final_tools_payload = ToolSchemaManager.get_all_tools()
+            if final_tools_payload:
+                final_params["tools"] = final_tools_payload
+                final_params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
 
-
-        final_response = await _responses_create_with_retry(client, final_params)
+        try:
+            final_response = await _responses_create_with_retry(client, final_params)
+        except openai.BadRequestError as e:
+            logger.warning("Responses API rejected call in reflection path (%s); retrying without forced tool/format", e)
+            final_params.pop("tool_choice", None)
+            final_params.pop("response_format", None)
+            final_response = await _responses_create_with_retry(client, final_params)
         
         tool_name, tool_args = _extract_first_tool_call(final_response)
         final_tokens_used = _calculate_token_usage(final_response)
@@ -1628,11 +1655,13 @@ DO NOT produce user-facing text here; only the JSON.
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
         else:
+            # Direct text response for reflection path
+            raw_text_response = (final_response.output_text or "")
             return {
                 "type": "input_text",
                 "function_name": None,
                 "function_args": None,
-                "response": (final_response.output_text or ""),  # Use output_text for text
+                "response": raw_text_response,
                 "tokens_used": (reflection_tokens_used + final_tokens_used),
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
