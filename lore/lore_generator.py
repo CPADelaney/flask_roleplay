@@ -1611,13 +1611,20 @@ class FactionGenerator(BaseGenerator):
                     scope="fictional",
                 )
 
-                if location_record.id is None:
-                    raise RuntimeError("Location factory did not persist record or return an ID")
+                location_id = location_record.location_id
+                if location_id is None:
+                    logger.error(
+                        "Location factory did not return an identifier for %s",
+                        location_data.get("name"),
+                    )
+                    return 0
 
                 logger.info(
-                    f"Stored location '{location_data['name']}' with id {location_record.id}"
+                    "Stored location '%s' with id %s",
+                    location_data["name"],
+                    location_id,
                 )
-                return location_record.id
+                return location_id
 
         except Exception as e:
             logger.error(f"Error storing location '{location_data.get('name')}': {e}", exc_info=True)
