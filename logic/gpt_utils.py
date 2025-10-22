@@ -140,25 +140,27 @@ async def call_gpt_json(
     max_retries: int = 2
 ) -> Dict[str, Any]:
     """
-    Calls GPT with the given context and prompt, robustly parsing JSON from the response.
-    Returns a Python dict or an empty dict {} if all attempts fail.
+    Calls GPT for world-building, forcing a direct JSON response.
+    This is the function that your lore generator should be using.
     """
     for attempt in range(1, max_retries + 1):
         try:
             logging.info(f"[call_gpt_json] Attempt {attempt}/{max_retries}")
             
-            # --- CHANGE: ADD DETAILED PROMPT LOGGING ---
             logging.info(
                 f"[call_gpt_json] Sending request to model '{model}' with context '{context}'.\n"
                 f"--- PROMPT START ---\n{prompt}\n--- PROMPT END ---"
             )
-            # --- END CHANGE ---
 
-            response = await spaced_gpt_call(conversation_id, context, prompt, delay=1.0)
+            # --- KEY CHANGE: This function now *always* calls get_chatgpt_response with force_json_response=True ---
+            response = await get_chatgpt_response(
+                conversation_id=int(conversation_id),
+                aggregator_text=context, # Pass context as aggregator text
+                user_input=prompt,
+                use_nyx_integration=False, # We don't want the full Nyx pipeline here
+                force_json_response=True # THIS IS THE FIX
+            )
 
-            if response.get("type") == "function_call":
-                return response.get("function_args", {})
-            
             raw_text = response.get("response", "").strip()
             
             logging.info("RAW RESPONSE FROM GPT: ---BEGIN---\n%s\n---END---", raw_text)
@@ -167,6 +169,7 @@ async def call_gpt_json(
                 logging.warning(f"[call_gpt_json] GPT returned an empty response string on attempt {attempt}.")
                 continue
             
+            # The response should be a clean JSON object now, so direct parsing should work
             parsed_json = parse_json_from_response(raw_text)
             
             if parsed_json:
