@@ -4,6 +4,7 @@ import json
 import re
 import logging
 import asyncio
+from typing import Any, Dict, Optional
 
 from logic.chatgpt_integration import get_chatgpt_response
 
