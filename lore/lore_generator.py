@@ -1147,7 +1147,7 @@ class FactionGenerator(BaseGenerator):
         return events_data
 
     async def generate_locations(
-        self, environment_desc: str, factions: List[Dict[str, Any]]
+        self, environment_desc: str, factions: List[Dict[str, Any]], city_name: str
     ) -> List[Dict[str, Any]]:
         """
         Generate 5-8 significant locations referencing environment + faction names.
@@ -1155,7 +1155,7 @@ class FactionGenerator(BaseGenerator):
         Args:
             environment_desc: Environment description text
             factions: List of faction dictionaries
-
+            city_name: The name of the city these locations belong to. # <-- CHANGE: Added docstring
         Returns:
             List of location dictionaries
         """
@@ -1190,8 +1190,9 @@ class FactionGenerator(BaseGenerator):
         # Store each location
         for loc in locations_data:
             try:
-                # Create the location record
-                location_id = await self._store_location(loc)
+                # Create the location record, passing the city context
+                # <-- CHANGE: Pass city_name to the storage function
+                location_id = await self._store_location(loc, city_name)
 
                 # Add location lore
                 controlling_faction = loc.get("controlling_faction")
@@ -1525,42 +1526,60 @@ class FactionGenerator(BaseGenerator):
             logger.error(f"Error storing historical event: {e}")
             return 0
 
-    async def _store_location(self, location_data: Dict[str, Any]) -> int:
-        """Store a location in the database."""
+    async def _store_location(self, location_data: Dict[str, Any], city_name: str) -> int:
+        """
+        Store a location in the database, ensuring it's linked to the correct city.
+
+        Args:
+            location_data: A dictionary containing the generated location's details.
+            city_name: The name of the city this location belongs to.
+        
+        Returns:
+            The integer ID of the newly created or found location record.
+        """
         try:
             async with get_db_connection_context() as conn:
-                # Generate embedding
+                # Generate embedding for semantic search and context
                 embedding_text = (
-                    f"{location_data['name']} {location_data['description']}"
+                    f"{location_data.get('name', '')} {location_data.get('description', '')}"
                 )
                 embedding = await generate_embedding(embedding_text)
 
-                # Parse strategic_importance to ensure it's an integer
+                # Parse strategic_importance to ensure it's a valid integer
                 strategic_value = location_data.get("strategic_importance", 5)
                 if isinstance(strategic_value, str):
-                    # Try to extract a number from the string or use default
                     try:
-                        # Look for a number in the string
                         import re
-
                         numbers = re.findall(r"\d+", strategic_value)
                         if numbers:
                             strategic_value = int(numbers[0])
-                            # Ensure it's within valid range (1-10)
+                            # Ensure it's within a valid range (e.g., 1-10)
                             strategic_value = max(1, min(10, strategic_value))
                         else:
-                            # Default to 5 if no number found
-                            strategic_value = 5
-                    except:
+                            strategic_value = 5 # Default if no number is found
+                    except (ValueError, TypeError):
                         strategic_value = 5
                 elif not isinstance(strategic_value, int):
                     strategic_value = 5
 
+                # --- KEY CHANGES START HERE ---
+                # Build the metadata payload for the Candidate object. This is where we inject
+                # the city context that was missing before.
                 meta: Dict[str, Any] = {
                     "display_name": location_data.get("name"),
                     "description": location_data.get("description"),
                     "location_type": location_data.get("type", "settlement"),
-                    "parent_location": location_data.get("parent_location"),
+                    
+                    # 1. Set the city explicitly. This is the primary fix.
+                    "city": city_name,
+                    
+                    # 2. Set the parent_location. For a top-level venue in a city, the city is its parent.
+                    #    This respects an explicit parent from the LLM but falls back to the city.
+                    "parent_location": location_data.get("parent_location") or city_name,
+                    
+                    # 3. Ensure the is_fictional flag is always true for this path.
+                    "is_fictional": True,
+
                     "cultural_significance": location_data.get("cultural_significance", "moderate"),
                     "economic_importance": location_data.get("economic_importance", "moderate"),
                     "strategic_value": strategic_value,
@@ -1571,7 +1590,10 @@ class FactionGenerator(BaseGenerator):
                     "local_customs": location_data.get("local_customs", []),
                     "embedding": embedding,
                 }
+                # --- KEY CHANGES END HERE ---
 
+                # Create a Candidate object that the hierarchy system understands.
+                # 'level' is set to 'venue' as these are specific points of interest.
                 candidate = Candidate(
                     place=Place(
                         name=location_data.get("name", "Unknown Location"),
@@ -1580,6 +1602,7 @@ class FactionGenerator(BaseGenerator):
                     )
                 )
 
+                # This function now receives a Candidate with proper city context.
                 location_record = await get_or_create_location(
                     conn,
                     user_id=self.user_id,
@@ -1589,7 +1612,7 @@ class FactionGenerator(BaseGenerator):
                 )
 
                 if location_record.id is None:
-                    raise RuntimeError("Location factory did not persist record")
+                    raise RuntimeError("Location factory did not persist record or return an ID")
 
                 logger.info(
                     f"Stored location '{location_data['name']}' with id {location_record.id}"
@@ -1597,7 +1620,7 @@ class FactionGenerator(BaseGenerator):
                 return location_record.id
 
         except Exception as e:
-            logger.error(f"Error storing location: {e}")
+            logger.error(f"Error storing location '{location_data.get('name')}': {e}", exc_info=True)
             return 0
 
     async def _store_location_lore(
@@ -2273,11 +2296,15 @@ class DynamicLoreGenerator(BaseGenerator):
         """
         Generate a complete set of lore for a game world.
 
+        This orchestrates the generation of foundational lore, factions, cultural
+        elements, historical events, significant locations, and quest hooks, ensuring
+        that context (like the primary city name) is passed down correctly.
+
         Args:
-            environment_desc: Description of the environment
+            environment_desc: A high-level description of the environment or setting.
 
         Returns:
-            Complete lore package
+            A dictionary containing the complete, structured lore package.
         """
         if not self.initialized:
             await self.initialize()
@@ -2297,34 +2324,44 @@ class DynamicLoreGenerator(BaseGenerator):
             return {"error": permission.get("reasoning"), "approved": False}
 
         try:
-            # 1) Foundation lore
+            # 1) Generate foundation lore (cosmology, magic systems, etc.)
             foundation_data = await self.world_builder.initialize_world_lore(
                 environment_desc
             )
             if isinstance(foundation_data, dict) and "error" in foundation_data:
                 return foundation_data
 
-            # 2) Factions referencing 'social_structure' from foundation_data
+            # --- KEY CHANGE: Determine the city name from the world context ---
+            # This name will be used as the anchor for all subsequent generated entities.
+            city_name = await self.world_builder.get_setting_name()
+            if not city_name or city_name == "The Setting":
+                # Fallback if the setting name isn't descriptive
+                city_name = "Generated City" 
+                logging.warning(f"Using fallback city name '{city_name}' for lore generation.")
+            # ----------------------------------------------------------------
+
+            # 2) Generate factions based on the social structure from foundation lore
             factions_data = await self.faction_generator.generate_factions(
                 environment_desc, foundation_data
             )
 
-            # 3) Cultural elements referencing environment + factions
+            # 3) Generate cultural elements referencing the environment and new factions
             cultural_data = await self.faction_generator.generate_cultural_elements(
                 environment_desc, factions_data
             )
 
-            # 4) Historical events referencing environment + foundation_data + factions
+            # 4) Generate historical events to flesh out the world's timeline
             historical_data = await self.faction_generator.generate_historical_events(
                 environment_desc, foundation_data, factions_data
             )
 
-            # 5) Locations referencing environment + factions
+            # 5) Generate significant locations, passing the city_name for proper anchoring
+            # --- CHANGE: Pass the city_name to the locations generator ---
             locations_data = await self.faction_generator.generate_locations(
-                environment_desc, factions_data
+                environment_desc, factions_data, city_name=city_name
             )
 
-            # 6) Quest hooks referencing factions + locations
+            # 6) Generate quest hooks that tie together the new factions and locations
             quests_data = await self.faction_generator.generate_quest_hooks(
                 factions_data, locations_data
             )
@@ -2346,10 +2383,11 @@ class DynamicLoreGenerator(BaseGenerator):
                     "historical_events_count": len(historical_data),
                     "locations_count": len(locations_data),
                     "quests_count": len(quests_data),
-                    "setting_name": await self.world_builder.get_setting_name(),
+                    "setting_name": city_name, # Use the resolved city name
                 },
             )
 
+            # Return the complete package of generated lore
             return {
                 "world_lore": foundation_data,
                 "factions": factions_data,
@@ -2360,7 +2398,7 @@ class DynamicLoreGenerator(BaseGenerator):
             }
         except Exception as e:
             error_msg = f"Error generating complete lore: {str(e)}"
-            logger.error(error_msg)
+            logger.error(error_msg, exc_info=True) # Added exc_info for better debugging
 
             # Use error handler if available
             if self.error_handler:
