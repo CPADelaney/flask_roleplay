@@ -122,10 +122,9 @@ Return a JSON object with:
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            response_format={"type": "json_object"}
         )
-        
-        # Parse JSON response
+
+        # Attempt to parse JSON response; fallback handles failures
         return json.loads(response.choices[0].message.content)
         
     except json.JSONDecodeError:
@@ -176,9 +175,8 @@ Make it vivid but appropriate for a narrative game (PG-13)."""
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            response_format={"type": "json_object"}
         )
-        
+
         result = json.loads(response.choices[0].message.content)
         return result.get("details", f"{interaction_type.replace('_', ' ')} between {actor_name} and {target_name}")
         
@@ -213,9 +211,8 @@ Location: {location}"""
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            response_format={"type": "json_object"}
         )
-        
+
         result = json.loads(response.choices[0].message.content)
         return result.get("description", f"{npc_name} is {activity_kind} at {location}")
         
@@ -1191,9 +1188,8 @@ Generate a single action as JSON with these fields:
             response = await client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages,
-                response_format={"type": "json_object"}
             )
-            
+
             # Parse response
             action_data = json.loads(response.choices[0].message.content)
             return NPCAction(
