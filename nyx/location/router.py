@@ -91,17 +91,52 @@ def _enrich_metadata_with_intent(user_text: str, meta: Dict[str, Any]) -> None:
     world = meta.setdefault("world", {})
     
     # Theme park patterns
-    if any(keyword in text_lower for keyword in ["disneyland", "disney", "theme park", "amusement park", "six flags", "universal studios"]):
-        world.update({
-            "type": "fictional",
-            "themes": ["entertainment", "theme park", "family-friendly", "attractions"],
-            "tone": "whimsical",
-            "genre": "modern fantasy",
-            "technology_level": "modern",
-            "primary_city": "Theme Park Resort"
-        })
-        logger.info("Detected theme park intent, enriching metadata")
-        return
+    theme_park_keywords = [
+        "disneyland",
+        "disney",
+        "theme park",
+        "amusement park",
+        "six flags",
+        "universal studios",
+    ]
+    if any(keyword in text_lower for keyword in theme_park_keywords):
+        world_type = (world.get("type") or world.get("kind") or "").strip().lower()
+        scope_explicit_real = (
+            world_type in {"real", "modern_realistic", "realistic", "historical", "modern"}
+            or world.get("real_world_based") is True
+            or world.get("use_real_locations") is True
+            or meta.get("use_google_maps") is True
+            or meta.get("enable_google_maps") is True
+        )
+
+        if scope_explicit_real:
+            logger.info("Detected theme park intent but scope is explicitly real; skipping enrichment")
+        else:
+            theme_hints = ["entertainment", "theme park", "family-friendly", "attractions"]
+            existing_themes = world.get("themes")
+            if isinstance(existing_themes, list):
+                for hint in theme_hints:
+                    if hint not in existing_themes:
+                        existing_themes.append(hint)
+            elif existing_themes:
+                combined_themes = [str(existing_themes), *theme_hints]
+                deduped_themes = []
+                for hint in combined_themes:
+                    if hint not in deduped_themes:
+                        deduped_themes.append(hint)
+                world["themes"] = deduped_themes
+            else:
+                world["themes"] = theme_hints
+
+            world.setdefault("tone", "whimsical")
+            world.setdefault("technology_level", "modern")
+
+            logger.info("Detected theme park intent, enriching metadata with hints")
+            logger.debug(
+                "Theme park enrichment added hints without overriding scope (world.type=%s)",
+                world.get("type"),
+            )
+            return
     
     # Fantasy locations
     if any(keyword in text_lower for keyword in ["castle", "kingdom", "realm", "shire", "rivendell", "hogwarts", "narnia"]):
