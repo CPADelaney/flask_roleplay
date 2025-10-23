@@ -79,7 +79,7 @@ def _loads_maybe_double(s: str) -> Dict[str, Any]:
     return data
 
 async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
-    # Ask Runner to enforce JSON if it supports response_format; otherwise it’s ignored harmlessly.
+    # Ask Runner to enforce JSON via whatever schema tooling it supports; otherwise the request is still safe to ignore.
     try:
         run = await Runner.run(INTENT_AGENT, user_input)
     except Exception:

@@ -1946,7 +1946,7 @@ def _make_runner(
         except Exception:
             output_guardrail = None  # no guardrail available; proceed without
 
-    # No ModelSettings, no temperature, no max tokens, no response_format
+    # No ModelSettings, no temperature, no max tokens
     model = OpenAIResponsesModel(model=model_name)
 
     agent_kwargs = dict(

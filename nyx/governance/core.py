@@ -156,7 +156,7 @@ governor_active_agents = Gauge(
 VALID_OPENAI_PARAMS = {
     "model", "name", "description", "instructions", "tools",
     "file_ids", "metadata", "temperature", "top_p",
-    "response_format", "tool_resources"
+    "tool_resources"
 }
 
 # Protocol for type safety
@@ -1316,7 +1316,7 @@ class NyxUnifiedGovernor(
             VALID_OPENAI_PARAMS = {
                 "model", "name", "description", "instructions", "tools",
                 "file_ids", "metadata", "temperature", "top_p",
-                "response_format", "tool_resources"
+                "tool_resources"
             }
         else:
             VALID_OPENAI_PARAMS = self.VALID_OPENAI_PARAMS
@@ -1375,7 +1375,7 @@ class NyxUnifiedGovernor(
                     # sensible default whitelist for Assistants.create
                     allowed = {
                         "model", "name", "instructions", "tools", "metadata",
-                        "temperature", "top_p", "response_format", "tool_resources",
+                        "temperature", "top_p", "tool_resources",
                         "tool_choice", "timeout_ms",  # include any you support
                     }
             
