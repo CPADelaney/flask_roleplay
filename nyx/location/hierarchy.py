@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 import random
 import json
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
+import logging
 import asyncpg
 
 from .nominatim_map import nominatim_to_admin_path
@@ -35,6 +36,93 @@ _LEVEL_KEYS: Dict[str, Sequence[str]] = {
     "district": ("district", "county"),
     "neighborhood": ("neighborhood",),
 }
+
+if TYPE_CHECKING:
+    from lore.core.context import CanonicalContext
+
+logger = logging.getLogger(__name__)
+
+# Add this helper to avoid circular imports
+async def _notify_canon_of_location(
+    conn: asyncpg.Connection,
+    user_id: int,
+    conversation_id: int,
+    location: Location,
+) -> None:
+    """Notify canon system of new location creation."""
+    try:
+        # Import here to avoid circular dependency
+        from lore.core.canon import log_canonical_event, get_canon_memory_orchestrator
+        from lore.core.context import CanonicalContext
+        from memory.memory_orchestrator import EntityType
+        
+        ctx = CanonicalContext(user_id=user_id, conversation_id=conversation_id)
+        
+        # Log the canonical event
+        significance = 7 if location.location_type == "city" else 6 if location.location_type == "district" else 5
+        
+        await log_canonical_event(
+            ctx, conn,
+            f"Location '{location.location_name}' established in {location.city or 'the world'}",
+            tags=['location', 'creation', location.location_type or 'venue', location.scope or 'real'],
+            significance=significance,
+            persist_memory=True
+        )
+        
+        # Store in memory system with embedding
+        memory_orchestrator = await get_canon_memory_orchestrator(user_id, conversation_id)
+        
+        # Build description for embedding
+        description_parts = [location.location_name]
+        if location.description:
+            description_parts.append(location.description)
+        if location.district:
+            description_parts.append(f"in {location.district}")
+        if location.city:
+            description_parts.append(f", {location.city}")
+        
+        embedding_text = " ".join(description_parts)
+        
+        # Store as memory
+        await memory_orchestrator.store_memory(
+            entity_type=EntityType.LORE,
+            entity_id=0,
+            memory_text=embedding_text,
+            significance=0.7 if location.location_type == "venue" else 0.8,
+            tags=['location', location.location_type or 'venue', location.scope or 'real'],
+            metadata={
+                "location_id": location.id,
+                "location_name": location.location_name,
+                "location_type": location.location_type,
+                "city": location.city,
+                "district": location.district,
+                "scope": location.scope
+            }
+        )
+        
+        # Add to vector store for searchability
+        await memory_orchestrator.add_to_vector_store(
+            text=embedding_text,
+            metadata={
+                "entity_type": "location",
+                "location_id": location.id,
+                "location_name": location.location_name,
+                "location_type": location.location_type,
+                "city": location.city,
+                "district": location.district,
+                "is_fictional": location.is_fictional,
+                "scope": location.scope,
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            },
+            entity_type="location"
+        )
+        
+        logger.info(f"✓ Notified canon system of location: {location.location_name}")
+        
+    except Exception as e:
+        # Don't let canon failures break location creation
+        logger.warning(f"Failed to notify canon of location creation: {e}", exc_info=True)
 
 
 def _slugify(value: str) -> str:
@@ -784,6 +872,9 @@ async def generate_and_persist_hierarchy(
     meta.setdefault("planet", persisted.planet)
     meta.setdefault("galaxy", persisted.galaxy)
     meta.setdefault("realm", persisted.realm)
+
+    # ✨ NEW: Notify canon system
+    await _notify_canon_of_location(conn, user_id, conversation_id, persisted)
 
     return persisted
 
