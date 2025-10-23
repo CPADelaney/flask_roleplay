@@ -1,4 +1,3 @@
-# nyx/location/anchors.py
 from __future__ import annotations
 import math
 import logging
@@ -33,17 +32,33 @@ async def _geocode_city_once(city: str, region: Optional[str], country: Optional
     q = ", ".join([p for p in [city, region, country] if p])
     if not q.strip():
         return None, None
-    headers = {"User-Agent": "nyx/worldsense/1.0 (contact: ops@nyx.example)"}
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": q, "format": "jsonv2", "limit": "1", "addressdetails": "1"},
-            headers=headers,
+    
+    # Nominatim requires a descriptive User-Agent.
+    headers = {"User-Agent": "nyx/worldsense/1.0 (contact: your-admin-email@example.com)"}
+    
+    # --- MODIFICATION START ---
+    # Wrap the network call to gracefully handle connection errors, which are
+    # common on PaaS like Render due to shared IPs being blocked by Nominatim.
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": q, "format": "jsonv2", "limit": "1", "addressdetails": "1"},
+                headers=headers,
+            )
+            r.raise_for_status()
+            data = r.json() or []
+            if isinstance(data, list) and data:
+                return float(data[0]["lat"]), float(data[0]["lon"])
+    except httpx.ConnectError:
+        logger.warning(
+            f"Could not connect to Nominatim to geocode '{q}'. This is a common issue on shared IP platforms like Render. "
+            "Proceeding without geocoded anchor, which will allow fallback to Gemini."
         )
-        r.raise_for_status()
-        data = r.json() or []
-        if isinstance(data, list) and data:
-            return float(data[0]["lat"]), float(data[0]["lon"])
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while geocoding '{q}': {e}", exc_info=True)
+    # --- MODIFICATION END ---
+        
     return None, None
 
 async def _fetch_current_location(user_id: str, conversation_id: str) -> Optional[Location]:
@@ -78,7 +93,6 @@ async def _fetch_current_location(user_id: str, conversation_id: str) -> Optiona
             logger.info(f"[ANCHOR] CurrentLocation from roleplay: '{current_location_name}'")
             
             # Now look up that location in the Locations table
-            # Normalize the name for comparison (lowercase, strip spaces)
             location_row = await conn.fetchrow(
                 """
                 SELECT *
