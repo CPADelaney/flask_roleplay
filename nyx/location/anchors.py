@@ -46,13 +46,77 @@ async def _geocode_city_once(city: str, region: Optional[str], country: Optional
             return float(data[0]["lat"]), float(data[0]["lon"])
     return None, None
 
+async def _fetch_current_location(user_id: str, conversation_id: str) -> Optional[Location]:
+    """
+    Fetch the player's current location by:
+    1. Querying currentroleplay table for CurrentLocation key
+    2. Looking up that location_name in Locations table
+    """
+    try:
+        from db.connection import get_db_connection_context
+        
+        user_key = int(user_id)
+        conversation_key = int(conversation_id)
+        
+        async with get_db_connection_context() as conn:
+            # First, get the current location name from currentroleplay
+            current_loc_row = await conn.fetchrow(
+                """
+                SELECT value
+                FROM currentroleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                """,
+                user_key,
+                conversation_key,
+            )
+            
+            if not current_loc_row or not current_loc_row["value"]:
+                logger.debug(f"No CurrentLocation found in currentroleplay for user={user_id} conv={conversation_id}")
+                return None
+            
+            current_location_name = str(current_loc_row["value"]).strip()
+            logger.info(f"[ANCHOR] CurrentLocation from roleplay: '{current_location_name}'")
+            
+            # Now look up that location in the Locations table
+            # Normalize the name for comparison (lowercase, strip spaces)
+            location_row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1 
+                  AND conversation_id = $2 
+                  AND LOWER(TRIM(location_name)) = LOWER($3)
+                ORDER BY location_id DESC
+                LIMIT 1
+                """,
+                user_key,
+                conversation_key,
+                current_location_name,
+            )
+            
+            if location_row:
+                logger.info(f"[ANCHOR] Found location in DB: {dict(location_row)}")
+                return Location.from_record(location_row)
+            else:
+                logger.warning(
+                    f"[ANCHOR] CurrentLocation '{current_location_name}' not found in Locations table. "
+                    f"The location may not have been persisted yet."
+                )
+                return None
+                
+    except Exception as e:
+        logger.debug(f"Failed to fetch current location: {e}", exc_info=True)
+    
+    return None
+
 async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversation_id: str = "0") -> GeoAnchor:
     """
     Build a robust anchor with lat/lon. Never rely on fictional scene names.
     Priority:
       1) incoming meta.locationInfo.geo lat/lon
       2) last persisted anchor from snapshot_store
-      3) world.primary_city (geocode once, cache)
+      3) current location from currentroleplay + Locations table
+      4) world.primary_city (geocode once, cache)
     """
     snap = _store.get(str(user_id), str(conversation_id)) or {}
     a = GeoAnchor()
@@ -95,7 +159,45 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
             if isinstance(v, str) and getattr(a, dst) is None:
                 setattr(a, dst, v.strip())
 
-    # 3) If still missing lat/lon, geocode world.primary_city (not scene labels)
+    # 3) Try fetching current location from currentroleplay + Locations
+    if not a.city or not a.region or not a.country or a.lat is None or a.lon is None:
+        current_location = await _fetch_current_location(user_id, conversation_id)
+        if current_location:
+            logger.info(
+                f"[ANCHOR] Using current location from DB: {current_location.location_name} "
+                f"(city={current_location.city}, region={current_location.region}, "
+                f"country={current_location.country}, lat={current_location.lat}, lon={current_location.lon})"
+            )
+            
+            # Fill in missing anchor data from database
+            if not a.city and current_location.city:
+                a.city = current_location.city
+            if not a.region and current_location.region:
+                a.region = current_location.region
+            if not a.country and current_location.country:
+                a.country = current_location.country
+            if a.lat is None and current_location.lat is not None:
+                a.lat = current_location.lat
+            if a.lon is None and current_location.lon is not None:
+                a.lon = current_location.lon
+            if not a.neighborhood and current_location.district:
+                a.neighborhood = current_location.district
+            
+            # Update snapshot with database values so we don't need to query again
+            snap = dict(snap or {})
+            if current_location.lat is not None:
+                snap["lat"] = current_location.lat
+            if current_location.lon is not None:
+                snap["lon"] = current_location.lon
+            if current_location.city:
+                snap["city"] = current_location.city
+            if current_location.region:
+                snap["region"] = current_location.region
+            if current_location.country:
+                snap["country"] = current_location.country
+            _store.put(str(user_id), str(conversation_id), snap)
+
+    # 4) If still missing lat/lon, geocode world.primary_city (not scene labels)
     if a.lat is None or a.lon is None:
         city = a.city or world.get("primary_city")
         if city:
@@ -121,7 +223,7 @@ async def derive_geo_anchor(meta: Dict[str, Any], user_id: str = "0", conversati
 
 def build_nominatim_params_for_poi(poi: str, anchor: GeoAnchor, *, radius_km: float, limit: int) -> Dict[str, str]:
     def _normalize(s: str) -> str:
-        return (s or "").replace("’", "'").strip()
+        return (s or "").replace("'", "'").strip()
     params = {"format": "jsonv2", "limit": str(limit), "addressdetails": "1"}
     brand = _normalize(poi)
     if anchor.lat is not None and anchor.lon is not None:
