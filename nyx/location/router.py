@@ -162,23 +162,154 @@ def _enrich_metadata_with_intent(user_text: str, meta: Dict[str, Any]) -> None:
 async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> Anchor:
     """Constructs a location resolution anchor from conversation metadata."""
     world = (meta or {}).get("world") or {}
-    kind_txt = (world.get("type") or world.get("kind") or "").strip().lower()
-    
-    # Enhanced scope detection with multiple signals
-    is_real = (
-        kind_txt in {"real", "modern_realistic", "realistic", "historical", "modern"}
-        or world.get("real_world_based") is True
-        or world.get("use_real_locations") is True
-        or meta.get("use_google_maps") is True
-        or meta.get("enable_google_maps") is True
-    )
-    
-    scope: Scope = "real" if is_real else "fictional"
-    
+    kind_raw = world.get("type") or world.get("kind")
+    kind_txt = (kind_raw or "").strip().lower()
+    kind_source = "world.type" if world.get("type") else ("world.kind" if world.get("kind") else "world.type")
+
+    real_signals: list[tuple[str, bool]] = []
+    fictional_signals: list[tuple[str, bool]] = []
+
+    def add_signal(target: list[tuple[str, bool]], signal: str, explicit: bool) -> None:
+        entry = (signal, explicit)
+        if entry not in target:
+            target.append(entry)
+
+    def normalize_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1", "y"}:
+                return True
+            if normalized in {"false", "no", "0", "n"}:
+                return False
+        return None
+
+    real_scope_tokens = {
+        "real",
+        "realistic",
+        "historical",
+        "earth",
+        "contemporary",
+        "actual",
+        "authentic",
+        "nonfiction",
+        "canon",
+        "irl",
+        "realworld",
+        "real_world",
+        "true",
+    }
+    fictional_scope_tokens = {
+        "fictional",
+        "fiction",
+        "fantasy",
+        "magical",
+        "mythic",
+        "mythical",
+        "mythology",
+        "legendary",
+        "imaginary",
+        "supernatural",
+        "dystopian",
+        "utopian",
+        "cyberpunk",
+        "steampunk",
+        "futuristic",
+        "alternate",
+        "otherworldly",
+        "realm",
+        "kingdom",
+        "saga",
+        "myth",
+        "fable",
+        "fairytale",
+        "fairy",
+        "arcane",
+        "enchanted",
+        "enchant",
+        "mythos",
+        "dreamscape",
+        "galactic",
+        "interstellar",
+        "spacefaring",
+        "cosmic",
+        "scifi",
+    }
+    sci_fi_hints = ("sci-fi", "science fiction", "science-fiction", "sci fi")
+
+    if kind_txt:
+        kind_tokens = [token for token in re.split(r"[^a-z0-9]+", kind_txt) if token]
+
+        for token in kind_tokens:
+            if token in real_scope_tokens:
+                add_signal(real_signals, f"{kind_source}~{token}", True)
+            if token in fictional_scope_tokens:
+                add_signal(fictional_signals, f"{kind_source}~{token}", True)
+
+        if any(hint in kind_txt for hint in sci_fi_hints):
+            add_signal(fictional_signals, f"{kind_source} contains sci-fi hint", True)
+
+    for container_label, container in (("meta", meta), ("world", world)):
+        scope_hint = None
+        if isinstance(container, dict):
+            scope_hint = container.get("scope")
+        if isinstance(scope_hint, str):
+            normalized_scope = scope_hint.strip().lower()
+            if normalized_scope == "fictional":
+                add_signal(fictional_signals, f"{container_label}.scope=fictional", True)
+            elif normalized_scope == "real":
+                add_signal(real_signals, f"{container_label}.scope=real", True)
+
+    for container_label, container in (("meta", meta), ("world", world)):
+        if isinstance(container, dict) and "is_fictional" in container:
+            normalized_bool = normalize_bool(container.get("is_fictional"))
+            if normalized_bool is True:
+                add_signal(fictional_signals, f"{container_label}.is_fictional=True", True)
+            elif normalized_bool is False:
+                add_signal(real_signals, f"{container_label}.is_fictional=False", True)
+
+    if normalize_bool(world.get("real_world_based")) is True:
+        add_signal(real_signals, "world.real_world_based=True", False)
+    if normalize_bool(world.get("use_real_locations")) is True:
+        add_signal(real_signals, "world.use_real_locations=True", False)
+    if normalize_bool(meta.get("use_google_maps")) is True:
+        add_signal(real_signals, "meta.use_google_maps=True", False)
+    if normalize_bool(meta.get("enable_google_maps")) is True:
+        add_signal(real_signals, "meta.enable_google_maps=True", False)
+
+    explicit_fictional = any(explicit for _, explicit in fictional_signals)
+    has_real_signals = bool(real_signals)
+    has_fictional_signals = bool(fictional_signals)
+
+    if explicit_fictional and not has_real_signals:
+        scope: Scope = "fictional"
+        decision_reason = "explicit-fictional"
+    else:
+        scope = "real"
+        if has_real_signals and has_fictional_signals:
+            decision_reason = "conflict-prefers-real"
+        elif any(explicit for _, explicit in real_signals):
+            decision_reason = "explicit-real"
+        elif has_real_signals:
+            decision_reason = "implicit-real"
+        elif not kind_txt:
+            decision_reason = "default-real-empty-kind"
+        elif has_fictional_signals and not explicit_fictional:
+            decision_reason = "implicit-fictional-ignored"
+        else:
+            decision_reason = "default-real-no-fictional"
+
+    def format_signals(signals: list[tuple[str, bool]]) -> list[str]:
+        return [f"{'explicit' if explicit else 'implicit'}:{signal}" for signal, explicit in signals]
+
     logger.info(
-        f"[ANCHOR] Scope determined as '{scope}' from world.type='{kind_txt}', "
-        f"real_world_based={world.get('real_world_based')}, "
-        f"use_google_maps={meta.get('use_google_maps')}"
+        "[ANCHOR] Scope decision -> scope=%s (reason=%s, kind=%s, fictional_signals=%s, real_signals=%s)",
+        scope,
+        decision_reason,
+        kind_txt or "<empty>",
+        format_signals(fictional_signals),
+        format_signals(real_signals),
     )
 
     geo = await derive_geo_anchor(meta, user_id, conversation_id)
