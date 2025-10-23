@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import logging
 from typing import Any, Dict, Optional
+import asyncio
 
 from .anchors import derive_geo_anchor
 from .fictional_resolver import resolve_fictional
@@ -24,6 +25,42 @@ from .types import (
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
 logger = logging.getLogger(__name__)
+
+async def _track_player_movement(
+    user_id: str,
+    conversation_id: str,
+    location_name: str,
+    location_type: Optional[str] = None,
+) -> None:
+    """Track player movement in canon system."""
+    try:
+        from db.connection import get_db_connection_context
+        from lore.core.canon import update_current_roleplay, log_canonical_event
+        from lore.core.context import CanonicalContext
+        
+        async with get_db_connection_context() as conn:
+            ctx = CanonicalContext(
+                user_id=int(user_id), 
+                conversation_id=int(conversation_id)
+            )
+            
+            # Update current location
+            await update_current_roleplay(ctx, conn, 'CurrentLocation', location_name)
+            
+            # Log movement with appropriate significance
+            significance = 6 if location_type in ['city', 'district'] else 4
+            await log_canonical_event(
+                ctx, conn,
+                f"Player moved to {location_name}",
+                tags=['movement', 'location', 'player', location_type or 'venue'],
+                significance=significance,
+                persist_memory=True
+            )
+            
+            logger.info(f"✓ Tracked player movement to: {location_name}")
+            
+    except Exception as e:
+        logger.warning(f"Failed to track player movement: {e}", exc_info=True)
 
 # Regular expressions to parse user intent for movement or travel.
 _GO_TO_RX = re.compile(r"\b(?:go|head|walk|run|drive|get|straight|toward|to)\s+(?:the\s+)?(.+)$", re.IGNORECASE)
@@ -456,6 +493,28 @@ async def resolve_place_or_travel(
         res.anchor = anchor
     if res.scope is None:
         res.scope = anchor.scope
+    
+    # ✨ NEW: Track player movement if we have an exact match
+    if res.status == STATUS_EXACT and res.candidates:
+        top_candidate = res.candidates[0]
+        location_name = top_candidate.place.name
+        location_type = top_candidate.place.meta.get("location_type") or top_candidate.place.level
+        
+        # Track movement asynchronously (don't block on failure)
+        asyncio.create_task(
+            _track_player_movement(user_id, conversation_id, location_name, location_type)
+        )
+    
+    # ✨ NEW: Also track if we have a location object directly
+    if res.location and res.status == STATUS_EXACT:
+        asyncio.create_task(
+            _track_player_movement(
+                user_id, 
+                conversation_id, 
+                res.location.location_name,
+                res.location.location_type
+            )
+        )
     
     logger.info(
         f"[ROUTER] Final result: status={res.status}, scope={res.scope}, "
