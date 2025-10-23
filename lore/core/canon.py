@@ -4298,3 +4298,84 @@ async def process_canonical_update(
     )
     
     return result
+
+async def track_location_visit(
+    ctx,
+    conn,
+    location_name: str,
+    location_type: str = "venue",
+    from_location: Optional[str] = None,
+    travel_method: Optional[str] = None,
+) -> None:
+    """
+    Track a player visit to a location with rich context.
+    
+    Args:
+        ctx: Canonical context
+        conn: Database connection
+        location_name: Name of location visited
+        location_type: Type of location (venue, district, city, etc.)
+        from_location: Previous location (optional)
+        travel_method: How they traveled (walk, fly, teleport, etc.)
+    """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Update current location
+    await update_current_roleplay(ctx, conn, 'CurrentLocation', location_name)
+    
+    # Build event description
+    event_parts = [f"Visited {location_name}"]
+    if from_location:
+        event_parts.append(f"from {from_location}")
+    if travel_method:
+        event_parts.append(f"by {travel_method}")
+    
+    event_text = " ".join(event_parts)
+    
+    # Determine significance based on location type
+    significance_map = {
+        'city': 8,
+        'district': 7,
+        'landmark': 6,
+        'venue': 4,
+        'room': 3
+    }
+    significance = significance_map.get(location_type.lower(), 4)
+    
+    # Log canonical event
+    await log_canonical_event(
+        ctx, conn,
+        event_text,
+        tags=['movement', 'location', 'visit', location_type],
+        significance=significance,
+        persist_memory=True
+    )
+    
+    # Store as player memory
+    from memory.memory_orchestrator import EntityType
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.PLAYER,
+        entity_id=ctx.user_id,
+        memory_text=event_text,
+        significance=0.6 if location_type == 'room' else 0.7,
+        tags=['location', 'travel', location_type],
+        metadata={
+            "location_name": location_name,
+            "location_type": location_type,
+            "from_location": from_location,
+            "travel_method": travel_method
+        }
+    )
+    
+    # Update location visit tracking
+    await conn.execute("""
+        INSERT INTO LocationVisits (user_id, conversation_id, location_name, visit_count, last_visited)
+        VALUES ($1, $2, $3, 1, NOW())
+        ON CONFLICT (user_id, conversation_id, location_name)
+        DO UPDATE SET
+            visit_count = LocationVisits.visit_count + 1,
+            last_visited = NOW()
+    """, ctx.user_id, ctx.conversation_id, location_name)
+    
+    logger.info(f"✓ Tracked visit to {location_name}")
