@@ -1235,6 +1235,7 @@ async def get_or_generate_districts(
     user_id: str,
     conversation_id: str,
     city_name: str,
+    query_hint: Optional[str] = None,  # Add this parameter
 ) -> List[Location]:
     seed: Dict[str, Any] = dict(world_seed or {})
     city = _stringify(city_name) or seed.get("primary_city") or seed.get("name") or "Fictional City"
@@ -1285,31 +1286,60 @@ async def get_or_generate_districts(
 
     seed_summary = _format_world_seed(seed, city)
     context_name = _extract_text_value(seed, _WORLD_NAME_PATHS) or city
-    prompt = (
-        f"You are a world-builder creating unique districts for \"{city}\".\n\n"
-        f"**World Context:**\n{seed_summary}\n\n"
-        f"**User's Request:** {context_name}\n\n"
-        f"**Your Task:**\n"
-        f"Design 3-5 ORIGINAL districts that fit this specific world and request. "
-        f"Each district must be thematically appropriate to the world seed above.\n\n"
-        f"**CRITICAL: Do NOT use generic fantasy tropes unless they fit the world seed. "
-        f"Create districts that match the tone, genre, and themes described above.**\n\n"
-        f"Return ONLY a JSON object (no markdown fences) with this structure:\n\n"
-        "{\n"
-        '  "districts": [\n'
-        '    {\n'
-        '      "key": "unique_slug_here",\n'
-        '      "name": "District Display Name",\n'
-        '      "vibe": "One vivid sentence about atmosphere",\n'
-        '      "layout": "One sentence about physical placement",\n'
-        '      "theme": "Core concept in a few words",\n'
-        '      "summary": "One sentence tagline",\n'
-        '      "features": ["Notable feature 1", "Notable feature 2"]\n'
-        '    }\n'
-        '  ]\n'
-        '}\n\n'
-        f"**Now create districts for: {city}**"
-    )
+    
+    # Build the prompt with query hint if available
+    if query_hint:
+        prompt = (
+            f"You are a world-builder creating unique districts for \"{city}\" based on the player's request.\n\n"
+            f"**Player's Request:** {query_hint}\n\n"
+            f"**World Context:**\n{seed_summary}\n\n"
+            f"**Your Task:**\n"
+            f"Design 3-5 ORIGINAL districts that fit the player's request and world context. "
+            f"The districts should be thematically appropriate to both the player's query ('{query_hint}') "
+            f"and the world seed described above.\n\n"
+            f"**CRITICAL: Create districts that directly relate to '{query_hint}'. "
+            f"Do NOT use generic templates. Make them specific to this request and world.**\n\n"
+            f"Return ONLY a JSON object (no markdown fences) with this structure:\n\n"
+            "{\n"
+            '  "districts": [\n'
+            '    {\n'
+            '      "key": "unique_slug_here",\n'
+            '      "name": "District Display Name",\n'
+            '      "vibe": "One vivid sentence about atmosphere",\n'
+            '      "layout": "One sentence about physical placement",\n'
+            '      "theme": "Core concept in a few words",\n'
+            '      "summary": "One sentence tagline",\n'
+            '      "features": ["Notable feature 1", "Notable feature 2"]\n'
+            '    }\n'
+            '  ]\n'
+            '}\n\n'
+            f"**Now create 3-5 original districts for \"{city}\" that relate to: {query_hint}**"
+        )
+    else:
+        prompt = (
+            f"You are a world-builder creating unique districts for \"{city}\".\n\n"
+            f"**World Context:**\n{seed_summary}\n\n"
+            f"**Your Task:**\n"
+            f"Design 3-5 ORIGINAL districts that fit this specific world. "
+            f"Each district must be thematically appropriate to the world seed above.\n\n"
+            f"**CRITICAL: Do NOT use generic fantasy tropes unless they fit the world seed. "
+            f"Create districts that match the tone, genre, and themes described above.**\n\n"
+            f"Return ONLY a JSON object (no markdown fences) with this structure:\n\n"
+            "{\n"
+            '  "districts": [\n'
+            '    {\n'
+            '      "key": "unique_slug_here",\n'
+            '      "name": "District Display Name",\n'
+            '      "vibe": "One vivid sentence about atmosphere",\n'
+            '      "layout": "One sentence about physical placement",\n'
+            '      "theme": "Core concept in a few words",\n'
+            '      "summary": "One sentence tagline",\n'
+            '      "features": ["Notable feature 1", "Notable feature 2"]\n'
+            '    }\n'
+            '  ]\n'
+            '}\n\n'
+            f"**Now create 3-5 original districts for: {city}**"
+        )
 
     try:
         llm_payload = await call_gpt_json(
@@ -1493,11 +1523,13 @@ async def resolve_fictional(
         or "Fictional City"
     )
 
+    # Pass query.target as query_hint to district generation
     districts = await get_or_generate_districts(
         world_seed,
         user_id=user_key,
         conversation_id=conv_key,
         city_name=city_name,
+        query_hint=query.target,  # Add this parameter
     )
 
     if not (query.target or query.normalized):
@@ -1511,7 +1543,7 @@ async def resolve_fictional(
     target_district = _select_target_district(districts, query, anchor, meta)
     if target_district is None:
         return ResolveResult(
-            status=STATUS_NOT_FOUND, # --- CHANGE: Return NOT_FOUND if no district can be determined ---
+            status=STATUS_NOT_FOUND,
             message="I can shape the city further—but couldn't determine a district from your request.",
             anchor=anchor,
             scope="fictional",
@@ -1524,12 +1556,9 @@ async def resolve_fictional(
         query_text=query.target or query.normalized or "",
     )
 
-    # --- CHANGE STARTS HERE: Improved resilience for POI generation ---
     if not venues:
-        # Attempt to generate POIs, and capture the result directly.
         generated_venues = await generate_pois_for_district(target_district, query.target or query.normalized or "")
         
-        # If generation fails to produce any venues, we have definitively not found the location.
         if not generated_venues:
             return ResolveResult(
                 status=STATUS_NOT_FOUND,
@@ -1537,9 +1566,7 @@ async def resolve_fictional(
                 anchor=anchor,
                 scope="fictional",
             )
-        # If generation succeeds, use the newly created venues for the rest of this function.
         venues = generated_venues
-    # --- CHANGE ENDS HERE ---
 
     phrase_candidates: List[str] = []
     if query.target:
@@ -1559,7 +1586,6 @@ async def resolve_fictional(
         score = _score_location_match(venue, profile, phrase_candidates, word_tokens)
         scored.append((score, venue))
     
-    # --- CHANGE: Handle case where scoring produces no viable candidates ---
     if not scored:
         return ResolveResult(
             status=STATUS_NOT_FOUND,
@@ -1567,7 +1593,6 @@ async def resolve_fictional(
             anchor=anchor,
             scope="fictional",
         )
-    # --- CHANGE ENDS HERE ---
 
     scored.sort(key=lambda item: item[0], reverse=True)
     best_location = scored[0][1]
