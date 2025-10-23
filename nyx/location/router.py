@@ -44,6 +44,82 @@ def _parse_place_query(text: str) -> PlaceQuery:
     target = (m.group(1) if m else t).strip().rstrip(".!?")
     return PlaceQuery(raw_text=t, normalized=target.lower(), target=target)
 
+def _enrich_metadata_with_intent(user_text: str, meta: Dict[str, Any]) -> None:
+    """
+    Analyze user text for common location patterns and enrich metadata
+    to guide world generation appropriately.
+    """
+    text_lower = user_text.lower()
+    world = meta.setdefault("world", {})
+    
+    # Theme park patterns
+    if any(keyword in text_lower for keyword in ["disneyland", "disney", "theme park", "amusement park", "six flags", "universal studios"]):
+        world.update({
+            "type": "fictional",
+            "themes": ["entertainment", "theme park", "family-friendly", "attractions"],
+            "tone": "whimsical",
+            "genre": "modern fantasy",
+            "technology_level": "modern",
+            "primary_city": "Theme Park Resort"
+        })
+        logger.info("Detected theme park intent, enriching metadata")
+        return
+    
+    # Fantasy locations
+    if any(keyword in text_lower for keyword in ["castle", "kingdom", "realm", "shire", "rivendell", "hogwarts", "narnia"]):
+        world.update({
+            "type": "fictional",
+            "themes": ["fantasy", "magic", "medieval"],
+            "tone": "epic",
+            "genre": "high fantasy",
+            "technology_level": "medieval"
+        })
+        logger.info("Detected fantasy location intent, enriching metadata")
+        return
+    
+    # Sci-fi locations
+    if any(keyword in text_lower for keyword in ["space station", "starship", "colony", "mars", "cyberpunk", "neo tokyo"]):
+        world.update({
+            "type": "fictional",
+            "themes": ["science fiction", "futuristic", "high tech"],
+            "tone": "futuristic",
+            "genre": "sci-fi",
+            "technology_level": "advanced"
+        })
+        logger.info("Detected sci-fi location intent, enriching metadata")
+        return
+    
+    # Horror/dark locations
+    if any(keyword in text_lower for keyword in ["haunted", "cemetery", "crypt", "mansion", "silent hill", "raccoon city"]):
+        world.update({
+            "type": "fictional",
+            "themes": ["horror", "dark", "supernatural"],
+            "tone": "ominous",
+            "genre": "horror",
+            "technology_level": "modern"
+        })
+        logger.info("Detected horror location intent, enriching metadata")
+        return
+    
+    # Video game/pop culture locations
+    game_locations = {
+        "hyrule": {"themes": ["fantasy", "adventure"], "tone": "heroic", "genre": "adventure fantasy"},
+        "gotham": {"themes": ["urban", "crime", "vigilante"], "tone": "noir", "genre": "superhero"},
+        "metropolis": {"themes": ["urban", "superhero"], "tone": "bright", "genre": "superhero"},
+        "rapture": {"themes": ["dystopian", "underwater"], "tone": "dark", "genre": "dystopian sci-fi"},
+        "columbia": {"themes": ["steampunk", "floating city"], "tone": "fantastical", "genre": "steampunk"},
+    }
+    
+    for location_name, settings in game_locations.items():
+        if location_name in text_lower:
+            world.update({
+                "type": "fictional",
+                "technology_level": "varied",
+                **settings
+            })
+            logger.info(f"Detected {location_name} reference, enriching metadata")
+            return
+
 async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> Anchor:
     """Constructs a location resolution anchor from conversation metadata."""
     world = (meta or {}).get("world") or {}
@@ -105,6 +181,9 @@ async def resolve_place_or_travel(
     """
     if store is None:
         store = ConversationSnapshotStore()
+    
+    # Enrich metadata based on user text patterns BEFORE building anchor
+    _enrich_metadata_with_intent(user_text, meta)
     
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
