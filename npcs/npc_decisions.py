@@ -246,18 +246,16 @@ Generate appropriate actions for this NPC."""
         ]
 
         try:
-            
             response = await call_openai_with_retry(
                 client,
                 model="gpt-5-nano",
                 messages=messages,
-                response_format={"type": "json_object"}  # Force JSON response
             )
 
             # Extract response content
             content = response.choices[0].message.content
 
-            # Parse JSON response
+            # Attempt best-effort JSON parsing
             try:
                 parsed = json.loads(content)
                 actions = parsed.get("actions", [])

@@ -413,11 +413,49 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
             model="gpt-5-nano",
             messages=[{"role": "system", "content": gpt_prompt}],
             temperature=0.5,
-            response_format={"type": "json_object"}
         )
 
         lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-        new_attrs = safe_json_loads(response.choices[0].message.content)
+        raw_attrs = safe_json_loads(response.choices[0].message.content)
+        if not isinstance(raw_attrs, dict) or not raw_attrs:
+            logger.warning("Image attribute extraction returned non-JSON or empty payload; falling back to defaults.")
+
+        defaults = {
+            "hair_color": current_state.get("hair_color") or "unknown",
+            "hair_style": current_state.get("hair_style") or "unknown",
+            "eye_color": current_state.get("eye_color") or "unknown",
+            "skin_tone": current_state.get("skin_tone") or "unknown",
+            "body_type": current_state.get("body_type") or "unknown",
+            "height": current_state.get("height") or "unknown",
+            "age_appearance": current_state.get("age_appearance") or "unknown",
+            "default_outfit": current_state.get("default_outfit") or "unknown",
+            "makeup_style": current_state.get("makeup_style") or "unknown",
+            "accessories": current_state.get("accessories") or [],
+        }
+
+        new_attrs = {}
+        for key, default in defaults.items():
+            value = raw_attrs.get(key) if isinstance(raw_attrs, dict) else None
+            if isinstance(value, str):
+                value = value.strip()
+            if not value:
+                value = default
+            if key == "accessories":
+                if isinstance(value, str):
+                    try:
+                        decoded = json.loads(value)
+                        if isinstance(decoded, list):
+                            value = decoded
+                        elif decoded:
+                            value = [decoded]
+                        else:
+                            value = []
+                    except (TypeError, json.JSONDecodeError):
+                        value = [value] if value else []
+                if not isinstance(value, list):
+                    value = default if isinstance(default, list) else []
+                value = value or []
+            new_attrs[key] = value
 
         # Update visual attributes through LoreSystem
         if current_attrs:
@@ -598,7 +636,6 @@ Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurr
         model="gpt-5-nano",
         messages=[{"role": "system", "content": prompt}],
         temperature=0.7,
-        response_format={"type": "json_object"}
     )
     data = safe_json_loads(response.choices[0].message.content)
     return data if data and "image_prompt" in data else {
