@@ -44,6 +44,7 @@ def _parse_place_query(text: str) -> PlaceQuery:
     target = (m.group(1) if m else t).strip().rstrip(".!?")
     return PlaceQuery(raw_text=t, normalized=target.lower(), target=target)
 
+
 def _enrich_metadata_with_intent(user_text: str, meta: Dict[str, Any]) -> None:
     """
     Analyze user text for common location patterns and enrich metadata
@@ -120,15 +121,28 @@ def _enrich_metadata_with_intent(user_text: str, meta: Dict[str, Any]) -> None:
             logger.info(f"Detected {location_name} reference, enriching metadata")
             return
 
+
 async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id: str) -> Anchor:
     """Constructs a location resolution anchor from conversation metadata."""
     world = (meta or {}).get("world") or {}
     kind_txt = (world.get("type") or world.get("kind") or "").strip().lower()
     
-    if kind_txt in {"real", "modern_realistic", "realistic", "historical", "modern"}:
-        scope: Scope = "real"
-    else:
-        scope = "fictional"
+    # Enhanced scope detection with multiple signals
+    is_real = (
+        kind_txt in {"real", "modern_realistic", "realistic", "historical", "modern"}
+        or world.get("real_world_based") is True
+        or world.get("use_real_locations") is True
+        or meta.get("use_google_maps") is True
+        or meta.get("enable_google_maps") is True
+    )
+    
+    scope: Scope = "real" if is_real else "fictional"
+    
+    logger.info(
+        f"[ANCHOR] Scope determined as '{scope}' from world.type='{kind_txt}', "
+        f"real_world_based={world.get('real_world_based')}, "
+        f"use_google_maps={meta.get('use_google_maps')}"
+    )
 
     geo = await derive_geo_anchor(meta, user_id, conversation_id)
     primary_city = geo.city or world.get("primary_city")
@@ -152,7 +166,7 @@ async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id:
             meta={"source": "geo_anchor"},
         )
 
-    return Anchor(
+    anchor = Anchor(
         scope=scope,
         focus=focus,
         label=label,
@@ -167,6 +181,25 @@ async def _anchor_from_meta(meta: Dict[str, Any], user_id: str, conversation_id:
             "geo_anchor": geo,
         },
     )
+    
+    logger.debug(
+        f"[ANCHOR] Built anchor: scope={anchor.scope}, city={anchor.primary_city}, "
+        f"lat={anchor.lat}, lon={anchor.lon}, label={anchor.label}"
+    )
+    
+    return anchor
+
+
+def _has_grounded_results(result: ResolveResult) -> bool:
+    """Check if any candidates in the result are grounded via Google Maps."""
+    if not result or not result.candidates:
+        return False
+    
+    return any(
+        c.place.meta.get("grounded") or c.place.meta.get("google_verified")
+        for c in result.candidates
+    )
+
 
 async def resolve_place_or_travel(
     user_text: str,
@@ -177,7 +210,17 @@ async def resolve_place_or_travel(
 ) -> ResolveResult:
     """
     Main entry point for location resolution. Determines scope (real/fictional)
-    and routes the query, with a fallback from fictional to real-world search on failure.
+    and routes the query appropriately.
+    
+    Resolution strategy for real-world scopes:
+    1. Try Gemini with Google Maps grounding (best for real places)
+    2. If Gemini returns grounded results -> use them
+    3. If Gemini finds nothing or results aren't grounded -> try Overpass/Nominatim
+    4. If still nothing -> fall back to fictional resolver
+    
+    Resolution strategy for fictional scopes:
+    1. Try fictional resolver first
+    2. If it fails -> fall back to real-world search (mixed worlds)
     """
     if store is None:
         store = ConversationSnapshotStore()
@@ -187,49 +230,236 @@ async def resolve_place_or_travel(
     
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
+    
+    logger.info(
+        f"[ROUTER] Resolving '{q.target}' with scope={anchor.scope}, "
+        f"is_travel={q.is_travel}, anchor_city={anchor.primary_city}"
+    )
 
     res: ResolveResult
+    
     if anchor.scope == "real":
-        # Handle real-world scopes directly, trying Gemini first.
+        # ============================================================
+        # REAL WORLD RESOLUTION CHAIN
+        # ============================================================
+        logger.info("[ROUTER] Using real-world resolution chain")
+        
+        # Step 1: Try Gemini with Google Maps grounding first
         gemini_result: Optional[ResolveResult] = None
         try:
+            logger.debug("[ROUTER] Attempting Gemini with Maps grounding...")
             gemini_result = await resolve_location_with_gemini(q, anchor)
-        except Exception:
+            
+            if gemini_result.errors:
+                logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
+            
+            # Check if we got grounded (verified via Google Maps) results
+            has_grounded = _has_grounded_results(gemini_result)
+            
+            if has_grounded:
+                logger.info(
+                    f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} "
+                    f"Google Maps-grounded results"
+                )
+                res = gemini_result
+                
+            elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                # Gemini found something but it's not grounded
+                # Could be fictional place or Gemini making educated guess
+                logger.info(
+                    f"[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. "
+                    f"Attempting verification with Overpass/Nominatim..."
+                )
+                
+                # Try to verify with traditional geocoding
+                try:
+                    verified_result = await resolve_real(q, anchor, meta)
+                    
+                    if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                        logger.info("[ROUTER] ✓ Verified via Overpass/Nominatim")
+                        res = verified_result
+                    else:
+                        # Overpass/Nominatim couldn't verify either
+                        # Use Gemini's best guess but mark confidence as lower
+                        logger.info("[ROUTER] Using Gemini's unverified results")
+                        for candidate in gemini_result.candidates:
+                            candidate.confidence *= 0.7  # Reduce confidence
+                            candidate.place.meta["verification_status"] = "unverified"
+                        res = gemini_result
+                        
+                except Exception as e:
+                    logger.warning(f"[ROUTER] Verification failed: {e}", exc_info=True)
+                    res = gemini_result
+                    
+            elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
+                # Gemini created a travel plan
+                logger.info("[ROUTER] ✓ Gemini created travel plan")
+                res = gemini_result
+                
+            else:
+                # Gemini found nothing useful
+                logger.info(
+                    f"[ROUTER] Gemini returned status={gemini_result.status}, "
+                    f"no useful results"
+                )
+                gemini_result = None
+                
+        except Exception as e:
+            logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
             gemini_result = None
-
-        if gemini_result and (
-            (gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE})
-            or (gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations)
-        ):
-            res = gemini_result
+        
+        # Step 2: If Gemini didn't work, try Overpass/Nominatim
+        if gemini_result is None:
+            logger.info("[ROUTER] Falling back to Overpass/Nominatim search...")
+            try:
+                res = await resolve_real(q, anchor, meta)
+                
+                if res.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                    logger.info(
+                        f"[ROUTER] ✓ Overpass/Nominatim found {len(res.candidates)} results"
+                    )
+                else:
+                    logger.info(
+                        f"[ROUTER] Overpass/Nominatim returned status={res.status}"
+                    )
+                    
+            except Exception as e:
+                logger.error(f"[ROUTER] Overpass/Nominatim failed: {e}", exc_info=True)
+                res = ResolveResult(
+                    status=STATUS_NOT_FOUND,
+                    message=f"Could not find '{q.target}' in the real world.",
+                    anchor=anchor,
+                    scope="real",
+                    errors=[f"real_world_search_failed: {e}"]
+                )
         else:
-            res = await resolve_real(q, anchor, meta)
+            res = gemini_result
+        
+        # Step 3: If everything failed, try fictional as last resort
+        if res.status in {STATUS_NOT_FOUND, STATUS_ASK} and q.target:
+            logger.info(
+                f"[ROUTER] Real-world search failed for '{q.target}'. "
+                f"Attempting fictional resolver as fallback (mixed world scenario)..."
+            )
+            
+            try:
+                # Temporarily mark as fictional for the resolver
+                fictional_anchor = Anchor(
+                    scope="fictional",
+                    focus=anchor.focus,
+                    label=anchor.label,
+                    lat=anchor.lat,
+                    lon=anchor.lon,
+                    primary_city=anchor.primary_city,
+                    region=anchor.region,
+                    country=anchor.country,
+                    world_name=anchor.world_name or anchor.primary_city,
+                    hints=anchor.hints,
+                )
+                
+                fictional_result = await resolve_fictional(
+                    q, fictional_anchor, meta, store, user_id, conversation_id
+                )
+                
+                if fictional_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                    logger.info(
+                        f"[ROUTER] ✓ Fictional resolver created '{q.target}' "
+                        f"in mixed real/fictional world"
+                    )
+                    # Mark as mixed world
+                    fictional_result.metadata = fictional_result.metadata or {}
+                    fictional_result.metadata["mixed_world"] = True
+                    fictional_result.metadata["base_scope"] = "real"
+                    fictional_result.metadata["fictional_element"] = q.target
+                    res = fictional_result
+                else:
+                    logger.info(
+                        f"[ROUTER] Fictional resolver also failed: {fictional_result.status}"
+                    )
+                    
+            except Exception as e:
+                logger.error(f"[ROUTER] Fictional fallback failed: {e}", exc_info=True)
+    
     else:
-        # Fictional scope: try fictional resolver first.
+        # ============================================================
+        # FICTIONAL RESOLUTION CHAIN
+        # ============================================================
+        logger.info("[ROUTER] Using fictional resolution chain")
+        
+        # Try fictional resolver first
         res_fictional = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
 
-        # If the fictional search fails, fall back to a real-world search.
+        # If fictional search fails, fall back to real-world search (mixed worlds)
         if res_fictional.status in {STATUS_NOT_FOUND, STATUS_ASK}:
-            logger.info(f"Fictional resolve failed for '{q.target}'. Falling back to real-world search.")
+            logger.info(
+                f"[ROUTER] Fictional resolve failed for '{q.target}'. "
+                f"Falling back to real-world search (mixed world scenario)..."
+            )
             
-            # Temporarily change the anchor's scope to perform a real-world search.
-            anchor.scope = "real"
-            res_real = await resolve_real(q, anchor, meta)
-
-            # If the real-world search found something, use its result.
-            if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                res = res_real
-            else:
-                # If both fictional and real searches fail, return the original fictional failure.
+            # Try real-world search with Gemini first
+            try:
+                real_anchor = Anchor(
+                    scope="real",
+                    focus=anchor.focus,
+                    label=anchor.label,
+                    lat=anchor.lat,
+                    lon=anchor.lon,
+                    primary_city=anchor.primary_city,
+                    region=anchor.region,
+                    country=anchor.country,
+                    world_name=anchor.world_name,
+                    hints=anchor.hints,
+                )
+                
+                gemini_result = await resolve_location_with_gemini(q, real_anchor)
+                
+                if _has_grounded_results(gemini_result):
+                    logger.info(
+                        f"[ROUTER] ✓ Found real-world match via Gemini Maps for '{q.target}' "
+                        f"in fictional world"
+                    )
+                    gemini_result.metadata = gemini_result.metadata or {}
+                    gemini_result.metadata["mixed_world"] = True
+                    gemini_result.metadata["base_scope"] = "fictional"
+                    gemini_result.metadata["real_element"] = q.target
+                    res = gemini_result
+                else:
+                    # Try Overpass/Nominatim
+                    res_real = await resolve_real(q, real_anchor, meta)
+                    
+                    if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                        logger.info(
+                            f"[ROUTER] ✓ Found real-world match via Overpass/Nominatim "
+                            f"for '{q.target}' in fictional world"
+                        )
+                        res_real.metadata = res_real.metadata or {}
+                        res_real.metadata["mixed_world"] = True
+                        res_real.metadata["base_scope"] = "fictional"
+                        res_real.metadata["real_element"] = q.target
+                        res = res_real
+                    else:
+                        # Both fictional and real searches failed
+                        logger.warning(
+                            f"[ROUTER] All resolution methods failed for '{q.target}'"
+                        )
+                        res = res_fictional
+                        
+            except Exception as e:
+                logger.error(f"[ROUTER] Real-world fallback failed: {e}", exc_info=True)
                 res = res_fictional
         else:
-            # The fictional search succeeded, so use its result.
+            # Fictional search succeeded
             res = res_fictional
 
-    # Ensure the final result has the anchor and scope attached.
+    # Ensure the final result has the anchor and scope attached
     if res.anchor is None:
         res.anchor = anchor
     if res.scope is None:
         res.scope = anchor.scope
+    
+    logger.info(
+        f"[ROUTER] Final result: status={res.status}, scope={res.scope}, "
+        f"candidates={len(res.candidates)}, mixed_world={res.metadata.get('mixed_world') if res.metadata else False}"
+    )
         
     return res
