@@ -1,10 +1,13 @@
 # nyx/location/router.py
 
 from __future__ import annotations
-import re
-import logging
-from typing import Any, Dict, Optional
+
 import asyncio
+import logging
+import math
+import re
+import unicodedata
+from typing import Any, Dict, Optional
 
 from .anchors import derive_geo_anchor
 from .fictional_resolver import resolve_fictional
@@ -31,6 +34,7 @@ async def _track_player_movement(
     conversation_id: str,
     location_name: str,
     location_type: Optional[str] = None,
+    city: Optional[str] = None,
 ) -> None:
     """Track player movement in canon system."""
     try:
@@ -43,22 +47,35 @@ async def _track_player_movement(
                 user_id=int(user_id), 
                 conversation_id=int(conversation_id)
             )
-            
+
             # Update current location
             await update_current_roleplay(ctx, conn, 'CurrentLocation', location_name)
-            
+
+            city_value = city.strip() if isinstance(city, str) else None
+            if city_value:
+                await update_current_roleplay(ctx, conn, 'CurrentCity', city_value)
+
             # Log movement with appropriate significance
             significance = 6 if location_type in ['city', 'district'] else 4
+            event_details = (
+                f"Player moved to {location_name}"
+                if not city_value
+                else f"Player moved to {location_name} in {city_value}"
+            )
             await log_canonical_event(
                 ctx, conn,
-                f"Player moved to {location_name}",
+                event_details,
                 tags=['movement', 'location', 'player', location_type or 'venue'],
                 significance=significance,
                 persist_memory=True
             )
-            
-            logger.info(f"✓ Tracked player movement to: {location_name}")
-            
+
+            logger.info(
+                "✓ Tracked player movement to: %s (city=%s)",
+                location_name,
+                city_value or 'unknown',
+            )
+
     except Exception as e:
         logger.warning(f"Failed to track player movement: {e}", exc_info=True)
 
@@ -231,11 +248,132 @@ def _has_grounded_results(result: ResolveResult) -> bool:
     """Check if any candidates in the result are grounded via Google Maps."""
     if not result or not result.candidates:
         return False
-    
+
     return any(
         c.place.meta.get("grounded") or c.place.meta.get("google_verified")
         for c in result.candidates
     )
+
+
+def _normalize_city_name(value: Optional[str]) -> Optional[str]:
+    """Normalize city strings for comparison."""
+    if not value:
+        return None
+
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+
+    primary = cleaned.split(",")[0].strip()
+    normalized = unicodedata.normalize("NFKC", primary)
+    normalized = re.sub(r"[^0-9a-zA-Z]+", "", normalized.casefold())
+    return normalized or None
+
+
+def _haversine_distance_km(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
+    """Compute great-circle distance between two coordinates in kilometers."""
+    radius_km = 6371.0
+    d_lat = math.radians(b_lat - a_lat)
+    d_lon = math.radians(b_lon - a_lon)
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(math.radians(a_lat))
+        * math.cos(math.radians(b_lat))
+        * math.sin(d_lon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return radius_km * c
+
+
+def _extract_candidate_city(candidate: Any) -> Optional[str]:
+    """Attempt to derive the candidate's city from address or metadata."""
+    place = getattr(candidate, "place", None)
+    if not place:
+        return None
+
+    address = place.address if isinstance(place.address, dict) else {}
+    for key in ("city", "town", "municipality", "locality", "village"):
+        candidate_city = address.get(key)
+        if candidate_city:
+            return str(candidate_city)
+
+    normalized_path = address.get("_normalized_admin_path") if isinstance(address, dict) else None
+    if isinstance(normalized_path, dict):
+        for key in ("city", "town"):
+            candidate_city = normalized_path.get(key)
+            if candidate_city:
+                return str(candidate_city)
+
+    meta = place.meta if isinstance(place.meta, dict) else {}
+    for key in ("city", "primary_city", "municipality", "locality"):
+        candidate_city = meta.get(key)
+        if candidate_city:
+            return str(candidate_city)
+
+    return None
+
+
+def _check_city_change(result: ResolveResult, anchor: Anchor) -> Optional[Dict[str, Any]]:
+    """
+    Inspect the top candidate and determine if it belongs to a different city
+    than the player's current anchor city. Returns city context information
+    including travel distance when available.
+    """
+
+    if not result or not result.candidates:
+        return None
+
+    top_candidate = result.candidates[0]
+    candidate_city = _extract_candidate_city(top_candidate)
+    if not candidate_city:
+        return None
+
+    anchor_city = (anchor.primary_city or "").strip() if anchor else ""
+    normalized_anchor = _normalize_city_name(anchor_city)
+    normalized_candidate = _normalize_city_name(candidate_city)
+
+    changed = False
+    if normalized_anchor and normalized_candidate:
+        changed = normalized_anchor != normalized_candidate
+
+    distance = None
+    if (
+        changed
+        and anchor
+        and anchor.lat is not None
+        and anchor.lon is not None
+        and top_candidate.place.lat is not None
+        and top_candidate.place.lon is not None
+    ):
+        distance = _haversine_distance_km(
+            float(anchor.lat),
+            float(anchor.lon),
+            float(top_candidate.place.lat),
+            float(top_candidate.place.lon),
+        )
+
+    if changed:
+        if distance is not None:
+            logger.info(
+                "[ROUTER] Destination city '%s' differs from anchor city '%s' (~%.1f km)",
+                candidate_city,
+                anchor_city or "unknown",
+                distance,
+            )
+        else:
+            logger.info(
+                "[ROUTER] Destination city '%s' differs from anchor city '%s'",
+                candidate_city,
+                anchor_city or "unknown",
+            )
+
+    return {
+        "candidate_city": candidate_city,
+        "anchor_city": anchor_city or None,
+        "changed": changed,
+        "distance_km": distance,
+        "candidate": top_candidate,
+    }
 
 
 async def resolve_place_or_travel(
@@ -493,26 +631,92 @@ async def resolve_place_or_travel(
         res.anchor = anchor
     if res.scope is None:
         res.scope = anchor.scope
-    
+
+    city_context = _check_city_change(res, anchor)
+    candidate_city = city_context["candidate_city"] if city_context else None
+
+    if city_context:
+        existing_meta = getattr(res, "metadata", None)
+        if isinstance(existing_meta, dict):
+            metadata = existing_meta
+        else:
+            metadata = {}
+            res.metadata = metadata
+        metadata.setdefault("candidate_city", candidate_city)
+        if city_context.get("anchor_city"):
+            metadata.setdefault("origin_city", city_context["anchor_city"])
+    else:
+        metadata = getattr(res, "metadata", None)
+
+    if city_context and city_context["changed"]:
+        metadata = metadata if isinstance(metadata, dict) else {}
+        res.metadata = metadata
+        metadata["requires_travel"] = True
+        metadata["destination_city"] = city_context["candidate_city"]
+        metadata["origin_city"] = city_context.get("anchor_city")
+        distance_km = city_context.get("distance_km")
+        if distance_km is not None:
+            metadata["travel_distance_km"] = distance_km
+
+        anchor_city = city_context.get("anchor_city")
+        distance_note = (
+            f" (~{distance_km:.1f} km away)" if distance_km is not None else ""
+        )
+        travel_msg = (
+            f"This destination is in {city_context['candidate_city']}, outside your current city {anchor_city}{distance_note}. "
+            "You'll need to travel to reach it."
+        )
+        metadata["travel_prompt"] = travel_msg
+        prompts = metadata.setdefault("prompts", [])
+        if travel_msg not in prompts:
+            prompts.append(travel_msg)
+
+        if res.message:
+            res.message = f"{res.message} {travel_msg}".strip()
+        else:
+            res.message = travel_msg
+
+        res.operations.append({
+            "op": "travel.prompt",
+            "from_city": anchor_city,
+            "to_city": city_context["candidate_city"],
+            "distance_km": distance_km,
+        })
+
+    if not hasattr(res, "metadata"):
+        res.metadata = metadata if isinstance(metadata, dict) else {}
+
     # ✨ NEW: Track player movement if we have an exact match
     if res.status == STATUS_EXACT and res.candidates:
         top_candidate = res.candidates[0]
         location_name = top_candidate.place.name
         location_type = top_candidate.place.meta.get("location_type") or top_candidate.place.level
-        
+
         # Track movement asynchronously (don't block on failure)
         asyncio.create_task(
-            _track_player_movement(user_id, conversation_id, location_name, location_type)
+            _track_player_movement(
+                user_id,
+                conversation_id,
+                location_name,
+                location_type,
+                city=candidate_city,
+            )
         )
-    
+
     # ✨ NEW: Also track if we have a location object directly
     if res.location and res.status == STATUS_EXACT:
+        location_city = (
+            res.location.city.strip()
+            if isinstance(res.location.city, str) and res.location.city.strip()
+            else candidate_city
+        )
         asyncio.create_task(
             _track_player_movement(
-                user_id, 
-                conversation_id, 
+                user_id,
+                conversation_id,
                 res.location.location_name,
-                res.location.location_type
+                res.location.location_type,
+                city=location_city,
             )
         )
     
