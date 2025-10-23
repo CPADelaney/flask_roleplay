@@ -40,7 +40,7 @@ class CheckpointingPlannerAgent:
             instructions=_CHECKPOINT_PROMPT,
             model="gpt-5-nano", # Or your preferred model
             output_type=None, # We expect raw JSON string output
-            model_settings={"response_format": {"type": "json_object"}} # Request JSON output
+            model_settings={}, # Rely on default response formatting
         )
         logger.info("CheckpointingPlannerAgent initialized.")
 

@@ -1079,7 +1079,7 @@ class NyxAgentSDK:
                 )
                 logger.info("[SDK-%s] Fallback proceeding with feasible action", trace_id)
 
-        safe_settings = ModelSettings(strict_tools=False, response_format=None)
+        safe_settings = ModelSettings(strict_tools=False)
         run_config = RunConfig(model_settings=safe_settings, workflow_name="Nyx Fallback")
         runner_context = RunContextWrapper(ctx)
 
