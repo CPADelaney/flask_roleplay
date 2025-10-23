@@ -1084,36 +1084,33 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
     )
 
     prompt = (
-            f"Design evocative fictional points of interest within the district \"{profile.get('name', district_key)}\".\n"
-            f"Player query: {normalized_query or 'general exploration request'}.\n"
-            f"District profile:\n{profile_text}\n\n"
-            f"World seed guidance:\n{world_seed_text}\n\n"
-            "Respond with JSON only. Return an object with a `pois` array. Each POI must include: "
-            "name, category, description, lore, travel (with modes array and time_minutes number), notable_features, "
-            "and coordinates with `dx_m` and `dy_m` offsets in meters from the district center.\n\n"
-            "### Example of the required JSON format:\n"
-            "```json\n"
-            "{\n"
-            '  "pois": [\n'
-            '    {\n'
-            '      "name": "The Gilded Compass",\n'
-            '      "category": "Tavern",\n'
-            '      "description": "A rowdy tavern built into the hull of a decommissioned airship, known for its smuggled spirits and whispered secrets.",\n'
-            '      "lore": "They say the captain of the ship, One-Eyed Maeve, still haunts the bar, searching for her lost treasure map.",\n'
-            '      "travel": {\n'
-            '        "modes": ["walk", "ferry"],\n'
-            '        "time_minutes": 15\n'
-            '      },\n'
-            '      "notable_features": ["Serves a glowing blue ale", "The bar is carved from a single piece of driftwood"],\n'
-            '      "coordinates": {\n'
-            '        "dx_m": -250,\n'
-            '        "dy_m": 120\n'
-            '      }\n'
-            '    }\n'
-            '  ]\n'
-            '}\n'
-            "```"
-        )
+        f"Create fictional points of interest in \"{profile.get('name', district_key)}\".\n\n"
+        f"**Player's Query:** {normalized_query or 'exploration'}\n\n"
+        f"**District Profile:**\n{profile_text}\n\n"
+        f"**World Context:**\n{world_seed_text}\n\n"
+        f"**CRITICAL INSTRUCTIONS:**\n"
+        f"1. Generate POIs that DIRECTLY relate to the player's query: '{normalized_query}'\n"
+        f"2. Match the district's vibe and theme described above\n"
+        f"3. Stay consistent with the world context's genre, tone, and technology level\n"
+        f"4. Create ORIGINAL names and concepts - do not copy any examples\n\n"
+        f"Return ONLY valid JSON (no markdown fences):\n\n"
+        "{\n"
+        '  "pois": [\n'
+        '    {\n'
+        '      "name": "Unique Location Name",\n'
+        '      "category": "Type of place",\n'
+        '      "description": "What this place is",\n'
+        '      "lore": "Interesting story or hook",\n'
+        '      "travel": {"modes": ["walk"], "time_minutes": 10},\n'
+        '      "notable_features": ["Feature 1", "Feature 2"],\n'
+        '      "coordinates": {"dx_m": 100, "dy_m": -50}\n'
+        '    }\n'
+        '  ]\n'
+        '}\n\n'
+        f"Coordinates are offsets in meters from district center (dx=east, dy=north).\n"
+        f"Time is walking time in minutes from current position.\n\n"
+        f"**Generate 2-4 POIs matching: {normalized_query}**"
+    )
 
     try:
         llm_payload = await call_gpt_json(
@@ -1289,37 +1286,30 @@ async def get_or_generate_districts(
     seed_summary = _format_world_seed(seed, city)
     context_name = _extract_text_value(seed, _WORLD_NAME_PATHS) or city
     prompt = (
-            f"You are a meticulous world-builder designing distinct districts for the fictional city \"{city}\".\n"
-            f"World seed insights:\n{seed_summary}\n\n"
-            "Return a JSON object with a `districts` array containing three to five entries. "
-            "Each district must provide: key, name, vibe, layout, theme, summary, and a list of 2-4 distinctive features. "
-            "Focus on relative placement and differentiated vibes. Respond with JSON only.\n\n"
-            "### Example of the required JSON format:\n"
-            "```json\n"
-            "{\n"
-            '  "districts": [\n'
-            '    {\n'
-            '      "key": "iron_quarter",\n'
-            '      "name": "The Iron Quarter",\n'
-            '      "vibe": "Industrial heart of the city, filled with smog and the clang of machinery.",\n'
-            '      "layout": "A rigid grid of warehouses and factories south of the river.",\n'
-            '      "theme": "Steampunk industry and labor movements",\n'
-            '      "summary": "Where the city\'s gears are forged and its workforce toils.",\n'
-            '      "features": ["Automated cargo trains", "Towering smokestacks"]\n'
-            '    },\n'
-            '    {\n'
-            '      "key": "whisperwood",\n'
-            '      "name": "Whisperwood",\n'
-            '      "vibe": "An ancient, overgrown park that has reclaimed the city\'s northern edge.",\n'
-            '      "layout": "A sprawling, untamed forest with winding paths and hidden clearings.",\n'
-            '      "theme": "Nature\'s resilience and forgotten magic",\n'
-            '      "summary": "A place of quiet mystery, rumored to be older than the city itself.",\n'
-            '      "features": ["Glowing flora at night", "The ruins of an old observatory"]\n'
-            '    }\n'
-            '  ]\n'
-            '}\n'
-            "```"
-        )
+        f"You are a world-builder creating unique districts for \"{city}\".\n\n"
+        f"**World Context:**\n{seed_summary}\n\n"
+        f"**User's Request:** {context_name}\n\n"
+        f"**Your Task:**\n"
+        f"Design 3-5 ORIGINAL districts that fit this specific world and request. "
+        f"Each district must be thematically appropriate to the world seed above.\n\n"
+        f"**CRITICAL: Do NOT use generic fantasy tropes unless they fit the world seed. "
+        f"Create districts that match the tone, genre, and themes described above.**\n\n"
+        f"Return ONLY a JSON object (no markdown fences) with this structure:\n\n"
+        "{\n"
+        '  "districts": [\n'
+        '    {\n'
+        '      "key": "unique_slug_here",\n'
+        '      "name": "District Display Name",\n'
+        '      "vibe": "One vivid sentence about atmosphere",\n'
+        '      "layout": "One sentence about physical placement",\n'
+        '      "theme": "Core concept in a few words",\n'
+        '      "summary": "One sentence tagline",\n'
+        '      "features": ["Notable feature 1", "Notable feature 2"]\n'
+        '    }\n'
+        '  ]\n'
+        '}\n\n'
+        f"**Now create districts for: {city}**"
+    )
 
     try:
         llm_payload = await call_gpt_json(
