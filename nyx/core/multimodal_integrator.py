@@ -1505,7 +1505,7 @@ class MultimodalIntegrator:
                 self.agent,
                 input=prompt,
                 context=self.context,
-                model_settings=ModelSettings(response_format={"type": "json_object"})
+                model_settings=ModelSettings()
             )
             
             # Convert the result to IntegratedPercept

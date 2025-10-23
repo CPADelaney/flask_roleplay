@@ -114,8 +114,7 @@ from nyx.core.sync.strategy_controller import get_active_strategies
 # ===== CRITICAL FIX #2: Default Model Settings with strict_tools=False =====
 DEFAULT_MODEL_SETTINGS = ModelSettings(
     strict_tools=False,
-    # Disable structured format validation
-    response_format=None,
+    # Rely on SDK defaults for response formatting.
 )
 
 # ===== CRITICAL FIX #3: Clean BaseModel without additionalProperties =====
@@ -4319,7 +4318,6 @@ async def process_user_input(
         # Create custom settings with extra safety
         safe_settings = ModelSettings(
             strict_tools=False,
-            response_format=None,
         )
         logger.debug(f"[{trace_id}] ✓ Using safe model settings")
 

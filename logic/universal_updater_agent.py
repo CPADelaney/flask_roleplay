@@ -909,7 +909,7 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     handoffs=[handoff(extraction_agent, tool_name_override="extract_state_changes")],
     output_type=AgentOutputSchema(UniversalUpdateInput, strict_json_schema=False),
     input_guardrails=[InputGuardrail(guardrail_function=content_safety_guardrail)],
-    model_settings=ModelSettings(response_format="json_object"),
+    model_settings=ModelSettings(),
     model='gpt-5-nano',
 )
 

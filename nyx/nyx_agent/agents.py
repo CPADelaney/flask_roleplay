@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 # Default Model Settings with strict_tools=False
 DEFAULT_MODEL_SETTINGS = ModelSettings(
     strict_tools=False,
-    response_format=None,
 )
 
 # ===== Sub-Agent Definitions =====

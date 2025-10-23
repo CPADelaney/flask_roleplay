@@ -550,7 +550,7 @@ async def process_user_input(
         # ---- STEP 5: Run main agent with enhanced input ----------------------
         async with _log_step("agent_run", trace_id):
             runner_context = RunContextWrapper(nyx_context)
-            safe_settings = ModelSettings(strict_tools=False, response_format=None)
+            safe_settings = ModelSettings(strict_tools=False)
             run_config = RunConfig(model_settings=safe_settings)
 
             # Use enhanced_input that includes feasibility context
