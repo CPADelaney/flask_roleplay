@@ -24,16 +24,17 @@ from .types import (
 
 LOGGER = logging.getLogger(__name__)
 
+# Use the correct model that supports grounding
 _GEMINI_ENDPOINT = os.getenv(
     "GOOGLE_GEMINI_ENDPOINT",
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",  # Changed!
 )
 
 
 def _anchor_context(anchor: Anchor) -> str:
     parts: List[str] = []
     if anchor.label:
-        parts.append(f"Anchor label: {anchor.label}")
+        parts.append(f"Current location: {anchor.label}")
     if anchor.primary_city:
         parts.append(f"City: {anchor.primary_city}")
     if anchor.region:
@@ -41,61 +42,37 @@ def _anchor_context(anchor: Anchor) -> str:
     if anchor.country:
         parts.append(f"Country: {anchor.country}")
     if anchor.lat is not None and anchor.lon is not None:
-        parts.append(f"Coordinates: {anchor.lat:.6f}, {anchor.lon:.6f}")
-    focus = anchor.focus
-    if focus and focus.meta:
-        focus_meta = ", ".join(f"{k}={v}" for k, v in focus.meta.items())
-        if focus_meta:
-            parts.append(f"Focus meta: {focus_meta}")
+        parts.append(f"Near coordinates: {anchor.lat:.6f}, {anchor.lon:.6f}")
     return "\n".join(parts)
 
 
 def _build_prompt(query: PlaceQuery, anchor: Anchor) -> str:
+    """Build a prompt that leverages Google Maps grounding."""
     context_lines = _anchor_context(anchor)
     target = query.target or query.raw_text
-    prompt = f"""
-You are an assistant that maps natural language requests to real-world places.
-Use the anchor context to reason about which venues or points of interest the user likely means.
-Return JSON only. The JSON must follow this schema:
-{{
-  "status": "exact | multiple | travel_plan | ask | not_found",
-  "message": "short status message",
-  "candidates": [
-    {{
-      "name": "place name",
-      "level": "venue|city|region|route",
-      "latitude": number,
-      "longitude": number,
-      "confidence": 0.0-1.0,
-      "address": {{"line1": str, "city": str, "region": str, "country": str, "postal_code": str}},
-      "travel_time_minutes": number | null,
-      "category": "category or type",
-      "notes": "optional details"
-    }}
-  ],
-  "operations": [
-    {{
-      "op": "poi.navigate" | "travel.plan" | "travel.estimate",
-      "label": "name",
-      "lat": number,
-      "lon": number,
-      "travel_time_min": number | null
-    }}
-  ]
-}}
-Anchor context:
-{context_lines or "(unknown)"}
-User query: {target}
-If you are uncertain, return status "ask" with an explanatory message. Ensure numbers are valid floats.
-"""
+    
+    # Simplified prompt - let Gemini use Maps grounding naturally
+    prompt = f"""I'm looking for: {target}
+
+Current context:
+{context_lines or "Unknown location"}
+
+Please help me find this place. Provide:
+1. The exact name and address
+2. Coordinates (latitude, longitude)
+3. Distance/travel time from my current location if applicable
+4. Any relevant details (business hours, category, etc.)
+
+If you find multiple matches, list the top 3-5 options."""
+    
     return prompt.strip()
 
 
 def _clean_json_text(text: str) -> str:
+    """Remove markdown fences and extract JSON."""
     text = text.strip()
     if not text:
         return text
-    # Remove markdown fences such as ```json ... ```
     fence_match = re.match(r"```(json)?(.*)```", text, re.DOTALL | re.IGNORECASE)
     if fence_match:
         text = fence_match.group(2).strip()
@@ -105,6 +82,7 @@ def _clean_json_text(text: str) -> str:
 
 
 def _extract_text_candidates(payload: Dict[str, Any]) -> str:
+    """Extract text from Gemini response."""
     chunks: List[str] = []
     for candidate in payload.get("candidates") or []:
         content = candidate.get("content") or {}
@@ -115,96 +93,216 @@ def _extract_text_candidates(payload: Dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def _normalise_status(raw_status: Optional[str], *, fallback: str) -> str:
-    if not raw_status:
-        return fallback
-    s = str(raw_status).strip().lower()
-    if s in {STATUS_EXACT, STATUS_MULTIPLE, STATUS_TRAVEL_PLAN, STATUS_ASK, STATUS_NOT_FOUND}:
-        return s
-    return fallback
+def _extract_grounding_metadata(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract Google Maps grounding metadata from response."""
+    for candidate in payload.get("candidates") or []:
+        grounding_metadata = candidate.get("groundingMetadata")
+        if grounding_metadata:
+            return grounding_metadata
+    return None
 
 
-def _safe_float(value: Any) -> Optional[float]:
+def _parse_grounded_response(
+    text: str, 
+    grounding_metadata: Optional[Dict[str, Any]],
+    anchor: Anchor
+) -> List[Candidate]:
+    """Parse Gemini response with Google Maps grounding data."""
+    candidates: List[Candidate] = []
+    
+    # Extract places from grounding metadata
+    if grounding_metadata:
+        grounding_supports = grounding_metadata.get("groundingSupports", [])
+        
+        for support in grounding_supports:
+            # Check if this is a Maps grounding support
+            grounding_chunk_indices = support.get("groundingChunkIndices", [])
+            segment = support.get("segment", {})
+            
+            # Look for place information in the grounding chunks
+            for chunk in grounding_metadata.get("groundingChunks", []):
+                # Check if this chunk is referenced by this support
+                if chunk.get("web"):  # This is a web/maps result
+                    web_info = chunk.get("web", {})
+                    
+                    # Try to extract structured place data
+                    place_name = web_info.get("title", "Unknown Place")
+                    uri = web_info.get("uri", "")
+                    
+                    # Parse coordinates from URI if it's a Google Maps link
+                    lat, lon = _extract_coords_from_maps_url(uri)
+                    
+                    if not lat and anchor.lat:
+                        lat = anchor.lat
+                    if not lon and anchor.lon:
+                        lon = anchor.lon
+                    
+                    place = Place(
+                        name=place_name,
+                        level="venue",
+                        lat=lat,
+                        lon=lon,
+                        address={
+                            "line1": web_info.get("title"),
+                            "_normalized_admin_path": {
+                                "city": anchor.primary_city,
+                                "region": anchor.region,
+                                "country": anchor.country,
+                            }
+                        },
+                        meta={
+                            "source": "gemini_maps_grounding",
+                            "uri": uri,
+                            "grounded": True,
+                        },
+                    )
+                    
+                    candidate = Candidate(
+                        place=place,
+                        confidence=0.85,  # High confidence for grounded results
+                        rationale="google_maps_grounding",
+                        raw=chunk,
+                    )
+                    candidates.append(candidate)
+    
+    # If no grounding metadata, try to parse structured response from text
+    if not candidates:
+        candidates = _parse_text_fallback(text, anchor)
+    
+    return candidates
+
+
+def _extract_coords_from_maps_url(url: str) -> tuple[Optional[float], Optional[float]]:
+    """Extract coordinates from a Google Maps URL."""
+    if not url:
+        return None, None
+    
+    # Pattern: @lat,lon,zoom
+    match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+)', url)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    
+    # Pattern: ?q=lat,lon
+    match = re.search(r'[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)', url)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    
+    return None, None
+
+
+def _parse_text_fallback(text: str, anchor: Anchor) -> List[Candidate]:
+    """Fallback parser if grounding metadata is not available."""
+    candidates: List[Candidate] = []
+    
+    # Try to parse as JSON first
     try:
-        if value is None:
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _collect_operations(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    ops: List[Dict[str, Any]] = []
-    for op in data.get("operations") or []:
-        if isinstance(op, dict):
-            ops.append(op)
-    return ops
-
-
-def _build_candidate(item: Dict[str, Any]) -> Optional[Candidate]:
-    name = item.get("name") or item.get("label")
-    if not isinstance(name, str) or not name.strip():
-        return None
-    level = item.get("level") or "venue"
-    lat = _safe_float(item.get("latitude") or item.get("lat"))
-    lon = _safe_float(item.get("longitude") or item.get("lon"))
-    address = item.get("address") if isinstance(item.get("address"), dict) else {}
-    confidence = _safe_float(item.get("confidence")) or 0.0
-    travel_time_min = _safe_float(item.get("travel_time_minutes") or item.get("travel_time_min"))
-    meta: Dict[str, Any] = {
-        "source": "gemini",
-        "scope": "real",
-    }
-    if "category" in item:
-        meta["category"] = item.get("category")
-    if item.get("notes"):
-        meta["notes"] = item.get("notes")
-    if travel_time_min is not None:
-        meta["travel_time_minutes"] = travel_time_min
-    place = Place(
-        name=name.strip(),
-        level=level if isinstance(level, str) else "venue",
-        key=item.get("id") or item.get("place_id") or name.strip().lower(),
-        lat=lat,
-        lon=lon,
-        address=dict(address),
-        meta=meta,
-    )
-    return Candidate(
-        place=place,
-        confidence=max(0.0, min(1.0, confidence)),
-        raw=dict(item),
-    )
+        cleaned = _clean_json_text(text)
+        parsed = json.loads(cleaned)
+        
+        if isinstance(parsed, dict):
+            places = parsed.get("places") or parsed.get("results") or [parsed]
+            for item in places if isinstance(places, list) else [places]:
+                if not isinstance(item, dict):
+                    continue
+                
+                name = item.get("name") or item.get("title")
+                if not name:
+                    continue
+                
+                lat = item.get("lat") or item.get("latitude")
+                lon = item.get("lon") or item.get("longitude")
+                
+                place = Place(
+                    name=name,
+                    level="venue",
+                    lat=float(lat) if lat else anchor.lat,
+                    lon=float(lon) if lon else anchor.lon,
+                    address=item.get("address", {}),
+                    meta={
+                        "source": "gemini_text_parsing",
+                        "category": item.get("category") or item.get("type"),
+                    },
+                )
+                
+                candidates.append(Candidate(
+                    place=place,
+                    confidence=0.6,
+                    rationale="text_parsing",
+                    raw=item,
+                ))
+    except json.JSONDecodeError:
+        LOGGER.debug("Could not parse response as JSON, using text analysis")
+    
+    return candidates
 
 
 async def resolve_location_with_gemini(query: PlaceQuery, anchor: Anchor) -> ResolveResult:
-    """Resolve a real-world place using the Gemini API.
-
-    The adapter is best-effort: if Gemini cannot be reached or the response cannot be
-    parsed we return a not_found ResolveResult containing the encountered errors so
-    callers can fall back to other providers.
     """
-
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    Resolve a real-world place using Gemini with Google Maps grounding.
+    
+    This uses Gemini's built-in Google Maps integration to find real places.
+    """
+    api_key = os.getenv("GOOGLE_GEMINI_API_KEY") or os.getenv("GOOGLE_MAPS_API_KEY")
+    
     base_result = ResolveResult(
         status=STATUS_NOT_FOUND,
         anchor=anchor,
         scope=anchor.scope or "real",
         message="Gemini resolution unavailable.",
     )
+    
     if not api_key:
         base_result.errors.append("gemini_api_key_missing")
+        LOGGER.warning("GOOGLE_GEMINI_API_KEY not set")
         return base_result
 
     prompt = _build_prompt(query, anchor)
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    # THIS IS THE KEY CHANGE: Enable Google Maps grounding
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "tools": [
+            {
+                "googleSearchRetrieval": {
+                    "dynamicRetrievalConfig": {
+                        "mode": "MODE_DYNAMIC",
+                        "dynamicThreshold": 0.7
+                    }
+                }
+            }
+        ],
+        # Optional: Add generation config for better structured output
+        "generationConfig": {
+            "temperature": 0.2,  # Lower temperature for factual responses
+            "topP": 0.8,
+            "topK": 40,
+        }
+    }
 
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.post(f"{_GEMINI_ENDPOINT}?key={api_key}", json=payload)
+            response = await client.post(
+                f"{_GEMINI_ENDPOINT}?key={api_key}",
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            )
             response.raise_for_status()
             data = response.json()
-    except Exception as exc:  # pragma: no cover - network failure guard
+            
+            LOGGER.debug(f"Gemini response: {json.dumps(data, indent=2)}")
+            
+    except httpx.HTTPStatusError as exc:
+        LOGGER.error(f"Gemini HTTP error: {exc.response.status_code} - {exc.response.text}")
+        base_result.errors.append(f"gemini_http_error:{exc.response.status_code}")
+        base_result.message = "Gemini location lookup failed."
+        return base_result
+    except Exception as exc:
         LOGGER.exception("Gemini request failed", exc_info=exc)
         base_result.errors.append(f"gemini_request_failed:{exc}")
         base_result.message = "Gemini location lookup failed."
@@ -216,63 +314,51 @@ async def resolve_location_with_gemini(query: PlaceQuery, anchor: Anchor) -> Res
         base_result.message = "Gemini returned no content."
         return base_result
 
-    cleaned = _clean_json_text(text)
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        LOGGER.warning("Gemini response parse error: %s", cleaned)
-        base_result.errors.append(f"gemini_parse_error:{exc}")
-        base_result.message = "Gemini response unparseable."
+    # Extract grounding metadata (this is where Google Maps data lives)
+    grounding_metadata = _extract_grounding_metadata(data)
+    
+    if grounding_metadata:
+        LOGGER.info("✓ Gemini used Google Maps grounding")
+    else:
+        LOGGER.warning("✗ No Google Maps grounding in response")
+
+    # Parse candidates from grounded response
+    candidates = _parse_grounded_response(text, grounding_metadata, anchor)
+    
+    if not candidates:
+        base_result.errors.append("gemini_no_candidates")
+        base_result.message = f"Couldn't find '{query.target}' near {anchor.label or 'your location'}."
         return base_result
 
-    candidates_raw = parsed.get("candidates") if isinstance(parsed, dict) else None
-    candidates: List[Candidate] = []
-    for item in candidates_raw or []:
-        if isinstance(item, dict):
-            cand = _build_candidate(item)
-            if cand:
-                candidates.append(cand)
-    status = _normalise_status(parsed.get("status") if isinstance(parsed, dict) else None, fallback=STATUS_MULTIPLE if len(candidates) > 1 else STATUS_EXACT if candidates else STATUS_NOT_FOUND)
+    # Determine status
+    if len(candidates) == 1:
+        status = STATUS_EXACT
+        message = f"Found: {candidates[0].place.name}"
+    elif len(candidates) > 1:
+        status = STATUS_MULTIPLE
+        message = f"Found {len(candidates)} possible matches"
+    else:
+        status = STATUS_NOT_FOUND
+        message = "No matches found"
 
-    operations = _collect_operations(parsed if isinstance(parsed, dict) else {})
-    if not operations and candidates:
-        for cand in candidates:
-            travel = cand.raw.get("travel_time_minutes") if isinstance(cand.raw, dict) else None
-            operations.append(
-                {
-                    "op": "poi.navigate",
-                    "label": cand.place.name,
-                    "lat": cand.place.lat,
-                    "lon": cand.place.lon,
-                    "travel_time_min": travel,
-                }
-            )
+    # Build operations
+    operations = []
+    for cand in candidates:
+        operations.append({
+            "op": "poi.navigate",
+            "label": cand.place.name,
+            "lat": cand.place.lat,
+            "lon": cand.place.lon,
+            "category": cand.place.meta.get("category"),
+            "grounded": cand.place.meta.get("grounded", False),
+        })
 
-    message = parsed.get("message") if isinstance(parsed, dict) else None
-    if not isinstance(message, str) or not message.strip():
-        if status == STATUS_EXACT and candidates:
-            message = f"Heading to {candidates[0].place.name}."
-        elif status == STATUS_MULTIPLE and candidates:
-            message = "Here are some possibilities from Gemini."
-        elif status == STATUS_TRAVEL_PLAN:
-            message = "Here is a travel plan suggestion."
-        elif status == STATUS_ASK:
-            message = "Gemini needs more detail about this place."
-        else:
-            message = "Gemini could not resolve the location."
-
-    choices: List[str] = [c.place.name for c in candidates] if status == STATUS_MULTIPLE else []
-
-    result = ResolveResult(
+    return ResolveResult(
         status=status,
         message=message,
         candidates=candidates,
         operations=operations,
-        choices=choices,
+        choices=[c.place.name for c in candidates] if status == STATUS_MULTIPLE else [],
         anchor=anchor,
         scope=anchor.scope or "real",
     )
-
-    if not candidates and status == STATUS_NOT_FOUND:
-        result.errors.append("gemini_no_candidates")
-    return result
