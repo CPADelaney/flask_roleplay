@@ -1457,7 +1457,6 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
         if force_json_response:
             # For world-building: request a direct JSON object.
             logger.debug("Requesting direct JSON object response (force_json_response=True)")
-            params["response_format"] = {"type": "json_object"}
         else:
             # For game actions: force the universal update tool.
             tools_payload = ToolSchemaManager.get_all_tools()
@@ -1469,9 +1468,8 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
         try:
             response = await _responses_create_with_retry(client, params)
         except openai.BadRequestError as e:
-            logger.warning("Responses API rejected call (%s); retrying without forced tool/format", e)
+            logger.warning("Responses API rejected call (%s); retrying without forced tool", e)
             params.pop("tool_choice", None)
-            params.pop("response_format", None)
             response = await _responses_create_with_retry(client, params)
 
         tool_name, tool_args = _extract_first_tool_call(response)
@@ -1608,7 +1606,6 @@ DO NOT produce user-facing text here; only the JSON.
         # Apply the same force_json_response logic for reflection path
         if force_json_response:
             logger.debug("Requesting direct JSON object response (force_json_response=True) for reflection final step")
-            final_params["response_format"] = {"type": "json_object"}
         else:
             final_tools_payload = ToolSchemaManager.get_all_tools()
             if final_tools_payload:
@@ -1618,9 +1615,8 @@ DO NOT produce user-facing text here; only the JSON.
         try:
             final_response = await _responses_create_with_retry(client, final_params)
         except openai.BadRequestError as e:
-            logger.warning("Responses API rejected call in reflection path (%s); retrying without forced tool/format", e)
+            logger.warning("Responses API rejected call in reflection path (%s); retrying without forced tool", e)
             final_params.pop("tool_choice", None)
-            final_params.pop("response_format", None)
             final_response = await _responses_create_with_retry(client, final_params)
         
         tool_name, tool_args = _extract_first_tool_call(final_response)
@@ -1963,7 +1959,6 @@ async def generate_text_completion(
     max_tokens: int = 1000,
     stop_sequences: List[str] | None = None,
     task_type: str = "decision",
-    response_format: Optional[str] = None,  # Added for JSON mode
     model: str = "gpt-5-nano",  # Added model parameter
 ) -> str:
     """
@@ -1977,7 +1972,6 @@ async def generate_text_completion(
         max_tokens: Maximum output tokens
         stop_sequences: Optional stop sequences
         task_type: Task type for default temperature
-        response_format: Optional response format ("json" for strict JSON)
         model: Model to use (default: gpt-5-nano)
     
     Returns:
@@ -2019,10 +2013,6 @@ async def generate_text_completion(
         # Add stop sequences if provided
         if stop_sequences:
             params["stop"] = stop_sequences
-        
-        # Add response format if specified (for JSON mode)
-        if response_format == "json":
-            params["response_format"] = {"type": "json_object"}  # Responses JSON mode
         
         model_limit = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
         requested_limit = params.get("max_output_tokens")
@@ -2435,7 +2425,6 @@ async def _responses_json_call(
     user_prompt: str,
     max_output_tokens: int = 1024,
     temperature: float | None = None,
-    response_format: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Call the *Responses* API and return parsed JSON (or raw text fallback).
@@ -2446,7 +2435,6 @@ async def _responses_json_call(
         user_prompt: User prompt
         max_output_tokens: Maximum output tokens
         temperature: Optional temperature (only used for models that support it)
-        response_format: Optional format ("json" for strict JSON mode)
         
     Returns:
         Parsed JSON dict or {"raw_response": text} if parsing fails
@@ -2464,10 +2452,6 @@ async def _responses_json_call(
     # Only add temperature if model supports it
     if temperature is not None and model in ALLOWS_TEMPERATURE:
         params["temperature"] = temperature
-    
-    # Add response format for strict JSON if requested
-    if response_format == "json":
-        params["response_format"] = {"type": "json_object"}  # Responses JSON mode
     
     resp = await _responses_create_with_retry(client, params)
 
