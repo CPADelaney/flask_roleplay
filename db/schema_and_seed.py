@@ -3558,6 +3558,9 @@ async def create_all_tables():
                 ON player_story_stats(user_id, conversation_id, story_id);
                 ''',
                 '''
+                DROP VIEW IF EXISTS canon.entity_cards_projection;
+                ''',
+                '''
                 ALTER TABLE NPCStats ALTER COLUMN embedding TYPE vector(1536);
                 ''',
                 '''
@@ -3875,9 +3878,9 @@ async def create_all_tables():
                 # UPDATE ALL VECTOR COLUMNS TO 1536 DIMENSIONS
                 # ======================================
                 '''
-                DO $$ 
+                DO $$
                 BEGIN
-                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
                                WHERE table_name = 'npcstats' AND column_name = 'embedding') THEN
                         ALTER TABLE NPCStats ALTER COLUMN embedding TYPE vector(1536);
                     END IF;
@@ -3982,11 +3985,90 @@ async def create_all_tables():
                         ALTER TABLE WorldLore ALTER COLUMN embedding TYPE vector(1536);
                     END IF;
                     
-                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
                                WHERE table_name = 'nyxmemories' AND column_name = 'embedding') THEN
                         ALTER TABLE NyxMemories ALTER COLUMN embedding TYPE vector(1536);
                     END IF;
                 END $$;
+                ''',
+                '''
+                CREATE OR REPLACE VIEW canon.entity_cards_projection AS
+                WITH npc_cards AS (
+                    SELECT
+                        'npc'::text AS entity_type,
+                        npc_id::text AS entity_id,
+                        user_id,
+                        conversation_id,
+                        jsonb_build_object(
+                            'npc_id', npc_id,
+                            'npc_name', npc_name,
+                            'role', role,
+                            'description', physical_description,
+                            'location', current_location,
+                            'personality_traits', COALESCE(personality_traits, '[]'::jsonb),
+                            'relationships', COALESCE(relationships, '[]'::jsonb)
+                        ) AS card,
+                        to_tsvector(
+                            'english',
+                            COALESCE(npc_name, '') || ' ' ||
+                            COALESCE(physical_description, '') || ' ' ||
+                            COALESCE(role, '')
+                        ) AS search_vector,
+                        embedding,
+                        created_at::timestamptz AS updated_at
+                    FROM npcstats
+                ),
+                location_cards AS (
+                    SELECT
+                        'location'::text AS entity_type,
+                        id::text AS entity_id,
+                        user_id,
+                        conversation_id,
+                        jsonb_build_object(
+                            'location_id', id,
+                            'location_name', location_name,
+                            'description', description,
+                            'location_type', location_type,
+                            'notable_features', COALESCE(notable_features, '[]'::jsonb)
+                        ) AS card,
+                        to_tsvector(
+                            'english',
+                            COALESCE(location_name, '') || ' ' ||
+                            COALESCE(description, '') || ' ' ||
+                            COALESCE(location_type, '')
+                        ) AS search_vector,
+                        embedding,
+                        NULL::timestamptz AS updated_at
+                    FROM locations
+                ),
+                memory_cards AS (
+                    SELECT
+                        'memory'::text AS entity_type,
+                        id::text AS entity_id,
+                        user_id,
+                        conversation_id,
+                        jsonb_build_object(
+                            'memory_id', id,
+                            'entity_type', entity_type,
+                            'entity_id', entity_id,
+                            'content', memory_text,
+                            'memory_type', memory_type,
+                            'importance', significance,
+                            'tags', COALESCE(tags, '[]'::jsonb),
+                            'metadata', COALESCE(metadata, '{}'::jsonb)
+                        ) AS card,
+                        to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
+                        embedding,
+                        timestamp::timestamptz AS updated_at
+                    FROM unified_memories
+                    WHERE status = 'active'
+                      AND COALESCE(is_archived, FALSE) = FALSE
+                )
+                SELECT * FROM npc_cards
+                UNION ALL
+                SELECT * FROM location_cards
+                UNION ALL
+                SELECT * FROM memory_cards;
                 ''',
                 
                 # ======================================
