@@ -205,22 +205,14 @@ async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Op
     if not _GEMINI_MODEL:
         raise RuntimeError("gemini_api_key_missing")
 
+    # The prompt already contains the location context, which is what this SDK uses.
     prompt = _build_prompt_for_tools(query, anchor)
 
     # --- MODIFICATION START ---
-    # The correct way to enable the built-in search/grounding tool in this SDK
-    # is to simply pass its name as a string in the tools list.
-    tools = ["google_search_retrieval"]
+    # The correct way to enable the built-in search tool is to use the
+    # Tool.from_google_search_retrieval() constructor. There is no separate ToolConfig.
+    tools = [types.Tool.from_google_search_retrieval(types.GoogleSearchRetrieval())]
     # --- MODIFICATION END ---
-
-    # Define the tool config for providing the anchor location (this part is correct)
-    tool_config = None
-    if anchor.lat is not None and anchor.lon is not None:
-        tool_config = types.ToolConfig(
-            retrieval_config=types.RetrievalConfig(
-                lat_lng=types.LatLng(latitude=anchor.lat, longitude=anchor.lon)
-            )
-        )
 
     generation_config = types.GenerationConfig(temperature=0.2)
 
@@ -230,7 +222,7 @@ async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Op
             _GEMINI_MODEL.generate_content,
             contents=[prompt],
             tools=tools,
-            tool_config=tool_config,
+            # The tool_config argument is removed as it's not supported here
             generation_config=generation_config
         )
         
