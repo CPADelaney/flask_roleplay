@@ -208,15 +208,12 @@ async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Op
     prompt = _build_prompt_for_tools(query, anchor)
 
     # --- MODIFICATION START ---
-    # The 'google_search_retrieval' tool is the correct one to enable all grounding,
-    # including Google Maps when a location context is provided.
-    # There is no separate 'GoogleMaps' tool in this SDK.
-    tools = [
-        types.Tool(google_search_retrieval={})
-    ]
+    # The correct way to enable the built-in search/grounding tool in this SDK
+    # is to simply pass its name as a string in the tools list.
+    tools = ["google_search_retrieval"]
     # --- MODIFICATION END ---
 
-    # Define the tool config for providing the anchor location (this part was already correct)
+    # Define the tool config for providing the anchor location (this part is correct)
     tool_config = None
     if anchor.lat is not None and anchor.lon is not None:
         tool_config = types.ToolConfig(
