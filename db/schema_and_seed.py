@@ -3506,27 +3506,171 @@ async def create_all_tables():
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS conflict_templates (
-                    id SERIAL PRIMARY KEY,
-                    template_name VARCHAR(200) NOT NULL,
-                    conflict_type VARCHAR(100) NOT NULL,
-                    description TEXT,
-                    required_elements JSONB DEFAULT '{}',
-                    optional_elements JSONB DEFAULT '{}',
-                    complexity_level INTEGER DEFAULT 3,
-                    tags JSONB DEFAULT '[]',
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(template_name)
+                    template_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                    category TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    base_structure JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    variable_elements JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    contextual_modifiers JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    generation_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    complexity_min DOUBLE PRECISION NOT NULL DEFAULT 0.2,
+                    complexity_max DOUBLE PRECISION NOT NULL DEFAULT 0.9,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    usage_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    last_evolved TIMESTAMP WITH TIME ZONE,
+                    UNIQUE(user_id, conversation_id, name)
                 );
                 ''',
                 '''
-                CREATE INDEX IF NOT EXISTS idx_conflict_templates_type
-                ON conflict_templates(conflict_type);
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'conflict_templates' AND column_name = 'id'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'conflict_templates' AND column_name = 'template_id'
+                    ) THEN
+                        ALTER TABLE conflict_templates RENAME COLUMN id TO template_id;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'conflict_templates' AND column_name = 'template_name'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'conflict_templates' AND column_name = 'name'
+                    ) THEN
+                        ALTER TABLE conflict_templates RENAME COLUMN template_name TO name;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'conflict_templates' AND column_name = 'conflict_type'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'conflict_templates' AND column_name = 'category'
+                    ) THEN
+                        ALTER TABLE conflict_templates RENAME COLUMN conflict_type TO category;
+                    END IF;
+                END $$;
                 ''',
                 '''
-                CREATE INDEX IF NOT EXISTS idx_conflict_templates_active
-                ON conflict_templates(is_active) WHERE is_active = TRUE;
+                ALTER TABLE conflict_templates
+                    ADD COLUMN IF NOT EXISTS user_id INTEGER,
+                    ADD COLUMN IF NOT EXISTS conversation_id INTEGER,
+                    ADD COLUMN IF NOT EXISTS category TEXT,
+                    ADD COLUMN IF NOT EXISTS name TEXT,
+                    ADD COLUMN IF NOT EXISTS base_structure JSONB DEFAULT '{}'::jsonb,
+                    ADD COLUMN IF NOT EXISTS variable_elements JSONB DEFAULT '[]'::jsonb,
+                    ADD COLUMN IF NOT EXISTS contextual_modifiers JSONB DEFAULT '{}'::jsonb,
+                    ADD COLUMN IF NOT EXISTS generation_rules JSONB DEFAULT '{}'::jsonb,
+                    ADD COLUMN IF NOT EXISTS complexity_min DOUBLE PRECISION DEFAULT 0.2,
+                    ADD COLUMN IF NOT EXISTS complexity_max DOUBLE PRECISION DEFAULT 0.9,
+                    ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb,
+                    ADD COLUMN IF NOT EXISTS usage_metadata JSONB DEFAULT '{}'::jsonb,
+                    ADD COLUMN IF NOT EXISTS last_evolved TIMESTAMP WITH TIME ZONE,
+                    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE conflict_templates
+                    ALTER COLUMN base_structure SET DEFAULT '{}'::jsonb,
+                    ALTER COLUMN variable_elements SET DEFAULT '[]'::jsonb,
+                    ALTER COLUMN contextual_modifiers SET DEFAULT '{}'::jsonb,
+                    ALTER COLUMN generation_rules SET DEFAULT '{}'::jsonb,
+                    ALTER COLUMN complexity_min SET DEFAULT 0.2,
+                    ALTER COLUMN complexity_max SET DEFAULT 0.9,
+                    ALTER COLUMN metadata SET DEFAULT '{}'::jsonb,
+                    ALTER COLUMN usage_metadata SET DEFAULT '{}'::jsonb,
+                    ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP,
+                    ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE conflict_templates DROP COLUMN IF EXISTS description;
+                ''',
+                '''
+                ALTER TABLE conflict_templates DROP COLUMN IF EXISTS required_elements;
+                ''',
+                '''
+                ALTER TABLE conflict_templates DROP COLUMN IF EXISTS optional_elements;
+                ''',
+                '''
+                ALTER TABLE conflict_templates DROP COLUMN IF EXISTS complexity_level;
+                ''',
+                '''
+                ALTER TABLE conflict_templates DROP COLUMN IF EXISTS tags;
+                ''',
+                '''
+                ALTER TABLE conflict_templates DROP COLUMN IF EXISTS is_active;
+                ''',
+                '''
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conrelid = 'conflict_templates'::regclass
+                          AND contype = 'u'
+                          AND conname = 'conflict_templates_template_name_key'
+                    ) THEN
+                        ALTER TABLE conflict_templates DROP CONSTRAINT conflict_templates_template_name_key;
+                    END IF;
+
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conrelid = 'conflict_templates'::regclass
+                          AND contype = 'u'
+                          AND conname = 'conflict_templates_user_conversation_name_key'
+                    ) THEN
+                        ALTER TABLE conflict_templates
+                            ADD CONSTRAINT conflict_templates_user_conversation_name_key
+                            UNIQUE (user_id, conversation_id, name);
+                    END IF;
+                END $$;
+                ''',
+                '''
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conrelid = 'conflict_templates'::regclass
+                          AND contype = 'f'
+                          AND conname = 'conflict_templates_user_id_fkey'
+                    ) THEN
+                        ALTER TABLE conflict_templates
+                            ADD CONSTRAINT conflict_templates_user_id_fkey
+                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                    END IF;
+
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conrelid = 'conflict_templates'::regclass
+                          AND contype = 'f'
+                          AND conname = 'conflict_templates_conversation_id_fkey'
+                    ) THEN
+                        ALTER TABLE conflict_templates
+                            ADD CONSTRAINT conflict_templates_conversation_id_fkey
+                            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_conflict_templates_type;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_conflict_templates_active;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflict_templates_user_conversation_category
+                ON conflict_templates(user_id, conversation_id, category);
                 ''',
                 '''
                 DO $$
