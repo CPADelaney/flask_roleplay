@@ -20,6 +20,7 @@ import hashlib
 import logging
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -55,6 +56,24 @@ from nyx.core.side_effects import (
     WorldDelta,
     group_side_effects,
 )
+
+try:
+    import openai
+except Exception:  # pragma: no cover
+    openai = None  # type: ignore
+
+
+def _agents_trace(workflow_name: str):
+    """Return an OpenAI Agents trace context if available."""
+
+    if openai is None:
+        return nullcontext()
+
+    try:
+        return openai.agents.trace(workflow_name)
+    except Exception:
+        return nullcontext()
+
 
 try:  # pragma: no cover - Celery is optional in some environments
     from nyx.tasks.realtime.post_turn import dispatch as post_turn_dispatch
@@ -284,7 +303,7 @@ class NyxSDKConfig:
     streaming_chunk_size: int = 320  # characters per chunk
 
     # Telemetry & filtering
-    enable_telemetry: bool = True
+    enable_telemetry: bool = False
     enable_response_filter: bool = True
 
 
@@ -390,14 +409,15 @@ class NyxAgentSDK:
             except Exception:
                 effective_timeout = 10.0
         try:
-            result = await asyncio.wait_for(
-                Runner.run(
-                    nyx_defer_agent,
-                    prompt,
-                    max_turns=2,
-                ),
-                timeout=max(0.25, effective_timeout),
-            )
+            with _agents_trace("Nyx SDK - Defer Narrative"):
+                result = await asyncio.wait_for(
+                    Runner.run(
+                        nyx_defer_agent,
+                        prompt,
+                        max_turns=2,
+                    ),
+                    timeout=max(0.25, effective_timeout),
+                )
         except asyncio.TimeoutError:
             logger.debug(
                 f"[SDK-{trace_id}] Nyx defer narrative generation timed out",
@@ -1084,12 +1104,16 @@ class NyxAgentSDK:
         runner_context = RunContextWrapper(ctx)
 
         try:
-            result = await asyncio.wait_for(
-                Runner.run(
-                    nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config
-                ),
-                timeout=max(0.5, _left() - safety_margin)
-            )
+            with _agents_trace("Nyx SDK - Fallback Run"):
+                result = await asyncio.wait_for(
+                    Runner.run(
+                        nyx_main_agent,
+                        enhanced_input,
+                        context=runner_context,
+                        run_config=run_config,
+                    ),
+                    timeout=max(0.5, _left() - safety_margin)
+                )
         except Exception:
             logger.exception("[SDK-%s] Fallback Runner invocation failed", trace_id)
             raise
