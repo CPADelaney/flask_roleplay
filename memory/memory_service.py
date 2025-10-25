@@ -35,9 +35,7 @@ from memory.faiss_vector_store import FAISSVectorDatabase
 from context.optimized_db import QdrantDatabase, create_vector_database
 from utils.embedding_dimensions import (
     DEFAULT_EMBEDDING_DIMENSION,
-    adjust_embedding_vector,
     build_zero_vector,
-    get_target_embedding_dimension,
     measure_embedding_dimension,
 )
 from logic.chatgpt_integration import get_text_embedding
@@ -47,6 +45,55 @@ logger = logging.getLogger(__name__)
 
 _HF_EMBEDDING_CACHE: Dict[str, HuggingFaceEmbeddings] = {}
 _HF_EMBEDDING_CACHE_LOCK = threading.Lock()
+
+
+def _extract_configured_dimension(
+    config: Optional[Dict[str, Any]],
+) -> Optional[int]:
+    """Return an explicit embedding dimension from *config* or the environment."""
+
+    if not isinstance(config, dict):
+        config = {}
+
+    search_maps: List[Dict[str, Any]] = [config]
+    for key in ("vector_store", "embedding", "memory", "vector"):
+        section = config.get(key) if isinstance(config, dict) else None
+        if isinstance(section, dict):
+            search_maps.append(section)
+
+    candidate_keys = (
+        "embedding_dim",
+        "dimension",
+        "vector_dimension",
+        "vector_dim",
+        "dim",
+    )
+
+    for mapping in search_maps:
+        for key in candidate_keys:
+            value = mapping.get(key)
+            try:
+                if value is None:
+                    continue
+                coerced = int(value)
+            except (TypeError, ValueError):
+                continue
+            if coerced > 0:
+                return coerced
+
+    for env_key in (
+        "MEMORY_EMBEDDING_DIMENSION",
+        "EMBEDDING_DIMENSION",
+        "DEFAULT_EMBEDDING_DIMENSION",
+    ):
+        try:
+            value = int(os.getenv(env_key, "") or 0)
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+
+    return None
 
 
 def _get_cached_hf_embeddings(
@@ -78,7 +125,7 @@ class MemoryEmbeddingService:
         user_id: int,
         conversation_id: int,
         vector_store_type: str = "chroma",
-        embedding_model: str = "local",
+        embedding_model: str = "openai",
         persist_directory: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None
     ):
@@ -96,8 +143,9 @@ class MemoryEmbeddingService:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.vector_store_type = vector_store_type.lower()
-        self.embedding_model = embedding_model
+        self.embedding_model = embedding_model.lower()
         self.config = config or {}
+        self._configured_dimension = _extract_configured_dimension(self.config)
         
         # Set persist directory
         if not persist_directory:
@@ -147,10 +195,7 @@ class MemoryEmbeddingService:
         if isinstance(self.config, dict):
             embedding_section = self.config.get("embedding") or {}
 
-        if self.target_embedding_dimension is None:
-            self.target_embedding_dimension = get_target_embedding_dimension(
-                self.config, self.embedding_model
-            )
+        configured_dimension = self._configured_dimension
 
         if self.embedding_model == "openai":
             model_name = "text-embedding-3-small"
@@ -167,7 +212,7 @@ class MemoryEmbeddingService:
                 return await get_text_embedding(
                     text,
                     model=_model,
-                    dimensions=self.target_embedding_dimension,
+                    dimensions=None,
                 )
 
             self.embeddings = None
@@ -238,24 +283,21 @@ class MemoryEmbeddingService:
                 None, _probe_dimension
             )
 
-        if (
-            self.target_embedding_dimension is None
-            and self.embedding_source_dimension is not None
-        ):
+        if self.embedding_source_dimension is not None:
+            if (
+                configured_dimension is not None
+                and configured_dimension != self.embedding_source_dimension
+            ):
+                logger.info(
+                    "Embedding model produced %d dimensions; overriding configured %d to match native size.",
+                    self.embedding_source_dimension,
+                    configured_dimension,
+                )
             self.target_embedding_dimension = self.embedding_source_dimension
-
-        if self.target_embedding_dimension is None:
+        elif configured_dimension is not None:
+            self.target_embedding_dimension = configured_dimension
+        else:
             self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
-
-        if (
-            self.embedding_source_dimension is not None
-            and self.embedding_source_dimension != self.target_embedding_dimension
-        ):
-            logger.info(
-                "Embedding model produced %d-dim vectors; storing as %d-dim after adjustment.",
-                self.embedding_source_dimension,
-                self.target_embedding_dimension,
-            )
 
         self.embedding_dimension = self.target_embedding_dimension
 
@@ -316,9 +358,16 @@ class MemoryEmbeddingService:
                 embedding = list(embedding)
             embedding = [float(value) for value in embedding]
 
-            return adjust_embedding_vector(
-                embedding, self._get_target_dimension()
-            )
+            expected_dim = self._get_target_dimension()
+            if len(embedding) != expected_dim:
+                logger.error(
+                    "Embedding dimension mismatch: expected %d values, received %d.",
+                    expected_dim,
+                    len(embedding),
+                )
+                return self._get_empty_embedding()
+
+            return embedding
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
             # Return an empty vector as fallback
@@ -370,9 +419,14 @@ class MemoryEmbeddingService:
         if embedding is None:
             embedding = await self.generate_embedding(text)
         else:
-            embedding = adjust_embedding_vector(
-                embedding, self._get_target_dimension()
-            )
+            expected_dim = self._get_target_dimension()
+            if len(embedding) != expected_dim:
+                raise ValueError(
+                    f"Provided embedding dimension {len(embedding)} does not match expected {expected_dim}"
+                )
+            if not isinstance(embedding, Sequence):
+                embedding = list(embedding)
+            embedding = [float(value) for value in embedding]
         
         # Add to vector store
         success = await self.vector_db.insert_vectors(
@@ -513,17 +567,14 @@ class MemoryEmbeddingService:
         self.initialized = False
 
     def _get_target_dimension(self) -> int:
-        if self.target_embedding_dimension is None:
-            self.target_embedding_dimension = get_target_embedding_dimension(
-                self.config, self.embedding_model
-            )
-            if (
-                self.target_embedding_dimension is None
-                and self.embedding_source_dimension is not None
-            ):
-                self.target_embedding_dimension = self.embedding_source_dimension
+        if self.target_embedding_dimension is not None:
+            return self.target_embedding_dimension
 
-        if self.target_embedding_dimension is None:
+        if self.embedding_source_dimension is not None:
+            self.target_embedding_dimension = self.embedding_source_dimension
+        elif self._configured_dimension is not None:
+            self.target_embedding_dimension = self._configured_dimension
+        else:
             self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
 
         return self.target_embedding_dimension
