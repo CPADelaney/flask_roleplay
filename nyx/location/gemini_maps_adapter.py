@@ -1,3 +1,4 @@
+# nyx/location/gemini_maps_adapter.py
 from __future__ import annotations
 
 import asyncio
@@ -10,10 +11,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-# --- SDK IMPORTS (GenAI SDK) ---
+# --- GenAI SDK (modern) ---
 from google import genai
 from google.genai import types, errors as genai_errors
-# -------------------------------
+# --------------------------
 
 from .query import PlaceQuery
 from .types import (
@@ -33,22 +34,17 @@ LOGGER = logging.getLogger(__name__)
 # Config & SDK Initialization
 # ---------------------------------------------------------------------------
 
-# Prefer the modern env var, but fall back to the ones you were using.
+# Use a dedicated key for the GenAI SDK (AI Studio). Do NOT reuse Maps keys here.
 _GEMINI_KEY = (
     os.getenv("GEMINI_API_KEY")
-    or os.getenv("GOOGLE_API_KEY")
-    or os.getenv("GOOGLE_GEMINI_API_KEY")
+    or os.getenv("GOOGLE_API_KEY")              # tolerated fallback if you insist
+    or os.getenv("GOOGLE_GEMINI_API_KEY")       # tolerated fallback for old envs
 )
 
-# Places/Routes still use REST; this is a separate key (or the same, if you insist).
-_MAPS_KEY = (
-    os.getenv("GOOGLE_MAPS_API_KEY")
-    or os.getenv("GOOGLE_API_KEY")
-    or os.getenv("GEMINI_API_KEY")
-    or os.getenv("GOOGLE_GEMINI_API_KEY")
-)
+# Places/Routes MUST use a Google Maps Platform key with billing. No fallbacks.
+# If this is missing or restricted by referrer, your Places calls will 403.
+_MAPS_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
-# Create the GenAI client only if we have a key; otherwise we'll fail fast later.
 CLIENT: Optional[genai.Client] = genai.Client(api_key=_GEMINI_KEY) if _GEMINI_KEY else None
 
 # Maps grounding requires a 2.5 model (or 2.0 Flash). Default to 2.5 Flash.
@@ -57,6 +53,13 @@ _GEMINI_MODEL_NAME = os.getenv("GOOGLE_GEMINI_MODEL", os.getenv("GEMINI_MODEL", 
 # Routes + Places (v1) endpoints (httpx calls)
 _ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
 _PLACES_BASE = "https://places.googleapis.com/v1"
+
+# Ask for addressComponents so we can set city/region/country correctly.
+_PLACES_FIELD_MASK = (
+    "id,displayName,formattedAddress,addressComponents,location,"
+    "googleMapsUri,primaryType,websiteUri,nationalPhoneNumber,"
+    "currentOpeningHours,regularOpeningHours"
+)
 
 # Structured output schema for “events”
 _EVENTS_SCHEMA: Dict[str, Any] = {
@@ -163,15 +166,40 @@ async def _places_get_details(client: httpx.AsyncClient, place_res_name: Optiona
     headers = {
         "X-Goog-Api-Key": _MAPS_KEY,
         "Content-Type": "application/json",
-        "X-Goog-FieldMask": "id,displayName,formattedAddress,location,googleMapsUri,primaryType,websiteUri,nationalPhoneNumber,currentOpeningHours,regularOpeningHours",
+        "X-Goog-FieldMask": _PLACES_FIELD_MASK,
     }
     try:
         resp = await client.get(url, headers=headers, timeout=8.0)
         resp.raise_for_status()
         return resp.json()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text if exc.response is not None else "<no body>"
+        LOGGER.warning(
+            "Places details failed for %s: %s %s",
+            place_res_name, exc, body[:500]
+        )
+        return None
     except Exception as exc:
         LOGGER.warning("Places details failed for %s: %s", place_res_name, exc)
         return None
+
+def _admin_from_components(components: Optional[List[Dict[str, Any]]]) -> Dict[str, Optional[str]]:
+    """Extract city/region/country from Places addressComponents."""
+    if not components:
+        return {"city": None, "region": None, "country": None}
+    city = region = country = None
+    for comp in components:
+        types_set = set(comp.get("types", []))
+        text = comp.get("longText") or comp.get("shortText") or comp.get("name")
+        if not text:
+            continue
+        if not city and ("locality" in types_set or "postal_town" in types_set):
+            city = text
+        if not region and "administrative_area_level_1" in types_set:
+            region = text
+        if not country and "country" in types_set:
+            country = text
+    return {"city": city, "region": region, "country": country}
 
 async def _candidates_from_maps_grounding(gm: Any, anchor: Anchor) -> List[Candidate]:
     candidates: List[Candidate] = []
@@ -186,10 +214,14 @@ async def _candidates_from_maps_grounding(gm: Any, anchor: Anchor) -> List[Candi
             if not key or key in seen:
                 continue
             seen.add(key)
+
+            # Position (rough) from URL, refined by Places Details if available
             lat, lon = _extract_coords_from_maps_url(uri)
+
             details = await _places_get_details(client, place_res) if place_res else None
             addr = title
             primary_type, website, phone, hours_obj = None, None, None, None
+
             if details:
                 addr = details.get("formattedAddress") or addr
                 loc = details.get("location") or {}
@@ -198,10 +230,15 @@ async def _candidates_from_maps_grounding(gm: Any, anchor: Anchor) -> List[Candi
                 primary_type = details.get("primaryType")
                 website = details.get("websiteUri")
                 phone = details.get("nationalPhoneNumber")
+                admin_path = _admin_from_components(details.get("addressComponents"))
                 now_hours = details.get("currentOpeningHours") or {}
                 reg_hours = details.get("regularOpeningHours") or {}
                 weekday = now_hours.get("weekdayDescriptions") or reg_hours.get("weekdayDescriptions")
                 hours_obj = {"weekdayText": weekday, "openNow": now_hours.get("openNow")}
+            else:
+                # No details (likely 403). Use anchor as a hint ONLY. Don't lie about the city.
+                admin_path = {"city": anchor.primary_city, "region": anchor.region, "country": anchor.country}
+
             place = Place(
                 name=title,
                 level="venue",
@@ -209,11 +246,7 @@ async def _candidates_from_maps_grounding(gm: Any, anchor: Anchor) -> List[Candi
                 lon=lon if lon is not None else anchor.lon,
                 address={
                     "line1": addr,
-                    "_normalized_admin_path": {
-                        "city": anchor.primary_city,
-                        "region": anchor.region,
-                        "country": anchor.country,
-                    },
+                    "_normalized_admin_path": admin_path,
                 },
                 meta={
                     "source": "gemini_maps_grounding",
@@ -243,13 +276,11 @@ async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Op
 
     prompt = _build_prompt_for_tools(query, anchor)
 
-    # Enable Maps grounding + Search grounding.
     tools = [
         types.Tool(google_maps=types.GoogleMaps()),
         types.Tool(google_search=types.GoogleSearch()),
     ]
 
-    # Provide the anchor location to the tools if we have it.
     tool_config = None  # types.ToolConfig | None
     if anchor.lat is not None and anchor.lon is not None:
         tool_config = types.ToolConfig(
@@ -265,7 +296,6 @@ async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Op
     )
 
     try:
-        # Native async call via the GenAI SDK
         response = await CLIENT.aio.models.generate_content(
             model=_GEMINI_MODEL_NAME,
             contents=prompt,
