@@ -15,15 +15,15 @@ DEFAULT_MEMORY_CONFIG = {
     "vector_store": {
         "type": "chroma",  # Options: "chroma", "faiss", "qdrant"
         "persist_base_dir": "./vector_stores",
-        "dimension": 1536,  # Default dimension for embeddings
+        "dimension": 1536,  # Default dimension for OpenAI embeddings
         "similarity_threshold": 0.7,  # Minimum similarity score for retrieval
         "max_results": 10,  # Maximum number of results to return
         "optimized_for_render": True,  # Optimization for Render hosting
-        
+
         # ChromaDB specific settings
         "chroma": {
-            "model_name": "all-MiniLM-L6-v2",
-            "collection_name": "memories"
+            "collection_name": "memories",
+            "openai_model": "text-embedding-3-small"
         },
         
         # FAISS specific settings
@@ -39,15 +39,14 @@ DEFAULT_MEMORY_CONFIG = {
             "prefer_grpc": True
         }
     },
-    
+
     # Embedding model settings
     "embedding": {
-        "type": "local",  # Options: "local", "openai"
-        "model_name": "all-MiniLM-L6-v2",  # For local embeddings
-        "openai_model": "text-embedding-3-small",  # For OpenAI embeddings
+        "type": "openai",  # Use OpenAI embeddings by default
+        "openai_model": "text-embedding-3-small",
         "normalize": True,
         "batch_size": 32,
-        "embedding_dim": 1536,  # Dimension of local embeddings
+        "embedding_dim": 1536,  # Dimension of text-embedding-3-small outputs
     },
     
     # LLM settings for memory retrieval
