@@ -16,6 +16,8 @@ import importlib
 import importlib.resources
 from collections import defaultdict
 
+from .ids import legacy_agent_ids, parse_agent_id
+
 # Remove direct OpenAI import - use chatgpt_integration instead
 # from openai import AsyncOpenAI
 # from openai.types.beta.assistant import Assistant
@@ -800,36 +802,59 @@ class NyxUnifiedGovernor(
                     
                 agent_type, agent_id, agent_instance = registration
                 
-                # Fast check using set
                 agent_key = (agent_type, agent_id)
                 if agent_key in self._registered_agent_keys:
                     logger.debug(f"Agent {agent_type}/{agent_id} already registered, skipping")
                     continue
-                
-                # Perform the actual registration
-                if agent_type not in self.registered_agents:
-                    self.registered_agents[agent_type] = {}
-                
-                # Check BEFORE adding (this is the fix!)
-                if agent_id in self.registered_agents[agent_type]:
+
+                agents_by_type = self.registered_agents.setdefault(agent_type, {})
+                normalized_existing = False
+                legacy_instances: List[Any] = []
+
+                parsed = parse_agent_id(agent_id)
+                if parsed:
+                    kind, suffix = parsed
+                    if str(suffix) == str(self.conversation_id):
+                        for legacy_id in legacy_agent_ids(kind, suffix):
+                            legacy_key = (agent_type, legacy_id)
+                            if legacy_id in agents_by_type:
+                                normalized_existing = True
+                                removed_instance = agents_by_type.pop(legacy_id)
+                                if removed_instance is not None:
+                                    legacy_instances.append(removed_instance)
+                                if legacy_key in self._registered_agent_keys:
+                                    self._registered_agent_keys.remove(legacy_key)
+                                logger.info(
+                                    "Normalized agent id %s → %s for type %s",
+                                    legacy_id,
+                                    agent_id,
+                                    agent_type,
+                                )
+
+                if agent_id in agents_by_type:
                     logger.warning(f"Agent {agent_id} already registered, updating")
-                
-                self.registered_agents[agent_type][agent_id] = agent_instance
-                self._registered_agent_keys.add(agent_key)  # Add to set
-                
+
+                if agent_instance is None and legacy_instances:
+                    agent_instance = legacy_instances[-1]
+
+                agents_by_type[agent_id] = agent_instance
+                self._registered_agent_keys.add(agent_key)
+
                 # Initialize tracking structures
                 for tracking_dict in [self.agent_goals, self.agent_performance, self.agent_learning]:
                     if agent_type not in tracking_dict:
                         tracking_dict[agent_type] = {}
-                
-                # Update metrics
-                governor_agents_registered.labels(agent_type=agent_type).inc()
-                
-                # Update active agents gauge efficiently
-                self._agent_counts[agent_type] = len(self.registered_agents[agent_type])
+
+                if not normalized_existing:
+                    governor_agents_registered.labels(agent_type=agent_type).inc()
+
+                self._agent_counts[agent_type] = len(agents_by_type)
                 governor_active_agents.labels(agent_type=agent_type).set(self._agent_counts[agent_type])
-                
-                logger.info(f"Successfully registered agent {agent_id} of type {agent_type}")
+
+                if normalized_existing:
+                    logger.info(f"Normalized registration for {agent_type}/{agent_id}")
+                else:
+                    logger.info(f"Successfully registered agent {agent_id} of type {agent_type}")
                 
             except Exception as e:
                 logger.error(f"Error processing agent registration", exc_info=True)

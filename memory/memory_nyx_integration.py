@@ -32,6 +32,7 @@ from memory.wrapper import MemorySystem
 from utils.caching import get_cache, set_cache, delete_cache
 
 from nyx.constants import AgentType, DirectiveType, DirectivePriority
+from nyx.governance.ids import format_agent_id
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class MemoryNyxBridge:
         self.conversation_id = conversation_id
         # just store whatever we were given – don’t create a fallback yet
         self.governor = governor
+        self.agent_id = format_agent_id(AgentType.MEMORY_MANAGER, conversation_id)
         self.memory_context = MemorySystemContext(user_id, conversation_id)
         self.memory_agent = None
         self.memory_system = None
@@ -132,14 +134,14 @@ class MemoryNyxBridge:
             if self.governor is not None:
                 await self.governor.register_agent(
                     agent_type=AgentType.MEMORY_MANAGER,
-                    agent_id=f"memory_manager:{self.conversation_id}",  # unique ID
+                    agent_id=self.agent_id,
                     agent_instance=self.memory_agent,
                 )
-    
+
                 # Standing directive (24 h rolling)
                 await self.governor.issue_directive(
                     agent_type=AgentType.MEMORY_MANAGER,
-                    agent_id=f"memory_manager:{self.conversation_id}",
+                    agent_id=self.agent_id,
                     directive_type=DirectiveType.ACTION,
                     directive_data={
                         "instruction": "Maintain entity memories and ensure proper consolidation.",
@@ -349,7 +351,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -382,7 +384,7 @@ class MemoryNyxBridge:
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
                 agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
+                agent_id=self.agent_id,
                 action={
                     "type": "memory_operation",
                     "operation": "remember",
@@ -422,7 +424,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -453,7 +455,7 @@ class MemoryNyxBridge:
         # Report action back to Nyx
         await self.governor.process_agent_action_report(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action={
                 "type": "memory_operation",
                 "operation": "recall",
@@ -492,7 +494,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -521,7 +523,7 @@ class MemoryNyxBridge:
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
                 agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
+                agent_id=self.agent_id,
                 action={
                     "type": "memory_operation",
                     "operation": "create_belief",
@@ -556,7 +558,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -583,7 +585,7 @@ class MemoryNyxBridge:
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
                 agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
+                agent_id=self.agent_id,
                 action={
                     "type": "memory_operation",
                     "operation": "get_beliefs",
@@ -616,7 +618,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -641,7 +643,7 @@ class MemoryNyxBridge:
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
                 agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
+                agent_id=self.agent_id,
                 action={
                     "type": "memory_operation",
                     "operation": "run_maintenance",
@@ -673,7 +675,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -698,7 +700,7 @@ class MemoryNyxBridge:
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
                 agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
+                agent_id=self.agent_id,
                 action={
                     "type": "memory_operation",
                     "operation": "analyze_memories",
@@ -730,7 +732,7 @@ class MemoryNyxBridge:
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
+            agent_id=self.agent_id,
             action_type="memory_operation",
             action_details=action_details
         )
@@ -750,7 +752,7 @@ class MemoryNyxBridge:
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
                 agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
+                agent_id=self.agent_id,
                 action={
                     "type": "memory_operation",
                     "operation": "generate_schemas",

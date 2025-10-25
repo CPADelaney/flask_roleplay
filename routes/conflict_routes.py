@@ -28,6 +28,7 @@ from logic.conflict_system.conflict_synthesizer import (
 
 # Import governance integration
 from nyx.governance import AgentType
+from nyx.governance.ids import format_agent_id
 from nyx.governance_helpers import (
     check_permission,
     report_action,
@@ -65,7 +66,7 @@ async def check_conflict_permission(
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action_type=action_type,
             action_details=conflict_data
         )
@@ -295,7 +296,7 @@ async def create_conflict(user_id):
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action={
                 "type": "create_conflict",
                 "conflict_type": conflict_type,
@@ -313,7 +314,7 @@ async def create_conflict(user_id):
                 user_id=user_id,
                 conversation_id=conversation_id,
                 agent_type=AgentType.CONFLICT_ANALYST,
-                agent_id=f"conflict_system_{conversation_id}",
+                agent_id=format_agent_id("conflict_system", conversation_id),
                 change_type="conflict_creation",
                 change_data={
                     "conflict_id": result["conflict_id"],
@@ -429,7 +430,7 @@ async def generate_emergent_conflict(user_id):
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action={
                 "type": "emergent_conflict_generated",
                 "conflict_type": conflict_type,
@@ -506,7 +507,7 @@ async def update_conflict(user_id):
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action={
                 "type": "update_conflict",
                 "conflict_id": conflict_id
@@ -584,7 +585,7 @@ async def resolve_conflict(user_id):
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action={
                 "type": "resolve_conflict",
                 "conflict_id": conflict_id,
@@ -602,7 +603,7 @@ async def resolve_conflict(user_id):
                 user_id=user_id,
                 conversation_id=conversation_id,
                 agent_type=AgentType.CONFLICT_ANALYST,
-                agent_id=f"conflict_system_{conversation_id}",
+                agent_id=format_agent_id("conflict_system", conversation_id),
                 change_type="conflict_resolution",
                 change_data={
                     "conflict_id": conflict_id,
@@ -755,7 +756,7 @@ async def process_scene(user_id):
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action={
                 "type": "process_scene",
                 "scene_type": scene_context.get("scene_type"),
@@ -1016,7 +1017,7 @@ async def handle_day_transition(user_id):
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
+            agent_id=format_agent_id("conflict_system", conversation_id),
             action={
                 "type": "day_transition",
                 "new_day": new_day

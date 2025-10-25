@@ -28,6 +28,8 @@ from lore.validation import ValidationManager
 
 import asyncpg
 
+from nyx.governance.ids import format_agent_id
+
 # Type checking imports (don't cause circular imports)
 if TYPE_CHECKING:
     from story_agent.world_director_agent import (
@@ -507,9 +509,10 @@ async def generate_slice_of_life_moment(
     AgentType = gov_types['AgentType']
     
     # Check governance permission
+    world_director_agent_id = format_agent_id("world_director", conversation_id)
     permission = await governance.check_action_permission(
         agent_type=AgentType.WORLD_BUILDER,
-        agent_id="world_director",
+        agent_id=world_director_agent_id,
         action_type="generate_moment",
         action_details=context or {}
     )
@@ -527,7 +530,7 @@ async def generate_slice_of_life_moment(
     # Report to governance
     await governance.process_agent_action_report(
         agent_type=AgentType.WORLD_BUILDER,
-        agent_id="world_director",
+        agent_id=world_director_agent_id,
         action={
             "type": "generate_moment",
             "description": "Generated slice-of-life moment"
@@ -566,9 +569,10 @@ async def orchestrate_scene_with_governance(
     orchestrate_daily_scene = interaction_funcs['orchestrate_daily_scene']
     
     # Check permission
+    scene_agent_id = format_agent_id("scene_orchestrator", conversation_id)
     permission = await governance.check_action_permission(
         agent_type=AgentType.NARRATIVE_CRAFTER,
-        agent_id="scene_orchestrator",
+        agent_id=scene_agent_id,
         action_type="orchestrate_scene",
         action_details={"focus": scene_focus, "npcs": involved_npcs}
     )
@@ -589,7 +593,7 @@ async def orchestrate_scene_with_governance(
     # Report to governance
     await governance.process_agent_action_report(
         agent_type=AgentType.NARRATIVE_CRAFTER,
-        agent_id="scene_orchestrator",
+        agent_id=scene_agent_id,
         action={
             "type": "orchestrate_scene",
             "description": f"Orchestrated {scene_focus} scene"
@@ -2286,6 +2290,8 @@ class LoreIntegration:
         self.lore_generator = None
         self.lore_manager = None
         self.npc_lore_integration = None
+        self._lore_agent_id = format_agent_id("lore_generator", conversation_id)
+        self._npc_integration_agent_id = format_agent_id("npc_integration", conversation_id)
     
     async def initialize(self):
         """Initialize the lore integration."""
@@ -2312,7 +2318,7 @@ class LoreIntegration:
         # Check permission with governance system
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="lore_generator",
+            agent_id=self._lore_agent_id,
             action_type="generate_lore",
             action_details={"environment_desc": environment_desc}
         )
@@ -2330,7 +2336,7 @@ class LoreIntegration:
         # Report the action
         await self.governor.process_agent_action_report(
             agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="lore_generator",
+            agent_id=self._lore_agent_id,
             action={
                 "type": "generate_lore",
                 "description": f"Generated complete lore for environment: {environment_desc[:50]}"
@@ -2366,7 +2372,7 @@ class LoreIntegration:
         # Check permission
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="npc_integration",
+            agent_id=self._npc_integration_agent_id,
             action_type="integrate_lore_with_npcs",
             action_details={"npc_ids": npc_ids}
         )
@@ -2387,7 +2393,7 @@ class LoreIntegration:
         # Report the action
         await self.governor.process_agent_action_report(
             agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="npc_integration",
+            agent_id=self._npc_integration_agent_id,
             action={
                 "type": "integrate_lore_with_npcs",
                 "description": f"Integrated lore with {len(npc_ids)} NPCs"

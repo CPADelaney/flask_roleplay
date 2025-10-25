@@ -10,6 +10,7 @@ from datetime import datetime
 import json
 
 from nyx.governance import AgentType
+from nyx.governance.ids import format_agent_id
 # Remove circular import - will import canon lazily when needed
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ def with_governance_permission(
             if id_from_context:
                 agent_id = id_from_context(ctx)
             else:
-                agent_id = getattr(self, "agent_id", f"{agent_type}_{conversation_id}")
+                agent_id = getattr(self, "agent_id", format_agent_id(agent_type, conversation_id))
             
             # Create action details from args and kwargs
             action_details = {
@@ -652,7 +653,7 @@ def with_action_reporting(
             if id_from_context:
                 agent_id = id_from_context(ctx)
             else:
-                agent_id = getattr(self, "agent_id", f"{agent_type}_{conversation_id}")
+                agent_id = getattr(self, "agent_id", format_agent_id(agent_type, conversation_id))
             
             # Call the original function
             result = await func(self, ctx, *args, **kwargs)
@@ -843,9 +844,9 @@ def with_governance(
             if id_from_context:
                 agent_id = id_from_context(ctx)
             elif is_method and self_arg:
-                agent_id = getattr(self_arg, "agent_id", f"{agent_type}_{conversation_id}")
+                agent_id = getattr(self_arg, "agent_id", format_agent_id(agent_type, conversation_id))
             else:
-                agent_id = f"{agent_type}_{conversation_id}"
+                agent_id = format_agent_id(agent_type, conversation_id)
             
             # Ensure we work with a mutable kwargs copy for downstream updates
             kwargs = dict(kwargs)
