@@ -240,6 +240,7 @@ from nyx.nyx_governance import (
 )
 from nyx.integrate import get_central_governance
 from nyx.directive_handler import DirectiveHandler
+from nyx.governance.ids import format_agent_id
 
 from logic.conflict_system.conflict_synthesizer import (
     get_synthesizer,
@@ -556,7 +557,7 @@ class CompleteWorldDirectorContext:
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
                 agent_type="world_director",
-                agent_id=f"world_director_{self.conversation_id}",
+                agent_id=format_agent_id("world_director", self.conversation_id),
                 governance=self.nyx_governor
             )
             

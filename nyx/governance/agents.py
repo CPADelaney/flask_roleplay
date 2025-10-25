@@ -10,6 +10,7 @@ import time
 from typing import Dict, Any, Optional, List, Union, Set, Callable
 from datetime import datetime, timedelta
 from .constants import DirectiveType, DirectivePriority, AgentType
+from .ids import format_agent_id
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 from utils.cache_manager import CacheManager
 from db.connection import get_db_connection_context
@@ -213,7 +214,7 @@ class AgentGovernanceMixin:
                 try:
                     from story_agent.world_director_agent import CompleteWorldDirector
                     world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
-                    agent_id = f"world_director_{self.conversation_id}"
+                    agent_id = format_agent_id("world_director", self.conversation_id)
                     # Store as string value
                     agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
                     registrations.append((agent_type_str, agent_id))
@@ -227,7 +228,7 @@ class AgentGovernanceMixin:
                 try:
                     from logic.universal_updater_agent import UniversalUpdaterAgent
                     universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
-                    agent_id = f"universal_updater_{self.conversation_id}"
+                    agent_id = format_agent_id("universal_updater", self.conversation_id)
                     # Store as string value
                     agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
                     registrations.append((agent_type_str, agent_id))
@@ -249,7 +250,7 @@ class AgentGovernanceMixin:
                     conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
                     
                     if conflict_synthesizer:
-                        agent_id = f"conflict_synthesizer_{self.conversation_id}"
+                        agent_id = format_agent_id("conflict_synthesizer", self.conversation_id)
                         # Store as string value
                         agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
                         registrations.append((agent_type_str, agent_id))
@@ -285,7 +286,7 @@ class AgentGovernanceMixin:
             
             specialized = initialize_specialized_agents()
             for key, agent_instance in specialized.items():
-                agent_id = f"{key}_{self.conversation_id}"
+                agent_id = format_agent_id(key, self.conversation_id)
                 registrations.append((key, agent_id))
                 logger.info(f"[discover] queued specialized agent {key} → {agent_id}")
                 
@@ -302,7 +303,7 @@ class AgentGovernanceMixin:
         ]
         
         for agent_name, agent_type in sdk_agents:
-            agent_id = f"{agent_name}_{self.conversation_id}"
+            agent_id = format_agent_id(agent_name, self.conversation_id)
             # Store as string value
             agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
             registrations.append((agent_type_str, agent_id))
@@ -333,7 +334,7 @@ class AgentGovernanceMixin:
         try:
             from logic.relationship_integration import RelationshipIntegration
             rel_manager = RelationshipIntegration(self.user_id, self.conversation_id)
-            agent_id = f"relationship_manager_{self.conversation_id}"
+            agent_id = format_agent_id("relationship_manager", self.conversation_id)
             # Store as string value
             agent_type_str = AgentType.RELATIONSHIP_MANAGER.value if hasattr(AgentType.RELATIONSHIP_MANAGER, 'value') else str(AgentType.RELATIONSHIP_MANAGER)
             registrations.append((agent_type_str, agent_id))
@@ -345,7 +346,7 @@ class AgentGovernanceMixin:
         try:
             from logic.resource_optimizer import ResourceOptimizer
             optimizer = ResourceOptimizer(self.user_id, self.conversation_id)
-            agent_id = f"resource_optimizer_{self.conversation_id}"
+            agent_id = format_agent_id("resource_optimizer", self.conversation_id)
             # Store as string value
             agent_type_str = AgentType.RESOURCE_OPTIMIZER.value if hasattr(AgentType.RESOURCE_OPTIMIZER, 'value') else str(AgentType.RESOURCE_OPTIMIZER)
             registrations.append((agent_type_str, agent_id))
