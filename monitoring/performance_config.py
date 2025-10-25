@@ -3,14 +3,14 @@ Performance monitoring configuration and setup.
 Integrates Prometheus metrics, DataDog, and NewRelic monitoring.
 """
 
-import os
 import logging
-from typing import Dict, Any
+import os
 from dataclasses import dataclass
-from prometheus_client import Counter, Histogram, Gauge
+from typing import Any, Dict
 
 # Import database connections
 from db.connection import get_db_connection_context
+from monitoring.metrics import metrics
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -25,35 +25,6 @@ class PerformanceConfig:
     memory_warning_threshold: float = 85.0  # percentage
     cpu_warning_threshold: float = 80.0  # percentage
     request_timeout: float = 30.0  # seconds
-
-# Prometheus metrics
-REQUEST_LATENCY = Histogram(
-    'request_latency_seconds',
-    'Request latency in seconds',
-    ['method', 'endpoint']
-)
-
-NPC_OPERATIONS = Counter(
-    'npc_operations_total',
-    'Total number of NPC operations',
-    ['operation_type']
-)
-
-MEMORY_OPERATIONS = Counter(
-    'memory_operations_total',
-    'Total number of memory operations',
-    ['operation_type']
-)
-
-SYSTEM_MEMORY_USAGE = Gauge(
-    'system_memory_usage_bytes',
-    'Current system memory usage'
-)
-
-SYSTEM_CPU_USAGE = Gauge(
-    'system_cpu_usage_percent',
-    'Current CPU usage percentage'
-)
 
 # DataDog configuration
 DATADOG_CONFIG = {
@@ -111,12 +82,15 @@ async def init_performance_monitoring(app) -> None:
 
 async def record_operation_metrics(operation_type: str, duration: float, success: bool) -> None:
     """Record operation metrics."""
+    namespace = metrics()
+
     if operation_type.startswith('npc_'):
-        NPC_OPERATIONS.labels(operation_type=operation_type).inc()
+        namespace.NPC_OPERATIONS.labels(operation_type=operation_type).inc()
     elif operation_type.startswith('memory_'):
-        MEMORY_OPERATIONS.labels(operation_type=operation_type).inc()
-    
-    REQUEST_LATENCY.labels(
+        namespace.MEMORY_OPERATIONS.labels(operation_type=operation_type).inc()
+        namespace.MEMORY_OPERATION_LATENCY.labels(operation_type=operation_type).observe(duration)
+
+    namespace.REQUEST_LATENCY.labels(
         method='operation',
         endpoint=operation_type
     ).observe(duration)
@@ -124,14 +98,16 @@ async def record_operation_metrics(operation_type: str, duration: float, success
 async def update_system_metrics() -> None:
     """Update system metrics (memory and CPU usage)."""
     import psutil
-    
+
+    namespace = metrics()
+
     # Update memory usage
     memory = psutil.virtual_memory()
-    SYSTEM_MEMORY_USAGE.set(memory.used)
-    
+    namespace.SYSTEM_MEMORY_USAGE.set(memory.used)
+
     # Update CPU usage
     cpu_percent = psutil.cpu_percent(interval=1)
-    SYSTEM_CPU_USAGE.set(cpu_percent)
+    namespace.SYSTEM_CPU_USAGE.set(cpu_percent)
     
     # Check thresholds
     config = PerformanceConfig()
