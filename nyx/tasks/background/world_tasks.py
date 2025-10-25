@@ -8,6 +8,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from celery import shared_task
 
+from db.connection import get_db_connection_context
+from logic.universal_updater_agent import (
+    UniversalUpdaterContext,
+    apply_universal_updates_async,
+    convert_updates_for_database,
+)
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from nyx.nyx_agent.context import (
     build_canonical_snapshot_payload,
@@ -66,6 +72,28 @@ def _persist_snapshot(user_id: str, conversation_id: str, snapshot: Dict[str, An
     _run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
 
 
+async def _apply_world_deltas_async(
+    user_id: int, conversation_id: int, deltas: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Execute the universal updater pipeline for the provided deltas."""
+
+    ctx = UniversalUpdaterContext(user_id, conversation_id)
+    await ctx.initialize()
+
+    try:
+        db_ready_updates = convert_updates_for_database(dict(deltas))
+    except Exception:
+        logger.exception(
+            "Failed to normalize world deltas for conversation=%s", conversation_id
+        )
+        raise
+
+    async with get_db_connection_context() as conn:
+        return await apply_universal_updates_async(
+            ctx, user_id, conversation_id, db_ready_updates, conn
+        )
+
+
 @shared_task(name="nyx.tasks.background.world_tasks.apply_universal", acks_late=True)
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
 def apply_universal(payload: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -92,24 +120,53 @@ def apply_universal(payload: Dict[str, Any]) -> Dict[str, Any] | None:
         )
         return {"status": "stale", "current": current_version, "incoming": incoming_world_version}
 
+    apply_result: Dict[str, Any] | None = None
+
     if not deltas:
         logger.debug("No world deltas for turn %s", turn_id)
     else:
         logger.info(
-            "Queuing world deltas turn=%s conversation=%s keys=%s",
+            "Applying world deltas turn=%s conversation=%s keys=%s",
             turn_id,
             conversation_id,
             list(deltas.keys()),
         )
-        # Placeholder for integration with the actual universal updater.  The real
-        # implementation should apply the deltas via DAO/async functions.
+        ids = _coerce_ids(user_id, conversation_id)
+        if not ids:
+            raise RuntimeError("Cannot apply world deltas without numeric identifiers")
+        try:
+            apply_result = _run_coro(_apply_world_deltas_async(ids[0], ids[1], deltas))
+        except Exception:
+            logger.exception(
+                "Universal updater failed turn=%s conversation=%s", turn_id, conversation_id
+            )
+            raise
+
+        if apply_result is None:
+            raise RuntimeError("Universal updater returned no result")
+
+        if not apply_result.get("success", True):
+            error_message = apply_result.get("error") or apply_result.get("reason") or "Unknown error"
+            logger.error(
+                "Universal updater rejected deltas turn=%s conversation=%s error=%s",
+                turn_id,
+                conversation_id,
+                error_message,
+            )
+            raise RuntimeError(error_message)
 
     snapshot["world_version"] = incoming_world_version
     if deltas:
         snapshot.setdefault("pending_world_deltas", []).append({"turn_id": turn_id, "deltas": deltas})
+        if apply_result is not None:
+            snapshot["last_world_apply"] = {"turn_id": turn_id, "result": apply_result}
     _SNAPSHOTS.put(user_id, conversation_id, snapshot)
     _persist_snapshot(user_id, conversation_id, snapshot)
-    return {"status": "queued", "version": incoming_world_version}
+
+    response: Dict[str, Any] = {"status": "applied" if apply_result else "noop", "version": incoming_world_version}
+    if apply_result is not None:
+        response["result"] = apply_result
+    return response
 
 
 __all__ = ["apply_universal"]
