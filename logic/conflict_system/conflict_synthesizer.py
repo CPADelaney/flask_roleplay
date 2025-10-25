@@ -343,6 +343,7 @@ class ConflictSynthesizer:
         self._cache_hits = 0
         self._cache_misses = 0
         self._bundle_lock = asyncio.Lock()  # Thread-safe cache access
+        self._initialized = False
         
         # Performance tracking with detailed metrics
         self._performance_metrics = {
@@ -428,6 +429,7 @@ class ConflictSynthesizer:
                 self._bg_tasks['cleanup'] = asyncio.create_task(self._periodic_cache_cleanup())
     
             logger.info("Conflict subsystems initialized")
+            self._initialized = True
         except Exception:
             logger.exception("Failed to initialize subsystems")
             raise
@@ -1886,28 +1888,52 @@ class ConflictSynthesizer:
 
 # Global synthesizer instance cache (per user/conversation)
 _synthesizers: Dict[tuple[int, int], ConflictSynthesizer] = {}
+_synthesizer_locks: Dict[tuple[int, int], asyncio.Lock] = {}
 
 async def get_synthesizer(user_id: int, conversation_id: int) -> ConflictSynthesizer:
     key = (user_id, conversation_id)
     synth = _synthesizers.get(key)
-    if not synth:
-        synth = ConflictSynthesizer(user_id, conversation_id)
-        await synth.initialize_all_subsystems()   # correct method name
-        _synthesizers[key] = synth
-        # optional day-transition hook
-        try:
-            from logic.time_cycle import register_day_transition_handler
-            register_day_transition_handler(user_id, conversation_id, synth.handle_day_transition)
-            logger.info("Registered synthesizer for day transitions")
-        except ImportError:
-            pass
-    return synth
+    if synth and getattr(synth, "_initialized", False):
+        return synth
+
+    lock = _synthesizer_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        existing = _synthesizer_locks.setdefault(key, lock)
+        lock = existing
+
+    async with lock:
+        synth = _synthesizers.get(key)
+        if synth is None:
+            synth = ConflictSynthesizer(user_id, conversation_id)
+            _synthesizers[key] = synth
+
+        if not getattr(synth, "_initialized", False):
+            try:
+                await synth.initialize_all_subsystems()   # correct method name
+            except Exception:
+                _synthesizers.pop(key, None)
+                raise
+
+            # optional day-transition hook
+            try:
+                from logic.time_cycle import register_day_transition_handler
+
+                register_day_transition_handler(
+                    user_id, conversation_id, synth.handle_day_transition
+                )
+                logger.info("Registered synthesizer for day transitions")
+            except ImportError:
+                pass
+
+        return synth
 
 
 async def release_synthesizer(user_id: int, conversation_id: int):
     """Release and cleanup a synthesizer instance"""
     key = (user_id, conversation_id)
     synthesizer = _synthesizers.pop(key, None)
+    _synthesizer_locks.pop(key, None)
     if synthesizer:
         await synthesizer.shutdown()
         logger.info(f"Released synthesizer for user {user_id}, conversation {conversation_id}")
