@@ -926,7 +926,8 @@ class BackgroundConflictSubsystem:
                     data={
                         'background_update': daily_update,
                         'news_count': len(daily_update.get("news", [])),
-                        'active_conflicts': daily_update.get('active_conflicts', 0)
+                        'active_conflicts': daily_update.get('active_conflicts', []) or [],
+                        'active_conflict_count': len(daily_update.get('active_conflicts', []) or [])
                     },
                     side_effects=side_effects
                 )
@@ -1045,16 +1046,23 @@ class BackgroundConflictSubsystem:
         """Check subsystem health"""
         try:
             active = await self._get_active_background_conflicts()
+            active_conflicts = [
+                self._db_to_background_conflict(conflict_data) for conflict_data in active
+            ]
+            summaries = [self._summarize_conflict(conflict) for conflict in active_conflicts]
             return {
                 'status': 'healthy',
-                'active_conflicts': len(active),
+                'active_conflicts': summaries,
+                'active_conflict_count': len(summaries),
                 'queue_size': len(self.processor._processing_queue),
                 'cache_size': len(self._context_cache)
             }
         except Exception as e:
             return {
                 'status': 'unhealthy',
-                'error': str(e)
+                'error': str(e),
+                'active_conflicts': [],
+                'active_conflict_count': 0
             }
     
     async def daily_background_update(self, generate_new: bool = False) -> Dict[str, Any]:
@@ -1071,14 +1079,18 @@ class BackgroundConflictSubsystem:
         conflicts_data = await self._get_active_background_conflicts()
         
         active_conflicts = []
+        active_conflict_summaries = []
         for conflict_data in conflicts_data:
-            active_conflicts.append(self._db_to_background_conflict(conflict_data))
-        
+            conflict = self._db_to_background_conflict(conflict_data)
+            active_conflicts.append(conflict)
+            active_conflict_summaries.append(self._summarize_conflict(conflict))
+
         # Only generate new conflicts if needed and allowed
         if generate_new and len(active_conflicts) < 3:
             new_conflict = await self.orchestrator.generate_background_conflict()
             if new_conflict:
                 active_conflicts.append(new_conflict)
+                active_conflict_summaries.append(self._summarize_conflict(new_conflict))
         
         # Process conflict advances if generating new content
         events = []
@@ -1132,7 +1144,8 @@ class BackgroundConflictSubsystem:
             )
         
         result = {
-            'active_conflicts': len(active_conflicts),
+            'active_conflicts': active_conflict_summaries,
+            'active_conflict_count': len(active_conflict_summaries),
             'events_today': events,
             'news': news_items,
             'ripple_effects': ripples_obj,
@@ -1236,6 +1249,22 @@ class BackgroundConflictSubsystem:
             last_news_generation=data.get('last_news_generation'),
             news_count=data.get('news_count', 0)
         )
+
+    def _summarize_conflict(self, conflict: BackgroundConflict) -> Dict[str, Any]:
+        """Create a lightweight summary for downstream consumers."""
+        try:
+            intensity_level = float(INTENSITY_TO_FLOAT[conflict.intensity])
+        except KeyError:
+            intensity_level = 0.4
+
+        return {
+            'id': conflict.conflict_id,
+            'type': 'background',
+            'name': conflict.name,
+            'intensity': conflict.intensity.value,
+            'intensity_level': intensity_level,
+            'progress': conflict.progress,
+        }
 
 
 # ===============================================================================
