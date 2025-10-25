@@ -269,8 +269,8 @@ class BackgroundConflictOrchestrator:
                 INSERT INTO backgroundconflicts
                 (user_id, conversation_id, conflict_type, name, description,
                  factions, current_state, intensity, progress, status,
-                 metadata, news_count)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 metadata, news_count, last_news_generation)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 RETURNING id
                 """,
                 self.user_id,
