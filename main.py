@@ -1349,9 +1349,44 @@ def create_quart_app():
 
     @sio.event
     async def disconnect(sid):
-        # sock_sess = await sio.get_session(sid) # This might fail if session is already gone
-        # user_id = sock_sess.get("user_id", "unknown") if sock_sess else "unknown"
-        app.logger.warning(f"SERVER-SIDE: Socket disconnected: sid={sid}.")
+        """Log disconnects with severity based on the underlying reason."""
+
+        reason: Optional[str] = None
+
+        try:
+            sock_sess = await sio.get_session(sid)
+        except KeyError:
+            sock_sess = None
+        except Exception as exc:  # pragma: no cover - defensive logging
+            app.logger.debug(
+                "SERVER-SIDE: Failed to get session for disconnected sid=%s: %s",
+                sid,
+                exc,
+            )
+            sock_sess = None
+
+        if sock_sess:
+            reason = (
+                sock_sess.get("disconnect_reason")
+                or sock_sess.get("reason")
+                or sock_sess.get("close_reason")
+            )
+
+        expected_reasons = {
+            "client namespace disconnect",
+            "server namespace disconnect",
+            "transport close",
+        }
+
+        log_level = logging.INFO
+        if reason and reason not in expected_reasons:
+            log_level = logging.WARNING
+
+        message = f"SERVER-SIDE: Socket disconnected: sid={sid}."
+        if reason:
+            message = f"{message} reason={reason}"
+
+        app.logger.log(log_level, message)
         
     @sio.event
     async def client_heartbeat(sid, data):
