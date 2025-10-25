@@ -1,5 +1,6 @@
 # memory/core.py
 
+import os
 import time
 import logging
 import asyncpg
@@ -278,35 +279,86 @@ class OpenAIEmbedding(EmbeddingProvider):
             return [[0.0] * EMBEDDING_DIMENSION for _ in texts]
 
 class FallbackEmbedding(EmbeddingProvider):
-    def __init__(self):
-        self.providers = []
-        
-        # Check if we should use OpenAI first based on config
-        if EMBEDDING_MODEL == "text-embedding-ada-002" or os.getenv("FORCE_OPENAI_EMBEDDINGS"):
-            try:
-                self.providers.append(OpenAIEmbedding())
-                logger.info("Using OpenAI for embeddings (1536 dimensions)")
-            except Exception as e:
-                logger.warning(f"OpenAI embedding unavailable: {e}")
-        
-        # Only fall back to SentenceTransformers if OpenAI isn't available
+    DEFAULT_CACHE_TTL = 300
+    DEFAULT_CACHE_MAXSIZE = 256
+
+    def __init__(
+        self,
+        providers: Optional[List[EmbeddingProvider]] = None,
+        *,
+        cache_ttl: Optional[int] = None,
+        cache_maxsize: Optional[int] = None,
+    ):
+        self.providers = providers or []
+
+        cache_config = EMBEDDING_CONFIG.get("cache", {}) if isinstance(EMBEDDING_CONFIG, dict) else {}
+        self._cache_ttl = cache_ttl if cache_ttl is not None else cache_config.get("ttl_seconds", self.DEFAULT_CACHE_TTL)
+        self._cache_maxsize = (
+            cache_maxsize if cache_maxsize is not None else cache_config.get("maxsize", self.DEFAULT_CACHE_MAXSIZE)
+        )
+        self._cache: "OrderedDict[Tuple[str, str], Tuple[float, List[float]]]" = OrderedDict()
+        self._cache_lock = asyncio.Lock()
+
         if not self.providers:
-            try:
-                self.providers.append(SentenceTransformerEmbedding())
-                logger.info("Using SentenceTransformers for embeddings (1536 dimensions)")
-                logger.warning("WARNING: Dimension mismatch - database expects 1536!")
-            except (ImportError, Exception) as e:
-                logger.warning(f"SentenceTransformers unavailable: {e}")
+            # Check if we should use OpenAI first based on config
+            if EMBEDDING_MODEL == "text-embedding-ada-002" or os.getenv("FORCE_OPENAI_EMBEDDINGS"):
+                try:
+                    self.providers.append(OpenAIEmbedding())
+                    logger.info("Using OpenAI for embeddings (1536 dimensions)")
+                except Exception as e:
+                    logger.warning(f"OpenAI embedding unavailable: {e}")
+
+            # Only fall back to SentenceTransformers if OpenAI isn't available
+            if not self.providers:
+                try:
+                    self.providers.append(SentenceTransformerEmbedding())
+                    logger.info("Using SentenceTransformers for embeddings (1536 dimensions)")
+                    logger.warning("WARNING: Dimension mismatch - database expects 1536!")
+                except (ImportError, Exception) as e:
+                    logger.warning(f"SentenceTransformers unavailable: {e}")
 
         if not self.providers:
             logger.error("No embedding providers available! Using zero vectors.")
 
+    async def _get_cached_embedding(self, key: Tuple[str, str]) -> Optional[List[float]]:
+        async with self._cache_lock:
+            cached = self._cache.get(key)
+            if not cached:
+                return None
+
+            expires_at, embedding = cached
+            now = time.time()
+            if expires_at <= now:
+                del self._cache[key]
+                return None
+
+            self._cache.move_to_end(key)
+            return embedding
+
+    async def _set_cached_embedding(self, key: Tuple[str, str], embedding: List[float]) -> None:
+        async with self._cache_lock:
+            expires_at = time.time() + max(self._cache_ttl, 0)
+            self._cache[key] = (expires_at, embedding)
+            self._cache.move_to_end(key)
+
+            while len(self._cache) > max(self._cache_maxsize, 1):
+                self._cache.popitem(last=False)
+
     async def get_embedding(self, text: str) -> List[float]:
         for provider in self.providers:
+            key = (provider.__class__.__name__, text)
+
+            cached = await self._get_cached_embedding(key)
+            if cached is not None:
+                return cached
+
             try:
-                return await provider.get_embedding(text)
+                embedding = await provider.get_embedding(text)
+                await self._set_cached_embedding(key, embedding)
+                return embedding
             except Exception as e:
                 logger.warning(f"Embedding provider {provider.__class__.__name__} failed: {e}")
+
         logger.error("All embedding providers failed")
         return [0.0] * EMBEDDING_DIMENSION
 
