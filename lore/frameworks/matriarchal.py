@@ -306,22 +306,33 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
     # 1) Generating Core Principles with Pydantic Model
     # ------------------------------------------------------------------
     async def _generate_core_principles_impl(self) -> CorePrinciples:
+        """
+        Generates core principles using a robust prompt and includes error handling
+        to prevent JSON parsing failures from crashing the system.
+        """
+        # 1. Enhanced Prompt: More explicit instructions for the LLM.
         prompt = (
             "Generate a JSON object describing the core principles of a strongly matriarchal (femdom) world. "
-            "Include sections like 'power_dynamics', 'societal_norms', and 'symbolic_representations'. "
-            "Each section should be detailed, engaging, and suitable for a narrative-heavy setting. "
-            "Your output must be valid JSON, with no extra text. Example structure:\n\n"
+            "Your output MUST be a single, valid JSON object that strictly conforms to the required structure. "
+            "Do not include any text, markdown, or explanations before or after the JSON.\n\n"
+            "The JSON object must contain these top-level keys: 'power_dynamics', 'societal_norms', and 'symbolic_representations'.\n\n"
+            "Example Structure:\n"
             "{\n"
             '  "power_dynamics": {\n'
-            '      "dominant_gender": "female",\n'
-            '      "power_expressions": ["..."],\n'
-            '      ...\n'
+            '    "dominant_gender": "female",\n'
+            '    "power_expressions": ["Control of resources", "Spiritual authority", "Sexual dominance"],\n'
+            '    "authority_sources": ["Divine right of the Matriarch", "Control over fertility and lineage"],\n'
+            '    "submission_forms": ["Ritualistic servitude", "Economic dependency", "Oath of fealty"]\n'
             "  },\n"
             '  "societal_norms": {\n'
-            '      ...\n'
+            '    "gender_roles": {"female": "Rulers, scholars, warriors", "male": "Artisans, laborers, consorts"},\n'
+            '    "behavioral_expectations": {"female": "Assertive, decisive", "male": "Obedient, diligent"},\n'
+            '    "social_structures": {"family": "Matrilineal clans", "governance": "Council of Matriarchs"}\n'
             "  },\n"
             '  "symbolic_representations": {\n'
-            '      ...\n'
+            '    "symbols": {"primary": "Crescent moon representing the Goddess"},\n'
+            '    "rituals": {"rite_of_ascension": "A trial for a woman to claim a title"},\n'
+            '    "ceremonial_elements": {"colors": "Purple and silver for nobility"}\n'
             "  }\n"
             "}"
         )
@@ -341,14 +352,27 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
 
-        result = await Runner.run(
-            principles_agent,
-            prompt,
-            context=run_ctx.context,
-            run_config=run_cfg
-        )
-
-        return result.final_output_as(CorePrinciples)
+        # 2. Error Handling and Fallback Mechanism
+        try:
+            result = await Runner.run(
+                principles_agent,
+                prompt,
+                context=run_ctx.context,
+                run_config=run_cfg
+            )
+            # The .final_output_as() method will attempt to parse and validate.
+            # If it fails, it will raise an exception that we now catch.
+            return result.final_output_as(CorePrinciples)
+        except Exception as e:
+            # If parsing fails, log the error and return a default, empty object.
+            logger.error(f"Failed to generate and parse CorePrinciples: {e}", exc_info=True)
+            
+            # This default object ensures the rest of the system doesn't crash.
+            return CorePrinciples(
+                power_dynamics=PowerDynamics(power_expressions=[], authority_sources=[], submission_forms=[]),
+                societal_norms=SocietalNorms(gender_roles={}, behavioral_expectations={}, social_structures={}),
+                symbolic_representations=SymbolicRepresentations(symbols={}, rituals={}, ceremonial_elements={})
+            )
 
     @function_tool
     async def generate_core_principles(self) -> CorePrinciples:
