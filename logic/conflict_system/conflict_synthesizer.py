@@ -484,66 +484,115 @@ class ConflictSynthesizer:
 
     async def conflict_context_for_scene(self, scene_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Get conflict context optimized for current scene. Main entry for NyxContext.
+        Get conflict context for a scene using a cache-first, non-blocking strategy.
+        Returns cached data if available, otherwise triggers a background update and
+        returns a minimal, fast-path response immediately.
         """
+        from tasks import update_scene_conflict_context
         scene_info = self._scene_scope_to_mapping(scene_info) or {}
 
-        # Stable, safe cache key (handles lists/dicts)
+        # 1. Generate a stable cache key
         try:
             key_str = json.dumps(scene_info, sort_keys=True, default=str)
         except Exception:
             key_str = str(scene_info)
-        cache_key = f"scene_{hashlib.md5(key_str.encode()).hexdigest()}"
-        if cache_key in self._scene_cache:
-            cached = self._scene_cache[cache_key]
-            if datetime.utcnow().timestamp() - cached['timestamp'] < self._cache_ttl:
-                return cached['data']
+        cache_key = f"conflict_context:{self.user_id}:{self.conversation_id}:{hashlib.md5(key_str.encode()).hexdigest()}"
 
-        # Background fast-path: scene-relevant updates (ambient effects, immediate NPC updates enqueued)
-        ambient_from_processor = []
+        # 2. Fast Path: Check Redis Cache
         try:
-            immediate = await self.processor.process_scene_relevant_updates(scene_info)
-            ambient_from_processor = immediate.get('ambient_effects') or []
+            cached_data = redis_client.get(cache_key)
+            if cached_data:
+                logger.debug(f"Conflict context cache HIT for key: {cache_key}")
+                return json.loads(cached_data)
         except Exception as e:
-            logger.debug(f"Scene-relevant background updates failed: {e}")
-    
-        event = SystemEvent(
-            event_id=f"scene_{datetime.now().timestamp()}",
-            event_type=EventType.SCENE_ENTER,
-            source_subsystem=SubsystemType.ORCHESTRATOR,
-            payload={'scene_context': scene_info},
-            target_subsystems={SubsystemType.BACKGROUND},
-        )
-    
-        responses = await self.emit_event(event)
-    
-        context = {
-            'conflicts': [],
-            'tensions': {},
-            'opportunities': [],
-            'ambient_effects': [],
+            logger.warning(f"Redis cache check failed: {e}")
+
+        # 3. Cache Miss: Trigger background task and return a fast-path response
+        logger.debug(f"Conflict context cache MISS for key: {cache_key}. Triggering background job.")
+        
+        try:
+            update_scene_conflict_context.delay(
+                self.user_id, self.conversation_id, scene_info, cache_key
+            )
+        except Exception as e:
+            logger.error(f"Failed to trigger Celery task for conflict context: {e}")
+        
+        # --- Start of Fast-Path Logic ---
+        # This is the immediate, non-blocking response.
+        fast_context = {
+            'conflicts': [], 'tensions': {}, 'opportunities': [],
+            'ambient_effects': ["The air is still, holding a quiet potential..."],
             'world_tension': 0.0,
+            'metadata': {'status': 'partial_fast_response', 'cache_key': cache_key}
         }
-    
-        if responses:
-            for response in responses:
-                if response.success and response.data:
-                    if response.subsystem == SubsystemType.BACKGROUND:
-                        scene_ctx = response.data.get('scene_context', {}) or {}
-                        context['conflicts'].extend(scene_ctx.get('active_conflicts', []) or [])
-                        # Accept either key and merge processor ambient
-                        ambient = scene_ctx.get('ambient_effects') or scene_ctx.get('ambient_atmosphere') or []
-                        context['ambient_effects'].extend(ambient or [])
-                        context['ambient_effects'].extend(ambient_from_processor or [])
-                        wt = scene_ctx.get('world_tension')
-                        if isinstance(wt, (int, float)):
-                            context['world_tension'] = float(wt)
-    
-        self._scene_cache[cache_key] = {
-            'timestamp': datetime.utcnow().timestamp(),
-            'data': context,
-        }
-        return context
+        
+        try:
+            valid_npc_ids = [int(nid) for nid in scene_info.get('npcs', []) if nid is not None]
+            location_id = scene_info.get('location_id')
+
+            if valid_npc_ids or location_id:
+                async with get_db_connection_context() as conn:
+                    conflict_ids = set()
+                    active_conflicts = []
+
+                    if valid_npc_ids:
+                        stakeholder_rows = await conn.fetch(
+                            "SELECT DISTINCT conflict_id FROM conflict_stakeholders WHERE npc_id = ANY($1::int[])",
+                            valid_npc_ids
+                        )
+                        for row in stakeholder_rows:
+                            if row['conflict_id']:
+                                conflict_ids.add(row['conflict_id'])
+                    
+                    if location_id:
+                        # Query the new junction table
+                        location_conflict_rows = await conn.fetch(
+                            "SELECT conflict_id FROM conflict_locations WHERE location_id = $1",
+                            location_id
+                        )
+                        for row in location_conflict_rows:
+                            conflict_ids.add(row['conflict_id'])
+
+                    if conflict_ids:
+                        conflict_rows = await conn.fetch(
+                            "SELECT conflict_id as id, conflict_name as name, conflict_type as type, intensity FROM conflicts WHERE is_active = TRUE AND conflict_id = ANY($1::int[])",
+                            list(conflict_ids)
+                        )
+                        active_conflicts.extend([dict(row) for row in conflict_rows])
+
+                    if location_id:
+                        national_rows = await conn.fetch(
+                            "SELECT id, name, conflict_type as type, (severity / 10.0) as intensity FROM nationalconflicts WHERE location_id = $1 AND status != 'resolved'",
+                            location_id
+                        )
+                        active_conflicts.extend([dict(row) for row in national_rows])
+
+                        domestic_rows = await conn.fetch(
+                            "SELECT id, name, issue_type as type, (severity / 10.0) as intensity FROM domesticissues WHERE location_id = $1 AND status = 'active'",
+                            location_id
+                        )
+                        active_conflicts.extend([dict(row) for row in domestic_rows])
+                    
+                    if active_conflicts:
+                        unique_conflicts = {c['id']: c for c in active_conflicts}.values()
+                        fast_context['conflicts'] = list(unique_conflicts)
+                        total_intensity = sum(c.get('intensity', 0.5) for c in unique_conflicts if c.get('intensity'))
+                        avg_intensity = total_intensity / len(unique_conflicts) if unique_conflicts else 0.0
+                        fast_context['world_tension'] = round(min(1.0, avg_intensity * 1.2), 2)
+                        
+                        if avg_intensity > 0.7:
+                            fast_context['ambient_effects'] = ["A palpable tension hangs in the air, sharp and unseen."]
+                        elif avg_intensity > 0.4:
+                            fast_context['ambient_effects'] = ["There's an undercurrent of unease, a sense that things are not quite settled."]
+                        else:
+                            fast_context['ambient_effects'] = ["The atmosphere is calm, but watchful."]
+        
+        except Exception as e:
+            logger.error(f"Fast-path conflict context fetch failed: {e}", exc_info=True)
+            # Return a safe default even if the fast-path fails
+            fast_context['ambient_effects'] = ["An unexpected silence fills the air as the world recalibrates..."]
+
+        return fast_context
     
     
     async def handle_day_transition(self, new_day: int) -> Dict[str, Any]:
