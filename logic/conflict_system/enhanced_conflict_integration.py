@@ -137,6 +137,7 @@ class EnhancedIntegrationSubsystem:
         from logic.conflict_system.conflict_synthesizer import EventType
         return {
             EventType.STATE_SYNC,
+            EventType.SCENE_ENTER,
             EventType.PLAYER_CHOICE,
             EventType.NPC_REACTION,
             EventType.HEALTH_CHECK,
@@ -159,8 +160,9 @@ class EnhancedIntegrationSubsystem:
                 payload = event.payload or {}
                 scene_context = payload.get('scene_context') or payload
 
+                await self._register_scene_context_for_refresh(scene_context, reason="state_sync")
                 tensions = await self.analyze_scene_tensions(scene_context)
-    
+
                 side_effects = []
                 if tensions and tensions.get('should_generate_conflict'):
                     # Suggest conflict creation as a side-effect (orchestrator will route)
@@ -231,7 +233,19 @@ class EnhancedIntegrationSubsystem:
                     data=await self.health_check(),
                     side_effects=[]
                 )
-    
+
+            if event.event_type == EventType.SCENE_ENTER:
+                payload = event.payload or {}
+                scene_context = payload.get('scene_context') or payload
+                await self._register_scene_context_for_refresh(scene_context, reason="scene_enter")
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'registered': bool(scene_context)},
+                    side_effects=[]
+                )
+
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
@@ -266,9 +280,11 @@ class EnhancedIntegrationSubsystem:
             }
             scene_context = self._normalize_scene_context(raw_scene_context)
             scope_key = self._scope_key_from_context(scene_context)
-            self._remember_scope(scope_key, scene_context)
 
-            cached_summary = await self._get_cached_tension_summary(scope_key)
+            cached_summary = await self._get_cached_tension_summary(
+                scope_key,
+                mutate_cache=False
+            )
             if cached_summary:
                 await record_cache_operation(
                     cache_type="enhanced_conflict_tension",
@@ -283,11 +299,6 @@ class EnhancedIntegrationSubsystem:
                     cache_type="enhanced_conflict_tension",
                     hit=False
                 )
-                logger.info(
-                    "No cached tension summary for scope %s; scheduling background refresh",
-                    scope_key
-                )
-                self._schedule_refresh({scope_key: scene_context}, reason="cache_miss")
                 cached_summary = {}
 
             manifestations = list(cached_summary.get('manifestation', []) or [])
@@ -360,6 +371,33 @@ class EnhancedIntegrationSubsystem:
         while len(self._known_scene_contexts) > self._scope_memory_limit:
             self._known_scene_contexts.popitem(last=False)
 
+    async def _register_scene_context_for_refresh(
+        self,
+        scene_context: Dict[str, Any],
+        reason: str
+    ) -> None:
+        if not scene_context:
+            return
+
+        normalized = self._normalize_scene_context(scene_context)
+        scope_key = self._scope_key_from_context(normalized)
+        if not scope_key:
+            return
+
+        self._remember_scope(scope_key, normalized)
+
+        cached = await self._get_cached_tension_summary(scope_key)
+        if cached:
+            logger.debug(
+                "Scope %s already has cached tensions; no refresh scheduled", scope_key
+            )
+            return
+
+        logger.info(
+            "Scheduling tension refresh for scope %s via %s", scope_key, reason
+        )
+        self._schedule_refresh({scope_key: normalized}, reason=reason)
+
     def _schedule_refresh(self, contexts: Dict[str, Dict[str, Any]], reason: str) -> None:
         if not contexts:
             return
@@ -404,7 +442,12 @@ class EnhancedIntegrationSubsystem:
             duration
         )
 
-    async def _get_cached_tension_summary(self, scope_key: str) -> Dict[str, Any]:
+    async def _get_cached_tension_summary(
+        self,
+        scope_key: str,
+        *,
+        mutate_cache: bool = True
+    ) -> Dict[str, Any]:
         if not scope_key:
             return {}
         cached = await self._tension_cache.get(scope_key)
@@ -433,7 +476,8 @@ class EnhancedIntegrationSubsystem:
                     summary = {}
             if row.get('last_updated') and isinstance(summary, dict):
                 summary.setdefault('cached_at', row['last_updated'].isoformat())
-            await self._tension_cache.set(scope_key, summary, ttl=3600)
+            if mutate_cache:
+                await self._tension_cache.set(scope_key, summary, ttl=3600)
             return summary
 
     async def _persist_tension_summary(self, scope_key: str, summary: Dict[str, Any]) -> None:
