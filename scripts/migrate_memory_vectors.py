@@ -19,6 +19,14 @@ def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def _qualified_table(schema: str, table: str) -> str:
+    """Return a fully qualified and quoted table identifier."""
+
+    if not schema:
+        raise ValueError("Schema name is required for fully qualified identifiers")
+    return f"{_quote_ident(schema)}.{_quote_ident(table)}"
+
+
 async def _fetch_vector_columns(
     conn: asyncpg.Connection,
 ) -> List[Tuple[str, str, str, Optional[int]]]:
@@ -69,9 +77,7 @@ async def _alter_column_dimension(
     column: str,
     dimension: int,
 ) -> None:
-    qualified_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
-    if not schema or schema == "public":
-        qualified_table = _quote_ident(table)
+    qualified_table = _qualified_table(schema, table)
 
     alter_sql = (
         f"ALTER TABLE {qualified_table} "
@@ -97,9 +103,7 @@ async def _count_mismatched_rows(
     column: str,
     dimension: int,
 ) -> int:
-    qualified_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
-    if not schema or schema == "public":
-        qualified_table = _quote_ident(table)
+    qualified_table = _qualified_table(schema, table)
 
     mismatch_sql = (
         f"SELECT COUNT(*) AS mismatches "
