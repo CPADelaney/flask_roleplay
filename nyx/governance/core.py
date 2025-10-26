@@ -2,12 +2,13 @@
 """
 Core governance class that combines all mixins.
 """
+import json
 import logging
 import asyncio
 import uuid
 import yaml
 import os
-from typing import Dict, Any, Optional, List, Union, TYPE_CHECKING, Protocol, Tuple
+from typing import Dict, Any, Optional, List, Union, TYPE_CHECKING, Protocol, Tuple, Set
 from datetime import datetime, timedelta
 from contextvars import ContextVar
 from functools import wraps
@@ -18,38 +19,17 @@ from collections import defaultdict
 
 from .ids import legacy_agent_ids, parse_agent_id
 
-# Remove direct OpenAI import - use chatgpt_integration instead
-# from openai import AsyncOpenAI
-# from openai.types.beta.assistant import Assistant
-
-try:
-    from openai import BadRequestError
-    OPENAI_ERRORS_AVAILABLE = True
-except ImportError:
-    OPENAI_ERRORS_AVAILABLE = False
-    # Create a fallback BadRequestError class
-    class BadRequestError(Exception):
-        """Fallback BadRequestError when OpenAI is not available."""
-        pass
-
 # Helper functions for OpenAI integration
 RESPONSES_ALLOWED_KEYS = {
-    "model", "name", "instructions", "temperature", "top_p", 
-    "max_tokens", "tools", "custom_capabilities"
+    "model",
+    "name",
+    "instructions",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "tools",
+    "custom_capabilities",
 }
-
-def _is_unsupported_model(error: Exception) -> bool:
-    """Check if the error indicates an unsupported model."""
-    error_msg = str(error).lower()
-    unsupported_phrases = [
-        "model not supported",
-        "unsupported model", 
-        "invalid model",
-        "does not exist",
-        "not available for assistants",
-        "gpt-5"  # gpt-5 models might not be supported yet
-    ]
-    return any(phrase in error_msg for phrase in unsupported_phrases)
 
 def _filter_responses_kwargs(kwargs: dict) -> dict:
     """Filter kwargs to only include valid Responses API parameters."""
@@ -59,18 +39,135 @@ def _filter_responses_kwargs(kwargs: dict) -> dict:
             filtered[key] = kwargs[key]
     return filtered
 
-class ResponsesAssistant:
-    """Shim class to provide Assistant-like interface for Responses API fallback."""
-    def __init__(self, id: str, name: str, model: str, 
-                 instructions: str = "", tools: list = None, 
-                 _custom_params: dict = None):
-        self.id = id
-        self.name = name
+class ResponsesAgent:
+    """
+    Lightweight adapter around the Responses API that exposes the same high-level
+    surface your code expects (analyze, guide, plan). Keeps the rest of the system
+    indifferent to how it's talking to the model.
+    """
+
+    def __init__(
+        self,
+        *,
+        agent_type: str,
+        agent_id: str,
+        model: str,
+        name: Optional[str] = None,
+        instructions: str = "",
+        tools: Optional[List[dict]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        custom_capabilities: Optional[List[str]] = None,
+        openai_client_factory=None,
+    ):
+        self.agent_type = agent_type
+        self.agent_id = agent_id
+        self.id = f"resp_{agent_id}"
+        self.name = name or f"{agent_type}:{agent_id}"
         self.model = model
-        self.instructions = instructions
+        self.instructions = instructions or f"You are the {agent_type} agent."
         self.tools = tools or []
-        self._custom_params = _custom_params or {}
+        self.temperature = temperature
+        self.top_p = top_p
+        self.max_tokens = max_tokens
+        self._custom_params = {"custom_capabilities": custom_capabilities or []}
         self.created_at = datetime.now().isoformat()
+        self._get_client = openai_client_factory
+
+    async def _client(self):
+        if self._get_client is None:
+            raise RuntimeError("OpenAI client factory not set for ResponsesAgent")
+        return await self._get_client()
+
+    def _compose_prompt(
+        self, op: str, context: Dict[str, Any], capabilities: Optional[List[str]]
+    ) -> str:
+        header = f"[agent={self.name} op={op}]"
+        caps = f"\nCapabilities: {', '.join(capabilities)}" if capabilities else ""
+        body = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        sys = self.instructions.strip()
+        return f"{header}\n{sys}{caps}\n\nContext:\n{body}"
+
+    def _extract_text(self, resp: Any) -> str:
+        text = getattr(resp, "output_text", None)
+        if isinstance(text, str) and text.strip():
+            return text
+        try:
+            chunks: List[str] = []
+            for item in getattr(resp, "output", []) or []:
+                for content in getattr(item, "content", []) or []:
+                    candidate = getattr(content, "text", None)
+                    if isinstance(candidate, str):
+                        chunks.append(candidate)
+                    elif hasattr(candidate, "value"):
+                        chunks.append(getattr(candidate, "value"))
+            if chunks:
+                return "\n".join(chunks)
+        except Exception:  # pragma: no cover - best effort fallback
+            pass
+        return str(resp)
+
+    def _maybe_json(self, text: str) -> Dict[str, Any]:
+        text = (text or "").strip()
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        if "```" in text:
+            for part in text.split("```"):
+                part = part.strip()
+                if part.lower().startswith("json"):
+                    part = part.split("\n", 1)[-1] if "\n" in part else ""
+                    part = part.strip()
+                if part.startswith("{") and part.endswith("}"):
+                    try:
+                        return json.loads(part)
+                    except Exception:
+                        continue
+        return {"text": text}
+
+    async def _run(
+        self,
+        op: str,
+        *,
+        context: Dict[str, Any],
+        capabilities: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        client = await self._client()
+        prompt = self._compose_prompt(op, context, capabilities)
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "input": prompt,
+        }
+        if self.temperature is not None:
+            params["temperature"] = self.temperature
+        if self.top_p is not None:
+            params["top_p"] = self.top_p
+        if self.max_tokens is not None:
+            params["max_output_tokens"] = self.max_tokens
+        if self.tools:
+            params["tools"] = self.tools
+        resp = await client.responses.create(**params)
+        text = self._extract_text(resp)
+        return self._maybe_json(text)
+
+    async def analyze(
+        self, *, context: Dict[str, Any], capabilities: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        return await self._run("analyze", context=context, capabilities=capabilities)
+
+    async def guide(
+        self, *, context: Dict[str, Any], capabilities: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        return await self._run("guide", context=context, capabilities=capabilities)
+
+    async def plan(
+        self, *, context: Dict[str, Any], capabilities: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        return await self._run("plan", context=context, capabilities=capabilities)
 
 # Import metrics (assuming prometheus_client is available)
 try:
@@ -111,13 +208,6 @@ from db.connection import get_db_connection_context
 
 # Import LLM access from chatgpt_integration
 
-# Try to import Assistant type for type hints
-try:
-    from openai.types.beta.assistant import Assistant
-    ASSISTANT_TYPE_AVAILABLE = True
-except ImportError:
-    ASSISTANT_TYPE_AVAILABLE = False
-    Assistant = Any  # Fallback type
 
 # Pydantic for validation
 try:
@@ -153,13 +243,6 @@ governor_active_agents = Gauge(
     'Currently active agents',
     ['agent_type']
 )
-
-# Valid OpenAI Assistant parameters
-VALID_OPENAI_PARAMS = {
-    "model", "name", "description", "instructions", "tools",
-    "file_ids", "metadata", "temperature", "top_p",
-    "tool_resources"
-}
 
 # Protocol for type safety
 class SupportsInitialize(Protocol):
@@ -654,7 +737,7 @@ class NyxUnifiedGovernor(
       9. Temporal consistency enforcement
       10. User preference integration
     """
-    _assistants: dict[str, Assistant] = {}
+    _assistants: Dict[str, ResponsesAgent] = {}
     _openai_client = None  # Cached client instance
     
     def __init__(self, user_id: int, conversation_id: int, player_name: Optional[str] = None):
@@ -1334,19 +1417,9 @@ class NyxUnifiedGovernor(
                     type(caps).__name__
                 )
     
-        # Log & drop any keys the OpenAI SDK won't recognise
-        # Need to define VALID_OPENAI_PARAMS if not already defined
-        if not hasattr(self, 'VALID_OPENAI_PARAMS'):
-            # These are the common OpenAI Assistant parameters
-            VALID_OPENAI_PARAMS = {
-                "model", "name", "description", "instructions", "tools",
-                "file_ids", "metadata", "temperature", "top_p",
-                "tool_resources"
-            }
-        else:
-            VALID_OPENAI_PARAMS = self.VALID_OPENAI_PARAMS
-            
-        unknown = set(kwargs) - VALID_OPENAI_PARAMS
+        allowed: Set[str] = set(RESPONSES_ALLOWED_KEYS)
+        allowed.update({"metadata", "description", "file_ids", "tool_resources"})
+        unknown = set(kwargs) - allowed
         if unknown:
             logger.warning(
                 "create_agent: ignoring unsupported kwargs: %s",
@@ -1355,127 +1428,54 @@ class NyxUnifiedGovernor(
             for k in unknown:
                 kwargs.pop(k, None)
         
-    async def create_agent(
-        self,
-        agent_type: str,
-        agent_id: str,
-        *,
-        use_openai_sdk: bool = True,
-        **kwargs,
-    ) -> Any:
-        """
-        Create / register an agent.
-    
-        If use_openai_sdk=True (default), we try Assistants first.
-        If the model is not supported there, we transparently fall back to Responses
-        (keeping the same model and tools).
-        """
-        logger.info("Creating agent via SDK=%s, type=%s, id=%s",
-                    use_openai_sdk, agent_type, agent_id)
-    
-        # Return cached if exists
+    async def create_agent(self, agent_type: str, agent_id: str, **kwargs) -> Any:
+        """Create/register an agent backed by the Responses API only."""
+
+        logger.info(
+            "Creating Responses-backed agent, type=%s, id=%s", agent_type, agent_id
+        )
+
         if agent_id in getattr(self, "_assistants", {}):
             return self._assistants[agent_id]
-    
+
         sdk_defaults = {
             "name": f"{agent_type}:{agent_id}",
-            "model": kwargs.get("model", "gpt-5-nano"),  # keep your preferred default
-            "instructions": kwargs.get("instructions", f"You are the {agent_type} agent."),
+            "model": kwargs.get("model", "gpt-5-nano"),
+            "instructions": kwargs.get(
+                "instructions", f"You are the {agent_type} agent."
+            ),
             "tools": kwargs.get("tools", []),
+            "temperature": kwargs.get("temperature"),
+            "top_p": kwargs.get("top_p"),
+            "max_tokens": kwargs.get("max_tokens"),
         }
-    
-        # Migrate legacy kwargs and filter for Assistants
+
         sdk_defaults.update(kwargs)
         if hasattr(self, "_migrate_legacy_kwargs"):
             self._migrate_legacy_kwargs(sdk_defaults)
-    
-        # Try Assistants first (if requested)
-        if use_openai_sdk:
-            try:
-                client = await self._get_openai_client()
-            
-                # --- FIX: ensure we keep 'model' and other valid fields ---
-                allowed = getattr(self, "VALID_OPENAI_PARAMS", None)
-                if not allowed:
-                    # sensible default whitelist for Assistants.create
-                    allowed = {
-                        "model", "name", "instructions", "tools", "metadata",
-                        "temperature", "top_p", "tool_resources",
-                        "tool_choice", "timeout_ms",  # include any you support
-                    }
-            
-                assistant_kwargs = {k: v for k, v in sdk_defaults.items()
-                                    if k in allowed and v is not None}
-            
-                # Guarantee 'model' survives even if external config forgot to whitelist it
-                assistant_kwargs.setdefault("model", sdk_defaults["model"])
-            
-                # (Optional) debug what you're actually sending
-                logger.debug("assistant.create kwargs: %s", {k: type(v).__name__ for k,v in assistant_kwargs.items()})
-            
-                assistant = await client.beta.assistants.create(**assistant_kwargs)
-            
-                # keep custom params
-                custom = {k: v for k, v in sdk_defaults.items() if k not in allowed}
-                setattr(assistant, "_custom_params", custom)
-            
-                self._assistants[agent_id] = assistant
-                logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
-                return assistant
-            
-            except BadRequestError as e:
-                # Fall back to Responses only when the model is unsupported for Assistants
-                if _is_unsupported_model(e):
-                    logger.warning(
-                        "Model %s not supported on Assistants; falling back to Responses for %s/%s",
-                        sdk_defaults["model"], agent_type, agent_id
-                    )
-                else:
-                    emsg = str(e).lower()
-                    if "invalid" in emsg or "bad request" in emsg or "400" in emsg:
-                        logger.error("Assistant creation failed (bad request): %s", e, exc_info=True)
-                        raise AgentRegistrationError(
-                            f"Assistant creation failed (bad request - check parameters): {e}"
-                        ) from e
-                    logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
-                    raise AgentRegistrationError(
-                        f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
-                    ) from e
-            except Exception as e:
-                s = str(e).lower()
-                if "unauthorized" in s or "api key" in s or "401" in s:
-                    logger.error("Assistant creation failed (auth): %s", e, exc_info=True)
-                    raise AgentRegistrationError(
-                        f"Assistant creation failed (authentication issue): {e}"
-                    ) from e
-                if "rate limit" in s or "429" in s:
-                    logger.error("Assistant creation failed (rate limit): %s", e, exc_info=True)
-                    raise AgentRegistrationError(
-                        f"Assistant creation failed (rate limit exceeded): {e}"
-                    ) from e
-                logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
-                raise AgentRegistrationError(
-                    f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
-                ) from e
-    
-        # ────────────────────────────────────────────────────────────────────
-        # Responses fallback (or direct path if use_openai_sdk=False)
-        # ────────────────────────────────────────────────────────────────────
+
         resp_kwargs = _filter_responses_kwargs(sdk_defaults)
-        # We “register” a shim with the same info so the caller can use it later.
-        shim = ResponsesAssistant(
-            id=f"resp_{agent_id}",
-            name=resp_kwargs.get("name") or f"{agent_type}:{agent_id}",
+        agent = ResponsesAgent(
+            agent_type=agent_type,
+            agent_id=agent_id,
             model=resp_kwargs["model"],
+            name=resp_kwargs.get("name"),
             instructions=resp_kwargs.get("instructions", ""),
             tools=resp_kwargs.get("tools", []),
-            _custom_params={k: v for k, v in sdk_defaults.items() if k not in RESPONSES_ALLOWED_KEYS},
+            temperature=resp_kwargs.get("temperature"),
+            top_p=resp_kwargs.get("top_p"),
+            max_tokens=resp_kwargs.get("max_tokens"),
+            custom_capabilities=resp_kwargs.get("custom_capabilities", []),
+            openai_client_factory=self._get_openai_client,
         )
-        # Cache under the same dictionary so existing call-sites keep working
-        self._assistants[agent_id] = shim
-        logger.info("Responses-backed agent created for %s (id=%s, model=%s)",
-                    agent_id, shim.id, shim.model)
-        return shim
+        self._assistants[agent_id] = agent
+        logger.info(
+            "Responses-backed agent created for %s (id=%s, model=%s)",
+            agent_id,
+            agent.id,
+            agent.model,
+        )
+        return agent
 
     async def register_agent(self, *args, **kwargs):
         """
