@@ -19,12 +19,18 @@ def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def _qualified_table(schema: str, table: str) -> str:
-    """Return a fully qualified and quoted table identifier."""
+def _qualified_identifier(schema: str, name: str) -> str:
+    """Return a fully qualified and quoted identifier."""
 
     if not schema:
         raise ValueError("Schema name is required for fully qualified identifiers")
-    return f"{_quote_ident(schema)}.{_quote_ident(table)}"
+    return f"{_quote_ident(schema)}.{_quote_ident(name)}"
+
+
+def _qualified_table(schema: str, table: str) -> str:
+    """Return a fully qualified and quoted table identifier."""
+
+    return _qualified_identifier(schema, table)
 
 
 async def _fetch_vector_columns(
@@ -70,20 +76,113 @@ async def _fetch_vector_columns(
     ]
 
 
+async def _get_indexes_for_column(
+    conn: asyncpg.Connection,
+    schema: str,
+    table: str,
+    column: str,
+) -> List[Tuple[str, str, str]]:
+    """Return (index_schema, index_name, create_statement) for indexes on a column."""
+
+    rows: Sequence[asyncpg.Record] = await conn.fetch(
+        """
+        SELECT DISTINCT
+            ni.nspname AS index_schema,
+            ci.relname AS index_name,
+            pg_get_indexdef(i.indexrelid) AS index_definition
+        FROM pg_index i
+        JOIN pg_class ct ON ct.oid = i.indrelid
+        JOIN pg_namespace nt ON nt.oid = ct.relnamespace
+        JOIN pg_class ci ON ci.oid = i.indexrelid
+        JOIN pg_namespace ni ON ni.oid = ci.relnamespace
+        JOIN LATERAL unnest(i.indkey) AS idx(attnum) ON TRUE
+        JOIN pg_attribute a ON a.attrelid = ct.oid AND a.attnum = idx.attnum
+        WHERE nt.nspname = $1
+          AND ct.relname = $2
+          AND a.attname = $3
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pg_constraint con
+              WHERE con.conindid = i.indexrelid
+          )
+        ORDER BY index_schema, index_name
+        """,
+        schema,
+        table,
+        column,
+    )
+
+    return [
+        (
+            row["index_schema"],
+            row["index_name"],
+            row["index_definition"],
+        )
+        for row in rows
+    ]
+
+
+def _prepare_create_index_sql(index_definition: str, concurrent_index: bool) -> str:
+    """Return the CREATE INDEX statement, optionally with CONCURRENTLY."""
+
+    create_sql = index_definition
+    if concurrent_index and "CONCURRENTLY" not in create_sql:
+        if "CREATE UNIQUE INDEX" in create_sql:
+            create_sql = create_sql.replace(
+                "CREATE UNIQUE INDEX",
+                "CREATE UNIQUE INDEX CONCURRENTLY",
+                1,
+            )
+        elif "CREATE INDEX" in create_sql:
+            create_sql = create_sql.replace(
+                "CREATE INDEX",
+                "CREATE INDEX CONCURRENTLY",
+                1,
+            )
+    if not create_sql.rstrip().endswith(";"):
+        create_sql = f"{create_sql};"
+    return create_sql
+
+
 async def _alter_column_dimension(
     conn: asyncpg.Connection,
     schema: str,
     table: str,
     column: str,
     dimension: int,
+    *,
+    concurrent_index: bool = False,
 ) -> None:
     qualified_table = _qualified_table(schema, table)
+
+    indexes = await _get_indexes_for_column(conn, schema, table, column)
+    drop_clause = "CONCURRENTLY " if concurrent_index else ""
+    for index_schema, index_name, _ in indexes:
+        qualified_index = _qualified_identifier(index_schema, index_name)
+        drop_sql = f"DROP INDEX {drop_clause}{qualified_index};"
+        await conn.execute(drop_sql)
 
     alter_sql = (
         f"ALTER TABLE {qualified_table} "
         f"ALTER COLUMN {_quote_ident(column)} TYPE vector({dimension});"
     )
-    await conn.execute(alter_sql)
+    try:
+        await conn.execute(alter_sql)
+    except Exception as exc:
+        for index_schema, index_name, index_definition in indexes:
+            try:
+                await conn.execute(
+                    _prepare_create_index_sql(index_definition, concurrent_index)
+                )
+            except Exception as recreate_exc:
+                exc.add_note(
+                    "Failed to restore index "
+                    f"{_qualified_identifier(index_schema, index_name)}: {recreate_exc}"
+                )
+        raise
+
+    for _, _, index_definition in indexes:
+        await conn.execute(_prepare_create_index_sql(index_definition, concurrent_index))
 
 
 async def _validate_column_dimension(
@@ -120,6 +219,13 @@ async def main() -> None:
     if not dsn:
         raise SystemExit("DB_DSN environment variable is required for migration")
 
+    concurrent_index = os.getenv("CONCURRENT_INDEX", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     target_dimension = get_target_embedding_dimension()
     async with asyncpg.create_pool(dsn) as pool:
         async with pool.acquire() as conn:
@@ -152,7 +258,14 @@ async def main() -> None:
                     )
                     continue
 
-                await _alter_column_dimension(conn, schema, table, column, target_dimension)
+                await _alter_column_dimension(
+                    conn,
+                    schema,
+                    table,
+                    column,
+                    target_dimension,
+                    concurrent_index=concurrent_index,
+                )
                 validation_errors = await _validate_column_dimension(
                     conn, schema, table, column, target_dimension
                 )
