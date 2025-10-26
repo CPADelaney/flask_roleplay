@@ -86,22 +86,8 @@ async def _validate_column_dimension(
     table: str,
     column: str,
     dimension: int,
-) -> bool:
-    qualified_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
-    if not schema or schema == "public":
-        qualified_table = _quote_ident(table)
-
-    validation_sql = (
-        f"SELECT vector_dims({_quote_ident(column)}) AS dims "
-        f"FROM {qualified_table} "
-        f"WHERE {_quote_ident(column)} IS NOT NULL "
-        "LIMIT 1"
-    )
-    row = await conn.fetchrow(validation_sql)
-    if row is None:
-        # No data to validate – treat as success after ALTER TABLE
-        return True
-    return row["dims"] == dimension
+) -> int:
+    return await _count_mismatched_rows(conn, schema, table, column, dimension)
 
 
 async def _count_mismatched_rows(
@@ -163,11 +149,17 @@ async def main() -> None:
                     continue
 
                 await _alter_column_dimension(conn, schema, table, column, target_dimension)
-                is_valid = await _validate_column_dimension(
+                validation_errors = await _validate_column_dimension(
                     conn, schema, table, column, target_dimension
                 )
-                status = "OK" if is_valid else "CHECK"
-                print(f" - {qualified_table}.{column}: {status}")
+                if validation_errors:
+                    print(
+                        " - "
+                        f"{qualified_table}.{column}: ERROR - "
+                        f"{validation_errors} row(s) still have vector_dims <> {target_dimension}"
+                    )
+                else:
+                    print(f" - {qualified_table}.{column}: OK")
 
 
 if __name__ == "__main__":
