@@ -269,8 +269,8 @@ class BackgroundConflictOrchestrator:
                 INSERT INTO backgroundconflicts
                 (user_id, conversation_id, conflict_type, name, description,
                  factions, current_state, intensity, progress, status,
-                 metadata, news_count, last_news_generation)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 metadata, news_count)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING id
                 """,
                 self.user_id,
@@ -289,8 +289,7 @@ class BackgroundConflictOrchestrator:
                     "created_at": datetime.utcnow().isoformat(),
                     "daily_life_impacts": data.get("daily_life_impacts", [])
                 }),
-                0,  # news_count
-                None  # last_news_generation
+                0  # news_count
             )
             
             # Store initial development
