@@ -55,6 +55,9 @@ MAX_BUNDLE_CACHE = int(os.getenv('CONFLICT_BUNDLE_CACHE_MAX', '256'))
 LLM_ROUTE_TIMEOUT = float(os.getenv('CONFLICT_LLM_TIMEOUT', '5.0'))
 MAX_SIDE_EFFECTS_PER_EVENT = int(os.getenv('CONFLICT_MAX_SIDE_EFFECTS', '100'))
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
 # Time source usage:
 # - time.perf_counter() for durations (monotonic, unaffected by clock adjustments)
 # - time.time() for timestamps (wall clock, needed for cross-process cache TTLs)
