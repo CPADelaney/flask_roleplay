@@ -919,6 +919,9 @@ class BackgroundConflictSubsystem:
                             )
                         )
     
+                active_conflict_ids = daily_update.get('active_conflict_ids', []) or []
+                active_conflicts = daily_update.get('active_conflicts', []) or []
+
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
@@ -926,8 +929,9 @@ class BackgroundConflictSubsystem:
                     data={
                         'background_update': daily_update,
                         'news_count': len(daily_update.get("news", [])),
-                        'active_conflicts': daily_update.get('active_conflicts', []) or [],
-                        'active_conflict_count': len(daily_update.get('active_conflicts', []) or [])
+                        'active_conflicts': active_conflicts,
+                        'active_conflict_ids': active_conflict_ids,
+                        'active_conflict_count': len(active_conflict_ids),
                     },
                     side_effects=side_effects
                 )
@@ -1085,12 +1089,15 @@ class BackgroundConflictSubsystem:
             active_conflicts.append(conflict)
             active_conflict_summaries.append(self._summarize_conflict(conflict))
 
+        active_conflict_ids = [conflict.conflict_id for conflict in active_conflicts]
+
         # Only generate new conflicts if needed and allowed
         if generate_new and len(active_conflicts) < 3:
             new_conflict = await self.orchestrator.generate_background_conflict()
             if new_conflict:
                 active_conflicts.append(new_conflict)
                 active_conflict_summaries.append(self._summarize_conflict(new_conflict))
+                active_conflict_ids.append(new_conflict.conflict_id)
         
         # Process conflict advances if generating new content
         events = []
@@ -1145,7 +1152,7 @@ class BackgroundConflictSubsystem:
         
         result = {
             'active_conflicts': active_conflict_summaries,
-            'active_conflict_count': len(active_conflict_summaries),
+            'active_conflict_ids': active_conflict_ids,
             'events_today': events,
             'news': news_items,
             'ripple_effects': ripples_obj,
