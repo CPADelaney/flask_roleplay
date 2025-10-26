@@ -539,8 +539,9 @@ class LoreOrchestrator:
     async def get_scene_bundle(self, scope: Any) -> Dict[str, Any]:
         """
         Get scene-scoped lore bundle with canonical data prioritized.
-        Includes matriarchal framework context when enabled.
+        Matriarchal framework context is now loaded from cache, not generated in real-time.
         """
+        from tasks import generate_and_cache_mpf_lore
         start_time = time.perf_counter()
     
         # Generate cache key from scope
@@ -577,7 +578,6 @@ class LoreOrchestrator:
             tasks.append(('religions', self._fetch_religions_for_location(loc_ref)))
             tasks.append(('myths', self._fetch_myths_for_location(loc_ref)))
         elif isinstance(loc_ref, str) and loc_ref:
-            # Name-only: fetch the location context, skip id-dependent tables
             tasks.append(('location', self.get_location_context(loc_ref)))
     
         if hasattr(scope, 'lore_tags') and scope.lore_tags:
@@ -592,22 +592,14 @@ class LoreOrchestrator:
             tasks.append(('nations', self._fetch_nations_for_bundle(nid_list)))
             tasks.append(('culture', self._fetch_cultural_data_for_bundle(nid_list)))
     
-        # NEW: Matriarchal framework tasks (optional)
-        need_mpf = bool(self.config.enable_matriarchal_theme) and (
-            (hasattr(scope, 'nation_ids') and scope.nation_ids) or
-            (getattr(scope, 'location_id', None) is not None) or
-            (hasattr(scope, 'lore_tags') and scope.lore_tags)
-        )
-        # In get_scene_bundle(), the matriarchal framework tasks section:
-        if need_mpf:
-            tasks.append(('mpf_core', self.mpf_generate_core_principles()))
-            tasks.append(('mpf_expressions', self.mpf_generate_power_expressions(limit=3)))
-            # You could also add:
-            tasks.append(('mpf_constraints', self.mpf_generate_hierarchical_constraints()))
+        # --- START OF MODIFICATION ---
+        # The slow, blocking LLM calls for MPF lore are removed from here.
+        # Instead, we add a single, fast database call to check our new cache table.
+        tasks.append(('mpf_cache', self._fetch_cached_mpf_lore()))
+        # --- END OF MODIFICATION ---
     
         # Execute all tasks in parallel with timeout protection
         try:
-            # Create wrapped tasks with semaphore and timeout
             wrapped_tasks = [
                 (
                     label,
@@ -618,7 +610,6 @@ class LoreOrchestrator:
                 for label, coro in tasks
             ]
     
-            # Wait for all to complete
             results = []
             for label, task in wrapped_tasks:
                 try:
@@ -647,35 +638,35 @@ class LoreOrchestrator:
     
                 elif label == 'nations':
                     bundle_data.nations = data
-                    canonical = True  # Nations are canonical
+                    canonical = True
     
                 elif label == 'culture':
                     bundle_data.languages = data.get('languages', [])
                     bundle_data.cultural_norms = data.get('norms', [])
                     bundle_data.etiquette = data.get('etiquette', [])
     
-                # NEW: Matriarchal framework results
-                elif label == 'mpf_core':
-                    # Ensure world dict exists and attach principles
-                    bundle_data.world = bundle_data.world or {}
-                    bundle_data.world["matriarchal_principles"] = data
-                    canonical = True
-    
-                elif label == 'mpf_expressions':
-                    # Ensure world dict exists and attach expressions
-                    bundle_data.world = bundle_data.world or {}
-                    bundle_data.world["power_expressions"] = data
+                # --- START OF MODIFICATION ---
+                # Handle the result from our new cache fetcher.
+                # If data is present, populate the bundle. If not, do nothing.
+                elif label == 'mpf_cache':
+                    if data:
+                        bundle_data.world = bundle_data.world or {}
+                        bundle_data.world["matriarchal_principles"] = data.get("matriarchal_principles")
+                        bundle_data.world["power_expressions"] = data.get("power_expressions")
+                        bundle_data.world["hierarchical_constraints"] = data.get("hierarchical_constraints")
+                        canonical = True
+                # --- END OF MODIFICATION ---
     
                 elif label == 'religions':
-                    bundle_data.religions = data[:3]  # Top 3 religions
+                    bundle_data.religions = data[:3]
     
                 elif label == 'conflicts':
                     bundle_data.conflicts = data
     
                 elif label == 'myths':
-                    bundle_data.myths = data[:3]  # Top 3 myths
+                    bundle_data.myths = data[:3]
     
-            # Add canonical consistency rules (after main fetches)
+            # Add canonical consistency rules (this part remains the same)
             if self.config.enable_validation:
                 try:
                     canonical_rules = await self._wait_with_timeout(
@@ -693,27 +684,25 @@ class LoreOrchestrator:
     
         except Exception as e:
             logger.error(f"Error building scene bundle: {e}")
-            # Return minimal bundle on error
     
         # Calculate build time
         build_ms = (time.perf_counter() - start_time) * 1000
         self.metrics['build_ms'] = self.metrics.get('build_ms', [])
         if isinstance(self.metrics['build_ms'], list):
             self.metrics['build_ms'].append(build_ms)
-            # Keep only last 100 measurements
             if len(self.metrics['build_ms']) > 100:
                 self.metrics['build_ms'] = self.metrics['build_ms'][-100:]
     
         # Build result with consistent structure and anchors
         result = {
-            'section': 'lore',  # Consistent with other bundles
+            'section': 'lore',
             'anchors': {
                 'location_id': getattr(scope, 'location_id', None),
                 'nation_ids': sorted(list(getattr(scope, 'nation_ids', set())))[:5],
                 'conflict_ids': sorted(list(getattr(scope, 'conflict_ids', set())))[:5],
             },
             'data': bundle_data.to_dict(),
-            'canonical': canonical,  # Changed from 'canon'
+            'canonical': canonical,
             'last_changed_at': time.time(),
             'version': f"lore_{cache_key[:8]}_{int(time.time())}",
             'build_ms': build_ms
@@ -1759,6 +1748,56 @@ class LoreOrchestrator:
             logger.debug(f"Could not fetch cultural data: {e}")
             return {'languages': [], 'norms': [], 'etiquette': [], 'customs': [], 
                     'dialects': [], 'exchanges': []}
+
+    async def _fetch_cached_mpf_lore(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetches pre-generated Matriarchal Power Framework lore from the cache table.
+        If the lore is missing and not already being generated, it triggers a background task.
+        """
+        from tasks import generate_and_cache_mpf_lore
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT principles, expressions, constraints, generation_status
+                    FROM MatriarchalLoreCache
+                    WHERE user_id = $1 AND conversation_id = $2
+                    """,
+                    self.user_id, self.conversation_id
+                )
+
+                if row:
+                    # Data exists, return it
+                    if row['generation_status'] == 'complete':
+                        return {
+                            "matriarchal_principles": row['principles'],
+                            "power_expressions": row['expressions'],
+                            "hierarchical_constraints": row['constraints']
+                        }
+                    # If it's pending or failed, we don't return data but also don't re-trigger
+                    return None
+                else:
+                    # No entry found. Create a 'pending' entry and trigger the task.
+                    await conn.execute(
+                        """
+                        INSERT INTO MatriarchalLoreCache (user_id, conversation_id, generation_status)
+                        VALUES ($1, $2, 'pending')
+                        ON CONFLICT DO NOTHING;
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                    # This is the "fire-and-forget" call to the background worker
+                    generate_and_cache_mpf_lore.delay(self.user_id, self.conversation_id)
+                    logger.info(f"Triggered background MPF lore generation for user {self.user_id}.")
+                    return None
+
+        except (asyncpg.exceptions.UndefinedTableError):
+            logger.warning("MatriarchalLoreCache table does not exist. Skipping MPF lore.")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching cached MPF lore: {e}", exc_info=True)
+            return None
+
     
     async def get_scene_delta(self, scope: Any, since_ts: float) -> Dict[str, Any]:
         """
