@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import List, Sequence, Tuple
+import re
+from typing import List, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -18,19 +19,47 @@ def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-async def _fetch_vector_columns(conn: asyncpg.Connection) -> List[Tuple[str, str, str]]:
-    """Return a list of (schema, table, column) for pgvector columns."""
+async def _fetch_vector_columns(
+    conn: asyncpg.Connection,
+) -> List[Tuple[str, str, str, Optional[int]]]:
+    """Return a list of (schema, table, column, declared_dimension) for pgvector columns."""
 
     rows: Sequence[asyncpg.Record] = await conn.fetch(
         """
-        SELECT table_schema, table_name, column_name
-        FROM information_schema.columns
-        WHERE udt_name = 'vector'
-          AND table_schema NOT IN ('pg_catalog', 'information_schema')
+        SELECT
+            n.nspname AS table_schema,
+            c.relname AS table_name,
+            a.attname AS column_name,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS formatted_type
+        FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+        JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+        WHERE NOT a.attisdropped
+          AND a.attnum > 0
+          AND c.relkind IN ('r', 'm', 'p', 'f')
+          AND pg_catalog.format_type(a.atttypid, a.atttypmod) LIKE 'vector%'
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         ORDER BY table_schema, table_name, column_name
         """
     )
-    return [(row["table_schema"], row["table_name"], row["column_name"]) for row in rows]
+
+    dimension_pattern = re.compile(r"vector\((\d+)\)")
+
+    def _parse_dimension(formatted_type: str) -> Optional[int]:
+        match = dimension_pattern.search(formatted_type)
+        if not match:
+            return None
+        return int(match.group(1))
+
+    return [
+        (
+            row["table_schema"],
+            row["table_name"],
+            row["column_name"],
+            _parse_dimension(row["formatted_type"]),
+        )
+        for row in rows
+    ]
 
 
 async def _alter_column_dimension(
@@ -75,6 +104,27 @@ async def _validate_column_dimension(
     return row["dims"] == dimension
 
 
+async def _count_mismatched_rows(
+    conn: asyncpg.Connection,
+    schema: str,
+    table: str,
+    column: str,
+    dimension: int,
+) -> int:
+    qualified_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+    if not schema or schema == "public":
+        qualified_table = _quote_ident(table)
+
+    mismatch_sql = (
+        f"SELECT COUNT(*) AS mismatches "
+        f"FROM {qualified_table} "
+        f"WHERE {_quote_ident(column)} IS NOT NULL "
+        f"  AND vector_dims({_quote_ident(column)}) <> {dimension}"
+    )
+    row = await conn.fetchrow(mismatch_sql)
+    return int(row["mismatches"]) if row is not None else 0
+
+
 async def main() -> None:
     dsn = os.getenv("DB_DSN")
     if not dsn:
@@ -91,13 +141,32 @@ async def main() -> None:
             print(
                 f"Updating {len(columns)} vector column(s) to dimension {target_dimension}..."
             )
-            for schema, table, column in columns:
+            for schema, table, column, declared_dimension in columns:
+                qualified_table = f"{schema}.{table}" if schema else table
+
+                if declared_dimension == target_dimension:
+                    print(
+                        " - "
+                        f"{qualified_table}.{column}: declared dimension already {target_dimension}, skipping"
+                    )
+                    continue
+
+                mismatched_rows = await _count_mismatched_rows(
+                    conn, schema, table, column, target_dimension
+                )
+                if mismatched_rows > 0:
+                    print(
+                        " - "
+                        f"{qualified_table}.{column}: "
+                        f"{mismatched_rows} row(s) have vector_dims <> {target_dimension}; skipping"
+                    )
+                    continue
+
                 await _alter_column_dimension(conn, schema, table, column, target_dimension)
                 is_valid = await _validate_column_dimension(
                     conn, schema, table, column, target_dimension
                 )
                 status = "OK" if is_valid else "CHECK"
-                qualified_table = f"{schema}.{table}" if schema else table
                 print(f" - {qualified_table}.{column}: {status}")
 
 
