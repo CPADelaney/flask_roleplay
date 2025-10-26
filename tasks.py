@@ -36,8 +36,6 @@ from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 # --- New scene-scoped SDK (lazy singleton) ---
 from nyx.nyx_agent_sdk import NyxAgentSDK, NyxSDKConfig
 
-from lore.lore_orchestrator import LoreOrchestrator
-
 logger = logging.getLogger(__name__)
 
 # Define DSN (optional sanity check)
@@ -1663,6 +1661,7 @@ def generate_and_cache_mpf_lore(self, user_id: int, conversation_id: int):
     Celery task to generate and cache the Matriarchal Power Framework lore.
     This runs in the background and does not block user requests.
     """
+    from lore.lore_orchestrator import LoreOrchestrator
     try:
         logger.info(f"Starting MPF lore generation for user:{user_id} convo:{conversation_id}")
         
