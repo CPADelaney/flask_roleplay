@@ -1654,6 +1654,108 @@ def cleanup_old_performance_data_task():
 
     return run_async_in_worker_loop(run_cleanup())
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def generate_and_cache_mpf_lore(self, user_id: int, conversation_id: int):
+    """
+    Celery task to generate and cache the Matriarchal Power Framework lore.
+    This runs in the background and does not block user requests.
+    """
+    try:
+        logger.info(f"Starting MPF lore generation for user:{user_id} convo:{conversation_id}")
+        
+        # We need an async context to run the orchestrator methods.
+        # This can be tricky in Celery. A common pattern is to use asyncio.run().
+        import asyncio
+
+        async def _generate():
+            # Get a fresh orchestrator instance
+            # NOTE: get_lore_orchestrator is async, so we call it inside our async runner
+            from lore.lore_orchestrator import get_lore_orchestrator
+            orchestrator = await get_lore_orchestrator(user_id, conversation_id)
+            
+            # Generate all MPF components in parallel
+            core_principles, power_expressions, hierarchical_constraints = await asyncio.gather(
+                orchestrator.mpf_generate_core_principles(),
+                orchestrator.mpf_generate_power_expressions(limit=10), # Generate a decent number for the cache
+                orchestrator.mpf_generate_hierarchical_constraints(),
+                return_exceptions=True # Don't let one failure stop everything
+            )
+
+            # Check for errors and handle them
+            if isinstance(core_principles, Exception):
+                logger.error(f"Failed to generate core principles: {core_principles}")
+                core_principles = None
+            if isinstance(power_expressions, Exception):
+                logger.error(f"Failed to generate power expressions: {power_expressions}")
+                power_expressions = None
+            if isinstance(hierarchical_constraints, Exception):
+                logger.error(f"Failed to generate hierarchical constraints: {hierarchical_constraints}")
+                hierarchical_constraints = None
+            
+            # Convert Pydantic models to dictionaries for JSON serialization
+            principles_dict = core_principles.dict() if core_principles else None
+            expressions_list = [expr.dict() for expr in power_expressions] if power_expressions else None
+            constraints_dict = hierarchical_constraints.dict() if hierarchical_constraints else None
+
+            return principles_dict, expressions_list, constraints_dict
+
+        # Run the async generation function
+        principles, expressions, constraints = asyncio.run(_generate())
+
+        # If all generations failed, we should retry
+        if not principles and not expressions and not constraints:
+            logger.warning("All MPF generation tasks failed. Retrying...")
+            raise self.retry()
+
+        # Store the results in the database using a synchronous connection pool
+        conn = get_db_connection_sync() # You'll need a sync utility for this
+        try:
+            with conn.cursor() as cur:
+                # Use INSERT ON CONFLICT to safely insert or update the cache
+                cur.execute(
+                    """
+                    INSERT INTO MatriarchalLoreCache 
+                        (user_id, conversation_id, principles, expressions, constraints, generation_status, last_updated)
+                    VALUES (%s, %s, %s, %s, %s, 'complete', NOW())
+                    ON CONFLICT (user_id, conversation_id) DO UPDATE SET
+                        principles = EXCLUDED.principles,
+                        expressions = EXCLUDED.expressions,
+                        constraints = EXCLUDED.constraints,
+                        generation_status = 'complete',
+                        last_updated = NOW();
+                    """,
+                    (
+                        user_id,
+                        conversation_id,
+                        json.dumps(principles) if principles else None,
+                        json.dumps(expressions) if expressions else None,
+                        json.dumps(constraints) if constraints else None,
+                    )
+                )
+            conn.commit()
+            logger.info(f"Successfully cached MPF lore for user:{user_id} convo:{conversation_id}")
+        finally:
+            conn.close()
+
+    except Exception as exc:
+        logger.error(f"MPF lore generation task failed for user:{user_id}: {exc}", exc_info=True)
+        # Mark as failed in DB
+        conn = get_db_connection_sync()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE MatriarchalLoreCache SET generation_status = 'failed' 
+                    WHERE user_id = %s AND conversation_id = %s;
+                    """,
+                    (user_id, conversation_id)
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        # Retry the task
+        raise self.retry(exc=exc)
+
 
 # === Split-brain sweep and merge ===============================================
 
