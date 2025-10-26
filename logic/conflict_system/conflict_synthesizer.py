@@ -21,6 +21,8 @@ import json
 import asyncio
 import time
 import uuid
+import redis
+import asyncpg
 import hashlib
 import os
 from typing import Dict, List, Any, Optional, Set, TYPE_CHECKING, Tuple
@@ -492,6 +494,7 @@ class ConflictSynthesizer:
         returns a minimal, fast-path response immediately.
         """
         from tasks import update_scene_conflict_context
+        from db.connection import get_db_connection_context
         scene_info = self._scene_scope_to_mapping(scene_info) or {}
 
         # 1. Generate a stable cache key
