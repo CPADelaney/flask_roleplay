@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from celery_config import celery_app
 from celery.signals import task_revoked
+from celery import shared_task
 from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
 
@@ -34,6 +35,8 @@ from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
 # --- New scene-scoped SDK (lazy singleton) ---
 from nyx.nyx_agent_sdk import NyxAgentSDK, NyxSDKConfig
+
+from lore.lore_orchestrator import LoreOrchestrator
 
 logger = logging.getLogger(__name__)
 
