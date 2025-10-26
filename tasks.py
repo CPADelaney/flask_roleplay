@@ -1121,6 +1121,65 @@ def generate_lore_background_task(user_id: int, conversation_id: int) -> Dict[st
 
     return run_async_in_worker_loop(run_lore_generation())
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=90)
+def update_scene_conflict_context(self, user_id: int, conversation_id: int, scene_info: Dict[str, Any], cache_key: str):
+    """
+    Celery task to generate a full, rich conflict context for a scene in the background.
+    """
+    try:
+        logger.info(f"Starting background conflict context generation for key: {cache_key}")
+        
+        async def _generate_context():
+            # Get a synthesizer instance within the async context
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            synthesizer = await get_synthesizer(user_id, conversation_id)
+    
+            # Create the event that triggers all the analysis subsystems
+            event = SystemEvent(
+                event_id=f"scene_analysis_{cache_key}",
+                event_type=EventType.SCENE_ENTER,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload={'scene_context': scene_info},
+                requires_response=True  # We need the responses to build the context
+            )
+            
+            # This is the slow part that we've offloaded.
+            # It can now take its time without blocking the user.
+            responses = await synthesizer._process_event_parallel(event)
+            
+            # Synthesize the final context from the subsystem responses
+            context = {
+                'conflicts': [],
+                'tensions': {},
+                'opportunities': [],
+                'ambient_effects': [],
+                'world_tension': 0.0,
+            }
+    
+            if responses:
+                for response in responses:
+                    if response.success and response.data:
+                        # Aggregate data from all responding subsystems
+                        context['conflicts'].extend(response.data.get('active_conflicts', []))
+                        context['ambient_effects'].extend(response.data.get('ambient_effects', []) or response.data.get('ambient_atmosphere', []))
+                        world_tension = response.data.get('world_tension')
+                        if isinstance(world_tension, (int, float)):
+                            context['world_tension'] = max(context['world_tension'], world_tension)
+            
+            return context
+    
+        # Run the async generation logic
+        full_context = asyncio.run(_generate_context())
+    
+        # Cache the complete result in Redis with a TTL (e.g., 10 minutes)
+        redis_client.set(cache_key, json.dumps(full_context), ex=600)
+        logger.info(f"Successfully cached full conflict context for key: {cache_key}")
+    
+    except Exception as exc:
+        logger.error(f"Background conflict context generation failed for key {cache_key}: {exc}", exc_info=True)
+        # Retry the task if it fails
+        raise self.retry(exc=exc)
+
 
 @celery_app.task
 def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[str, Any]:
