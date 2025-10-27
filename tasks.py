@@ -592,6 +592,74 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
 
     return run_async_in_worker_loop(run_new_game())
 
+@celery_app.task(name="tasks.update_edge_case_scan", max_retries=1)
+def update_edge_case_scan(user_id: int, conversation_id: int):
+    """
+    Celery task to run the full edge case scan in the background and cache the results.
+    """
+    logger.info(f"Starting background edge case scan for user={user_id}, conv={conversation_id}")
+
+    async def do_scan():
+        """Helper async function to be run by the synchronous worker."""
+        # It's crucial to get a fresh synthesizer instance within the task's context
+        # and import modules that might not be loaded in the worker.
+        from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+        
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        
+        # Safely get the subsystem instance
+        edge_handler = synthesizer._subsystems.get(SubsystemType.EDGE_HANDLER)
+        
+        if edge_handler:
+            await edge_handler.perform_full_scan_and_cache()
+            return {"status": "success", "message": "Edge case scan completed and cached."}
+        else:
+            logger.error("Could not find Edge Case Subsystem in synthesizer.")
+            return {"status": "error", "message": "Edge Case Subsystem not found."}
+
+    try:
+        # Use your existing utility to run the async function
+        result = run_async_in_worker_loop(do_scan())
+        logger.info(f"Finished edge case scan for user={user_id}, conv={conversation_id}. Result: {result}")
+        return result
+    except Exception as e:
+        logger.exception(f"Critical error in update_edge_case_scan task for user={user_id}")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task(name="tasks.update_tension_bundle_cache", max_retries=1)
+def update_tension_bundle_cache(user_id: int, conversation_id: int, scene_context: Dict[str, Any]):
+    """
+    Celery task to generate and cache the full tension bundle (with manifestations)
+    for a specific scene in the background.
+    """
+    logger.info(f"Starting background tension bundle generation for user={user_id}, conv={conversation_id}")
+
+    async def do_generation():
+        """Helper async function to be run by the synchronous worker."""
+        # Get a fresh synthesizer instance and necessary types
+        from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        
+        # Safely get the subsystem instance
+        tension_system = synthesizer._subsystems.get(SubsystemType.TENSION)
+        
+        if tension_system:
+            await tension_system.perform_bundle_generation_and_cache(scene_context)
+            return {"status": "success", "message": "Tension bundle generated and cached."}
+        else:
+            logger.error("Could not find Tension Subsystem in synthesizer.")
+            return {"status": "error", "message": "Tension Subsystem not found."}
+
+    try:
+        # Use your existing utility to run the async function
+        result = run_async_in_worker_loop(do_generation())
+        logger.info(f"Finished tension bundle generation for user={user_id}, conv={conversation_id}. Result: {result}")
+        return result
+    except Exception as e:
+        logger.exception(f"Critical error in update_tension_bundle_cache task for user={user_id}")
+        return {"status": "error", "error": str(e)}
 
 # Signal handling for revoked new game tasks to avoid leaving conversations stuck
 def _handle_process_new_game_task_revoked(
