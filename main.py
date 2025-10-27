@@ -127,6 +127,8 @@ from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons, build_aggregator_text
 
+from tasks import background_chat_task_with_memory
+
 logger = logging.getLogger(__name__)
 
 app_is_ready = asyncio.Event()
@@ -1254,65 +1256,65 @@ def create_quart_app():
             if not app_is_ready.is_set():
                 logger.warning(f"Received 'storybeat' from sid={sid} before app is fully ready. Rejecting.")
                 await sio.emit('error', {'error': 'Server is initializing, please try again in a moment.'}, to=sid)
+                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag on early exit
                 return
             
             sock_sess = await sio.get_session(sid)
             user_id = sock_sess.get("user_id", "anonymous")
             
-            # Reject anonymous users
             if user_id == "anonymous":
                 logger.warning(f"Socket session has anonymous user, cannot process authenticated request")
                 await sio.emit('error', {
                     'error': 'Not authenticated. Please refresh the page and log in again.',
                     'requiresAuth': True
                 }, to=sid)
+                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
                 return
             
             # Ensure user_id is int
-            if isinstance(user_id, str) and user_id.isdigit():
-                user_id = int(user_id)
+            user_id = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id
             
-            # Get and validate conversation_id
             conversation_id = data.get("conversation_id")
-            if conversation_id is not None:
-                try:
-                    conversation_id = int(conversation_id)
-                except (ValueError, TypeError):
-                    logger.error(f"Invalid conversation_id from client: {conversation_id}")
-                    await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
-                    return
+            if conversation_id is None:
+                await sio.emit('error', {'error': 'Missing conversation_id'}, to=sid)
+                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
+                return
+                
+            try:
+                conversation_id = int(conversation_id)
+            except (ValueError, TypeError):
+                logger.error(f"Invalid conversation_id from client: {conversation_id}")
+                await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
+                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
+                return
             
             user_input = data.get("user_input")
             universal_update = data.get("universal_update")
             
             app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
             
-            # Basic validation
-            if not all([conversation_id is not None, user_input is not None]):
-                error_msg = "Invalid 'storybeat' payload: missing conversation_id or user_input."
+            if not user_input:
+                error_msg = "Invalid 'storybeat' payload: missing user_input."
                 app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
                 await sio.emit('error', {'error': error_msg}, to=sid)
+                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
                 return
             
             await sio.emit("processing", {"message": "Your request is being processed...", "request_id": request_id}, to=sid)
-            
-            # Start background task with proper user_id and redis_pool
-            sio.start_background_task(
-                background_chat_task,
-                conversation_id,
-                user_input,
-                user_id,
-                universal_update,
-                sio,
-                request_id,
-                app.redis_rate_limit_pool  # Pass the redis pool
+
+            background_chat_task_with_memory.delay(
+                conversation_id=conversation_id,
+                user_input=user_input,
+                user_id=user_id,
+                universal_update=universal_update
             )
-            app.logger.info(f"Started background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
+            
+            app.logger.info(f"Dispatched Celery background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
         
         except Exception as e:
-            app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
-            await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=str(conversation_id))
-            # Clear the processing flag on error - use global function with redis pool
+            app.logger.error(f"Error dispatching Celery task for sid={sid}: {e}", exc_info=True)
+            await sio.emit('error', {'error': 'Server failed to dispatch message processing.'}, to=sid)
+            # Clear the processing flag on error
             await clear_request_processing(request_id, app.redis_rate_limit_pool)
 
     @app.before_serving
