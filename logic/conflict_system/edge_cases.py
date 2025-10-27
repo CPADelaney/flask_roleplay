@@ -231,8 +231,8 @@ class ConflictEdgeCaseSubsystem:
             
             if lock_acquired:
                 try:
-                    # from tasks import update_edge_case_scan
-                    # update_edge_case_scan.delay(self.user_id, self.conversation_id)
+                    # This name MUST match the name in the @celery_app.task decorator
+                    celery_app.send_task('tasks.update_edge_case_scan', args=[self.user_id, self.conversation_id])
                     logger.info(f"Triggered background edge case scan for {self.user_id}:{self.conversation_id}")
                 except ImportError:
                     logger.warning("Celery task not available, running scan inline as a fallback.")
