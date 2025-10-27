@@ -1,31 +1,36 @@
 # logic/rule_enforcement.py
 """
-Refactored Punishment Enforcement with Nyx-style gating:
-- Persistent, per-conversation cooldown + de-dupe
-- Feasibility/scene/stimuli-aware tiering ('ambient' | 'soft' | 'major')
-- Deterministic RNG per (user_id, conversation_id)
-- Canonical writes via LoreSystem when possible (guarded import)
-- Safe fallbacks if LoreSystem or extended columns are unavailable
+Refactored Punishment Enforcement with Nyx-style gating and enhanced robustness.
+
+Features:
+- Bypasses unrecognized rule conditions gracefully to prevent crashes.
+- Persistent, per-conversation cooldown + de-duplication.
+- Feasibility/scene/stimuli-aware tiering ('ambient' | 'soft' | 'major').
+- Deterministic RNG per (user_id, conversation_id).
+- Canonical writes via LoreSystem when possible (guarded import).
+- Safe fallbacks if LoreSystem or extended columns are unavailable.
 """
 
 from __future__ import annotations
 
-from quart import Blueprint, request, jsonify
-from db.connection import get_db_connection_context
-from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
-from dataclasses import dataclass, field
-import json
-import random
 import asyncio
-import logging
-import time
 import hashlib
-import asyncpg
+import json
+import logging
+import random
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-# Optional LoreSystem canonical writes (guarded import)
+import asyncpg
+from quart import Blueprint, jsonify, request
+
+from db.connection import get_db_connection_context
+
+# Optional LoreSystem for canonical writes (guarded import)
 try:
     from lore.core.lore_system import LoreSystem  # type: ignore
-except Exception:
+except ImportError:
     LoreSystem = None  # type: ignore
 
 rule_enforcement_bp = Blueprint("rule_enforcement_bp", __name__)
@@ -51,7 +56,7 @@ def _gate_for(uid: int, cid: int) -> Tuple[_PersistentGate, asyncio.Lock]:
     st = _GATE_STATE.setdefault(key, _PersistentGate())
     lk = _GATE_LOCKS.setdefault(key, asyncio.Lock())
     _GATE_TOUCH[key] = time.time()
-    # opportunistic GC
+    # Opportunistic GC to clean up old conversation data
     cutoff = time.time() - _GATE_TTL_SECONDS
     for k, ts in list(_GATE_TOUCH.items()):
         if ts < cutoff:
@@ -67,7 +72,7 @@ def purge_punishment_gate_state(user_id: int, conversation_id: int):
         d.pop(key, None)
 
 # -------------------------------------------------------------------
-# Trigger Configuration (mirrors addiction-style)
+# Trigger Configuration
 # -------------------------------------------------------------------
 
 @dataclass
@@ -79,19 +84,16 @@ class PunishmentTriggerConfig:
     intent_markers: Set[str] = field(default_factory=lambda: {
         "punishment", "discipline", "humiliation", "dominance", "kink"
     })
-    # Global spam guards
     min_turn_gap: int = 2
     min_seconds_between: float = 45.0
-    # Probability knobs for soft hints when relevant
     soft_prob_base: float = 0.10
     soft_prob_high: float = 0.22
-    # Stimuli affinity (optional; used to bias towards soft/major)
     stimuli_affinity: Dict[str, Set[str]] = field(default_factory=lambda: {
         "humiliation": {"snicker", "laugh", "eye_roll", "dismissive"},
         "obedience": {"order", "command", "kneel", "obedience"},
         "implements": {"paddle", "cane", "collar", "leash"},
     })
-    severity_threshold_level: int = 3  # escalate to 'major' at/above this hint level
+    severity_threshold_level: int = 3
 
 # -------------------------------------------------------------------
 # Gate / Context
@@ -103,7 +105,6 @@ class PunishmentContext:
         self.conversation_id = int(conversation_id)
         self.cfg = PunishmentTriggerConfig()
         self._pg, self._lock = _gate_for(self.user_id, self.conversation_id)
-        # Deterministic RNG for reproducible behavior
         seed = hashlib.sha1(f"{self.user_id}:{self.conversation_id}".encode()).hexdigest()[:16]
         self._rng = random.Random(int(seed, 16))
 
@@ -111,20 +112,17 @@ class PunishmentContext:
         return bool(set(scene_tags or []) & self.cfg.allowed_scene_tags)
 
     def _intents_allow(self, feas: Optional[dict]) -> bool:
-        if not isinstance(feas, dict):
-            return False
-        per = feas.get("per_intent") or []
-        for it in per:
-            if set((it or {}).get("tags", [])) & self.cfg.intent_markers:
+        if not isinstance(feas, dict): return False
+        per_intent = feas.get("per_intent") or []
+        for intent in per_intent:
+            if set((intent or {}).get("tags", [])) & self.cfg.intent_markers:
                 return True
         overall = feas.get("overall") or {}
         return bool(set(overall.get("tags", [])) & self.cfg.intent_markers)
 
     def _cooldowns_ok(self, turn_idx: int, now: float) -> bool:
-        if (turn_idx - self._pg.last_any_turn) < self.cfg.min_turn_gap:
-            return False
-        if (now - self._pg.last_any_ts) < self.cfg.min_seconds_between:
-            return False
+        if (turn_idx - self._pg.last_any_turn) < self.cfg.min_turn_gap: return False
+        if (now - self._pg.last_any_ts) < self.cfg.min_seconds_between: return False
         return True
 
     async def _mark_emit(self, turn_idx: int):
@@ -133,42 +131,27 @@ class PunishmentContext:
             self._pg.last_any_turn = turn_idx
             self._pg.last_any_ts = now
 
-    def decide_tier(
-        self,
-        meta: Dict[str, Any],
-        violations_count: int,
-        severity_hint_level: int
-    ) -> Optional[str]:
-        """
-        Decide None | 'ambient' | 'soft' | 'major' using feasibility/scene/stimuli and violations.
-        """
+    def decide_tier(self, meta: Dict[str, Any], violations_count: int, severity_hint_level: int) -> Optional[str]:
         turn_idx = int(meta.get("turn_index", 0))
         scene_tags = ((meta.get("scene") or {}).get("tags")) or meta.get("scene_tags") or []
         feas = meta.get("feasibility") or {}
         stimuli = set(meta.get("stimuli", []))
         now = time.time()
 
-        if not self._cooldowns_ok(turn_idx, now):
-            return None
-
+        if not self._cooldowns_ok(turn_idx, now): return None
         relevant = self._scene_allows(scene_tags) or self._intents_allow(feas)
 
         if violations_count <= 0:
-            # No rule violations; allow a gentle nudge sometimes in relevant scenes
             if relevant:
                 prob = self.cfg.soft_prob_base if severity_hint_level < self.cfg.severity_threshold_level else self.cfg.soft_prob_high
                 return "soft" if self._rng.random() < prob else None
             return None
 
-        # Violations present:
         if relevant:
             return "major" if severity_hint_level >= self.cfg.severity_threshold_level else "soft"
-
-        # Not an explicitly relevant scene, but violations exist:
-        # If stimuli feature punishment-adjacent tokens, allow soft
-        for _, vocab in self.cfg.stimuli_affinity.items():
-            if stimuli & vocab:
-                return "soft"
+        
+        for vocab in self.cfg.stimuli_affinity.values():
+            if stimuli & vocab: return "soft"
 
         return None
 
@@ -176,247 +159,223 @@ class PunishmentContext:
 # Helpers: Player/NPC stats with graceful fallbacks
 # -------------------------------------------------------------------
 
-async def get_player_stats(
-    player_name: str = "Chase",
-    user_id: Optional[int] = None,
-    conversation_id: Optional[int] = None
-) -> Dict[str, int]:
+async def get_player_stats(player_name: str = "Chase", user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> Dict[str, int]:
     try:
         async with get_db_connection_context() as conn:
             row = None
             if user_id is not None and conversation_id is not None:
                 try:
-                    row = await conn.fetchrow("""
-                        SELECT corruption, confidence, willpower, obedience, dependency,
-                               lust, mental_resilience, physical_endurance
-                        FROM PlayerStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                    """, int(user_id), int(conversation_id), player_name)
-                except Exception:
-                    row = None
+                    row = await conn.fetchrow("SELECT corruption, confidence, willpower, obedience, dependency, lust, mental_resilience, physical_endurance FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3", int(user_id), int(conversation_id), player_name)
+                except Exception: row = None
             if not row:
-                row = await conn.fetchrow("""
-                    SELECT corruption, confidence, willpower, obedience, dependency,
-                           lust, mental_resilience, physical_endurance
-                    FROM PlayerStats
-                    WHERE player_name=$1
-                """, player_name)
-        if not row:
-            return {}
+                row = await conn.fetchrow("SELECT corruption, confidence, willpower, obedience, dependency, lust, mental_resilience, physical_endurance FROM PlayerStats WHERE player_name=$1", player_name)
+        if not row: return {}
         return {
-            "Corruption": row["corruption"],
-            "Confidence": row["confidence"],
-            "Willpower": row["willpower"],
-            "Obedience": row["obedience"],
-            "Dependency": row["dependency"],
-            "Lust": row["lust"],
-            "Mental Resilience": row["mental_resilience"],
-            "Physical Endurance": row["physical_endurance"],
+            "Corruption": row["corruption"], "Confidence": row["confidence"], "Willpower": row["willpower"], 
+            "Obedience": row["obedience"], "Dependency": row["dependency"], "Lust": row["lust"], 
+            "Mental Resilience": row["mental_resilience"], "Physical Endurance": row["physical_endurance"],
         }
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error fetching player stats: {db_err}", exc_info=True)
-        return {}
     except Exception as e:
-        logger.error(f"Unexpected error fetching player stats: {e}", exc_info=True)
+        logger.error(f"Error fetching player stats: {e}", exc_info=True)
         return {}
 
-async def get_npc_stats(
-    npc_name: Optional[str] = None,
-    npc_id: Optional[int] = None,
-    user_id: Optional[int] = None,
-    conversation_id: Optional[int] = None
-) -> Dict[str, Any]:
+async def get_npc_stats(npc_name: Optional[str] = None, npc_id: Optional[int] = None, user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> Dict[str, Any]:
     try:
         async with get_db_connection_context() as conn:
             row = None
             if npc_id is not None and user_id is not None and conversation_id is not None:
                 try:
-                    row = await conn.fetchrow("""
-                        SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity
-                        FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """, int(user_id), int(conversation_id), int(npc_id))
-                except Exception:
-                    row = None
+                    row = await conn.fetchrow("SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3", int(user_id), int(conversation_id), int(npc_id))
+                except Exception: row = None
             if not row:
-                if npc_id is not None:
-                    row = await conn.fetchrow("""
-                        SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity
-                        FROM NPCStats
-                        WHERE npc_id=$1
-                    """, int(npc_id))
-                elif npc_name:
-                    row = await conn.fetchrow("""
-                        SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity
-                        FROM NPCStats
-                        WHERE npc_name=$1
-                    """, npc_name)
-        if not row:
-            return {}
+                if npc_id is not None: row = await conn.fetchrow("SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity FROM NPCStats WHERE npc_id=$1", int(npc_id))
+                elif npc_name: row = await conn.fetchrow("SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity FROM NPCStats WHERE npc_name=$1", npc_name)
+        if not row: return {}
         return {
-            "NPCName": row["npc_name"],
-            "Dominance": row["dominance"],
-            "Cruelty": row["cruelty"],
-            "Closeness": row["closeness"],
-            "Trust": row["trust"],
-            "Respect": row["respect"],
+            "NPCName": row["npc_name"], "Dominance": row["dominance"], "Cruelty": row["cruelty"],
+            "Closeness": row["closeness"], "Trust": row["trust"], "Respect": row["respect"],
             "Intensity": row["intensity"]
         }
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error fetching NPC stats: {db_err}", exc_info=True)
-        return {}
     except Exception as e:
-        logger.error(f"Unexpected error fetching NPC stats: {e}", exc_info=True)
+        logger.error(f"Error fetching NPC stats: {e}", exc_info=True)
         return {}
 
 # -------------------------------------------------------------------
-# Condition parsing/eval
+# Condition parsing/eval (REFACTORED SECTION)
 # -------------------------------------------------------------------
+
+def parse_condition(condition_str: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Parses a condition string into a structured format.
+    Refactored to gracefully handle and flag unrecognized parts.
+    """
+    cond = (condition_str or "").strip().lower()
+    if " and " in cond:
+        logic_op, parts = "AND", [p.strip() for p in cond.split(" and ")]
+    elif " or " in cond:
+        logic_op, parts = "OR", [p.strip() for p in cond.split(" or ")]
+    else:
+        logic_op, parts = "SINGLE", [cond]
+
+    parsed_list: List[Dict[str, Any]] = []
+    for part in parts:
+        if not part:
+            continue
+
+        # Pattern 1: Check for token bundle syntax (e.g., "category:theft | hazard:social")
+        if "|" in part or ":" in part:
+            bundle_tokens: List[Dict[str, str]] = []
+            is_valid_bundle = True
+            for token in part.split("|"):
+                token = token.strip()
+                if ":" in token:
+                    prefix, value = token.split(":", 1)
+                    prefix, value = prefix.strip(), value.strip()
+                    if prefix and value:
+                        bundle_tokens.append({"kind": prefix, "value": value})
+                    else: # Malformed token like "category:"
+                        is_valid_bundle = False; break
+                else: # Token without a colon
+                    is_valid_bundle = False; break
+            
+            if is_valid_bundle and bundle_tokens:
+                parsed_list.append({"type": "token_bundle", "tokens": bundle_tokens})
+                continue
+
+        # Pattern 2: Check for numeric comparison syntax (e.g., "willpower < 30")
+        tokens = part.split()
+        if len(tokens) == 3 and tokens[1] in (">", ">=", "<", "<=", "=="):
+            stat_name, operator, threshold_str = tokens
+            try:
+                threshold = int(threshold_str)
+                parsed_list.append({
+                    "type": "numeric",
+                    "stat": stat_name.title(), # Normalize to TitleCase to match stats dict
+                    "operator": operator,
+                    "threshold": threshold,
+                })
+                continue
+            except (ValueError, TypeError):
+                # Falls through to unrecognized if threshold is not a number
+                pass
+
+        # Fallback: If it matches no known patterns, it's unrecognized.
+        logger.warning(f"Unrecognized condition part: '{part}'. This rule will be bypassed.")
+        parsed_list.append({"type": "unrecognized", "original_text": part})
+        
+    return (logic_op, parsed_list)
+
+def evaluate_condition(
+    logic_op: str,
+    parsed_conditions: List[Dict[str, Any]],
+    stats_dict: Dict[str, int],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Evaluates parsed conditions.
+    Refactored to safely ignore any parts marked as "unrecognized".
+    """
+    if not parsed_conditions:
+        return False
+
+    results: List[bool] = []
+    token_sets = _extract_feasibility_sets(metadata)
+
+    for condition in parsed_conditions:
+        ctype = condition.get("type")
+
+        if ctype == "unrecognized":
+            results.append(False)  # Safely bypass by evaluating to False
+            continue
+
+        elif ctype == "numeric":
+            stat_name = condition.get("stat", "")
+            operator = condition.get("operator", "")
+            threshold = int(condition.get("threshold", 0))
+            actual_value = stats_dict.get(stat_name, 0)
+            
+            outcome = False
+            if operator == ">": outcome = actual_value > threshold
+            elif operator == ">=": outcome = actual_value >= threshold
+            elif operator == "<": outcome = actual_value < threshold
+            elif operator == "<=": outcome = actual_value <= threshold
+            elif operator == "==": outcome = actual_value == threshold
+            results.append(outcome)
+
+        elif ctype == "token_bundle":
+            tokens = condition.get("tokens") or []
+            outcome = _evaluate_token_bundle(tokens, token_sets)
+            results.append(outcome)
+        
+        else: # Safeguard for any other unexpected type
+            results.append(False)
+
+    if not results: return False
+    if logic_op == "AND": return all(results)
+    if logic_op == "OR": return any(results)
+    return results[0] # SINGLE case
+
+# ... (The rest of the file, including _normalize_token_values, _extract_feasibility_sets,
+# _evaluate_token_bundle, apply_effect, and all other functions, remains unchanged)
+# I will include them here for completeness.
 
 def _normalize_token_values(value: Any) -> Set[str]:
     normalized: Set[str] = set()
     if isinstance(value, str):
         val = value.strip().lower()
-        if val:
-            normalized.add(val)
+        if val: normalized.add(val)
     elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
         for item in value:
             normalized.update(_normalize_token_values(item))
     return normalized
 
-
 def _extract_feasibility_sets(metadata: Optional[Dict[str, Any]]) -> Dict[str, Set[str]]:
-    """Collect category/hazard/magic markers from feasibility metadata."""
-
-    sets: Dict[str, Set[str]] = {
-        "category": set(),
-        "hazard": set(),
-        "magic": set(),
-    }
-
-    if not isinstance(metadata, dict):
-        return sets
-
+    sets: Dict[str, Set[str]] = {"category": set(), "hazard": set(), "magic": set()}
+    if not isinstance(metadata, dict): return sets
     feasibility = metadata.get("feasibility")
-    if not isinstance(feasibility, dict):
-        return sets
-
-    def add_from_violations(violations: Any) -> None:
-        if not isinstance(violations, Iterable) or isinstance(violations, (str, bytes, dict)):
-            return
+    if not isinstance(feasibility, dict): return sets
+    def add_from_violations(violations: Any):
+        if not isinstance(violations, Iterable) or isinstance(violations, (str, bytes, dict)): return
         for entry in violations:
-            if not isinstance(entry, dict):
-                continue
+            if not isinstance(entry, dict): continue
             rule = str(entry.get("rule", "")).strip().lower()
-            if not rule or ":" not in rule:
-                continue
+            if not rule or ":" not in rule: continue
             prefix, value = rule.split(":", 1)
-            prefix = prefix.strip()
-            value = value.strip()
-            if prefix in sets and value:
-                sets[prefix].add(value)
-
-    def add_from_entry(entry: Dict[str, Any]) -> None:
+            prefix, value = prefix.strip(), value.strip()
+            if prefix in sets and value: sets[prefix].add(value)
+    def add_from_entry(entry: Dict[str, Any]):
         sets["category"].update(_normalize_token_values(entry.get("categories")))
         sets["hazard"].update(_normalize_token_values(entry.get("hazards")))
         sets["magic"].update(_normalize_token_values(entry.get("magic")))
         sets["magic"].update(_normalize_token_values(entry.get("magic_requirements")))
         add_from_violations(entry.get("violations"))
-
     per_intent = feasibility.get("per_intent")
     if isinstance(per_intent, Iterable) and not isinstance(per_intent, (str, bytes, dict)):
         for entry in per_intent:
-            if isinstance(entry, dict):
-                add_from_entry(entry)
-
+            if isinstance(entry, dict): add_from_entry(entry)
     add_from_violations(feasibility.get("violations"))
-
     overall = feasibility.get("overall")
-    if isinstance(overall, dict):
-        add_from_entry(overall)
-
+    if isinstance(overall, dict): add_from_entry(overall)
     capabilities = feasibility.get("capabilities")
     if isinstance(capabilities, dict):
         sets["category"].update(_normalize_token_values(capabilities.get("categories")))
         sets["hazard"].update(_normalize_token_values(capabilities.get("hazards")))
         sets["magic"].update(_normalize_token_values(capabilities.get("magic")))
         sets["magic"].update(_normalize_token_values(capabilities.get("magic_flags")))
-
     return sets
 
-
-def parse_condition(condition_str: str) -> Tuple[str, List[Dict[str, Any]]]:
-    cond = (condition_str or "").strip().lower()
-    if " and " in cond:
-        logic_op, parts = "AND", cond.split(" and ")
-    elif " or " in cond:
-        logic_op, parts = "OR", cond.split(" or ")
-    else:
-        logic_op, parts = "SINGLE", [cond]
-
-    parsed_list: List[Dict[str, Any]] = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-
-        bundle_tokens: List[Dict[str, str]] = []
-        for token in part.split("|"):
-            token = token.strip()
-            if not token:
-                continue
-            if ":" in token:
-                prefix, value = token.split(":", 1)
-                prefix = prefix.strip()
-                value = value.strip()
-                if prefix and value:
-                    bundle_tokens.append({"kind": prefix, "value": value})
-                continue
-        if bundle_tokens:
-            parsed_list.append({"type": "token_bundle", "tokens": bundle_tokens})
-            continue
-
-        tokens = part.split()
-        if len(tokens) == 3:
-            stat_name, operator, threshold_str = tokens
-            stat_name = stat_name.title()
-            try:
-                threshold = int(threshold_str)
-            except Exception:
-                threshold = 0
-            parsed_list.append(
-                {
-                    "type": "numeric",
-                    "stat": stat_name,
-                    "operator": operator,
-                    "threshold": threshold,
-                }
-            )
-        else:
-            logger.warning(f"Unrecognized condition part: '{part}'")
-    return (logic_op, parsed_list)
-
-
 def _evaluate_token_bundle(tokens: List[Dict[str, str]], token_sets: Dict[str, Set[str]]) -> bool:
-    if not tokens:
-        return False
-
-    category_hits = token_sets.get("category", set())
-    hazard_hits = token_sets.get("hazard", set())
-    magic_hits = token_sets.get("magic", set())
-
+    if not tokens: return False
+    category_hits, hazard_hits, magic_hits = token_sets.get("category", set()), token_sets.get("hazard", set()), token_sets.get("magic", set())
     for token in tokens:
-        kind = str(token.get("kind", "")).strip().lower()
-        value = str(token.get("value", "")).strip().lower()
-        if not kind or not value:
-            continue
-        if kind == "category" and value in category_hits:
-            return True
-        if kind == "hazard" and (value in hazard_hits or value in category_hits):
-            return True
-        if kind == "magic" and (value in magic_hits or value in category_hits):
-            return True
+        kind, value = str(token.get("kind", "")).strip().lower(), str(token.get("value", "")).strip().lower()
+        if not kind or not value: continue
+        if kind == "category" and value in category_hits: return True
+        if kind == "hazard" and (value in hazard_hits or value in category_hits): return True
+        if kind == "magic" and (value in magic_hits or value in category_hits): return True
     return False
+
+
 
 
 def evaluate_condition(
@@ -576,6 +535,10 @@ async def _bump_npc_cruelty(
     except Exception as e:
         logger.error(f"npc cruelty bump failed: {e}", exc_info=True)
         return None
+
+# -------------------------------------------------------------------
+# Effect application (uses LoreSystem if available)
+# -------------------------------------------------------------------
 
 async def apply_effect(
     effect_str: str,
@@ -790,7 +753,6 @@ async def enforce_all_rules_on_player(
         # 5) Apply according to tier
         triggered: List[Dict[str, Any]] = []
         if tier == "ambient":
-            # Return a single gentle warning, no DB writes
             if matches:
                 first = matches[0]
                 triggered.append({
@@ -799,15 +761,12 @@ async def enforce_all_rules_on_player(
                     "outcome": {"hint": "A warning presence lingers; consequences may follow."}
                 })
         elif tier == "soft":
-            # Apply at most 1-2 light effects (first two matches)
             for condition_str, effect_str in matches[:2]:
                 out = await apply_effect(effect_str, player_name, user_id=user_id, conversation_id=conversation_id)
-                # keep scenario short if present
                 if isinstance(out.get("punishmentScenario"), str):
                     out["punishmentScenario"] = out["punishmentScenario"][:240]
                 triggered.append({"condition": condition_str, "effect": effect_str, "outcome": out})
-        else:
-            # major: apply all matched effects
+        else: # major
             for condition_str, effect_str in matches:
                 out = await apply_effect(effect_str, player_name, user_id=user_id, conversation_id=conversation_id)
                 triggered.append({"condition": condition_str, "effect": effect_str, "outcome": out})
@@ -828,25 +787,11 @@ async def enforce_all_rules_on_player(
         return {"tier": "none", "triggered": [], "error": str(e)}
 
 # -------------------------------------------------------------------
-# Blueprint Route (backwards compatible, now accepts user/convo/meta)
+# Blueprint Route
 # -------------------------------------------------------------------
 
 @rule_enforcement_bp.route("/enforce_rules", methods=["POST"])
 async def enforce_rules_route():
-    """
-    JSON:
-    {
-      "player_name": "Chase",
-      "user_id": 123,                # optional
-      "conversation_id": 456,        # optional
-      "metadata": {                  # optional; supports scene_tags, stimuli, feasibility, turn_index...
-        "scene_tags": ["punishment"],
-        "stimuli": ["collar"],
-        "feasibility": {...},
-        "turn_index": 12
-      }
-    }
-    """
     data = await request.get_json() or {}
     player_name = data.get("player_name", "Chase")
     user_id = data.get("user_id")
@@ -863,12 +808,8 @@ async def enforce_rules_route():
 
 # Public API
 __all__ = [
-    "rule_enforcement_bp",
-    "enforce_all_rules_on_player",
-    "parse_condition",
-    "evaluate_condition",
-    "get_player_stats",
-    "get_npc_stats",
-    "apply_effect",
-    "purge_punishment_gate_state",
+    "rule_enforcement_bp", "enforce_all_rules_on_player",
+    "parse_condition", "evaluate_condition",
+    "get_player_stats", "get_npc_stats",
+    "apply_effect", "purge_punishment_gate_state",
 ]
