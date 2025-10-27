@@ -34,7 +34,6 @@ from collections import defaultdict, OrderedDict
 import weakref
 
 from db.connection import get_db_connection_context
-from tasks import update_scene_conflict_context
 
 from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
@@ -496,6 +495,7 @@ class ConflictSynthesizer:
         Returns cached data if available, otherwise triggers a background update and
         returns a minimal, fast-path response immediately.
         """
+        
         scene_info = self._scene_scope_to_mapping(scene_info) or {}
 
         # 1. Generate a stable cache key
@@ -517,6 +517,7 @@ class ConflictSynthesizer:
         # 3. Cache Miss: Trigger the slow background task
         logger.debug(f"Conflict context cache MISS for key: {cache_key}. Triggering background job.")
         try:
+            from tasks import update_scene_conflict_context
             update_scene_conflict_context.delay(
                 self.user_id, self.conversation_id, scene_info, cache_key
             )
