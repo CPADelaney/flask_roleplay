@@ -331,6 +331,13 @@ class TensionSubsystem:
         scene_hash = self._hash_scene_context(scene_context)
         logger.info(f"Starting background tension bundle generation for scene: {scene_hash}")
         
+        # <<< FIX #1: Acquire the redis client at the start of the function.
+        redis_client = await get_redis_client()
+        
+        lock_key = GENERATION_LOCK_KEY_TEMPLATE.format(
+            user_id=self.user_id, conv_id=self.conversation_id, scene_hash=scene_hash
+        )
+
         try:
             # 1. Generate the expensive manifestation content (LLM call)
             manifestation = await self._generate_tension_manifestation_llm(scene_context)
@@ -354,22 +361,20 @@ class TensionSubsystem:
                 scene_hash=scene_hash
             )
             
-            redis_client.set(cache_key, json.dumps(bundle), ex=CACHE_TTL_SECONDS)
+            # <<< FIX #2: This call will now succeed because redis_client is defined.
+            await redis_client.set(cache_key, json.dumps(bundle), ex=CACHE_TTL_SECONDS)
             logger.info(f"Successfully cached tension bundle for scene: {scene_hash}")
             
         except Exception as e:
             logger.error(f"Failed to generate tension bundle: {e}", exc_info=True)
         finally:
             # POLISH: Always release the lock, even on failure
-            scene_hash = self._hash_scene_context(scene_context)
-            lock_key = GENERATION_LOCK_KEY_TEMPLATE.format(
-                user_id=self.user_id, conv_id=self.conversation_id, scene_hash=scene_hash
-            )
+            # No need to get the client again, we already have it.
             try:
-                redis_client = await get_redis_client()
                 await redis_client.delete(lock_key)
             except Exception as lock_e:
                 logger.error(f"Failed to release tension generation lock: {lock_e}")
+
 
     
     async def _generate_tension_manifestation_llm(self, scene_context: Dict[str, Any]) -> TensionManifestation:
