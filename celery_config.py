@@ -100,6 +100,11 @@ task_routes = {
     'tasks.generate_lore_background_task': {'queue': 'background'},
     'tasks.generate_initial_conflict_task': {'queue': 'background'},
 
+    ## NEW ##: Add routes for the new conflict system tasks
+    'tasks.update_edge_case_scan': {'queue': 'background'},
+    'tasks.update_tension_bundle_cache': {'queue': 'heavy'}, # This is LLM-heavy, good for this queue
+    'tasks.periodic_edge_case_maintenance': {'queue': 'background'}, # The maintenance task itself is lightweight
+
     # Default priority tasks
     'tasks.run_npc_learning_cycle_task': {'queue': 'background'},
     'tasks.nyx_memory_maintenance_task': {'queue': 'heavy'},
@@ -139,7 +144,7 @@ base_config = {
     # Add these new settings:
     'task_time_limit': 900,  # 15 minutes hard limit
     'task_soft_time_limit': 840,  # 14 minutes soft limit
-    'worker_max_memory_per_child': 1000000,  # 500MB - restart worker if it uses more
+    'worker_max_memory_per_child': 1000000,  # 1GB - restart worker if it uses more
 }
 
 # Enhanced configuration for RabbitMQ
@@ -216,6 +221,13 @@ celery_app.conf.beat_schedule = {
         'task': 'tasks.run_npc_learning_cycle_task',
         'schedule': crontab(minute='*/15'),
     },
+
+    ## NEW ##: Add the periodic maintenance schedule for the conflict system
+    'periodic-edge-case-maintenance': {
+        'task': 'tasks.periodic_edge_case_maintenance',
+        'schedule': crontab(minute='*/20'),  # Run every 20 minutes
+        'options': {'queue': 'background'}
+    },
     
     # --- Nyx Brain Tasks ---
     'nyx-memory-maintenance-daily': {
@@ -225,7 +237,7 @@ celery_app.conf.beat_schedule = {
     },
     "sweep-and-merge-nyx-split-brains-every-5min": {
         "task": "tasks.sweep_and_merge_nyx_split_brains",
-        "schedule": crontab(minute="*/5"),  # Runs every 5 mins
+        "schedule": crontab(minute="*/5"),
     },
     'llm-periodic-checkpoint-every-10min': {
         'task': 'tasks.run_llm_periodic_checkpoint_task',
