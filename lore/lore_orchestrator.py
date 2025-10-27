@@ -103,6 +103,12 @@ from lore.core.canon import (
     ensure_embedding_columns,
 )
 
+from tasks import (
+    generate_and_cache_mpf_lore, 
+    lore_evolution_task, 
+    quick_setup_world_task
+)
+
 logger = logging.getLogger(__name__)
 
 # Database connection
@@ -721,10 +727,25 @@ class LoreOrchestrator:
     
         return result
 
+    def dispatch_quick_setup_world(self, world_description: str) -> Dict[str, Any]:
+        """
+        Dispatches a background task to perform a full world setup.
+        This method is lightweight and returns immediately.
+
+        **USE THIS IN YOUR API/WEB HANDLERS.**
+        """
+        logger.info(f"Dispatching quick world setup task for conversation {self.conversation_id}")
+        quick_setup_world_task.delay(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            world_description=world_description
+        )
+        return {"status": "accepted", "message": "Full world setup is being processed in the background."}
+
     async def quick_setup_world(self, world_description: str) -> Dict[str, Any]:
         """
-        Quick setup for a new world with core systems seeded.
-        Note: nations are generated via GeopoliticalSystemManager tool function.
+        This is the original, heavy-lifting implementation for a new world.
+        It will now be called by the `quick_setup_world_task` Celery worker.
         """
         results = {
             'world': None,
@@ -760,11 +781,15 @@ class LoreOrchestrator:
             results['education'] = edu_systems
             
             # Initialize cultures for some nations
-            for nation in (nations or [])[:3]:
+            nation_list = nations or []
+            for nation in nation_list[:3]:
                 try:
-                    culture_data = await self.initialize_nation_culture(run_ctx, nation['id'], language_count=2)
-                    results['cultures'].append({'nation_id': nation['id'], 'culture': culture_data})
-                except Exception:
+                    nation_id = nation.get('id')
+                    if nation_id is not None:
+                        culture_data = await self.initialize_nation_culture(run_ctx, nation_id, language_count=2)
+                        results['cultures'].append({'nation_id': nation_id, 'culture': culture_data})
+                except Exception as e:
+                    logger.warning(f"Could not initialize culture for nation {nation.get('id')}: {e}")
                     continue
             
             results['status'] = 'complete'
@@ -1754,7 +1779,6 @@ class LoreOrchestrator:
         Fetches pre-generated Matriarchal Power Framework lore from the cache table.
         If the lore is missing and not already being generated, it triggers a background task.
         """
-        from tasks import generate_and_cache_mpf_lore
         try:
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
@@ -1767,22 +1791,25 @@ class LoreOrchestrator:
                 )
 
                 if row:
-                    # Data exists, return it
+                    # Data exists, check its status
                     if row['generation_status'] == 'complete':
+                        logger.debug(f"MPF lore cache hit for user {self.user_id}.")
                         return {
-                            "matriarchal_principles": row['principles'],
-                            "power_expressions": row['expressions'],
-                            "hierarchical_constraints": row['constraints']
+                            "matriarchal_principles": json.loads(row['principles']) if row['principles'] else None,
+                            "power_expressions": json.loads(row['expressions']) if row['expressions'] else None,
+                            "hierarchical_constraints": json.loads(row['constraints']) if row['constraints'] else None,
                         }
-                    # If it's pending or failed, we don't return data but also don't re-trigger
-                    return None
+                    else:
+                        # Generation is pending or failed, don't re-trigger.
+                        logger.debug(f"MPF lore generation is already in status '{row['generation_status']}'.")
+                        return None
                 else:
-                    # No entry found. Create a 'pending' entry and trigger the task.
+                    # No entry found. Create a 'pending' entry to act as a lock and trigger the task.
                     await conn.execute(
                         """
                         INSERT INTO MatriarchalLoreCache (user_id, conversation_id, generation_status)
                         VALUES ($1, $2, 'pending')
-                        ON CONFLICT DO NOTHING;
+                        ON CONFLICT (user_id, conversation_id) DO NOTHING;
                         """,
                         self.user_id, self.conversation_id
                     )
@@ -1791,13 +1818,28 @@ class LoreOrchestrator:
                     logger.info(f"Triggered background MPF lore generation for user {self.user_id}.")
                     return None
 
-        except (asyncpg.exceptions.UndefinedTableError):
-            logger.warning("MatriarchalLoreCache table does not exist. Skipping MPF lore.")
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("MatriarchalLoreCache table does not exist. Skipping MPF lore. Please run migrations.")
             return None
         except Exception as e:
             logger.error(f"Error fetching cached MPF lore: {e}", exc_info=True)
             return None
 
+    def dispatch_evolve_world_with_event(self, event_description: str, affected_location_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Dispatches a background task to evolve the world with a narrative event.
+        This method is lightweight and returns immediately.
+        
+        **USE THIS IN YOUR API/WEB HANDLERS.**
+        """
+        logger.info(f"Dispatching lore evolution task for conversation {self.conversation_id}")
+        lore_evolution_task.delay(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            event_description=event_description,
+            affected_location_id=affected_location_id
+        )
+        return {"status": "accepted", "message": "Lore evolution is being processed in the background."}
     
     async def get_scene_delta(self, scope: Any, since_ts: float) -> Dict[str, Any]:
         """
@@ -4466,6 +4508,10 @@ class LoreOrchestrator:
         id_from_context=lambda ctx: "lore_orchestrator"
     )
     async def evolve_world_with_event(self, ctx, event_description: str, affected_location_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        This is the original, heavy-lifting implementation. 
+        It will now be called by the `lore_evolution_task` Celery worker, not directly by the web server.
+        """
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
     
