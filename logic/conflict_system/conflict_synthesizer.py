@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
-PARALLEL_TIMEOUT = float(os.getenv('CONFLICT_PARALLEL_TIMEOUT', '2.0'))
+PARALLEL_TIMEOUT = float(os.getenv('CONFLICT_PARALLEL_TIMEOUT', '10.0'))
 MAX_PARALLEL_TASKS = int(os.getenv('CONFLICT_MAX_PARALLEL', '6'))
 BUNDLE_TTL_SECONDS = float(os.getenv('CONFLICT_BUNDLE_TTL', '30.0'))
 MAX_EVENT_QUEUE = int(os.getenv('CONFLICT_EVENT_Q_MAX', '1000'))
