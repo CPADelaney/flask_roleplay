@@ -1801,105 +1801,103 @@ def cleanup_old_performance_data_task():
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def generate_and_cache_mpf_lore(self, user_id: int, conversation_id: int):
     """
-    Celery task to generate and cache the Matriarchal Power Framework lore.
-    This runs in the background and does not block user requests.
+    Generate and cache Matriarchal Power Framework lore.
+    Runs in a Celery worker; async work is wrapped via asyncio.run().
     """
-    from lore.lore_orchestrator import LoreOrchestrator
-    try:
-        logger.info(f"Starting MPF lore generation for user:{user_id} convo:{conversation_id}")
-        
-        # We need an async context to run the orchestrator methods.
-        # This can be tricky in Celery. A common pattern is to use asyncio.run().
-        import asyncio
-
-        async def _generate():
-            # Get a fresh orchestrator instance
-            # NOTE: get_lore_orchestrator is async, so we call it inside our async runner
-            from lore.lore_orchestrator import get_lore_orchestrator
-            orchestrator = await get_lore_orchestrator(user_id, conversation_id)
-            
-            # Generate all MPF components in parallel
-            core_principles, power_expressions, hierarchical_constraints = await asyncio.gather(
-                orchestrator.mpf_generate_core_principles(),
-                orchestrator.mpf_generate_power_expressions(limit=10), # Generate a decent number for the cache
-                orchestrator.mpf_generate_hierarchical_constraints(),
-                return_exceptions=True # Don't let one failure stop everything
-            )
-
-            # Check for errors and handle them
-            if isinstance(core_principles, Exception):
-                logger.error(f"Failed to generate core principles: {core_principles}")
-                core_principles = None
-            if isinstance(power_expressions, Exception):
-                logger.error(f"Failed to generate power expressions: {power_expressions}")
-                power_expressions = None
-            if isinstance(hierarchical_constraints, Exception):
-                logger.error(f"Failed to generate hierarchical constraints: {hierarchical_constraints}")
-                hierarchical_constraints = None
-            
-            # Convert Pydantic models to dictionaries for JSON serialization
-            principles_dict = core_principles.dict() if core_principles else None
-            expressions_list = [expr.dict() for expr in power_expressions] if power_expressions else None
-            constraints_dict = hierarchical_constraints.dict() if hierarchical_constraints else None
-
-            return principles_dict, expressions_list, constraints_dict
-
-        # Run the async generation function
-        principles, expressions, constraints = asyncio.run(_generate())
-
-        # If all generations failed, we should retry
-        if not principles and not expressions and not constraints:
-            logger.warning("All MPF generation tasks failed. Retrying...")
-            raise self.retry()
-
-        # Store the results in the database using a synchronous connection pool
-        conn = get_db_connection_sync() # You'll need a sync utility for this
-        try:
-            with conn.cursor() as cur:
-                # Use INSERT ON CONFLICT to safely insert or update the cache
-                cur.execute(
-                    """
-                    INSERT INTO MatriarchalLoreCache 
-                        (user_id, conversation_id, principles, expressions, constraints, generation_status, last_updated)
-                    VALUES (%s, %s, %s, %s, %s, 'complete', NOW())
-                    ON CONFLICT (user_id, conversation_id) DO UPDATE SET
-                        principles = EXCLUDED.principles,
-                        expressions = EXCLUDED.expressions,
-                        constraints = EXCLUDED.constraints,
-                        generation_status = 'complete',
-                        last_updated = NOW();
-                    """,
-                    (
-                        user_id,
-                        conversation_id,
-                        json.dumps(principles) if principles else None,
-                        json.dumps(expressions) if expressions else None,
-                        json.dumps(constraints) if constraints else None,
-                    )
-                )
-            conn.commit()
-            logger.info(f"Successfully cached MPF lore for user:{user_id} convo:{conversation_id}")
-        finally:
-            conn.close()
-
-    except Exception as exc:
-        logger.error(f"MPF lore generation task failed for user:{user_id}: {exc}", exc_info=True)
-        # Mark as failed in DB
+    def _store_status_sync(status: str, principles=None, expressions=None, constraints=None, last_error=None):
         conn = get_db_connection_sync()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE MatriarchalLoreCache SET generation_status = 'failed' 
-                    WHERE user_id = %s AND conversation_id = %s;
-                    """,
-                    (user_id, conversation_id)
-                )
+                if status in ("complete", "partial"):
+                    cur.execute(
+                        """
+                        INSERT INTO MatriarchalLoreCache
+                          (user_id, conversation_id, principles, expressions, constraints, generation_status, last_updated)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (user_id, conversation_id) DO UPDATE SET
+                          principles = EXCLUDED.principles,
+                          expressions = EXCLUDED.expressions,
+                          constraints = EXCLUDED.constraints,
+                          generation_status = EXCLUDED.generation_status,
+                          last_updated = NOW();
+                        """,
+                        (
+                            user_id,
+                            conversation_id,
+                            json.dumps(principles) if principles is not None else None,
+                            json.dumps(expressions) if expressions is not None else None,
+                            json.dumps(constraints) if constraints is not None else None,
+                            status,
+                        ),
+                    )
+                else:
+                    # failed / retrying path (record last_error if you have a column for it)
+                    cur.execute(
+                        """
+                        UPDATE MatriarchalLoreCache
+                           SET generation_status = %s,
+                               last_updated = NOW()
+                         WHERE user_id = %s AND conversation_id = %s;
+                        """,
+                        (status, user_id, conversation_id),
+                    )
             conn.commit()
         finally:
             conn.close()
-        # Retry the task
-        raise self.retry(exc=exc)
+
+    async def _generate_async():
+        from lore.lore_orchestrator import get_lore_orchestrator
+        orchestrator = await get_lore_orchestrator(user_id, conversation_id)
+        core_principles, power_expressions, hierarchical_constraints = await asyncio.gather(
+            orchestrator.mpf_generate_core_principles(),
+            orchestrator.mpf_generate_power_expressions(limit=10),
+            orchestrator.mpf_generate_hierarchical_constraints(),
+            return_exceptions=True,
+        )
+
+        def _ok(x): return not isinstance(x, Exception) and x is not None
+
+        if isinstance(core_principles, Exception):
+            logger.error("MPF core principles failed: %s", core_principles)
+            core = None
+        else:
+            core = core_principles.dict() if _ok(core_principles) else None
+
+        if isinstance(power_expressions, Exception):
+            logger.error("MPF power expressions failed: %s", power_expressions)
+            exprs = None
+        else:
+            exprs = [e.dict() for e in power_expressions] if _ok(power_expressions) else None
+
+        if isinstance(hierarchical_constraints, Exception):
+            logger.error("MPF hierarchical constraints failed: %s", hierarchical_constraints)
+            cons = None
+        else:
+            cons = hierarchical_constraints.dict() if _ok(hierarchical_constraints) else None
+
+        return core, exprs, cons
+
+    logger.info("Starting MPF lore generation for user=%s convo=%s", user_id, conversation_id)
+
+    try:
+        principles, expressions, constraints = asyncio.run(_generate_async())
+
+        if not principles and not expressions and not constraints:
+            _store_status_sync("retrying")
+            raise self.retry(exc=RuntimeError("All MPF sub-tasks failed"))
+
+        status = "complete" if all([principles, expressions, constraints]) else "partial"
+        _store_status_sync(status, principles, expressions, constraints)
+        logger.info("Cached MPF lore (%s) for user=%s convo=%s", status, user_id, conversation_id)
+
+    except Retry:
+        # Handed back to Celery scheduler; we've already written 'retrying'.
+        raise
+    except Exception as exc:
+        logger.exception("MPF lore generation failed for user=%s convo=%s", user_id, conversation_id)
+        _store_status_sync("failed")
+        # Retry if allowed; otherwise the exception marks task failure.
+        raise self.retry(exc=exc) if self.request.retries < self.max_retries else exc
 
 
 # === Split-brain sweep and merge ===============================================
@@ -2046,66 +2044,55 @@ def memory_consolidate_task(conversation_id: str, recent_memories: Optional[List
             return {"ok": False, "error": str(e)}
     return run_async_in_worker_loop(_run())
 
-# tasks.py
 
 @celery_app.task
-def lore_evolution_task(params):
+def lore_evolution_task(user_id: int, conversation_id: int, event_description: str, affected_location_id: Optional[int] = None):
     """
-    Background task to evolve lore based on events.
+    REVISED: Background task to evolve lore based on a specific event.
     """
-    async def evolve_lore():
+    async def _evolve_lore():
         with trace(workflow_name="lore_evolution_background"):
-            try:
-                affected_entities = params.get('affected_entities', [])
-                
-                if not affected_entities:
-                    logger.info("No entities to evolve, skipping lore evolution")
-                    return {"status": "success", "message": "No entities to process"}
-                
-                processed_count = 0
-                
-                for entity in affected_entities:
-                    try:
-                        user_id = entity.get('user_id')
-                        conversation_id = entity.get('conversation_id')
-                        event_description = entity.get('event', 'World state evolution')
-                        
-                        if not user_id or not conversation_id:
-                            continue
-                        
-                        # Use the lore orchestrator's actual method
-                        from lore.lore_orchestrator import get_lore_orchestrator
-                        
-                        orchestrator = await get_lore_orchestrator(user_id, conversation_id)
-                        
-                        # Create mock context for the governance decorator
-                        ctx = orchestrator._create_mock_context()
-                        
-                        # Use the actual evolve_world_with_event method
-                        evolution_result = await orchestrator.evolve_world_with_event(
-                            ctx,
-                            event_description=event_description,
-                            affected_location_id=entity.get('location_id')
-                        )
-                        
-                        if evolution_result:
-                            logger.info(f"Lore evolved for entity {entity}: {evolution_result.get('affected_elements', [])}")
-                            processed_count += 1
-                    
-                    except Exception as e:
-                        logger.error(f"Failed to evolve lore for entity {entity}: {e}")
-                
-                return {
-                    "status": "success",
-                    "entities_processed": processed_count
-                }
-                
-            except Exception as e:
-                logger.error(f"Lore evolution error: {e}", exc_info=True)
-                return {"status": "error", "error": str(e)}
-    
-    return run_async_in_worker_loop(evolve_lore())
+            from lore.lore_orchestrator import get_lore_orchestrator
+            
+            orchestrator = await get_lore_orchestrator(user_id, conversation_id)
+            ctx = orchestrator._create_mock_context()
+            
+            evolution_result = await orchestrator.evolve_world_with_event(
+                ctx,
+                event_description=event_description,
+                affected_location_id=affected_location_id
+            )
+            
+            logger.info(f"Lore evolved for conversation {conversation_id} due to event: '{event_description[:50]}...'")
+            return serialize_for_celery(evolution_result)
+            
+    try:
+        return run_async_in_worker_loop(_evolve_lore())
+    except Exception as e:
+        logger.error(f"Lore evolution task failed: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
 
+
+@celery_app.task
+def quick_setup_world_task(user_id: int, conversation_id: int, world_description: str):
+    """
+    NEW: Background task for the very heavy quick_setup_world function.
+    """
+    async def _setup_world():
+        with trace(workflow_name="quick_setup_world_background"):
+            from lore.lore_orchestrator import get_lore_orchestrator
+            orchestrator = await get_lore_orchestrator(user_id, conversation_id)
+            
+            setup_result = await orchestrator.quick_setup_world(world_description)
+            
+            logger.info(f"Quick world setup completed for conversation {conversation_id}.")
+            return serialize_for_celery(setup_result)
+            
+    try:
+        return run_async_in_worker_loop(_setup_world())
+    except Exception as e:
+        logger.error(f"Quick world setup task failed: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
 
 @celery_app.task
 def update_conflict_tensions_task(params):
