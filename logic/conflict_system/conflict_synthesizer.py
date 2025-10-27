@@ -33,6 +33,9 @@ from datetime import datetime
 from collections import defaultdict, OrderedDict
 import weakref
 
+from db.connection import get_db_connection_context
+from tasks import update_scene_conflict_context
+
 from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
     BackgroundConflictProcessor
