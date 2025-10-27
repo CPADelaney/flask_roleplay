@@ -2807,108 +2807,125 @@ class NyxContext:
     error_counts: Dict[str, int] = field(default_factory=dict)
     
     async def initialize(self):
-        """Initialize all orchestrators and the context broker"""
-        # Try to load config if available
-        try:
-            from .config import Config
-            self.config = Config
-        except ImportError:
-            pass
-
-        user_key = str(self.user_id)
-        conversation_key = str(self.conversation_id)
-        snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
-        if not snapshot:
-            canonical_snapshot = await fetch_canonical_snapshot(
-                self.user_id, self.conversation_id
-            )
-            if canonical_snapshot:
-                _SNAPSHOT_STORE.put(user_key, conversation_key, canonical_snapshot)
-
-        initialization_tasks = []
-
-        # Initialize Memory Orchestrator
-        initialization_tasks.append(self._init_memory_orchestrator())
-        
-        # Initialize Lore Orchestrator
-        initialization_tasks.append(self._init_lore_orchestrator())
-        
-        # Initialize NPC Orchestrator
-        initialization_tasks.append(self._init_npc_orchestrator())
-        
-        # Initialize Conflict Synthesizer
-        initialization_tasks.append(self._init_conflict_synthesizer())
-        
-        # Initialize World Systems
-        if WORLD_SIMULATION_AVAILABLE:
-            initialization_tasks.append(self._init_world_systems())
-        
-        # Run all initializations in parallel
-        if self.enable_parallel_fetch:
-            results = await asyncio.gather(*initialization_tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Initialization task {i} failed: {result}")
-                    self.log_error(result, {"task": f"init_{i}"})
-        else:
-            # Fallback to sequential initialization
-            for task in initialization_tasks:
-                try:
-                    await task
-                except Exception as e:
-                    logger.error(f"Initialization failed: {e}")
-                    self.log_error(e, {"task": "init"})
-
-        await self._hydrate_location_from_db()
-
-        if not self.current_location:
+            """Initialize all orchestrators and the context broker with detailed performance logging."""
+            logger.info(f"[CONTEXT_INIT] Starting initialization for user {self.user_id}, conversation {self.conversation_id}...")
+            init_start_time = time.time()
+    
+            # Try to load config if available
             try:
-                fallback_context = await get_comprehensive_context(
-                    self.user_id,
-                    self.conversation_id,
+                from .config import Config
+                self.config = Config
+            except ImportError:
+                pass
+    
+            user_key = str(self.user_id)
+            conversation_key = str(self.conversation_id)
+            snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
+            if not snapshot:
+                canonical_snapshot = await fetch_canonical_snapshot(
+                    self.user_id, self.conversation_id
                 )
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.warning(
-                    "Failed to fetch fallback context for user_id=%s conversation_id=%s",
-                    self.user_id,
-                    self.conversation_id,
-                    exc_info=True,
-                )
+                if canonical_snapshot:
+                    _SNAPSHOT_STORE.put(user_key, conversation_key, canonical_snapshot)
+    
+            # Helper function to wrap and time each initialization task
+            async def timed_init(name, coro):
+                t0 = time.time()
+                logger.info(f"[CONTEXT_INIT] Starting sub-task '{name}'...")
+                try:
+                    await coro
+                    logger.info(f"[CONTEXT_INIT] ✔ Sub-task '{name}' finished in {time.time() - t0:.3f}s")
+                except Exception as e:
+                    logger.error(f"[CONTEXT_INIT] ✖ Sub-task '{name}' failed after {time.time() - t0:.3f}s: {e}", exc_info=True)
+                    raise # Re-raise the exception after logging
+    
+            initialization_tasks = []
+    
+            # Initialize Memory Orchestrator
+            initialization_tasks.append(timed_init("Memory", self._init_memory_orchestrator()))
+            
+            # Initialize Lore Orchestrator
+            initialization_tasks.append(timed_init("Lore", self._init_lore_orchestrator()))
+            
+            # Initialize NPC Orchestrator
+            initialization_tasks.append(timed_init("NPC", self._init_npc_orchestrator()))
+            
+            # Initialize Conflict Synthesizer
+            initialization_tasks.append(timed_init("Conflict", self._init_conflict_synthesizer()))
+            
+            # Initialize World Systems
+            if WORLD_SIMULATION_AVAILABLE:
+                initialization_tasks.append(timed_init("World", self._init_world_systems()))
+            
+            # Run all initializations in parallel
+            if self.enable_parallel_fetch:
+                results = await asyncio.gather(*initialization_tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        # The timed_init wrapper already logged the error, so we just note the failure here.
+                        logger.error(f"Initialization task {i} failed and was caught by gather.")
+                        self.log_error(result, {"task": f"init_{i}"})
             else:
-                if isinstance(fallback_context, dict):
-                    previous_location_id = self.current_context.get("location_id")
-                    self.current_context.update(fallback_context)
-                    await self._refresh_location_from_context(
-                        previous_location_id=previous_location_id
+                # Fallback to sequential initialization for debugging if needed
+                for task_coro in initialization_tasks:
+                    try:
+                        await task_coro
+                    except Exception as e:
+                        # The timed_init wrapper will have already logged the specifics.
+                        logger.error(f"Sequential initialization failed: {e}")
+                        self.log_error(e, {"task": "sequential_init"})
+    
+            await self._hydrate_location_from_db()
+    
+            if not self.current_location:
+                try:
+                    fallback_context = await get_comprehensive_context(
+                        self.user_id,
+                        self.conversation_id,
                     )
-
-                    normalized_location = self._normalize_location_value(
-                        self.current_location
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to fetch fallback context for user_id=%s conversation_id=%s",
+                        self.user_id,
+                        self.conversation_id,
+                        exc_info=True,
                     )
-                    if normalized_location:
-                        self.current_location = normalized_location
-                        try:
-                            user_key = str(self.user_id)
-                            conversation_key = str(self.conversation_id)
-                            snapshot = _SNAPSHOT_STORE.get(
-                                user_key, conversation_key
-                            )
-                            snapshot["location_name"] = normalized_location
-                            snapshot.setdefault("scene_id", normalized_location)
-                            _SNAPSHOT_STORE.put(
-                                user_key, conversation_key, snapshot
-                            )
-                        except Exception as snapshot_exc:  # pragma: no cover - cache best effort
-                            logger.debug(
-                                "Snapshot store seed failed after fallback context: %s",
-                                snapshot_exc,
-                            )
-
-        # Initialize the context broker
-        self.context_broker = ContextBroker(self)
-        await self.context_broker.initialize()
-
-        logger.info(f"NyxContext initialized for user {self.user_id}, conversation {self.conversation_id}")
+                else:
+                    if isinstance(fallback_context, dict):
+                        previous_location_id = self.current_context.get("location_id")
+                        self.current_context.update(fallback_context)
+                        await self._refresh_location_from_context(
+                            previous_location_id=previous_location_id
+                        )
+    
+                        normalized_location = self._normalize_location_value(
+                            self.current_location
+                        )
+                        if normalized_location:
+                            self.current_location = normalized_location
+                            try:
+                                user_key = str(self.user_id)
+                                conversation_key = str(self.conversation_id)
+                                snapshot = _SNAPSHOT_STORE.get(
+                                    user_key, conversation_key
+                                )
+                                snapshot["location_name"] = normalized_location
+                                snapshot.setdefault("scene_id", normalized_location)
+                                _SNAPSHOT_STORE.put(
+                                    user_key, conversation_key, snapshot
+                                )
+                            except Exception as snapshot_exc:
+                                logger.debug(
+                                    "Snapshot store seed failed after fallback context: %s",
+                                    snapshot_exc,
+                                )
+    
+            # Initialize the context broker
+            self.context_broker = ContextBroker(self)
+            await self.context_broker.initialize()
+    
+            logger.info(f"NyxContext initialized for user {self.user_id}, conversation {self.conversation_id}")
+            logger.info(f"[CONTEXT_INIT] Total initialization took {time.time() - init_start_time:.3f}s")
 
     async def _hydrate_location_from_db(self) -> None:
         """Preload the current location from the CurrentRoleplay table."""
