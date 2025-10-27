@@ -100,6 +100,10 @@ task_routes = {
     'tasks.generate_lore_background_task': {'queue': 'background'},
     'tasks.generate_initial_conflict_task': {'queue': 'background'},
 
+    'tasks.generate_and_cache_mpf_lore': {'queue': 'heavy'}, # LLM-intensive
+    'tasks.lore_evolution_task': {'queue': 'heavy'},         # LLM-intensive
+    'tasks.quick_setup_world_task': {'queue': 'heavy'},      # Very LLM-intensive
+
     ## NEW ##: Add routes for the new conflict system tasks
     'tasks.update_edge_case_scan': {'queue': 'background'},
     'tasks.update_tension_bundle_cache': {'queue': 'heavy'}, # This is LLM-heavy, good for this queue
