@@ -287,10 +287,13 @@ class TensionSubsystem:
             
             if lock_acquired:
                 try:
-                    # from tasks import update_tension_bundle_cache
-                    # update_tension_bundle_cache.delay(self.user_id, self.conversation_id, scene_context)
+                    # This name MUST match the name in the @celery_app.task decorator
+                    celery_app.send_task(
+                        'tasks.update_tension_bundle_cache',
+                        args=[self.user_id, self.conversation_id, scene_context]
+                    )
                     logger.info(f"Dispatched background tension bundle generation for scene: {scene_hash}")
-                except ImportError:
+                except Exception as e:
                     logger.warning("Celery task not available, running generation inline as a fallback.")
                     asyncio.create_task(self.perform_bundle_generation_and_cache(scene_context))
             else:
