@@ -1244,16 +1244,40 @@ class BackgroundConflictSubsystem:
     def _db_to_background_conflict(self, data: Dict[str, Any]) -> BackgroundConflict:
         """Convert database row to BackgroundConflict object"""
         metadata = json.loads(data.get('metadata', '{}'))
+        
+        # <<< FIX IS HERE: Robustly handle intensity value >>>
+        intensity_value = data.get('intensity')
+        intensity_enum = BackgroundIntensity.DISTANT_RUMOR  # Default value
+
+        if isinstance(intensity_value, str):
+            try:
+                intensity_enum = BackgroundIntensity[intensity_value.upper()]
+            except KeyError:
+                logger.warning(f"Invalid intensity string '{intensity_value}' in DB, defaulting to DISTANT_RUMOR.")
+        
+        elif isinstance(intensity_value, (int, float)):
+            # Convert float back to the closest enum
+            if intensity_value <= 0.2:
+                intensity_enum = BackgroundIntensity.DISTANT_RUMOR
+            elif intensity_value <= 0.4:
+                intensity_enum = BackgroundIntensity.OCCASIONAL_NEWS
+            elif intensity_value <= 0.6:
+                intensity_enum = BackgroundIntensity.REGULAR_TOPIC
+            elif intensity_value <= 0.8:
+                intensity_enum = BackgroundIntensity.AMBIENT_TENSION
+            else:
+                intensity_enum = BackgroundIntensity.VISIBLE_EFFECTS
+        
         return BackgroundConflict(
             conflict_id=data['id'],
             conflict_type=GrandConflictType[data['conflict_type'].upper()],
             name=data['name'],
             description=data['description'],
-            intensity=BackgroundIntensity[data['intensity'].upper()],
+            intensity=intensity_enum, # Use the resolved enum value
             progress=float(data.get('progress', 0.0)),
             factions=json.loads(data['factions']),
             current_state=data['current_state'],
-            recent_developments=data.get('recent_developments', []), # This is now a list from the DB
+            recent_developments=data.get('recent_developments', []),
             impact_on_daily_life=metadata.get('daily_life_impacts', []),
             player_awareness_level=float(data.get('awareness', 0.1)),
             last_news_generation=data.get('last_news_generation'),
