@@ -493,8 +493,6 @@ class ConflictSynthesizer:
         Returns cached data if available, otherwise triggers a background update and
         returns a minimal, fast-path response immediately.
         """
-        from tasks import update_scene_conflict_context
-        from db.connection import get_db_connection_context
         scene_info = self._scene_scope_to_mapping(scene_info) or {}
 
         # 1. Generate a stable cache key
@@ -504,7 +502,7 @@ class ConflictSynthesizer:
             key_str = str(scene_info)
         cache_key = f"conflict_context:{self.user_id}:{self.conversation_id}:{hashlib.md5(key_str.encode()).hexdigest()}"
 
-        # 2. Fast Path: Check Redis Cache
+        # 2. Fast Path: Check Redis Cache for a complete result
         try:
             cached_data = redis_client.get(cache_key)
             if cached_data:
@@ -513,18 +511,16 @@ class ConflictSynthesizer:
         except Exception as e:
             logger.warning(f"Redis cache check failed: {e}")
 
-        # 3. Cache Miss: Trigger background task and return a fast-path response
+        # 3. Cache Miss: Trigger the slow background task
         logger.debug(f"Conflict context cache MISS for key: {cache_key}. Triggering background job.")
-        
         try:
             update_scene_conflict_context.delay(
                 self.user_id, self.conversation_id, scene_info, cache_key
             )
         except Exception as e:
             logger.error(f"Failed to trigger Celery task for conflict context: {e}")
-        
-        # --- Start of Fast-Path Logic ---
-        # This is the immediate, non-blocking response.
+
+        # 4. Immediately build and return a minimal, fast-path response
         fast_context = {
             'conflicts': [], 'tensions': {}, 'opportunities': [],
             'ambient_effects': ["The air is still, holding a quiet potential..."],
@@ -533,69 +529,84 @@ class ConflictSynthesizer:
         }
         
         try:
+            # --- START of REFACTORED LOGIC ---
             valid_npc_ids = [int(nid) for nid in scene_info.get('npcs', []) if nid is not None]
-            location_id = scene_info.get('location_id')
+            
+            # Gracefully handle either a location name (str) or id (int)
+            location_ref = scene_info.get('location_id') or scene_info.get('location')
+            resolved_location_id: Optional[int] = None
 
-            if valid_npc_ids or location_id:
-                async with get_db_connection_context() as conn:
-                    conflict_ids = set()
-                    active_conflicts = []
+            async with get_db_connection_context() as conn:
+                if isinstance(location_ref, int):
+                    resolved_location_id = location_ref
+                elif isinstance(location_ref, str):
+                    logger.debug(f"Location is a string '{location_ref}', looking up ID.")
+                    # This query finds the ID based on the name.
+                    resolved_location_id = await conn.fetchval(
+                        "SELECT location_id FROM locations WHERE location_name = $1 LIMIT 1",
+                        location_ref
+                    )
+            # --- END of REFACTORED LOGIC ---
 
-                    if valid_npc_ids:
-                        stakeholder_rows = await conn.fetch(
-                            "SELECT DISTINCT conflict_id FROM conflict_stakeholders WHERE npc_id = ANY($1::int[])",
-                            valid_npc_ids
-                        )
-                        for row in stakeholder_rows:
-                            if row['conflict_id']:
-                                conflict_ids.add(row['conflict_id'])
+            if not valid_npc_ids and not resolved_location_id:
+                return fast_context
+
+            async with get_db_connection_context() as conn:
+                conflict_ids = set()
+                active_conflicts = []
+
+                if valid_npc_ids:
+                    stakeholder_rows = await conn.fetch(
+                        "SELECT DISTINCT conflict_id FROM conflict_stakeholders WHERE npc_id = ANY($1::int[])",
+                        valid_npc_ids
+                    )
+                    conflict_ids.update(row['conflict_id'] for row in stakeholder_rows if row['conflict_id'])
+                
+                if resolved_location_id:
+                    # Query using the resolved integer ID
+                    location_conflict_rows = await conn.fetch(
+                        "SELECT conflict_id FROM conflict_locations WHERE location_id = $1",
+                        resolved_location_id
+                    )
+                    conflict_ids.update(row['conflict_id'] for row in location_conflict_rows)
+
+                if conflict_ids:
+                    conflict_rows = await conn.fetch(
+                        "SELECT conflict_id as id, conflict_name as name, conflict_type as type, intensity FROM conflicts WHERE is_active = TRUE AND conflict_id = ANY($1::int[])",
+                        list(conflict_ids)
+                    )
+                    active_conflicts.extend([dict(row) for row in conflict_rows])
+
+                if resolved_location_id:
+                    nation_id = await conn.fetchval("SELECT nation_id FROM locations WHERE location_id = $1", resolved_location_id)
                     
-                    if location_id:
-                        # Query the new junction table
-                        location_conflict_rows = await conn.fetch(
-                            "SELECT conflict_id FROM conflict_locations WHERE location_id = $1",
-                            location_id
-                        )
-                        for row in location_conflict_rows:
-                            conflict_ids.add(row['conflict_id'])
+                    national_rows = await conn.fetch(
+                        "SELECT id, name, conflict_type as type, (severity / 10.0) as intensity FROM nationalconflicts WHERE location_id = $1 AND status != 'resolved'",
+                        resolved_location_id
+                    )
+                    active_conflicts.extend([dict(row) for row in national_rows])
 
-                    if conflict_ids:
-                        conflict_rows = await conn.fetch(
-                            "SELECT conflict_id as id, conflict_name as name, conflict_type as type, intensity FROM conflicts WHERE is_active = TRUE AND conflict_id = ANY($1::int[])",
-                            list(conflict_ids)
-                        )
-                        active_conflicts.extend([dict(row) for row in conflict_rows])
-
-                    if location_id:
-                        national_rows = await conn.fetch(
-                            "SELECT id, name, conflict_type as type, (severity / 10.0) as intensity FROM nationalconflicts WHERE location_id = $1 AND status != 'resolved'",
-                            location_id
-                        )
-                        active_conflicts.extend([dict(row) for row in national_rows])
-
+                    if nation_id:
                         domestic_rows = await conn.fetch(
-                            "SELECT id, name, issue_type as type, (severity / 10.0) as intensity FROM domesticissues WHERE location_id = $1 AND status = 'active'",
-                            location_id
+                            "SELECT id, name, issue_type as type, (severity / 10.0) as intensity FROM domesticissues WHERE nation_id = $1 AND status = 'active'",
+                            nation_id
                         )
                         active_conflicts.extend([dict(row) for row in domestic_rows])
+                
+                if active_conflicts:
+                    unique_conflicts = {c['id']: c for c in active_conflicts}.values()
+                    fast_context['conflicts'] = list(unique_conflicts)
+                    total_intensity = sum(c.get('intensity', 0.5) or 0.5 for c in unique_conflicts)
+                    avg_intensity = total_intensity / len(unique_conflicts) if unique_conflicts else 0.0
+                    fast_context['world_tension'] = round(min(1.0, avg_intensity * 1.2), 2)
                     
-                    if active_conflicts:
-                        unique_conflicts = {c['id']: c for c in active_conflicts}.values()
-                        fast_context['conflicts'] = list(unique_conflicts)
-                        total_intensity = sum(c.get('intensity', 0.5) for c in unique_conflicts if c.get('intensity'))
-                        avg_intensity = total_intensity / len(unique_conflicts) if unique_conflicts else 0.0
-                        fast_context['world_tension'] = round(min(1.0, avg_intensity * 1.2), 2)
-                        
-                        if avg_intensity > 0.7:
-                            fast_context['ambient_effects'] = ["A palpable tension hangs in the air, sharp and unseen."]
-                        elif avg_intensity > 0.4:
-                            fast_context['ambient_effects'] = ["There's an undercurrent of unease, a sense that things are not quite settled."]
-                        else:
-                            fast_context['ambient_effects'] = ["The atmosphere is calm, but watchful."]
-        
+                    if avg_intensity > 0.7:
+                        fast_context['ambient_effects'] = ["A palpable tension hangs in the air, sharp and unseen."]
+                    elif avg_intensity > 0.4:
+                        fast_context['ambient_effects'] = ["There's an undercurrent of unease, a sense that things are not quite settled."]
+
         except Exception as e:
             logger.error(f"Fast-path conflict context fetch failed: {e}", exc_info=True)
-            # Return a safe default even if the fast-path fails
             fast_context['ambient_effects'] = ["An unexpected silence fills the air as the world recalibrates..."]
 
         return fast_context
