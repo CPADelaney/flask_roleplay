@@ -596,29 +596,24 @@ def process_new_game_task(user_id: int, conversation_data: Dict[str, Any]):
 def update_edge_case_scan(user_id: int, conversation_id: int):
     """
     Celery task to run the full edge case scan in the background and cache the results.
+    This is the core background job for the Edge Case subsystem.
     """
     logger.info(f"Starting background edge case scan for user={user_id}, conv={conversation_id}")
 
     async def do_scan():
-        """Helper async function to be run by the synchronous worker."""
-        # It's crucial to get a fresh synthesizer instance within the task's context
-        # and import modules that might not be loaded in the worker.
         from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
         
         synthesizer = await get_synthesizer(user_id, conversation_id)
-        
-        # Safely get the subsystem instance
         edge_handler = synthesizer._subsystems.get(SubsystemType.EDGE_HANDLER)
         
         if edge_handler:
             await edge_handler.perform_full_scan_and_cache()
             return {"status": "success", "message": "Edge case scan completed and cached."}
         else:
-            logger.error("Could not find Edge Case Subsystem in synthesizer.")
+            logger.error(f"Could not find Edge Case Subsystem for user={user_id}, conv={conversation_id}")
             return {"status": "error", "message": "Edge Case Subsystem not found."}
 
     try:
-        # Use your existing utility to run the async function
         result = run_async_in_worker_loop(do_scan())
         logger.info(f"Finished edge case scan for user={user_id}, conv={conversation_id}. Result: {result}")
         return result
@@ -630,36 +625,72 @@ def update_edge_case_scan(user_id: int, conversation_id: int):
 @celery_app.task(name="tasks.update_tension_bundle_cache", max_retries=1)
 def update_tension_bundle_cache(user_id: int, conversation_id: int, scene_context: Dict[str, Any]):
     """
-    Celery task to generate and cache the full tension bundle (with manifestations)
-    for a specific scene in the background.
+    Celery task to generate and cache the full tension bundle for a specific scene.
+    This is the core background job for the Tension subsystem's performance fix.
     """
     logger.info(f"Starting background tension bundle generation for user={user_id}, conv={conversation_id}")
 
     async def do_generation():
-        """Helper async function to be run by the synchronous worker."""
-        # Get a fresh synthesizer instance and necessary types
         from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
-
-        synthesizer = await get_synthesizer(user_id, conversation_id)
         
-        # Safely get the subsystem instance
+        synthesizer = await get_synthesizer(user_id, conversation_id)
         tension_system = synthesizer._subsystems.get(SubsystemType.TENSION)
         
         if tension_system:
             await tension_system.perform_bundle_generation_and_cache(scene_context)
             return {"status": "success", "message": "Tension bundle generated and cached."}
         else:
-            logger.error("Could not find Tension Subsystem in synthesizer.")
+            logger.error(f"Could not find Tension Subsystem for user={user_id}, conv={conversation_id}")
             return {"status": "error", "message": "Tension Subsystem not found."}
 
     try:
-        # Use your existing utility to run the async function
         result = run_async_in_worker_loop(do_generation())
         logger.info(f"Finished tension bundle generation for user={user_id}, conv={conversation_id}. Result: {result}")
         return result
     except Exception as e:
         logger.exception(f"Critical error in update_tension_bundle_cache task for user={user_id}")
         return {"status": "error", "error": str(e)}
+
+
+@celery_app.task(name="tasks.periodic_edge_case_maintenance")
+def periodic_edge_case_maintenance():
+    """
+    Periodic task (for Celery Beat) to trigger edge case scans for recently
+    active conversations, ensuring system health is monitored proactively.
+    """
+    logger.info("Starting periodic edge case maintenance.")
+
+    async def do_maintenance():
+        processed_count = 0
+        try:
+            async with get_db_connection_context() as conn:
+                # Find conversations that have had recent activity
+                conversations = await conn.fetch("""
+                    SELECT DISTINCT user_id, id as conversation_id
+                    FROM conversations
+                    WHERE last_active > NOW() - INTERVAL '24 hours'
+                    LIMIT 100
+                """)
+            
+            if not conversations:
+                logger.info("No active conversations found for edge case maintenance.")
+                return {"status": "success", "triggered_scans": 0}
+            
+            for conv in conversations:
+                try:
+                    # Re-use the main task to avoid duplicating logic
+                    update_edge_case_scan.delay(conv['user_id'], conv['conversation_id'])
+                    processed_count += 1
+                    await asyncio.sleep(0.5) # Stagger tasks slightly
+                except Exception as e:
+                    logger.error(f"Failed to trigger scan for {conv['user_id']}:{conv['conversation_id']}: {e}")
+            
+            return {"status": "success", "triggered_scans": processed_count}
+        except Exception as e:
+            logger.error(f"Periodic edge case maintenance failed: {e}", exc_info=True)
+            return {"status": "error", "error": str(e)}
+    
+    return run_async_in_worker_loop(do_maintenance())
 
 # Signal handling for revoked new game tasks to avoid leaving conversations stuck
 def _handle_process_new_game_task_revoked(
