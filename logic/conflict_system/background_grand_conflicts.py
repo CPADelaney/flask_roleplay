@@ -261,6 +261,9 @@ class BackgroundConflictOrchestrator:
         
         response = await Runner.run(self.conflict_generator, prompt)
         data = json.loads(extract_runner_response(response))
+
+        # Convert the string intensity (e.g., "distant_rumor") from the LLM into a float
+        intensity_float = resolve_intensity_value(data.get("initial_intensity"))
         
         # Store in database
         async with get_db_connection_context() as conn:
@@ -280,7 +283,8 @@ class BackgroundConflictOrchestrator:
                 data["description"],
                 json.dumps(data["factions"]),
                 data["initial_state"],
-                data.get("initial_intensity", "distant_rumor"),
+                # OLD, INCORRECT LINE: data.get("initial_intensity", "distant_rumor"),
+                intensity_float,  # <-- USE THE CONVERTED FLOAT HERE
                 0.0,  # Initial progress
                 'active',
                 json.dumps({
