@@ -138,6 +138,8 @@ DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
     logger.critical("DB_DSN environment variable not set!")
 
+redis_listener_task = None
+
 CHATKIT_MODEL = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-5-nano")
 INTEGRATE_GUARDRAIL_DENIAL = os.getenv("INTEGRATE_GUARDRAIL_DENIAL", "true").lower() in {
     "1",
@@ -145,6 +147,64 @@ INTEGRATE_GUARDRAIL_DENIAL = os.getenv("INTEGRATE_GUARDRAIL_DENIAL", "true").low
     "yes",
     "on",
 }
+
+async def redis_listener(app: Quart, sio: socketio.AsyncServer):
+    """
+    Listens to the 'chat-responses' Redis channel and streams results back to clients via Socket.IO.
+    """
+    # Use the shared redis pool from the app context
+    redis_pool = app.redis_rate_limit_pool 
+    if not redis_pool:
+        logger.error("Redis listener cannot start: no Redis pool configured.")
+        return
+
+    pubsub = redis_pool.pubsub()
+    await pubsub.subscribe("chat-responses")
+    logger.info("Redis listener subscribed to 'chat-responses' channel.")
+
+    while True:
+        try:
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30)
+            if message is None:
+                continue
+
+            data = json.loads(message["data"])
+            conversation_id = data.get("conversation_id")
+            request_id = data.get("request_id")
+            room = str(conversation_id)
+
+            logger.info(f"Listener received message for conv {conversation_id}, request_id={request_id}")
+
+            if data.get("success"):
+                full_text = data.get("full_text", "...")
+                # Simulate streaming for the client
+                chunk_size = 15  # Adjust for desired speed
+                for i in range(0, len(full_text), chunk_size):
+                    token = full_text[i:i + chunk_size]
+                    await sio.emit('new_token', {'token': token, 'request_id': request_id}, room=room)
+                    await asyncio.sleep(0.01) # Small delay to make streaming feel real
+
+                # Send the final 'done' event
+                await sio.emit('done', {
+                    'full_text': full_text,
+                    'request_id': request_id,
+                    'success': True,
+                    'metadata': data.get('metadata')
+                }, room=room)
+                logger.info(f"Finished streaming response for request_id={request_id}")
+
+            else:
+                # Handle error payload from the task
+                error_msg = data.get("error", "An unknown error occurred in the background task.")
+                await sio.emit('error', {'error': error_msg, 'request_id': request_id}, room=room)
+                logger.error(f"Sent error to client for request_id={request_id}: {error_msg}")
+
+        except asyncio.CancelledError:
+            logger.info("Redis listener task cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Error in Redis listener: {e}", exc_info=True)
+            await asyncio.sleep(1) # Prevent rapid-fire errors
 
 def _build_guardrail_system_prompt(
     player_name: str,
@@ -1243,8 +1303,11 @@ def create_quart_app():
             request_id = f"{sid}_{uuid.uuid4().hex[:8]}"
             logger.debug(f"Generated request_id: {request_id}")
         
-        # Try to mark as processing (atomic operation) - use global function with redis pool
-        if not await mark_request_processing(request_id, app.redis_rate_limit_pool):
+        # Use the global redis pool from the app context
+        redis_pool = app.redis_rate_limit_pool
+        
+        # Try to mark as processing (atomic operation)
+        if not await mark_request_processing(request_id, redis_pool):
             logger.warning(f"Duplicate request {request_id} ignored for sid={sid}")
             await sio.emit('duplicate_request', {
                 'request_id': request_id,
@@ -1256,57 +1319,51 @@ def create_quart_app():
             if not app_is_ready.is_set():
                 logger.warning(f"Received 'storybeat' from sid={sid} before app is fully ready. Rejecting.")
                 await sio.emit('error', {'error': 'Server is initializing, please try again in a moment.'}, to=sid)
-                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag on early exit
+                await clear_request_processing(request_id, redis_pool) # Clear flag on early exit
                 return
             
             sock_sess = await sio.get_session(sid)
             user_id = sock_sess.get("user_id", "anonymous")
             
             if user_id == "anonymous":
-                logger.warning(f"Socket session has anonymous user, cannot process authenticated request")
-                await sio.emit('error', {
-                    'error': 'Not authenticated. Please refresh the page and log in again.',
-                    'requiresAuth': True
-                }, to=sid)
-                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
+                # Handle unauthenticated user...
+                await clear_request_processing(request_id, redis_pool)
                 return
             
-            # Ensure user_id is int
             user_id = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id
             
             conversation_id = data.get("conversation_id")
             if conversation_id is None:
-                await sio.emit('error', {'error': 'Missing conversation_id'}, to=sid)
-                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
+                # Handle missing conversation_id...
+                await clear_request_processing(request_id, redis_pool)
                 return
                 
             try:
                 conversation_id = int(conversation_id)
             except (ValueError, TypeError):
-                logger.error(f"Invalid conversation_id from client: {conversation_id}")
-                await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
-                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
+                # Handle invalid conversation_id...
+                await clear_request_processing(request_id, redis_pool)
                 return
             
             user_input = data.get("user_input")
             universal_update = data.get("universal_update")
             
-            app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
-            
             if not user_input:
-                error_msg = "Invalid 'storybeat' payload: missing user_input."
-                app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
-                await sio.emit('error', {'error': error_msg}, to=sid)
-                await clear_request_processing(request_id, app.redis_rate_limit_pool) # <-- Clear flag
+                # Handle missing user_input...
+                await clear_request_processing(request_id, redis_pool)
                 return
             
+            app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
+            
             await sio.emit("processing", {"message": "Your request is being processed...", "request_id": request_id}, to=sid)
-
+            
+            # --- THE KEY CHANGE: Dispatch the Celery task ---
             background_chat_task_with_memory.delay(
                 conversation_id=conversation_id,
                 user_input=user_input,
                 user_id=user_id,
-                universal_update=universal_update
+                universal_update=universal_update,
+                request_id=request_id  # Pass the request ID to the task
             )
             
             app.logger.info(f"Dispatched Celery background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
@@ -1315,39 +1372,63 @@ def create_quart_app():
             app.logger.error(f"Error dispatching Celery task for sid={sid}: {e}", exc_info=True)
             await sio.emit('error', {'error': 'Server failed to dispatch message processing.'}, to=sid)
             # Clear the processing flag on error
-            await clear_request_processing(request_id, app.redis_rate_limit_pool)
-
+            await clear_request_processing(request_id, redis_pool)
+            
     @app.before_serving
     async def on_startup():
+        global redis_listener_task
         try:
-            # IMPORTANT: initialize_systems should now handle all critical async setups
-            await initialize_systems(app) 
+            await initialize_systems(app)
+            # Start the Redis listener as a background task
+            if app.redis_rate_limit_pool:
+                redis_listener_task = asyncio.create_task(redis_listener(app, sio))
+                logger.info("Redis pub/sub listener started.")
         except Exception as e:
             logger.critical(f"Application startup failed during initialize_systems: {e}", exc_info=True)
-            # This will prevent Hypercorn from fully starting if init fails
             raise 
 
     @app.after_serving
     async def shutdown_resources():
+        """
+        Gracefully shut down all asynchronous resources on application exit.
+        This includes the Redis listener, connection pools, and database pool.
+        """
+        global redis_listener_task
         logger.info("Starting graceful shutdown of resources...")
 
-        # Close aioredis pools
-        if hasattr(app, 'aioredis_rate_limit_pool') and app.aioredis_rate_limit_pool:
+        # 1. Cancel and wait for the Redis pub/sub listener task to finish
+        if redis_listener_task and not redis_listener_task.done():
+            logger.info("Attempting to cancel Redis pub/sub listener task...")
             try:
-                await app.aioredis_rate_limit_pool.close()
-                # await app.aioredis_rate_limit_pool.wait_closed() # For older redis-py versions or if needed
-                logger.info("aioredis pool for Rate Limiter (and IP Block) closed.")
+                redis_listener_task.cancel()
+                await redis_listener_task
+            except asyncio.CancelledError:
+                # This is the expected and correct outcome of a successful cancellation.
+                logger.info("Redis pub/sub listener task successfully cancelled.")
             except Exception as e:
-                logger.error(f"Error closing aioredis_rate_limit_pool: {e}", exc_info=True)
+                logger.error(f"An unexpected error occurred while shutting down the Redis listener task: {e}", exc_info=True)
+
+        # 2. Close the shared Redis connection pool
+        # Since app.redis_rate_limit_pool and app.redis_ip_block_pool point to the same object,
+        # we only need to close it once.
+        if hasattr(app, 'redis_rate_limit_pool') and app.redis_rate_limit_pool:
+            logger.info("Closing shared Redis connection pool...")
+            try:
+                await app.redis_rate_limit_pool.close()
+                logger.info("Shared Redis connection pool closed successfully.")
+            except Exception as e:
+                logger.error(f"Error closing the shared Redis pool: {e}", exc_info=True)
         
-        # Close database pool (your existing db.connection.close_connection_pool should handle app.db_pool)
+        # 3. Close the PostgreSQL database connection pool using your existing helper
+        logger.info("Closing database connection pool...")
         try:
-            await close_connection_pool(app=app) # Pass app if your function expects it
-            logger.info("Database connection pool closed via db.connection.close_connection_pool.")
+            await close_connection_pool(app=app)
+            logger.info("Database connection pool closed successfully.")
         except Exception as e:
-            logger.error(f"Error closing database connection pool: {e}", exc_info=True)
+            logger.error(f"Error closing the database connection pool: {e}", exc_info=True)
         
-        logger.info("Resource shutdown complete.")
+        logger.info("All resources have been shut down gracefully.")
+
 
     @sio.event
     async def disconnect(sid):
