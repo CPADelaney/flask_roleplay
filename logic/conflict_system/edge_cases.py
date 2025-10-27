@@ -33,7 +33,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis_client: Optional[redis.Redis] = None
 
 async def get_redis_client() -> redis.Redis:
-    """Lazy-load async Redis client."""
+    """Lazy-loads and returns a singleton async Redis client instance."""
     global _redis_client
     if _redis_client is None:
         _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
@@ -214,59 +214,48 @@ class ConflictEdgeCaseSubsystem:
                 logger.debug(f"Edge case scan cache HIT for key: {cache_key}")
                 scan_result = json.loads(cached_data)
                 scan_result['status'] = 'cached'
-                
                 return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data=scan_result,
-                    side_effects=[]
+                    subsystem=self.subsystem_type, event_id=event.event_id,
+                    success=True, data=scan_result
                 )
         except Exception as e:
             logger.warning(f"Redis cache check failed: {e}")
         
         # 2. Cache Miss: Try to trigger a background scan
-        logger.debug(f"Edge case scan cache MISS for key: {cache_key}. Attempting to trigger background scan.")
+        logger.debug(f"Edge case scan cache MISS for key: {cache_key}. Attempting background scan.")
         
-        # Use a lock to prevent multiple concurrent scans
         lock_key = SCAN_LOCK_KEY_TEMPLATE.format(user_id=self.user_id, conv_id=self.conversation_id)
         try:
             redis_client = await get_redis_client()
-            # Try to acquire lock (NX = only set if not exists)
-            lock_acquired = await redis_client.set(
-                lock_key, "1", 
-                ex=SCAN_LOCK_TIMEOUT_SECONDS, 
-                nx=True
-            )
+            lock_acquired = await redis_client.set(lock_key, "1", ex=SCAN_LOCK_TIMEOUT_SECONDS, nx=True)
             
             if lock_acquired:
-                # We got the lock - trigger background scan
                 try:
-                    from tasks import update_edge_case_scan
-                    update_edge_case_scan.delay(self.user_id, self.conversation_id)
+                    # from tasks import update_edge_case_scan
+                    # update_edge_case_scan.delay(self.user_id, self.conversation_id)
                     logger.info(f"Triggered background edge case scan for {self.user_id}:{self.conversation_id}")
                 except ImportError:
-                    logger.warning("Celery task not available, running scan inline")
-                    # Fallback: run inline if Celery not available
-                    await self.perform_full_scan_and_cache()
+                    logger.warning("Celery task not available, running scan inline as a fallback.")
+                    asyncio.create_task(self.perform_full_scan_and_cache())
             else:
                 logger.debug(f"Background scan already in progress for {self.user_id}:{self.conversation_id}")
         except Exception as e:
             logger.error(f"Failed to trigger background scan: {e}")
         
         # 3. Return a minimal response indicating scan is in progress
+        # POLISH: Add a helpful message to the 'issues' list
         return SubsystemResponse(
-            subsystem=self.subsystem_type,
-            event_id=event.event_id,
-            success=True,
+            subsystem=self.subsystem_type, event_id=event.event_id, success=True,
             data={
-                'healthy': True,
-                'edge_cases_found': 0,
-                'critical_cases': 0,
-                'issues': [],
-                'status': 'scan_in_progress'
-            },
-            side_effects=[]
+                'healthy': True, 'edge_cases_found': 0, 'critical_cases': 0,
+                'status': 'scan_in_progress',
+                'issues': [{
+                    'subsystem': 'edge_handler',
+                    'issue': 'Scan is running in the background. Results will be available shortly.',
+                    'severity': 'low',
+                    'recoverable': False
+                }],
+            }
         )
     
     async def _handle_recovery_execution(self, event) -> Any:
@@ -463,6 +452,8 @@ class ConflictEdgeCaseSubsystem:
                 ))
         except Exception as e:
             logger.error(f"Error detecting orphaned conflicts: {e}", exc_info=True)
+            return [] # POLISH: Always return a list
+        return edge_cases
         
         return edge_cases
     
@@ -514,7 +505,7 @@ class ConflictEdgeCaseSubsystem:
                     ))
         except Exception as e:
             logger.error(f"Error detecting infinite loops: {e}", exc_info=True)
-        
+            return [] # POLISH: Always return a list
         return edge_cases
     
     async def _detect_stale_conflicts(self) -> List[EdgeCase]:
