@@ -324,14 +324,10 @@ class TensionSubsystem:
         """
         The core logic for the background worker. Generates the full tension bundle
         with LLM calls and caches it in Redis.
-        
-        This method is called by the Celery task - it's expensive but non-blocking
-        because it runs in a background worker.
         """
         scene_hash = self._hash_scene_context(scene_context)
         logger.info(f"Starting background tension bundle generation for scene: {scene_hash}")
         
-        # <<< FIX #1: Acquire the redis client at the start of the function.
         redis_client = await get_redis_client()
         
         lock_key = GENERATION_LOCK_KEY_TEMPLATE.format(
@@ -345,9 +341,14 @@ class TensionSubsystem:
             # 2. Check for breaking points (potential LLM call)
             breaking_point = await self.check_tension_breaking_point()
             
+            # <<< FIX IS HERE: Convert the manifestation to a dict and ensure the enum is a string. >>>
+            manifestation_dict = dataclasses.asdict(manifestation)
+            if 'tension_type' in manifestation_dict and isinstance(manifestation_dict['tension_type'], Enum):
+                manifestation_dict['tension_type'] = manifestation_dict['tension_type'].value
+            
             # 3. Assemble the complete bundle
             bundle = {
-                'manifestation': dataclasses.asdict(manifestation),
+                'manifestation': manifestation_dict, # Use the corrected dictionary
                 'breaking_point': breaking_point,
                 'current_tensions': {t.value: v for t, v in self._current_tensions.items()},
                 'status': 'completed',
@@ -361,15 +362,13 @@ class TensionSubsystem:
                 scene_hash=scene_hash
             )
             
-            # <<< FIX #2: This call will now succeed because redis_client is defined.
+            # Now this will work because the bundle is fully JSON serializable
             await redis_client.set(cache_key, json.dumps(bundle), ex=CACHE_TTL_SECONDS)
             logger.info(f"Successfully cached tension bundle for scene: {scene_hash}")
             
         except Exception as e:
             logger.error(f"Failed to generate tension bundle: {e}", exc_info=True)
         finally:
-            # POLISH: Always release the lock, even on failure
-            # No need to get the client again, we already have it.
             try:
                 await redis_client.delete(lock_key)
             except Exception as lock_e:
