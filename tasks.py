@@ -8,6 +8,7 @@ import logging
 import asyncio
 import asyncpg
 import datetime
+import redis
 import time
 import traceback
 import re
@@ -47,6 +48,16 @@ if not DB_DSN:
 _APP_INITIALIZED = False
 _LAST_INIT_CHECK_TIME = 0.0
 _INIT_CHECK_INTERVAL = 30  # seconds
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+try:
+    redis_publisher = redis.from_url(REDIS_URL)
+    # Test the connection at startup
+    redis_publisher.ping()
+    logger.info("Redis publisher connected successfully for Celery tasks.")
+except Exception as e:
+    logger.critical(f"CRITICAL: Celery worker could not connect to Redis publisher at {REDIS_URL}. Tasks that publish results will fail. Error: {e}")
+    redis_publisher = None
 
 
 def set_app_initialized():
@@ -159,17 +170,27 @@ def test_task():
 # === Background chat (uses new NyxAgentSDK) ====================================
 
 @celery_app.task
-def background_chat_task_with_memory(conversation_id: int, user_input: str, user_id: int, universal_update: Optional[Dict[str, Any]] = None):
+def background_chat_task_with_memory(
+    conversation_id: int, 
+    user_input: str, 
+    user_id: int, 
+    universal_update: Optional[Dict[str, Any]] = None,
+    request_id: Optional[str] = None
+):
     """
-    Enhanced background chat task that includes memory retrieval and scene-scoped SDK.
-    Runs async flow on the worker's persistent loop.
+    Enhanced background chat task that runs the full Nyx Agent pipeline and
+    publishes the final result to a Redis channel for the web server to stream.
+    
+    This function is executed by a Celery worker and is decoupled from the web server process.
     """
-    async def run_chat_task():
+    async def run_chat_and_publish():
+        """Inner async function to run the core logic."""
+        full_response_payload = {}
         with trace(workflow_name="background_chat_task_celery"):
-            logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
+            logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}, request_id={request_id}")
             try:
                 # 1) Build aggregator context
-                from logic.aggregator import get_aggregated_roleplay_context
+                from logic.aggregator_sdk import get_aggregated_roleplay_context
                 aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
                 recent_turns = await fetch_recent_turns(user_id, conversation_id)
 
@@ -182,7 +203,7 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
                     "recent_turns": recent_turns,
                 }
 
-                # 2) Optional universal updates
+                # 2) Apply universal updates if provided
                 if universal_update:
                     logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
                     try:
@@ -195,13 +216,14 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
                                 conn
                             )
                         logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
-                        # Refresh
+                        # Refresh context after updates
                         aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                         context["aggregator_data"] = aggregator_data
                         context["recent_turns"] = await fetch_recent_turns(user_id, conversation_id)
                     except Exception as update_err:
+                        # Log and raise to be caught by the main exception handler
                         logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                        return {"error": "Failed to apply world updates"}
+                        raise Exception("Failed to apply world updates") from update_err
 
                 # 3) Enrich context with memories
                 try:
@@ -216,8 +238,9 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
                     logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
                 except Exception as memory_err:
                     logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
+                    # This is non-critical, so we just log it and continue
 
-                # 4) Invoke Nyx SDK (scene-scoped)
+                # 4) Invoke Nyx SDK for the main response
                 sdk = await _get_nyx_sdk()
                 logger.info(f"[BG Task {conversation_id}] Processing input with Nyx SDK...")
                 nyx_resp = await sdk.process_user_input(
@@ -230,49 +253,44 @@ def background_chat_task_with_memory(conversation_id: int, user_input: str, user
 
                 if not nyx_resp or not nyx_resp.success:
                     error_msg = (nyx_resp.metadata or {}).get("error", "Unknown SDK error") if nyx_resp else "Empty SDK response"
-                    logger.error(f"[BG Task {conversation_id}] Nyx SDK failed: {error_msg}")
-                    return {"error": error_msg}
+                    raise Exception(error_msg)
 
-                message_content = nyx_resp.narrative or ""
-
-                # 5) Store response in DB + add memory
-                try:
-                    async with get_db_connection_context() as conn:
-                        await conn.execute(
-                            """INSERT INTO messages (conversation_id, sender, content, created_at)
-                               VALUES ($1, $2, $3, NOW())""",
-                            conversation_id, "Nyx", message_content
-                        )
-                    logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
-
-                    try:
-                        from memory.memory_integration import add_memory_from_message
-                        memory_id = await add_memory_from_message(
-                            user_id=user_id,
-                            conversation_id=conversation_id,
-                            message_text=message_content,
-                            entity_type="memory",
-                            metadata={"source": "ai_response", "importance": 0.7}
-                        )
-                        logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
-                    except Exception as memory_err:
-                        logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
-
-                except Exception as db_err:
-                    logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
-
-                return serialize_for_celery({
-                    "success": True,
-                    "message": message_content,
+                # 5) Prepare the final success payload for publishing
+                message_content = nyx_resp.narrative.strip() if nyx_resp.narrative else "…"
+                
+                full_response_payload = {
                     "conversation_id": conversation_id,
+                    "full_text": message_content,
+                    "request_id": request_id,
+                    "success": True,
                     "metadata": serialize_for_celery(nyx_resp.metadata),
-                })
+                }
 
             except Exception as e:
-                logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-                return {"error": f"Server error processing message: {str(e)}"}
+                logger.error(f"[BG Task {conversation_id}] Critical Error in task execution: {str(e)}", exc_info=True)
+                # Prepare a structured error payload for publishing
+                full_response_payload = {
+                    "conversation_id": conversation_id,
+                    "request_id": request_id,
+                    "success": False,
+                    "error": f"I encountered an issue while processing your request. Please try again. (Details: {str(e)})",
+                }
+            
+            finally:
+                # 6) ALWAYS publish the result (success or failure) to the Redis channel
+                if full_response_payload and redis_publisher:
+                    channel = "chat-responses"
+                    try:
+                        payload_json = json.dumps(full_response_payload)
+                        redis_publisher.publish(channel, payload_json)
+                        logger.info(f"[BG Task {conversation_id}] Published result to '{channel}' for request_id={request_id}")
+                    except Exception as pub_err:
+                        logger.critical(f"[BG Task {conversation_id}] FAILED to publish result to Redis for request_id={request_id}. Error: {pub_err}", exc_info=True)
+                elif not redis_publisher:
+                    logger.critical("[BG Task] Redis publisher is not available. Cannot publish task result.")
 
-    return run_async_in_worker_loop(run_chat_task())
+    # Execute the async function within the Celery worker's event loop
+    return run_async_in_worker_loop(run_chat_and_publish())
 
 
 # === Memory embed/retrieval/analyze ============================================
