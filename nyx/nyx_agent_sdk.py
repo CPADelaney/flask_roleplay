@@ -1337,6 +1337,21 @@ class NyxAgentSDK:
             )
 
         if scene_id is not None or region_id is not None:
+            hint_payload: Dict[str, Any] = {"trace_id": trace_id}
+            if isinstance(scene_scope, dict):
+                scope_nation_ids = scene_scope.get("nation_ids")
+                normalized_nation_ids: List[int] = []
+                if isinstance(scope_nation_ids, (list, tuple, set)):
+                    for raw in scope_nation_ids:
+                        try:
+                            normalized = int(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        normalized_nation_ids.append(normalized)
+                elif isinstance(scope_nation_ids, int):
+                    normalized_nation_ids.append(scope_nation_ids)
+                if normalized_nation_ids:
+                    hint_payload["nation_ids"] = sorted(set(normalized_nation_ids))[:5]
             events.append(
                 LoreHint(
                     turn_id=turn_id,
@@ -1344,7 +1359,7 @@ class NyxAgentSDK:
                     conversation_id=conversation_key,
                     scene_id=str(scene_id) if scene_id is not None else None,
                     region_id=str(region_id) if region_id is not None else None,
-                    payload={"trace_id": trace_id},
+                    payload=hint_payload,
                 )
             )
 

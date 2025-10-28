@@ -105,6 +105,8 @@ from lore.core.canon import (
 
 logger = logging.getLogger(__name__)
 
+CULTURE_SUMMARY_PLACEHOLDER = "Culture summary pending refresh"
+
 # Database connection
 DB_DSN = os.getenv("DB_DSN")
 
@@ -3055,11 +3057,15 @@ class LoreOrchestrator:
                         COALESCE(id, nation_id)     AS id,
                         COALESCE(name, nation_name) AS name,
                         COALESCE(government_type, government) AS government_type,
-                        COALESCE(culture, lore_context) AS culture
+                        COALESCE(culture, lore_context) AS culture,
+                        culture_summary,
+                        culture_summary_updated_at
                     FROM Nations
                     WHERE COALESCE(id, nation_id) = ANY($1::int[])
                 """, nation_ids[:5])
-    
+
+                missing_summaries: List[int] = []
+
                 for r in rows:
                     nation_data = {
                         'id': r['id'],
@@ -3067,24 +3073,29 @@ class LoreOrchestrator:
                         'government': r['government_type'] or 'unknown',
                         'culture': r['culture'] or {}
                     }
+
+                    summary_value = (r.get('culture_summary') or '').strip()
+                    if summary_value:
+                        nation_data['culture_summary'] = summary_value
+                        updated_at = r.get('culture_summary_updated_at')
+                        if updated_at:
+                            nation_data['culture_summary_updated_at'] = (
+                                updated_at.isoformat() if hasattr(updated_at, 'isoformat') else updated_at
+                            )
+                    else:
+                        nation_data['culture_summary'] = CULTURE_SUMMARY_PLACEHOLDER
+                        missing_summaries.append(r['id'])
+
                     nations.append(nation_data)
-    
+
                     # Change tracking
                     if self._change_tracking_enabled:
                         scope_keys = self._get_affected_scope_keys('nation', r['id'], nation_data)
                         await self._track_element_change('nation', r['id'], nation_data, scope_keys)
-    
-            # Attach brief culture summary (non-blocking best-effort)
-            try:
-                for n in nations[:2]:  # only summarize first two to keep it light
-                    try:
-                        summary = await asyncio.wait_for(self.rc_summarize_culture(n['id'], format_type="brief"), timeout=1.2)
-                        n['culture_summary'] = summary
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            
+
+                if missing_summaries:
+                    self.metrics['culture_summaries_missing'] = len(missing_summaries)
+
             return nations
         except Exception as e:
             logger.debug(f"Could not fetch nations: {e}")
