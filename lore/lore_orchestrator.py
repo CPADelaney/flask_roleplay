@@ -103,12 +103,6 @@ from lore.core.canon import (
     ensure_embedding_columns,
 )
 
-from tasks import (
-    generate_and_cache_mpf_lore, 
-    lore_evolution_task, 
-    quick_setup_world_task
-)
-
 logger = logging.getLogger(__name__)
 
 # Database connection
@@ -735,6 +729,8 @@ class LoreOrchestrator:
         **USE THIS IN YOUR API/WEB HANDLERS.**
         """
         logger.info(f"Dispatching quick world setup task for conversation {self.conversation_id}")
+        from tasks import quick_setup_world_task
+
         quick_setup_world_task.delay(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -1779,6 +1775,8 @@ class LoreOrchestrator:
         Fetches pre-generated Matriarchal Power Framework lore from the cache table.
         If the lore is missing and not already being generated, it triggers a background task.
         """
+        from tasks import generate_and_cache_mpf_lore
+
         try:
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
@@ -1829,10 +1827,12 @@ class LoreOrchestrator:
         """
         Dispatches a background task to evolve the world with a narrative event.
         This method is lightweight and returns immediately.
-        
+
         **USE THIS IN YOUR API/WEB HANDLERS.**
         """
         logger.info(f"Dispatching lore evolution task for conversation {self.conversation_id}")
+        from tasks import lore_evolution_task
+
         lore_evolution_task.delay(
             user_id=self.user_id,
             conversation_id=self.conversation_id,

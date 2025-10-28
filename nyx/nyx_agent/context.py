@@ -38,7 +38,7 @@ import re
 import dataclasses
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Set, Tuple, Union
+from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING
 from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
@@ -218,12 +218,8 @@ from logic.conflict_system.conflict_synthesizer import (
     SystemEvent
 )
 
-# Import Lore Orchestrator
-from lore.lore_orchestrator import (
-    LoreOrchestrator,
-    OrchestratorConfig,
-    get_lore_orchestrator
-)
+if TYPE_CHECKING:
+    from lore.lore_orchestrator import LoreOrchestrator, OrchestratorConfig
 
 from .config import Config
 
@@ -2739,7 +2735,7 @@ class NyxContext:
     emotional_core: Optional[EmotionalCore] = None
     npc_orchestrator: Optional[NPCOrchestrator] = None
     conflict_synthesizer: Optional[ConflictSynthesizer] = None
-    lore_orchestrator: Optional[LoreOrchestrator] = None
+    lore_orchestrator: Optional["LoreOrchestrator"] = None
     world_director: Optional[Any] = None  # CompleteWorldDirector
     slice_of_life_narrator: Optional[Any] = None  # SliceOfLifeNarrator
     
@@ -3322,6 +3318,8 @@ class NyxContext:
     async def _init_lore_orchestrator(self):
         """Initialize lore orchestrator"""
         try:
+            from lore.lore_orchestrator import OrchestratorConfig, get_lore_orchestrator
+
             lore_config = OrchestratorConfig(
                 enable_governance=True,
                 enable_cache=True,
