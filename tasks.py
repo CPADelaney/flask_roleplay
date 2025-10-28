@@ -207,13 +207,21 @@ def background_chat_task_with_memory(
                 if universal_update:
                     logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
                     try:
-                        from logic.universal_updater import apply_universal_updates_async
+                        from logic.universal_updater_agent import (
+                            UniversalUpdaterContext,
+                            apply_universal_updates_async,
+                        )
+
+                        updater_context = UniversalUpdaterContext(user_id, conversation_id)
+                        await updater_context.initialize()
+
                         async with get_db_connection_context() as conn:
                             await apply_universal_updates_async(
-                                user_id,
-                                conversation_id,
-                                universal_update,
-                                conn
+                                updater_context,
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                updates=universal_update,
+                                conn=conn,
                             )
                         logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
                         # Refresh context after updates
@@ -2528,44 +2536,30 @@ def process_universal_updates_task(params):
                     }
 
                 # The actual implementation uses UniversalUpdaterContext
-                from logic.universal_updater_agent import UniversalUpdaterContext, apply_universal_updates_async
+                from logic.universal_updater_agent import (
+                    UniversalUpdaterContext,
+                    apply_universal_updates_async,
+                )
 
-                try:
-                    updater_context = UniversalUpdaterContext(user_id, conversation_id)
-                    await updater_context.initialize()
-                    
+                updater_context = UniversalUpdaterContext(user_id, conversation_id)
+                await updater_context.initialize()
+
+                async with get_db_connection_context() as conn:
                     await apply_universal_updates_async(
                         updater_context,
-                        user_id,
-                        conversation_id,
-                        updates_to_apply,
-                        None  # Connection will be created internally
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        updates=updates_to_apply,
+                        conn=conn,
                     )
-                    
-                    logger.info(f"Universal updates applied for conversation {conversation_id}")
-                    
-                    return {
-                        "status": "success",
-                        "conversation_id": conversation_id,
-                        "updates_applied": len(updates_to_apply)
-                    }
-                except ImportError:
-                    # Fallback to simpler updater if available
-                    from logic.universal_updater import apply_universal_updates_async
-                    
-                    async with get_db_connection_context() as conn:
-                        await apply_universal_updates_async(
-                            user_id,
-                            conversation_id,
-                            updates_to_apply,
-                            conn
-                        )
-                    
-                    return {
-                        "status": "success",
-                        "conversation_id": conversation_id,
-                        "updates_applied": len(updates_to_apply)
-                    }
+
+                logger.info(f"Universal updates applied for conversation {conversation_id}")
+
+                return {
+                    "status": "success",
+                    "conversation_id": conversation_id,
+                    "updates_applied": len(updates_to_apply)
+                }
                 
             except Exception as e:
                 logger.error(f"Universal update error: {e}", exc_info=True)
@@ -2700,13 +2694,21 @@ def world_update_universal_task(conversation_id: str, response: Dict[str, Any]):
         try:
             conv_id = int(conversation_id)
             user_id = await _get_user_id_for_conversation(conv_id)
-            from logic.universal_updater import apply_universal_updates_async
+            from logic.universal_updater_agent import (
+                UniversalUpdaterContext,
+                apply_universal_updates_async,
+            )
+
+            updater_context = UniversalUpdaterContext(user_id, conv_id)
+            await updater_context.initialize()
+
             async with get_db_connection_context() as conn:
                 await apply_universal_updates_async(
+                    updater_context,
                     user_id=user_id,
                     conversation_id=conv_id,
-                    universal_update=response,
-                    conn=conn
+                    updates=response,
+                    conn=conn,
                 )
             return {"ok": True, "conversation_id": conv_id}
         except Exception as e:
