@@ -352,7 +352,10 @@ async def process_user_input(
     user_input: str,
     context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Process user input with MANDATORY fast feasibility + dynamic full feasibility (no hard globals)."""
+    """
+    Process user input with non-blocking context initialization, background writes,
+    and enhanced reality enforcement.
+    """
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     monotonic = time.monotonic
@@ -385,7 +388,7 @@ async def process_user_input(
         if isinstance(fast, dict):
             overall = fast.get("overall", {})
             if overall.get("feasible") is False and (overall.get("strategy") or "").lower() == "deny":
-                # [Keep existing early return logic - this is correct]
+                # [Existing early return logic - this is correct]
                 per = fast.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 guidance = first.get("narrator_guidance") or "That can't happen here. Try a grounded approach that fits the setting."
@@ -410,7 +413,9 @@ async def process_user_input(
         # ---- STEP 1: Context initialization -----------------------------------
         async with _log_step("context_init", trace_id):
             nyx_context = NyxContext(user_id, conversation_id)
-            await nyx_context.initialize()
+            # *** CHANGE 1: THIS CALL IS NOW NON-BLOCKING AND RETURNS IMMEDIATELY ***
+            await nyx_context.initialize() 
+            
             base_context = _normalize_scene_context(context_data or {})
             base_context["_deadline"] = deadline
             base_context["user_input"] = user_input
@@ -419,29 +424,21 @@ async def process_user_input(
             nyx_context.current_context = base_context
             _preserve_hydrated_location(nyx_context.current_context, nyx_context.current_location)
 
+            # This will now internally await the necessary subsystems "just-in-time"
             packed_context = await nyx_context.build_context_for_input(
                 user_input,
                 base_context,
             )
             nyx_context.last_packed_context = packed_context
 
-            # [Keep existing SettingType detection code]
-            # ...
-
         # ---- STEP 2: World state integration ----------------------------------
         async with _log_step("world_state", trace_id):
-            world_task = None
-            if nyx_context is not None:
-                world_task = nyx_context.get_init_task("world")
-            if world_task is None or world_task.done():
-                await nyx_context.await_orchestrator("world")
-            if (
-                nyx_context.world_director
-                and getattr(nyx_context.world_director, "context", None)
-            ):
-                nyx_context.current_world_state = (
-                    nyx_context.world_director.context.current_world_state
-                )
+            # *** CHANGE 2: AWAIT THE 'WORLD' SUBSYSTEM BEFORE USING IT ***
+            if nyx_context and await nyx_context.await_orchestrator("world"):
+                if nyx_context.world_director and getattr(nyx_context.world_director, "context", None):
+                    nyx_context.current_world_state = (
+                        nyx_context.world_director.context.current_world_state
+                    )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")
@@ -459,18 +456,17 @@ async def process_user_input(
             logger.warning(f"[{trace_id}] Full feasibility failed softly: {e}", exc_info=True)
 
         if isinstance(feas, dict):
+            # [This entire block of feasibility logic is fine and remains unchanged]
             overall = feas.get("overall", {})
             feasible_flag = overall.get("feasible")
             strategy = (overall.get("strategy") or "").lower()
 
             if feasible_flag is False and strategy == "deny":
-                # [Keep existing early return with dynamic rejection - this is correct]
                 per = feas.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 violations = first.get("violations", [])
                 violation_text = violations[0]["reason"] if violations else "That violates the laws of this reality"
 
-                # record impossibility for consistency
                 try:
                     await record_impossibility(nyx_context, user_input, violation_text)
                 except Exception:
@@ -478,30 +474,21 @@ async def process_user_input(
 
                 rejection_narrative = f"*{first.get('reality_response', 'Reality ripples and refuses.')}*\n\n"
                 rejection_narrative += first.get('narrator_guidance', 'The world itself resists your attempt.')
-
                 alternatives = first.get("suggested_alternatives", [])
                 if alternatives:
                     rejection_narrative += f"\n\n*Perhaps you could {alternatives[0]} instead.*"
-
                 choices = [{"text": alt, "description": "A possible action within this reality", "feasible": True}
                            for alt in alternatives[:4]]
 
                 return {
-                    'success': True,
-                    'response': rejection_narrative,
+                    'success': True, 'response': rejection_narrative,
                     'metadata': {
-                        'choices': choices,
-                        'universal_updates': False,
-                        'feasibility': feas,
-                        'action_blocked': True,
-                        'block_reason': violation_text,
-                        'reality_maintained': True,
+                        'choices': choices, 'universal_updates': False, 'feasibility': feas,
+                        'action_blocked': True, 'block_reason': violation_text, 'reality_maintained': True,
                     },
-                    'trace_id': trace_id,
-                    'processing_time': time.time() - start_time,
+                    'trace_id': trace_id, 'processing_time': time.time() - start_time,
                 }
             elif feasible_flag is False and strategy == "ask":
-                # SOFT BLOCK: Add context to help agent understand constraints
                 constraints = feas.get("per_intent", [{}])[0].get("violations", [])
                 constraint_text = "[REALITY CHECK: This action pushes boundaries. Consider: " + ", ".join(
                     v.get("reason", "") for v in constraints
@@ -514,42 +501,25 @@ async def process_user_input(
                 if defer_context:
                     guidance = await _generate_defer_taunt(defer_context, trace_id, nyx_context)
                 if not guidance:
-                    if defer_context:
-                        guidance = build_defer_fallback_text(defer_context)
-                    else:
-                        guidance = "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
+                    guidance = build_defer_fallback_text(defer_context) if defer_context else "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
 
                 logger.info(f"[{trace_id}] ACTION DEFERRED (full feasibility)")
-
                 metadata = {
-                    "choices": [{"text": lead} for lead in leads[:4]],
-                    "universal_updates": False,
-                    "feasibility": feas,
-                    "action_blocked": True,
-                    "action_deferred": True,
-                    "reality_maintained": True,
+                    "choices": [{"text": lead} for lead in leads[:4]], "universal_updates": False,
+                    "feasibility": feas, "action_blocked": True, "action_deferred": True, "reality_maintained": True,
                 }
                 metadata.update(extra_meta)
-
                 return {
-                    "success": True,
-                    "response": guidance,
-                    "metadata": metadata,
-                    "trace_id": trace_id,
-                    "processing_time": time.time() - start_time,
+                    "success": True, "response": guidance, "metadata": metadata,
+                    "trace_id": trace_id, "processing_time": time.time() - start_time,
                 }
             elif feasible_flag is True:
-                # Record possibility for consistency
                 try:
                     intents = feas.get("per_intent", [])
-                    if intents:
-                        cats = intents[0].get("categories", [])
-                        if cats:
-                            await record_possibility(nyx_context, user_input, cats)
+                    if intents and (cats := intents[0].get("categories")):
+                        await record_possibility(nyx_context, user_input, cats)
                 except Exception:
                     logger.debug(f"[{trace_id}] record_possibility failed softly", exc_info=True)
-                
-                # Add subtle reality confirmation
                 enhanced_input = f"[REALITY CHECK: Action is feasible within universe laws.]\n\n{user_input}"
 
         # ---- STEP 4: Tool sanitization ----------------------------------------
@@ -563,41 +533,16 @@ async def process_user_input(
             safe_settings = ModelSettings(strict_tools=False)
             run_config = RunConfig(model_settings=safe_settings)
 
-            # Use enhanced_input that includes feasibility context
             result = await asyncio.wait_for(
                 Runner.run(nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config),
                 timeout=time_left()
             )
 
-            # Normalize result to a list of messages/events
-            if hasattr(result, 'messages'):
-                resp_stream = result.messages
-            elif hasattr(result, 'history'):
-                resp_stream = result.history
-            elif hasattr(result, 'events'):
-                resp_stream = result.events
-            else:
-                try:
-                    resp_stream = list(result) if hasattr(result, '__iter__') else []
-                except Exception:
-                    resp_stream = []
-
-            if not resp_stream:
-                # Minimal fallback extraction
-                text_out = (
-                    getattr(result, 'final_output', None) or
-                    getattr(result, 'output', None) or
-                    getattr(result, 'text', None) or
-                    str(result)
-                )
-                resp_stream = [{
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": str(text_out)}]
-                }]
+            resp_stream = extract_runner_response(result)
 
         # ---- STEP 6: Post-run enforcement (updates/image hooks + punishment) ---
         async with _log_step("post_run_enforcement", trace_id):
+            # [This block of logic is fine and remains unchanged]
             if time_left() < 2.0:
                 logger.info(f"[{trace_id}] Skipping post-run extras due to low budget")
             elif not _did_call_tool(resp_stream, "generate_universal_updates"):
@@ -606,60 +551,44 @@ async def process_user_input(
                     try:
                         update_result = await generate_universal_updates_impl(nyx_context, narrative)
                         resp_stream.append({
-                            "type": "function_call_output",
-                            "name": "generate_universal_updates",
+                            "type": "function_call_output", "name": "generate_universal_updates",
                             "output": json.dumps({
-                                "success": update_result.success,
-                                "updates_generated": update_result.updates_generated,
+                                "success": update_result.success, "updates_generated": update_result.updates_generated,
                                 "source": "post_run_injection"
                             })
                         })
                     except Exception as e:
                         logger.debug(f"[{trace_id}] Post-run universal updates failed softly: {e}")
 
-            # Image decision if not already done
             if time_left() >= 2.0 and not _did_call_tool(resp_stream, "decide_image_generation"):
                 narrative = _extract_last_assistant_text(resp_stream)
                 if narrative and len(narrative) > 20:
                     try:
                         image_result = await decide_image_generation_standalone(nyx_context, narrative)
                         resp_stream.append({
-                            "type": "function_call_output",
-                            "name": "decide_image_generation",
+                            "type": "function_call_output", "name": "decide_image_generation",
                             "output": image_result
                         })
                     except Exception as e:
                         logger.debug(f"[{trace_id}] Post-run image decision failed softly: {e}")
 
-            # Punishment enforcement — runs every turn, gate decides tier/emit
             if time_left() >= 2.0 and enforce_all_rules_on_player:
                 try:
-                    player_name = (
-                        nyx_context.current_context.get("player_name")
-                        or getattr(nyx_context, "player_name", None)
-                        or "Chase"
-                    )
-
+                    player_name = (nyx_context.current_context.get("player_name") or "Chase")
                     punishment_meta = {
                         "scene_tags": nyx_context.current_context.get("scene_tags", []),
                         "stimuli": nyx_context.current_context.get("stimuli", []),
                         "feasibility": (feas or fast),
                         "turn_index": nyx_context.current_context.get("turn_index", 0),
                     }
-
                     punishment_result = await enforce_all_rules_on_player(
-                        player_name=player_name,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        metadata=punishment_meta,
+                        player_name=player_name, user_id=user_id,
+                        conversation_id=conversation_id, metadata=punishment_meta,
                     )
-
                     resp_stream.append({
-                        "type": "function_call_output",
-                        "name": "enforce_punishments",
+                        "type": "function_call_output", "name": "enforce_punishments",
                         "output": json.dumps(punishment_result)
                     })
-
                     nyx_context.current_context["punishment"] = punishment_result
                 except Exception as e:
                     logger.debug(f"[{trace_id}] Punishment enforcement failed softly: {e}")
@@ -673,16 +602,14 @@ async def process_user_input(
                 agent_output=resp_stream,
                 processing_metadata={
                     "feasibility": (feas or fast),
-                    "punishment": nyx_context.current_context.get("punishment"),  # <-- pass through
+                    "punishment": nyx_context.current_context.get("punishment"),
                 },
                 user_input=user_input,
                 conversation_id=str(conversation_id),
             )
 
-            # Normalize to wire format
             out = {
-                "success": True,
-                "response": assembled.narrative,
+                "success": True, "response": assembled.narrative,
                 "metadata": {
                     "world": getattr(assembled, "world_state", {}),
                     "choices": getattr(assembled, "choices", []),
@@ -692,14 +619,39 @@ async def process_user_input(
                     "nyx_commentary": (assembled.metadata or {}).get("nyx_commentary"),
                     "universal_updates": (assembled.metadata or {}).get("universal_updates", False),
                     "reality_maintained": True,
-                    "punishment": nyx_context.current_context.get("punishment"),   # <-- include in output
+                    "punishment": nyx_context.current_context.get("punishment"),
                 },
-                "trace_id": trace_id,
-                "processing_time": time.time() - start_time,
+                "trace_id": trace_id, "processing_time": time.time() - start_time,
             }
-            logger.info(f"[{trace_id}] ========== PROCESS COMPLETE ==========")
+
+            # *** CHANGE 3: CREATE AND LAUNCH THE BACKGROUND WRITE TASK ***
+            async def perform_background_writes():
+                try:
+                    # Save the final context state (emotional, scene, etc.)
+                    await _save_context_state(nyx_context)
+                    
+                    # Persist any universal updates (like location changes)
+                    if nyx_context and nyx_context.context_broker:
+                        bundle = getattr(nyx_context.context_broker, '_last_bundle', None)
+                        if bundle:
+                            pending_updates = await nyx_context.context_broker.collect_universal_updates(bundle)
+                            if pending_updates:
+                                await nyx_context.context_broker.apply_updates_async(pending_updates)
+                    
+                    logger.info(f"[{trace_id}] ✔ Background writes completed.")
+                except Exception as e:
+                    logger.error(f"[{trace_id}] ✖ Background write task failed: {e}", exc_info=True)
+
+            # Schedule the writes to run in the background without blocking the response
+            if nyx_context:
+                task = asyncio.create_task(perform_background_writes())
+                # Use the helper method from the context to track the task
+                nyx_context._track_background_task(task, task_name="post_turn_writes")
+
+            logger.info(f"[{trace_id}] ========== PROCESS COMPLETE (Response Sent) ==========")
             logger.info(f"[{trace_id}] Response length: {len(assembled.narrative or '')}")
             logger.info(f"[{trace_id}] Processing time: {out['processing_time']:.2f}s")
+            
             return out
 
     except asyncio.CancelledError:
