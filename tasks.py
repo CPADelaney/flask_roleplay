@@ -34,6 +34,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
+from lore.systems.regional_culture import RegionalCultureSystem
 
 # --- Core NyxBrain + checkpointing ---
 from nyx.core.brain.base import NyxBrain
@@ -65,6 +66,23 @@ try:
 except Exception as e:
     logger.critical(f"CRITICAL: Celery worker could not connect to Redis publisher at {REDIS_URL}. Tasks that publish results will fail. Error: {e}")
     redis_publisher = None
+
+
+CONFLICT_CACHE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS CulturalConflictAnalysisCache (
+    nation1_id INTEGER NOT NULL,
+    nation2_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    summary JSONB,
+    last_error TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (nation1_id, nation2_id)
+);
+"""
+
+CONFLICT_CACHE_STALE_AFTER = datetime.timedelta(hours=6)
+CONFLICT_CACHE_PENDING_RETRY_AFTER = datetime.timedelta(minutes=15)
+CONFLICT_CACHE_FAILURE_RETRY_AFTER = datetime.timedelta(hours=1)
 
 
 def set_app_initialized():
@@ -111,6 +129,215 @@ def serialize_for_celery(obj: Any) -> Any:
 def get_preset_id(d: Dict[str, Any]) -> Optional[str]:
     """Extract preset story ID from various possible keys."""
     return d.get("preset_story_id") or d.get("story_id") or d.get("presetStoryId")
+
+
+def _normalize_nation_pair(nation1_id: int, nation2_id: int) -> Tuple[int, int]:
+    n1, n2 = int(nation1_id), int(nation2_id)
+    return (n1, n2) if n1 <= n2 else (n2, n1)
+
+
+async def _ensure_conflict_cache_table() -> None:
+    async with get_db_connection_context() as conn:
+        await conn.execute(CONFLICT_CACHE_TABLE_SQL)
+
+
+async def _get_conflict_cache_row(n1: int, n2: int) -> Optional[asyncpg.Record]:
+    async with get_db_connection_context() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT status, summary, last_error, updated_at
+            FROM CulturalConflictAnalysisCache
+            WHERE nation1_id = $1 AND nation2_id = $2
+            """,
+            n1,
+            n2,
+        )
+
+
+async def _set_conflict_cache_pending(n1: int, n2: int) -> None:
+    async with get_db_connection_context() as conn:
+        await conn.execute(
+            """
+            INSERT INTO CulturalConflictAnalysisCache (nation1_id, nation2_id, status, updated_at, last_error)
+            VALUES ($1, $2, 'pending', NOW(), NULL)
+            ON CONFLICT (nation1_id, nation2_id)
+            DO UPDATE SET status = 'pending', updated_at = NOW(), last_error = NULL
+            """,
+            n1,
+            n2,
+        )
+
+
+async def _update_conflict_cache(
+    n1: int,
+    n2: int,
+    status: str,
+    summary_json: Optional[str],
+    error: Optional[str],
+) -> None:
+    async with get_db_connection_context() as conn:
+        await conn.execute(
+            """
+            UPDATE CulturalConflictAnalysisCache
+               SET status = $3,
+                   summary = $4::jsonb,
+                   last_error = $5,
+                   updated_at = NOW()
+             WHERE nation1_id = $1 AND nation2_id = $2
+            """,
+            n1,
+            n2,
+            status,
+            summary_json,
+            error,
+        )
+
+
+async def _refresh_conflict_pair(
+    rcs: RegionalCultureSystem,
+    nation1_id: int,
+    nation2_id: int,
+    force: bool = False,
+) -> Dict[str, Any]:
+    await _ensure_conflict_cache_table()
+    n1, n2 = _normalize_nation_pair(nation1_id, nation2_id)
+
+    existing = await _get_conflict_cache_row(n1, n2)
+    now = datetime.datetime.utcnow()
+
+    if existing and not force:
+        updated_at = existing.get("updated_at") if existing else None
+        status = existing.get("status") if existing else None
+
+        if status == "ready" and updated_at and updated_at > now - CONFLICT_CACHE_STALE_AFTER:
+            return {"nation1_id": n1, "nation2_id": n2, "status": "skipped", "reason": "fresh"}
+        if status == "pending" and updated_at and updated_at > now - CONFLICT_CACHE_PENDING_RETRY_AFTER:
+            return {"nation1_id": n1, "nation2_id": n2, "status": "skipped", "reason": "recently_pending"}
+        if status == "failed" and updated_at and updated_at > now - CONFLICT_CACHE_FAILURE_RETRY_AFTER:
+            return {"nation1_id": n1, "nation2_id": n2, "status": "skipped", "reason": "recent_failure"}
+
+    await _set_conflict_cache_pending(n1, n2)
+
+    try:
+        analysis = await rcs.detect_cultural_conflicts(n1, n2)
+    except Exception as exc:
+        logger.exception(
+            "Error computing cultural conflict analysis for nations %s and %s", n1, n2
+        )
+        await _update_conflict_cache(n1, n2, "failed", None, str(exc))
+        return {
+            "nation1_id": n1,
+            "nation2_id": n2,
+            "status": "failed",
+            "error": str(exc),
+        }
+
+    if not analysis or not isinstance(analysis, dict):
+        await _update_conflict_cache(n1, n2, "failed", None, "Unknown error")
+        return {
+            "nation1_id": n1,
+            "nation2_id": n2,
+            "status": "failed",
+            "error": "Unknown error",
+        }
+
+    if analysis.get("error"):
+        error_msg = analysis.get("error")
+        await _update_conflict_cache(n1, n2, "failed", None, error_msg)
+        return {
+            "nation1_id": n1,
+            "nation2_id": n2,
+            "status": "failed",
+            "error": error_msg,
+        }
+
+    summary_json = json.dumps(analysis)
+    await _update_conflict_cache(n1, n2, "ready", summary_json, None)
+    return {
+        "nation1_id": n1,
+        "nation2_id": n2,
+        "status": "ready",
+        "severity": analysis.get("severity_level"),
+    }
+
+
+async def _gather_conflict_pairs(limit: int) -> List[Tuple[int, int]]:
+    await _ensure_conflict_cache_table()
+    async with get_db_connection_context() as conn:
+        try:
+            rows = await conn.fetch(
+                """
+                WITH pairs AS (
+                    SELECT LEAST(nation1_id, nation2_id) AS n1,
+                           GREATEST(nation1_id, nation2_id) AS n2
+                      FROM InternationalRelations
+                     WHERE nation1_id IS NOT NULL AND nation2_id IS NOT NULL
+                )
+                SELECT DISTINCT p.n1 AS nation1_id,
+                                p.n2 AS nation2_id,
+                                cca.status,
+                                cca.updated_at
+                  FROM pairs p
+             LEFT JOIN CulturalConflictAnalysisCache cca
+                    ON cca.nation1_id = p.n1 AND cca.nation2_id = p.n2
+                 WHERE cca.updated_at IS NULL
+                    OR cca.status IN ('pending', 'failed')
+                    OR cca.updated_at < NOW() - INTERVAL '6 hours'
+                 LIMIT $1
+                """,
+                limit,
+            )
+        except asyncpg.exceptions.UndefinedTableError:
+            return []
+    return [(_normalize_nation_pair(r["nation1_id"], r["nation2_id"])) for r in rows]
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=300)
+def refresh_cultural_conflict_cache(
+    self,
+    nation1_id: int,
+    nation2_id: int,
+    force: bool = False,
+):
+    """Compute and cache cultural conflict analysis for a nation pair."""
+
+    async def _run() -> Dict[str, Any]:
+        if not await is_app_initialized():
+            return {"status": "deferred"}
+
+        rcs = RegionalCultureSystem(user_id=0, conversation_id=0)
+        await rcs.ensure_initialized()
+        return await _refresh_conflict_pair(rcs, nation1_id, nation2_id, force=force)
+
+    return run_async_in_worker_loop(_run())
+
+
+@shared_task(bind=True, max_retries=1, default_retry_delay=900)
+def refresh_all_cultural_conflict_caches(
+    self,
+    limit: int = 10,
+    force: bool = False,
+):
+    """Refresh cultural conflict caches for active nation pairs."""
+
+    async def _run() -> Dict[str, Any]:
+        if not await is_app_initialized():
+            return {"status": "deferred"}
+
+        pairs = await _gather_conflict_pairs(limit)
+        if not pairs:
+            return {"status": "noop", "processed": 0}
+
+        rcs = RegionalCultureSystem(user_id=0, conversation_id=0)
+        await rcs.ensure_initialized()
+
+        results = []
+        for n1, n2 in pairs:
+            results.append(await _refresh_conflict_pair(rcs, n1, n2, force=force))
+
+        return {"status": "completed", "processed": len(results), "details": results}
+
+    return run_async_in_worker_loop(_run())
 
 
 # === Nyx SDK lazy singleton ====================================================

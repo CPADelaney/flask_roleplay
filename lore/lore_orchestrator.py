@@ -106,6 +106,9 @@ from lore.core.canon import (
 logger = logging.getLogger(__name__)
 
 CULTURE_SUMMARY_PLACEHOLDER = "Culture summary pending refresh"
+CONFLICT_ANALYSIS_STALE_AFTER = timedelta(hours=6)
+CONFLICT_ANALYSIS_PENDING_REFRESH_AFTER = timedelta(minutes=15)
+CONFLICT_ANALYSIS_FAILURE_REFRESH_AFTER = timedelta(hours=1)
 
 # Database connection
 DB_DSN = os.getenv("DB_DSN")
@@ -1619,7 +1622,8 @@ class LoreOrchestrator:
         """Enhanced cultural data fetching for scene bundles."""
         try:
             data = {'languages': [], 'norms': [], 'etiquette': [], 'customs': [], 'dialects': [], 'exchanges': []}
-    
+            trigger_refresh = False
+
             async with get_db_connection_context() as conn:
                 # Your original efficient queries - keep these!
                 # Languages linked to nation_ids (primary or minority)
@@ -1809,9 +1813,10 @@ class LoreOrchestrator:
                 # Cultural conflict detection (if multiple nations)
                 if len(nation_ids) >= 2:
                     # Quick conflict check using direct SQL
+                    primary_pair = nation_ids[:2]
                     conflict_check = await conn.fetchrow("""
                         WITH norm_conflicts AS (
-                            SELECT 
+                            SELECT
                                 cn1.category,
                                 cn1.description as norm1,
                                 cn2.description as norm2,
@@ -1820,7 +1825,7 @@ class LoreOrchestrator:
                                 cn2.nation_id as nation2_id
                             FROM CulturalNorms cn1
                             CROSS JOIN CulturalNorms cn2
-                            WHERE cn1.nation_id = $1 
+                            WHERE cn1.nation_id = $1
                               AND cn2.nation_id = $2
                               AND cn1.category = cn2.category
                               AND ABS(cn1.taboo_level - cn2.taboo_level) > 5
@@ -1828,29 +1833,92 @@ class LoreOrchestrator:
                         SELECT COUNT(*) as conflict_count,
                                MAX(taboo_diff) as max_difference
                         FROM norm_conflicts
-                    """, nation_ids[0], nation_ids[1])
-                    
+                    """, primary_pair[0], primary_pair[1])
+
                     if conflict_check and conflict_check['conflict_count'] > 0:
                         data['conflict_indicators'] = {
                             'norm_conflicts': conflict_check['conflict_count'],
                             'max_taboo_difference': conflict_check['max_difference'],
                             'risk_level': 'high' if conflict_check['max_difference'] > 7 else 'medium'
                         }
-    
-            # Get RegionalCultureSystem for advanced analysis only if needed
-            if len(nation_ids) >= 2 and not data.get('conflict_indicators'):
+
+                    # Attempt to include cached conflict summaries
+                    sorted_pair = sorted(primary_pair)
+                    cache_status: Optional[str] = None
+                    trigger_refresh = False
+                    try:
+                        conflict_cache = await conn.fetchrow(
+                            """
+                            SELECT status, summary, last_error, updated_at
+                            FROM CulturalConflictAnalysisCache
+                            WHERE nation1_id = $1 AND nation2_id = $2
+                            """,
+                            sorted_pair[0], sorted_pair[1]
+                        )
+                    except asyncpg.exceptions.UndefinedTableError:
+                        conflict_cache = None
+                        trigger_refresh = True
+
+                    now = datetime.utcnow()
+
+                    if conflict_cache:
+                        cache_status = conflict_cache['status']
+                        updated_at = conflict_cache.get('updated_at')
+                        updated_at_dt = updated_at if isinstance(updated_at, datetime) else None
+
+                        if cache_status == 'ready' and conflict_cache.get('summary'):
+                            summary_payload = conflict_cache['summary']
+                            if isinstance(summary_payload, str):
+                                try:
+                                    summary_payload = json.loads(summary_payload)
+                                except json.JSONDecodeError:
+                                    summary_payload = None
+                                    cache_status = 'failed'
+
+                            if isinstance(summary_payload, dict):
+                                data['conflict_summary'] = summary_payload
+                                data['detailed_conflicts'] = summary_payload.get('potential_conflicts', [])[:3]
+                                data['conflict_analysis'] = {
+                                    'severity': summary_payload.get('severity_level'),
+                                    'recommendations': summary_payload.get('recommendations')
+                                }
+
+                        if cache_status == 'failed' and conflict_cache.get('last_error'):
+                            data['conflict_analysis_error'] = conflict_cache['last_error']
+
+                        if updated_at_dt is not None:
+                            if cache_status == 'ready' and updated_at_dt < now - CONFLICT_ANALYSIS_STALE_AFTER:
+                                trigger_refresh = True
+                            elif cache_status == 'pending' and updated_at_dt < now - CONFLICT_ANALYSIS_PENDING_REFRESH_AFTER:
+                                trigger_refresh = True
+                            elif cache_status == 'failed' and updated_at_dt < now - CONFLICT_ANALYSIS_FAILURE_REFRESH_AFTER:
+                                trigger_refresh = True
+                        else:
+                            trigger_refresh = True
+                    else:
+                        cache_status = 'pending'
+                        trigger_refresh = True
+
+                    data['conflict_analysis_status'] = cache_status or 'pending'
+
+                    if 'conflict_summary' not in data:
+                        data['conflict_summary'] = CULTURE_SUMMARY_PLACEHOLDER
+
+            if len(nation_ids) >= 2:
+                sorted_pair = sorted(nation_ids[:2])
                 try:
-                    rcs = await self._get_regional_culture_system()
-                    conflict_analysis = await rcs.detect_cultural_conflicts(
-                        nation_ids[0], nation_ids[1]
-                    )
-                    if conflict_analysis and "error" not in conflict_analysis:
-                        data['detailed_conflicts'] = conflict_analysis.get('potential_conflicts', [])[:3]
-                except Exception as e:
-                    logger.debug(f"Could not perform detailed conflict analysis: {e}")
-    
+                    from tasks import refresh_cultural_conflict_cache
+                except Exception:
+                    refresh_cultural_conflict_cache = None
+
+                if refresh_cultural_conflict_cache and trigger_refresh:
+                    try:
+                        refresh_cultural_conflict_cache.delay(sorted_pair[0], sorted_pair[1])
+                    except Exception as exc:
+                        logger.debug(f"Failed to enqueue cultural conflict refresh: {exc}")
+
             return data
-            
+
         except Exception as e:
             logger.debug(f"Could not fetch cultural data: {e}")
             return {'languages': [], 'norms': [], 'etiquette': [], 'customs': [], 

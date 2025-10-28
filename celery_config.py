@@ -99,6 +99,8 @@ task_routes = {
     'tasks.background_chat_task_with_memory': {'queue': 'background'},
     'tasks.generate_lore_background_task': {'queue': 'background'},
     'tasks.generate_initial_conflict_task': {'queue': 'background'},
+    'tasks.refresh_cultural_conflict_cache': {'queue': 'heavy'},
+    'tasks.refresh_all_cultural_conflict_caches': {'queue': 'heavy'},
 
     'tasks.generate_and_cache_mpf_lore': {'queue': 'heavy'}, # LLM-intensive
     'tasks.lore_evolution_task': {'queue': 'heavy'},         # LLM-intensive
@@ -224,6 +226,12 @@ celery_app.conf.beat_schedule = {
     'npc-learning-cycle-every-15-mins': {
         'task': 'tasks.run_npc_learning_cycle_task',
         'schedule': crontab(minute='*/15'),
+    },
+
+    'refresh-cultural-conflicts-every-30-mins': {
+        'task': 'tasks.refresh_all_cultural_conflict_caches',
+        'schedule': crontab(minute='*/30'),
+        'options': {'queue': 'heavy'}
     },
 
     ## NEW ##: Add the periodic maintenance schedule for the conflict system
