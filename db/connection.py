@@ -19,6 +19,8 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, Set, List
 
+import psycopg2
+
 from quart import Quart
 import pgvector.asyncpg as pgvector_asyncpg
 
@@ -202,6 +204,15 @@ def get_db_dsn() -> str:
         raise EnvironmentError("Neither DB_DSN nor DATABASE_URL environment variables are set.")
     
     return dsn
+
+
+def get_db_connection_sync():
+    """Return a synchronous psycopg2 connection using the configured DSN."""
+
+    dsn = get_db_dsn()
+    conn = psycopg2.connect(dsn)
+    conn.autocommit = False
+    return conn
 
 
 def get_pool_config() -> Dict[str, int]:
@@ -925,6 +936,7 @@ __all__ = [
     'initialize_connection_pool',
     'get_db_connection_pool',
     'get_db_connection_context',
+    'get_db_connection_sync',
     'close_connection_pool',
     'check_pool_health',
     'setup_connection',

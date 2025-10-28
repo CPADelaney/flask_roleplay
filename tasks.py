@@ -12,6 +12,7 @@ import redis
 import time
 import traceback
 import re
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from celery_config import celery_app
@@ -21,7 +22,11 @@ from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
 
 # --- DB utils (async loop + connection mgmt) ---
-from db.connection import get_db_connection_context, run_async_in_worker_loop
+from db.connection import (
+    get_db_connection_context,
+    get_db_connection_sync,
+    run_async_in_worker_loop,
+)
 from utils.conversation_history import fetch_recent_turns
 
 # --- LLM + NPC + memory integration (unchanged external modules) ---
@@ -36,6 +41,8 @@ from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
 # --- New scene-scoped SDK (lazy singleton) ---
 from nyx.nyx_agent_sdk import NyxAgentSDK, NyxSDKConfig
+
+from psycopg2 import errors as psycopg2_errors
 
 logger = logging.getLogger(__name__)
 
@@ -1825,54 +1832,120 @@ def cleanup_old_performance_data_task():
     return run_async_in_worker_loop(run_cleanup())
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def generate_and_cache_mpf_lore(self, user_id: int, conversation_id: int):
-    """
-    Generate and cache Matriarchal Power Framework lore.
-    Runs in a Celery worker; async work is wrapped via asyncio.run().
-    """
-    def _store_status_sync(status: str, principles=None, expressions=None, constraints=None, last_error=None):
+def generate_and_cache_mpf_lore(
+    self,
+    user_id: int,
+    conversation_id: int,
+    foundation_data: Optional[Dict[str, Any]] = None,
+):
+    """Generate and cache Matriarchal Power Framework lore and transforms."""
+
+    def _store_status_sync(
+        status: str,
+        principles=None,
+        expressions=None,
+        constraints=None,
+        last_error=None,
+        transformed_fields: Optional[Dict[str, Any]] = None,
+    ) -> None:
         conn = get_db_connection_sync()
         try:
             with conn.cursor() as cur:
-                if status in ("complete", "partial"):
-                    cur.execute(
-                        """
-                        INSERT INTO MatriarchalLoreCache
-                          (user_id, conversation_id, principles, expressions, constraints, generation_status, last_updated)
-                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                        ON CONFLICT (user_id, conversation_id) DO UPDATE SET
-                          principles = EXCLUDED.principles,
-                          expressions = EXCLUDED.expressions,
-                          constraints = EXCLUDED.constraints,
-                          generation_status = EXCLUDED.generation_status,
-                          last_updated = NOW();
-                        """,
-                        (
-                            user_id,
-                            conversation_id,
-                            json.dumps(principles) if principles is not None else None,
-                            json.dumps(expressions) if expressions is not None else None,
-                            json.dumps(constraints) if constraints is not None else None,
-                            status,
-                        ),
-                    )
-                else:
-                    # failed / retrying path (record last_error if you have a column for it)
-                    cur.execute(
-                        """
-                        UPDATE MatriarchalLoreCache
-                           SET generation_status = %s,
-                               last_updated = NOW()
-                         WHERE user_id = %s AND conversation_id = %s;
-                        """,
-                        (status, user_id, conversation_id),
-                    )
+                json_principles = json.dumps(principles) if principles is not None else None
+                json_expressions = json.dumps(expressions) if expressions is not None else None
+                json_constraints = json.dumps(constraints) if constraints is not None else None
+                json_transforms = (
+                    json.dumps(transformed_fields) if transformed_fields is not None else None
+                )
+
+                def _execute_insert(include_transforms: bool) -> None:
+                    if include_transforms:
+                        cur.execute(
+                            """
+                            INSERT INTO MatriarchalLoreCache
+                              (user_id, conversation_id, principles, expressions, constraints, transformed_fields, generation_status, last_updated)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (user_id, conversation_id) DO UPDATE SET
+                              principles = EXCLUDED.principles,
+                              expressions = EXCLUDED.expressions,
+                              constraints = EXCLUDED.constraints,
+                              transformed_fields = EXCLUDED.transformed_fields,
+                              generation_status = EXCLUDED.generation_status,
+                              last_updated = NOW();
+                            """,
+                            (
+                                user_id,
+                                conversation_id,
+                                json_principles,
+                                json_expressions,
+                                json_constraints,
+                                json_transforms,
+                                status,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO MatriarchalLoreCache
+                              (user_id, conversation_id, principles, expressions, constraints, generation_status, last_updated)
+                            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (user_id, conversation_id) DO UPDATE SET
+                              principles = EXCLUDED.principles,
+                              expressions = EXCLUDED.expressions,
+                              constraints = EXCLUDED.constraints,
+                              generation_status = EXCLUDED.generation_status,
+                              last_updated = NOW();
+                            """,
+                            (
+                                user_id,
+                                conversation_id,
+                                json_principles,
+                                json_expressions,
+                                json_constraints,
+                                status,
+                            ),
+                        )
+
+                def _execute_status_update(include_transforms: bool) -> None:
+                    if include_transforms:
+                        cur.execute(
+                            """
+                            UPDATE MatriarchalLoreCache
+                               SET generation_status = %s,
+                                   transformed_fields = %s,
+                                   last_updated = NOW()
+                             WHERE user_id = %s AND conversation_id = %s;
+                            """,
+                            (status, json_transforms, user_id, conversation_id),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            UPDATE MatriarchalLoreCache
+                               SET generation_status = %s,
+                                   last_updated = NOW()
+                             WHERE user_id = %s AND conversation_id = %s;
+                            """,
+                            (status, user_id, conversation_id),
+                        )
+
+                try:
+                    if status in ("complete", "partial"):
+                        _execute_insert(include_transforms=True)
+                    else:
+                        _execute_status_update(include_transforms=True)
+                except psycopg2_errors.UndefinedColumn:
+                    if status in ("complete", "partial"):
+                        _execute_insert(include_transforms=False)
+                    else:
+                        _execute_status_update(include_transforms=False)
             conn.commit()
         finally:
             conn.close()
 
     async def _generate_async():
         from lore.lore_orchestrator import get_lore_orchestrator
+
         orchestrator = await get_lore_orchestrator(user_id, conversation_id)
         core_principles, power_expressions, hierarchical_constraints = await asyncio.gather(
             orchestrator.mpf_generate_core_principles(),
@@ -1881,7 +1954,28 @@ def generate_and_cache_mpf_lore(self, user_id: int, conversation_id: int):
             return_exceptions=True,
         )
 
-        def _ok(x): return not isinstance(x, Exception) and x is not None
+        transformed_fields: Optional[Dict[str, Any]] = None
+        if foundation_data:
+            try:
+                transformed_payload = await orchestrator.mpf_apply_power_lens(foundation_data)
+            except Exception as exc:  # pragma: no cover - defensive log only
+                logger.error("MPF lens transformation failed: %s", exc)
+            else:
+                if isinstance(transformed_payload, dict):
+                    transformed_fields = {}
+                    for key, original in foundation_data.items():
+                        if not isinstance(original, str) or not original.strip():
+                            continue
+                        new_value = transformed_payload.get(key)
+                        if not isinstance(new_value, str) or not new_value.strip():
+                            continue
+                        transformed_fields[key] = {
+                            "transformed": new_value,
+                            "source_hash": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+                        }
+
+        def _ok(x):
+            return not isinstance(x, Exception) and x is not None
 
         if isinstance(core_principles, Exception):
             logger.error("MPF core principles failed: %s", core_principles)
@@ -1901,28 +1995,34 @@ def generate_and_cache_mpf_lore(self, user_id: int, conversation_id: int):
         else:
             cons = hierarchical_constraints.dict() if _ok(hierarchical_constraints) else None
 
-        return core, exprs, cons
+        return core, exprs, cons, transformed_fields
 
     logger.info("Starting MPF lore generation for user=%s convo=%s", user_id, conversation_id)
 
     try:
-        principles, expressions, constraints = asyncio.run(_generate_async())
+        principles, expressions, constraints, transformed_fields = asyncio.run(_generate_async())
 
         if not principles and not expressions and not constraints:
-            _store_status_sync("retrying")
+            _store_status_sync("retrying", transformed_fields=transformed_fields)
             raise self.retry(exc=RuntimeError("All MPF sub-tasks failed"))
 
         status = "complete" if all([principles, expressions, constraints]) else "partial"
-        _store_status_sync(status, principles, expressions, constraints)
+        _store_status_sync(
+            status,
+            principles,
+            expressions,
+            constraints,
+            transformed_fields=transformed_fields,
+        )
         logger.info("Cached MPF lore (%s) for user=%s convo=%s", status, user_id, conversation_id)
 
     except Retry:
-        # Handed back to Celery scheduler; we've already written 'retrying'.
         raise
     except Exception as exc:
-        logger.exception("MPF lore generation failed for user=%s convo=%s", user_id, conversation_id)
-        _store_status_sync("failed")
-        # Retry if allowed; otherwise the exception marks task failure.
+        logger.exception(
+            "MPF lore generation failed for user=%s convo=%s", user_id, conversation_id
+        )
+        _store_status_sync("failed", transformed_fields=None)
         raise self.retry(exc=exc) if self.request.retries < self.max_retries else exc
 
 
