@@ -820,6 +820,57 @@ def test_location_refresh_uses_aggregator_current_roleplay():
     assert snapshot["scene_id"] == "Sunspire Plaza"
 
 
+def test_build_context_for_input_schedules_persist(monkeypatch):
+    from nyx.nyx_agent import context as context_module
+
+    context = context_module.NyxContext(user_id=501, conversation_id=502)
+    broker = _StubContextBroker(context)
+    context.context_broker = broker
+
+    start_event = asyncio.Event()
+    release_event = asyncio.Event()
+
+    async def fake_persist(self, canonical_location):
+        start_event.set()
+        await release_event.wait()
+
+    monkeypatch.setattr(
+        context_module.NyxContext,
+        "_persist_location_to_db",
+        fake_persist,
+    )
+
+    context_data = {
+        "currentRoleplay": {
+            "CurrentLocation": {
+                "id": "async_square",
+                "name": "Async Square",
+            }
+        }
+    }
+
+    async def _run() -> None:
+        await asyncio.wait_for(
+            context.build_context_for_input("look around", context_data),
+            timeout=0.5,
+        )
+
+        assert start_event.is_set(), "persist task should start asynchronously"
+        assert context.background_tasks, "background task tracking should retain the task"
+        assert any(
+            not task.done() for task in context.background_tasks
+        ), "persist task should still be pending"
+
+        release_event.set()
+        await asyncio.gather(
+            *list(context.background_tasks),
+            return_exceptions=True,
+        )
+        assert not context.background_tasks, "task set should be cleared after completion"
+
+    asyncio.run(_run())
+
+
 def test_location_refresh_ignores_placeholder_overrides():
     context = NyxContext(user_id=21, conversation_id=23)
     broker = _StubContextBroker(context)
