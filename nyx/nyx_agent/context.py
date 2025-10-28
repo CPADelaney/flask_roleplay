@@ -1004,19 +1004,58 @@ class ContextBroker:
         self._metrics_log_interval = 5  # Log every 5th turn
     
     async def initialize(self):
-        """Initialize broker with optional Redis for distributed caching"""
-        await self._try_connect_redis()
-        await self.ctx.await_orchestrator("npc")
-        await self._build_npc_alias_cache()
-        await self.ctx.await_orchestrator("conflict")
-        if self.ctx.conflict_synthesizer is not None:
-            self.conflict_synthesizer = self.ctx.conflict_synthesizer
-        else:
-            self.conflict_synthesizer = await get_synthesizer(
-                self.ctx.user_id,
-                self.ctx.conversation_id
-            )
-        logger.info("ContextBroker initialized with optimized conflict system")
+        """
+        NON-BLOCKING: Starts initialization of all subsystems in the background.
+        Uses a lock to ensure this only runs once.
+        """
+        async with self._init_lock:
+            # If initialization has already been started by another request, do nothing.
+            if self._is_initialized:
+                return
+
+            logger.info(f"[CONTEXT_INIT] Starting NON-BLOCKING initialization for user {self.user_id}...")
+            
+            # --- Start all subsystem initializations in the background ---
+            self._init_tasks["memory"] = asyncio.create_task(self._init_memory_orchestrator())
+            self._init_tasks["lore"] = asyncio.create_task(self._init_lore_orchestrator())
+            self._init_tasks["npc"] = asyncio.create_task(self._init_npc_orchestrator())
+            self._init_tasks["conflict"] = asyncio.create_task(self._init_conflict_synthesizer())
+            if WORLD_SIMULATION_AVAILABLE:
+                self._init_tasks["world"] = asyncio.create_task(self._init_world_systems())
+
+            # --- Initialize components that depend on others (or are fast) ---
+            # The context_broker itself is fast to init, but it needs to await the others later.
+            self.context_broker = ContextBroker(self)
+            self._init_tasks["context_broker"] = asyncio.create_task(self.context_broker.initialize())
+
+            # Mark as initialized so this block doesn't run again.
+            self._is_initialized = True
+            logger.info("NyxContext non-blocking initialization has been launched.")
+    
+    async def await_orchestrator(self, name: str) -> bool:
+        """
+        Safely awaits and returns True if the requested orchestrator is ready.
+        Returns False on failure.
+        """
+        if name not in self._init_tasks:
+            logger.warning(f"Attempted to await an unknown orchestrator: {name}")
+            return False
+            
+        # If the task isn't done yet, await it.
+        if not self._init_tasks[name].done():
+            try:
+                await self._init_tasks[name]
+            except Exception as e:
+                logger.error(f"Initialization for orchestrator '{name}' failed: {e}", exc_info=True)
+                return False
+        
+        # Check for exceptions that might have occurred during the task's run
+        if self._init_tasks[name].exception():
+            logger.error(f"Orchestrator '{name}' has a stored exception from initialization.")
+            return False
+
+        return True
+
 
     async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:
         name_map = {'memory': 'memories', 'conflict': 'conflicts'}
@@ -1996,7 +2035,7 @@ class ContextBroker:
         dynamic relationship data (player↔NPC) including patterns/archetypes/momentum
         and the full dimensions vector. Falls back to per-NPC snapshots if needed.
         """
-        await self.ctx.await_orchestrator("npc")
+        if not await self.ctx.await_orchestrator("npc"): return BundleSection(data=NPCSectionData(npcs=[], canonical_count=0))
         if not self.ctx.npc_orchestrator:
             return BundleSection(data=NPCSectionData(npcs=[], canonical_count=0), canonical=False, priority=0)
     
@@ -2171,7 +2210,7 @@ class ContextBroker:
     
     async def _fetch_memory_section(self, scope: SceneScope) -> BundleSection:
         """Fetch relevant memories using existing orchestrator API and link hints"""
-        await self.ctx.await_orchestrator("memory")
+        if not await self.ctx.await_orchestrator("memory"): return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]))
         if not self.ctx.memory_orchestrator:
             return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]),
                                canonical=False, priority=0)
@@ -2333,7 +2372,7 @@ class ContextBroker:
     
     async def _fetch_lore_section(self, scope: SceneScope) -> BundleSection:
         """Fetch lore context; prefer orchestrator scene bundle when available."""
-        await self.ctx.await_orchestrator("lore")
+        if not await self.ctx.await_orchestrator("lore"): return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]))
         if not self.ctx.lore_orchestrator:
             return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
                                  canonical=False, priority=0)
@@ -2423,6 +2462,7 @@ class ContextBroker:
     async def _fetch_conflict_section(self, scope: SceneScope) -> BundleSection:
         """Fetch conflict context using existing orchestrator API and link hints."""
         # Resolve synthesizer once and guard
+        if not await self.ctx.await_orchestrator("conflict"): return BundleSection(data={})
         synthesizer = getattr(self.ctx, "conflict_synthesizer", None)
         if not synthesizer:
             return BundleSection(data={}, canonical=False, priority=0)
@@ -2606,7 +2646,7 @@ class ContextBroker:
     
     async def _fetch_world_section(self, scope: SceneScope) -> BundleSection:
         """Fetch world state with safe field access and enum handling"""
-        await self.ctx.await_orchestrator("world")
+        if not await self.ctx.await_orchestrator("world"): return BundleSection(data={})
         if not self.ctx.world_director:
             return BundleSection(data={}, canonical=False, priority=0)
         
@@ -2654,7 +2694,7 @@ class ContextBroker:
     
     async def _fetch_narrative_section(self, scope: SceneScope) -> BundleSection:
         """Fetch narrative context with safe method calls"""
-        await self.ctx.await_orchestrator("world")
+        if not await self.ctx.await_orchestrator("world"): return BundleSection(data={}) # Narrator is part of world systems
         if not self.ctx.slice_of_life_narrator:
             return BundleSection(data={}, canonical=False, priority=0)
         
