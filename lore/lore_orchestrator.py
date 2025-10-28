@@ -518,6 +518,12 @@ class LoreOrchestrator:
     
     # ===== SCENE BUNDLE METHODS (NEW) =====
 
+    @staticmethod
+    def _hash_text_value(value: str) -> str:
+        """Return a stable hash for matriarchal transform inputs."""
+
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
     def _resolve_timeout_for_label(self, label: str) -> Optional[float]:
         """Pick the timeout to apply for a scene bundle task."""
         base_timeout = getattr(self.config, "subfetch_timeout", None)
@@ -653,10 +659,23 @@ class LoreOrchestrator:
                 elif label == 'mpf_cache':
                     if data:
                         bundle_data.world = bundle_data.world or {}
-                        bundle_data.world["matriarchal_principles"] = data.get("matriarchal_principles")
-                        bundle_data.world["power_expressions"] = data.get("power_expressions")
-                        bundle_data.world["hierarchical_constraints"] = data.get("hierarchical_constraints")
-                        canonical = True
+                        principles = data.get("matriarchal_principles")
+                        expressions = data.get("power_expressions")
+                        constraints = data.get("hierarchical_constraints")
+                        if principles:
+                            bundle_data.world["matriarchal_principles"] = principles
+                        if expressions:
+                            bundle_data.world["power_expressions"] = expressions
+                        if constraints:
+                            bundle_data.world["hierarchical_constraints"] = constraints
+                        transforms = data.get("transformed_fields") or {}
+                        if transforms:
+                            bundle_data.world["matriarchal_transforms"] = transforms
+                        status = data.get("generation_status")
+                        if status:
+                            bundle_data.world["matriarchal_generation_status"] = status
+                        if principles or expressions or constraints:
+                            canonical = True
                 # --- END OF MODIFICATION ---
     
                 elif label == 'religions':
@@ -1146,15 +1165,9 @@ class LoreOrchestrator:
         if not self.config.enable_matriarchal_theme:
             return bundle
     
-        try:
-            mpf = await self._get_matriarchal_power_framework()
-        except Exception as e:
-            logger.debug(f"Could not initialize matriarchal framework: {e}")
-            return bundle
-    
-        # Carefully transform just the most visible textual fields
+        # Carefully capture the most visible textual fields for potential transformation
         foundation: Dict[str, Any] = {}
-    
+
         # Location description
         try:
             loc_desc = (
@@ -1166,25 +1179,96 @@ class LoreOrchestrator:
                 foundation["location_description"] = loc_desc
         except Exception:
             pass
-    
+
         # Optionally, add other small, self-contained text fields here in future
-    
+
         if not foundation:
             return bundle  # Nothing to transform
-    
-        try:
-            transformed = await mpf.apply_power_lens(foundation)
-        except Exception as e:
-            logger.debug(f"Matriarchal lens application error: {e}")
-            return bundle
-    
-        # Apply back to bundle
-        try:
-            if "location_description" in transformed:
-                bundle["data"]["location"]["description"] = transformed["location_description"]
-        except Exception:
-            pass
-    
+
+        data_section = bundle.get("data") if isinstance(bundle, dict) else None
+        world_section: Optional[Dict[str, Any]] = None
+        if isinstance(data_section, dict):
+            world_section = data_section.get("world")
+        if not isinstance(world_section, dict):
+            world_section = {}
+            if isinstance(data_section, dict):
+                data_section["world"] = world_section
+
+        transforms = {}
+        generation_status = None
+        if isinstance(world_section, dict):
+            transforms = world_section.get("matriarchal_transforms") or {}
+            generation_status = world_section.get("matriarchal_generation_status")
+
+        expected_hash = None
+        location_transform: Optional[str] = None
+        if "location_description" in foundation:
+            value = foundation["location_description"]
+            expected_hash = self._hash_text_value(value)
+            cached_entry = transforms.get("location_description") if isinstance(transforms, dict) else None
+            if isinstance(cached_entry, dict):
+                if (
+                    cached_entry.get("source_hash") == expected_hash
+                    and isinstance(cached_entry.get("transformed"), str)
+                    and cached_entry.get("transformed").strip()
+                ):
+                    location_transform = cached_entry["transformed"]
+            elif isinstance(cached_entry, str) and cached_entry.strip():
+                location_transform = cached_entry
+
+        applied = False
+        if location_transform:
+            try:
+                bundle.setdefault("data", {}).setdefault("location", {})["description"] = location_transform
+                applied = True
+            except Exception:
+                logger.debug("Failed to apply cached matriarchal transform to location description")
+
+        if not applied:
+            should_queue = True
+            pending_statuses = {"pending", "running", "retrying"}
+            if generation_status in pending_statuses:
+                should_queue = False
+            elif isinstance(transforms, dict):
+                cached_entry = transforms.get("location_description")
+                if isinstance(cached_entry, dict) and expected_hash:
+                    # If we already requested the same hash and it's awaiting update, avoid duplicate queueing
+                    if (
+                        cached_entry.get("source_hash") == expected_hash
+                        and not cached_entry.get("transformed")
+                    ):
+                        should_queue = False
+
+            if should_queue and expected_hash:
+                try:
+                    from tasks import generate_and_cache_mpf_lore
+
+                    world_section["matriarchal_generation_status"] = "pending"
+                    if isinstance(transforms, dict):
+                        transforms.setdefault("location_description", {"source_hash": expected_hash})
+                        world_section["matriarchal_transforms"] = transforms
+
+                    generate_and_cache_mpf_lore.delay(
+                        self.user_id,
+                        self.conversation_id,
+                        foundation,
+                    )
+                    try:
+                        async with get_db_connection_context() as conn:
+                            await conn.execute(
+                                """
+                                UPDATE MatriarchalLoreCache
+                                   SET generation_status = 'pending'
+                                 WHERE user_id = $1 AND conversation_id = $2
+                                """,
+                                self.user_id,
+                                self.conversation_id,
+                            )
+                    except Exception as db_exc:
+                        logger.debug(f"Could not mark MPF cache as pending: {db_exc}")
+                except Exception as exc:
+                    logger.debug(f"Could not enqueue MPF transform generation: {exc}")
+
         return bundle
 
     async def _track_lore_dynamics_change(
@@ -1781,28 +1865,51 @@ class LoreOrchestrator:
 
         try:
             async with get_db_connection_context() as conn:
-                row = await conn.fetchrow(
-                    """
-                    SELECT principles, expressions, constraints, generation_status
-                    FROM MatriarchalLoreCache
-                    WHERE user_id = $1 AND conversation_id = $2
-                    """,
-                    self.user_id, self.conversation_id
-                )
+                transformed_fields = None
+                row_dict: Optional[Dict[str, Any]] = None
+                try:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT principles, expressions, constraints, transformed_fields, generation_status
+                        FROM MatriarchalLoreCache
+                        WHERE user_id = $1 AND conversation_id = $2
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                except asyncpg.exceptions.UndefinedColumnError:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT principles, expressions, constraints, generation_status
+                        FROM MatriarchalLoreCache
+                        WHERE user_id = $1 AND conversation_id = $2
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                else:
+                    row_dict = dict(row) if row else None
+                    raw_transforms = row_dict.get('transformed_fields') if row_dict else None
+                    if raw_transforms:
+                        try:
+                            transformed_fields = json.loads(raw_transforms)
+                        except (TypeError, json.JSONDecodeError):
+                            transformed_fields = raw_transforms if isinstance(raw_transforms, dict) else None
 
-                if row:
-                    # Data exists, check its status
-                    if row['generation_status'] == 'complete':
-                        logger.debug(f"MPF lore cache hit for user {self.user_id}.")
-                        return {
-                            "matriarchal_principles": json.loads(row['principles']) if row['principles'] else None,
-                            "power_expressions": json.loads(row['expressions']) if row['expressions'] else None,
-                            "hierarchical_constraints": json.loads(row['constraints']) if row['constraints'] else None,
-                        }
-                    else:
-                        # Generation is pending or failed, don't re-trigger.
-                        logger.debug(f"MPF lore generation is already in status '{row['generation_status']}'.")
-                        return None
+                if row and row_dict is None:
+                    row_dict = dict(row)
+
+                if row_dict:
+                    logger.debug(
+                        "MPF lore cache status for user %s: %s",
+                        self.user_id,
+                        row_dict.get('generation_status'),
+                    )
+                    return {
+                        "matriarchal_principles": json.loads(row_dict['principles']) if row_dict.get('principles') else None,
+                        "power_expressions": json.loads(row_dict['expressions']) if row_dict.get('expressions') else None,
+                        "hierarchical_constraints": json.loads(row_dict['constraints']) if row_dict.get('constraints') else None,
+                        "generation_status": row_dict.get('generation_status'),
+                        "transformed_fields": transformed_fields,
+                    }
                 else:
                     # No entry found. Create a 'pending' entry to act as a lock and trigger the task.
                     await conn.execute(
