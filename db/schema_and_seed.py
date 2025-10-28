@@ -2897,7 +2897,21 @@ async def create_all_tables():
                 END $$;
                 ''',
                 '''
-                ALTER TABLE NationalConflicts 
+                ALTER TABLE Nations
+                    ADD COLUMN IF NOT EXISTS culture_summary TEXT;
+                ''',
+                '''
+                ALTER TABLE Nations
+                    ADD COLUMN IF NOT EXISTS culture_summary_updated_at TIMESTAMPTZ;
+                ''',
+                '''
+                UPDATE Nations
+                    SET culture_summary = COALESCE(culture_summary, 'Culture summary pending refresh'),
+                        culture_summary_updated_at = NOW()
+                    WHERE culture_summary IS NULL;
+                ''',
+                '''
+                ALTER TABLE NationalConflicts
                     ALTER COLUMN involved_nations TYPE JSONB USING to_jsonb(involved_nations),
                     ALTER COLUMN recent_developments TYPE JSONB USING to_jsonb(recent_developments);
                 ''',
