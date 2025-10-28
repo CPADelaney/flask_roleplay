@@ -4,6 +4,8 @@ Dynamic feasibility system that learns what's possible/impossible in each unique
 Maintains reality consistency without hard-coded rules or repetitive responses.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -12,14 +14,16 @@ import re
 import unicodedata
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from agents import Agent, Runner
 from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
 from logic.aggregator_sdk import fallback_get_context
-from nyx.nyx_agent.context import NyxContext
 from nyx.location.router import resolve_place_or_travel
+
+if TYPE_CHECKING:
+    from nyx.nyx_agent.context import NyxContext
 
 from nyx.feas.actions.mundane import evaluate_mundane
 from nyx.feas.archetypes.modern_baseline import ModernBaseline
