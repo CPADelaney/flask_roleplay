@@ -2816,6 +2816,7 @@ class NyxContext:
     _init_tasks: Dict[str, asyncio.Task[Any]] = field(default_factory=dict, init=False, repr=False)
     _is_initialized: bool = field(default=False, init=False)
     _init_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    background_tasks: Set[asyncio.Task] = field(default_factory=set)
     
     async def initialize(self):
         """Initialize orchestrators lazily and start subsystem tasks without blocking."""
@@ -3157,6 +3158,37 @@ class NyxContext:
                 exc_info=True,
             )
 
+    def _track_background_task(
+        self,
+        task: asyncio.Task,
+        *,
+        task_name: str,
+        task_details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Track background tasks and surface failures via logging."""
+
+        if task_details is None:
+            task_details = {}
+
+        self.background_tasks.add(task)
+
+        def _handle_completion(completed: asyncio.Task) -> None:
+            self.background_tasks.discard(completed)
+            try:
+                completed.result()
+            except asyncio.CancelledError:
+                logger.info(
+                    "Background task '%s' cancelled", task_name,
+                    extra={"task_details": task_details},
+                )
+            except Exception:
+                logger.exception(
+                    "Background task '%s' failed", task_name,
+                    extra={"task_details": task_details},
+                )
+
+        task.add_done_callback(_handle_completion)
+
     @staticmethod
     def _is_placeholder_location_token(token: str) -> bool:
         if not isinstance(token, str):
@@ -3386,7 +3418,20 @@ class NyxContext:
             except Exception as exc:  # pragma: no cover - best effort cache seed
                 logger.debug("Snapshot store update failed: %s", exc)
 
-            await self._persist_location_to_db(canonical_location)
+            task = asyncio.create_task(
+                self._persist_location_to_db(canonical_location)
+            )
+            try:
+                task.set_name(
+                    f"nyx-persist-location:{self.user_id}:{self.conversation_id}"
+                )
+            except AttributeError:
+                pass
+            self._track_background_task(
+                task,
+                task_name="persist_location",
+                task_details={"location": canonical_location},
+            )
 
     async def _init_memory_orchestrator(self):
         """Initialize memory orchestrator"""
