@@ -430,8 +430,18 @@ async def process_user_input(
 
         # ---- STEP 2: World state integration ----------------------------------
         async with _log_step("world_state", trace_id):
-            if nyx_context.world_director and nyx_context.world_director.context:
-                nyx_context.current_world_state = nyx_context.world_director.context.current_world_state
+            world_task = None
+            if nyx_context is not None:
+                world_task = nyx_context.get_init_task("world")
+            if world_task is None or world_task.done():
+                await nyx_context.await_orchestrator("world")
+            if (
+                nyx_context.world_director
+                and getattr(nyx_context.world_director, "context", None)
+            ):
+                nyx_context.current_world_state = (
+                    nyx_context.world_director.context.current_world_state
+                )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")

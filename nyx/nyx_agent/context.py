@@ -1006,11 +1006,16 @@ class ContextBroker:
     async def initialize(self):
         """Initialize broker with optional Redis for distributed caching"""
         await self._try_connect_redis()
+        await self.ctx.await_orchestrator("npc")
         await self._build_npc_alias_cache()
-        self.conflict_synthesizer = await get_synthesizer(
-            self.ctx.user_id,
-            self.ctx.conversation_id
-        )
+        await self.ctx.await_orchestrator("conflict")
+        if self.ctx.conflict_synthesizer is not None:
+            self.conflict_synthesizer = self.ctx.conflict_synthesizer
+        else:
+            self.conflict_synthesizer = await get_synthesizer(
+                self.ctx.user_id,
+                self.ctx.conversation_id
+            )
         logger.info("ContextBroker initialized with optimized conflict system")
 
     async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:
@@ -1078,6 +1083,7 @@ class ContextBroker:
     
     async def _build_npc_alias_cache(self):
         """Build name→id mapping for efficient NPC lookup"""
+        await self.ctx.await_orchestrator("npc")
         if not self.ctx.npc_orchestrator:
             return
         
@@ -1990,6 +1996,7 @@ class ContextBroker:
         dynamic relationship data (player↔NPC) including patterns/archetypes/momentum
         and the full dimensions vector. Falls back to per-NPC snapshots if needed.
         """
+        await self.ctx.await_orchestrator("npc")
         if not self.ctx.npc_orchestrator:
             return BundleSection(data=NPCSectionData(npcs=[], canonical_count=0), canonical=False, priority=0)
     
@@ -2164,8 +2171,9 @@ class ContextBroker:
     
     async def _fetch_memory_section(self, scope: SceneScope) -> BundleSection:
         """Fetch relevant memories using existing orchestrator API and link hints"""
+        await self.ctx.await_orchestrator("memory")
         if not self.ctx.memory_orchestrator:
-            return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]), 
+            return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]),
                                canonical=False, priority=0)
         
         relevant_memories = []
@@ -2325,6 +2333,7 @@ class ContextBroker:
     
     async def _fetch_lore_section(self, scope: SceneScope) -> BundleSection:
         """Fetch lore context; prefer orchestrator scene bundle when available."""
+        await self.ctx.await_orchestrator("lore")
         if not self.ctx.lore_orchestrator:
             return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
                                  canonical=False, priority=0)
@@ -2597,6 +2606,7 @@ class ContextBroker:
     
     async def _fetch_world_section(self, scope: SceneScope) -> BundleSection:
         """Fetch world state with safe field access and enum handling"""
+        await self.ctx.await_orchestrator("world")
         if not self.ctx.world_director:
             return BundleSection(data={}, canonical=False, priority=0)
         
@@ -2644,6 +2654,7 @@ class ContextBroker:
     
     async def _fetch_narrative_section(self, scope: SceneScope) -> BundleSection:
         """Fetch narrative context with safe method calls"""
+        await self.ctx.await_orchestrator("world")
         if not self.ctx.slice_of_life_narrator:
             return BundleSection(data={}, canonical=False, priority=0)
         
@@ -2801,78 +2812,98 @@ class NyxContext:
     # ────────── ERROR LOGGING ──────────
     error_log: List[Dict[str, Any]] = field(default_factory=list)
     error_counts: Dict[str, int] = field(default_factory=dict)
+
+    _init_tasks: Dict[str, asyncio.Task[Any]] = field(default_factory=dict, init=False, repr=False)
+    _is_initialized: bool = field(default=False, init=False)
+    _init_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     
     async def initialize(self):
-            """Initialize all orchestrators and the context broker with detailed performance logging."""
-            logger.info(f"[CONTEXT_INIT] Starting initialization for user {self.user_id}, conversation {self.conversation_id}...")
+        """Initialize orchestrators lazily and start subsystem tasks without blocking."""
+
+        if self._is_initialized:
+            return
+
+        async with self._init_lock:
+            if self._is_initialized:
+                return
+
+            logger.info(
+                "[CONTEXT_INIT] Starting initialization for user %s, conversation %s...",
+                self.user_id,
+                self.conversation_id,
+            )
             init_start_time = time.time()
-    
+
             # Try to load config if available
             try:
                 from .config import Config
+
                 self.config = Config
             except ImportError:
                 pass
-    
+
             user_key = str(self.user_id)
             conversation_key = str(self.conversation_id)
             snapshot = _SNAPSHOT_STORE.get(user_key, conversation_key)
             if not snapshot:
                 canonical_snapshot = await fetch_canonical_snapshot(
-                    self.user_id, self.conversation_id
+                    self.user_id,
+                    self.conversation_id,
                 )
                 if canonical_snapshot:
-                    _SNAPSHOT_STORE.put(user_key, conversation_key, canonical_snapshot)
-    
+                    _SNAPSHOT_STORE.put(
+                        user_key,
+                        conversation_key,
+                        canonical_snapshot,
+                    )
+
             # Helper function to wrap and time each initialization task
-            async def timed_init(name, coro):
+            async def timed_init(name: str, coro: Any) -> None:
                 t0 = time.time()
-                logger.info(f"[CONTEXT_INIT] Starting sub-task '{name}'...")
+                logger.info("[CONTEXT_INIT] Starting sub-task '%s'...", name)
                 try:
                     await coro
-                    logger.info(f"[CONTEXT_INIT] ✔ Sub-task '{name}' finished in {time.time() - t0:.3f}s")
-                except Exception as e:
-                    logger.error(f"[CONTEXT_INIT] ✖ Sub-task '{name}' failed after {time.time() - t0:.3f}s: {e}", exc_info=True)
-                    raise # Re-raise the exception after logging
-    
-            initialization_tasks = []
-    
-            # Initialize Memory Orchestrator
-            initialization_tasks.append(timed_init("Memory", self._init_memory_orchestrator()))
-            
-            # Initialize Lore Orchestrator
-            initialization_tasks.append(timed_init("Lore", self._init_lore_orchestrator()))
-            
-            # Initialize NPC Orchestrator
-            initialization_tasks.append(timed_init("NPC", self._init_npc_orchestrator()))
-            
-            # Initialize Conflict Synthesizer
-            initialization_tasks.append(timed_init("Conflict", self._init_conflict_synthesizer()))
-            
-            # Initialize World Systems
+                    logger.info(
+                        "[CONTEXT_INIT] ✔ Sub-task '%s' finished in %.3fs",
+                        name,
+                        time.time() - t0,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[CONTEXT_INIT] ✖ Sub-task '%s' failed after %.3fs: %s",
+                        name,
+                        time.time() - t0,
+                        exc,
+                        exc_info=True,
+                    )
+                    raise
+
+            self._init_tasks.clear()
+
+            def _start_task(key: str, label: str, coro: Any) -> None:
+                task = asyncio.create_task(
+                    timed_init(label, coro),
+                    name=f"nyx_init_{key}",
+                )
+                self._init_tasks[key] = task
+                task.add_done_callback(
+                    lambda t, task_key=key: self._on_init_task_done(task_key, t)
+                )
+
+            _start_task("memory", "Memory", self._init_memory_orchestrator())
+            _start_task("lore", "Lore", self._init_lore_orchestrator())
+            _start_task("npc", "NPC", self._init_npc_orchestrator())
+            _start_task(
+                "conflict",
+                "Conflict",
+                self._init_conflict_synthesizer(),
+            )
+
             if WORLD_SIMULATION_AVAILABLE:
-                initialization_tasks.append(timed_init("World", self._init_world_systems()))
-            
-            # Run all initializations in parallel
-            if self.enable_parallel_fetch:
-                results = await asyncio.gather(*initialization_tasks, return_exceptions=True)
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        # The timed_init wrapper already logged the error, so we just note the failure here.
-                        logger.error(f"Initialization task {i} failed and was caught by gather.")
-                        self.log_error(result, {"task": f"init_{i}"})
-            else:
-                # Fallback to sequential initialization for debugging if needed
-                for task_coro in initialization_tasks:
-                    try:
-                        await task_coro
-                    except Exception as e:
-                        # The timed_init wrapper will have already logged the specifics.
-                        logger.error(f"Sequential initialization failed: {e}")
-                        self.log_error(e, {"task": "sequential_init"})
-    
+                _start_task("world", "World", self._init_world_systems())
+
             await self._hydrate_location_from_db()
-    
+
             if not self.current_location:
                 try:
                     fallback_context = await get_comprehensive_context(
@@ -2893,7 +2924,7 @@ class NyxContext:
                         await self._refresh_location_from_context(
                             previous_location_id=previous_location_id
                         )
-    
+
                         normalized_location = self._normalize_location_value(
                             self.current_location
                         )
@@ -2915,13 +2946,66 @@ class NyxContext:
                                     "Snapshot store seed failed after fallback context: %s",
                                     snapshot_exc,
                                 )
-    
-            # Initialize the context broker
+
             self.context_broker = ContextBroker(self)
-            await self.context_broker.initialize()
-    
-            logger.info(f"NyxContext initialized for user {self.user_id}, conversation {self.conversation_id}")
-            logger.info(f"[CONTEXT_INIT] Total initialization took {time.time() - init_start_time:.3f}s")
+            _start_task(
+                "context_broker",
+                "ContextBroker",
+                self.context_broker.initialize(),
+            )
+
+            self._is_initialized = True
+
+            logger.info(
+                "NyxContext initialized for user %s, conversation %s",
+                self.user_id,
+                self.conversation_id,
+            )
+            logger.info(
+                "[CONTEXT_INIT] Total initialization took %.3fs",
+                time.time() - init_start_time,
+            )
+
+    def _on_init_task_done(self, name: str, task: asyncio.Task[Any]) -> None:
+        """Ensure initialization task exceptions are surfaced and recorded."""
+
+        if task.cancelled():
+            logger.warning("Initialization task '%s' was cancelled", name)
+            return
+
+        try:
+            task.result()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Initialization task '%s' failed post-completion: %s",
+                name,
+                exc,
+                exc_info=True,
+            )
+            try:
+                self.log_error(exc, {"task": f"init_{name}"})
+            except Exception:
+                logger.debug("Failed to record init task error for '%s'", name, exc_info=True)
+
+    def get_init_task(self, name: str) -> Optional[asyncio.Task[Any]]:
+        """Return the initialization task for a subsystem, if any."""
+
+        return self._init_tasks.get(name)
+
+    def is_orchestrator_ready(self, name: str) -> bool:
+        """Return True if the orchestrator has finished initializing."""
+
+        task = self._init_tasks.get(name)
+        return task is None or task.done()
+
+    async def await_orchestrator(self, name: str) -> None:
+        """Await the initialization task for a subsystem if it exists."""
+
+        task = self._init_tasks.get(name)
+        if not task:
+            return
+
+        await task
 
     async def _hydrate_location_from_db(self) -> None:
         """Preload the current location from the CurrentRoleplay table."""
@@ -3376,6 +3460,8 @@ class NyxContext:
     async def handle_day_transition(self, new_day: int):
         """Handle game day transitions: notify conflicts & clear scene caches."""
         logger.info(f"NyxContext handling day transition to {new_day}")
+        await self.await_orchestrator("conflict")
+        await self.await_orchestrator("context_broker")
         try:
             if self.conflict_synthesizer and hasattr(self.conflict_synthesizer, 'handle_day_transition'):
                 await self.conflict_synthesizer.handle_day_transition(new_day)
@@ -3394,7 +3480,11 @@ class NyxContext:
     async def build_context_for_input(self, user_input: str, context_data: Dict[str, Any] = None) -> PackedContext:
         """Main entry point: build optimized context for user input"""
         start_time = time.time()
-        
+
+        await self.await_orchestrator("context_broker")
+        if not self.context_broker:
+            raise RuntimeError("Context broker failed to initialize")
+
         # Merge provided context
         previous_location_id = self.current_context.get("location_id")
         if context_data:
@@ -3489,6 +3579,7 @@ class NyxContext:
     
     async def calculate_conflict_tensions(self) -> Dict[str, float]:
         """Calculate tensions between entities (adapter for existing code)"""
+        await self.await_orchestrator("conflict")
         if not self.conflict_synthesizer:
             return {}
         
@@ -3517,6 +3608,7 @@ class NyxContext:
     
     async def analyze_memory_patterns(self, topic: str = None) -> Dict[str, Any]:
         """Analyze memory patterns (adapter method)"""
+        await self.await_orchestrator("memory")
         if not self.memory_orchestrator:
             return {'predictions': []}
         
