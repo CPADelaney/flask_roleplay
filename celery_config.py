@@ -99,6 +99,7 @@ task_routes = {
     'tasks.background_chat_task_with_memory': {'queue': 'background'},
     'tasks.generate_lore_background_task': {'queue': 'background'},
     'tasks.generate_initial_conflict_task': {'queue': 'background'},
+    'tasks.warm_user_context_cache_task': {'queue': 'background'},
     'tasks.refresh_cultural_conflict_cache': {'queue': 'heavy'},
     'tasks.refresh_all_cultural_conflict_caches': {'queue': 'heavy'},
 
