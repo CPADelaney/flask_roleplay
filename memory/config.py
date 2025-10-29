@@ -12,15 +12,15 @@ DEFAULT_CONFIG = {
     "database": {
         "dsn": os.getenv("DB_DSN") or os.getenv("DATABASE_URL"),
         "min_connections": 5,
-        "max_connections": 20,
+        "max_connections": 100,
         "command_timeout": 60,
         "statement_cache_size": 100,
         "max_inactive_connection_lifetime": 300
     },
     "embedding": {
-        "model": "text-embedding-ada-002", 
-        "batch_size": 5,
-        "fallback_model": "all-MiniLM-L6-v2"
+        "model": "text-embedding-ada-002",  # This model outputs 1536 dimensions
+        "batch_size": 5
+        # The "fallback_model" has been removed to prevent dimension mismatch.
     },
     "memory": {
         "cache_ttl": 300,  # 5 minutes
@@ -112,11 +112,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     # Create convenience shortcuts for commonly used sections
     global DB_CONFIG, EMBEDDING_CONFIG, MEMORY_CONFIG, OPENAI_CONFIG
     DB_CONFIG = config["database"]
-    EMBEDDING_CONFIG = {
-        "model": "text-embedding-ada-002",  # Force OpenAI
-        "batch_size": 5,
-        "fallback_model": "all-MiniLM-L6-v2"
-    }
+    EMBEDDING_CONFIG = config["embedding"] # This now correctly uses the loaded config without a fallback
     MEMORY_CONFIG = config["memory"]
     OPENAI_CONFIG = config["openai"]
     
@@ -133,7 +129,7 @@ def _deep_merge(target: Dict[str, Any], source: Dict[str, Any]) -> None:
         elif key in target:
             target[key] = value
 
-# Convenience shortcuts for commonly used sections
+# Update convenience shortcuts to reflect the loaded config
 DB_CONFIG = config["database"]
 EMBEDDING_CONFIG = config["embedding"]
 MEMORY_CONFIG = config["memory"]
