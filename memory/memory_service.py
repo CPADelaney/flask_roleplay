@@ -306,7 +306,8 @@ class MemoryEmbeddingService:
         if self.vector_store_type == "chroma":
             self.vector_db = ChromaVectorDatabase(
                 persist_directory=self.persist_directory,
-                config=self.config
+                expected_dimension=self._get_target_dimension(),
+                config=self.config,
             )
         elif self.vector_store_type == "faiss":
             self.vector_db = FAISSVectorDatabase(
