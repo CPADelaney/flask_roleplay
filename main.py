@@ -127,7 +127,7 @@ from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons, build_aggregator_text
 
-from tasks import background_chat_task_with_memory
+from tasks import background_chat_task_with_memory, warm_user_context_cache_task
 
 logger = logging.getLogger(__name__)
 
@@ -1544,7 +1544,41 @@ def create_quart_app():
             logger.error(f"Invalid conversation_id in join request: {data}")
             await sio.emit("error", {"error": "Invalid conversation_id"}, to=sid)
             return
-        
+
+        try:
+            async with get_db_connection_context() as conn:
+                owner_id = await conn.fetchval(
+                    "SELECT user_id FROM conversations WHERE id=$1",
+                    conversation_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to validate conversation %s for user %s: %s",
+                conversation_id,
+                user_id,
+                exc,
+                exc_info=True,
+            )
+            await sio.emit("error", {"error": "Unable to join conversation"}, to=sid)
+            return
+
+        if owner_id is None:
+            await sio.emit("error", {"error": "Conversation not found"}, to=sid)
+            return
+
+        if int(owner_id) != int(user_id):
+            await sio.emit("error", {"error": "Unauthorized"}, to=sid)
+            return
+
+        try:
+            warm_user_context_cache_task.delay(int(user_id), int(conversation_id))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Skipping context cache warm-up for join due to non-integer identifiers: user_id=%s conversation_id=%s",
+                user_id,
+                conversation_id,
+            )
+
         await sio.enter_room(sid, room)
         await sio.emit("joined", {"room": room, "user_id": user_id}, to=sid)
         app.logger.info(f"User {user_id} joined room {room}")
@@ -1931,7 +1965,16 @@ def create_quart_app():
             logger.info(f"ABOUT TO DISPATCH TASK: user_id={user_id}, conversation_id={conversation_id}")
             task_result = process_new_game_task.delay(user_id, {"conversation_id": conversation_id})
             logger.info(f"TASK DISPATCHED: task_id={task_result.id}, status={task_result.status}")
-            
+
+            try:
+                warm_user_context_cache_task.delay(int(user_id), int(conversation_id))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping context cache warm-up for /start_new_game due to non-integer identifiers: user_id=%s conversation_id=%s",
+                    user_id,
+                    conversation_id,
+                )
+
             return jsonify({
                 "job_id": task_result.id,
                 "conversation_id": conversation_id,

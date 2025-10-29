@@ -16,7 +16,7 @@ from db.connection import get_db_connection_context
 from routes.story_routes import build_aggregator_text
 
 # Only import the single task - no more preset-specific task
-from tasks import process_new_game_task
+from tasks import process_new_game_task, warm_user_context_cache_task
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -73,6 +73,15 @@ async def start_new_game():
 
     task = process_new_game_task.delay(user_id, conversation_data)
     logger.info(f"Enqueued process_new_game_task with NewGameAgent for user_id={user_id}, conversation_id={conversation_id}, task id: {task.id}")
+
+    try:
+        warm_user_context_cache_task.delay(int(user_id), int(conversation_id))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Skipping context cache warm-up due to non-integer identifiers: user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
 
     return jsonify({"job_id": task.id, "conversation_id": conversation_id}), 202
 
@@ -192,9 +201,18 @@ async def start_preset_game():
         "preset_story_id": story_id,  # This tells the task to use preset logic
         "conversation_id": conv_id
     })
-    
+
     logger.info(f"Enqueued process_new_game_task (preset mode) for story_id={story_id}, conversation_id={conv_id}")
-    
+
+    try:
+        warm_user_context_cache_task.delay(int(user_id), int(conv_id))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Skipping context cache warm-up for preset game due to non-integer identifiers: user_id=%s conversation_id=%s",
+            user_id,
+            conv_id,
+        )
+
     return jsonify({
         "status": "processing",
         "task_id": task.id,
