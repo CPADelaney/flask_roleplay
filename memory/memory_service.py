@@ -230,7 +230,7 @@ class MemoryEmbeddingService:
                     exc,
                 )
         else:
-            model_name = "all-MiniLM-L6-v2"
+            model_name = "text-embedding-ada-002"
             if isinstance(embedding_section, dict):
                 candidate = embedding_section.get("model_name") or embedding_section.get("hf_embedding_model")
                 if isinstance(candidate, str) and candidate.strip():
