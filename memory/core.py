@@ -230,7 +230,7 @@ class EmbeddingProvider:
         raise NotImplementedError("Subclasses must implement get_embeddings")
 
 class SentenceTransformerEmbedding(EmbeddingProvider):
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "text-embedding-ada-002"):
         if not HAVE_SENTENCE_TRANSFORMERS:
             raise ImportError("SentenceTransformers is not installed.")
         self.model = SentenceTransformer(model_name)
