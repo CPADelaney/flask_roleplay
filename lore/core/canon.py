@@ -4133,15 +4133,36 @@ async def sync_embeddings_to_memory_system(ctx, conn):
     ctx = ensure_canonical_context(ctx)
     memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
+    def _coerce_embedding(raw_embedding):
+        """Convert database vector types into JSON-serialisable lists."""
+        if raw_embedding is None:
+            return None
+
+        try:
+            if hasattr(raw_embedding, "tolist"):
+                sequence = raw_embedding.tolist()
+            else:
+                sequence = list(raw_embedding)
+        except TypeError:
+            logger.debug("Unable to coerce embedding %r; falling back to regeneration", raw_embedding)
+            return None
+
+        try:
+            return [float(value) for value in sequence]
+        except (TypeError, ValueError):
+            logger.debug("Embedding contained non-numeric values; falling back to regeneration")
+            return None
+
     # Sync NPCs
     npcs = await conn.fetch("""
-        SELECT npc_id, npc_name, role, affiliations
+        SELECT npc_id, npc_name, role, affiliations, embedding
         FROM NPCStats
         WHERE user_id = $1 AND conversation_id = $2
     """, ctx.user_id, ctx.conversation_id)
-    
+
     for npc in npcs:
         text = f"NPC: {npc['npc_name']}, role: {npc.get('role', 'unspecified')}"
+        embedding = _coerce_embedding(npc.get('embedding'))
         await memory_orchestrator.add_to_vector_store(
             text=text,
             metadata={
@@ -4151,18 +4172,20 @@ async def sync_embeddings_to_memory_system(ctx, conn):
                 "user_id": ctx.user_id,
                 "conversation_id": ctx.conversation_id
             },
-            entity_type="npc"
+            entity_type="npc",
+            embedding=embedding
         )
-    
+
     # Sync Locations
     locations = await conn.fetch("""
-        SELECT location_id, location_name, description, location_type
+        SELECT location_id, location_name, description, location_type, embedding
         FROM Locations
         WHERE user_id = $1 AND conversation_id = $2
     """, ctx.user_id, ctx.conversation_id)
-    
+
     for loc in locations:
         text = f"Location: {loc['location_name']} - {loc.get('description', '')}"
+        embedding = _coerce_embedding(loc.get('embedding'))
         await memory_orchestrator.add_to_vector_store(
             text=text,
             metadata={
@@ -4172,7 +4195,8 @@ async def sync_embeddings_to_memory_system(ctx, conn):
                 "user_id": ctx.user_id,
                 "conversation_id": ctx.conversation_id
             },
-            entity_type="location"
+            entity_type="location",
+            embedding=embedding
         )
     
     logger.info(f"Synced {len(npcs)} NPCs and {len(locations)} locations to memory system")
