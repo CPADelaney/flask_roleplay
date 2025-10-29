@@ -513,9 +513,6 @@ class UnifiedMemoryManager:
                 timestamp=datetime.now()
             )
 
-        if not memory.embedding and not embedding:
-            embedding = await self.embedding_provider.get_embedding(memory.text)
-
         if not memory.timestamp:
             memory.timestamp = datetime.now()
 
@@ -535,14 +532,14 @@ class UnifiedMemoryManager:
             INSERT INTO unified_memories (
                 entity_type, entity_id, user_id, conversation_id,
                 memory_text, memory_type, significance, emotional_intensity,
-                tags, embedding, metadata, timestamp, times_recalled,
+                tags, metadata, timestamp, times_recalled,
                 status, is_consolidated
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id
             """,
             self.entity_type, self.entity_id, self.user_id, self.conversation_id,
             memory.text, memory_type_value, memory.significance, memory.emotional_intensity,
-            json.dumps(memory.tags or []), embedding or memory.embedding, json.dumps(memory.metadata or {}),
+            json.dumps(memory.tags or []), json.dumps(memory.metadata or {}),
             memory.timestamp, memory.times_recalled,
             memory.status.value if isinstance(memory.status, Enum) else memory.status,
             memory.is_consolidated
@@ -577,20 +574,19 @@ class UnifiedMemoryManager:
             metadata={"source_memory_id": source_id},
             timestamp=datetime.now()
         )
-        embedding = await self.embedding_provider.get_embedding(semantic_text)
         semantic_id = await conn.fetchval(
             """
             INSERT INTO unified_memories (
                 entity_type, entity_id, user_id, conversation_id,
                 memory_text, memory_type, significance, emotional_intensity,
-                tags, embedding, metadata, timestamp, times_recalled,
+                tags, metadata, timestamp, times_recalled,
                 status, is_consolidated
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id
             """,
             self.entity_type, self.entity_id, self.user_id, self.conversation_id,
             semantic_memory.text, semantic_memory.memory_type.value, semantic_memory.significance,
-            semantic_memory.emotional_intensity, json.dumps(semantic_memory.tags), embedding,
+            semantic_memory.emotional_intensity, json.dumps(semantic_memory.tags),
             json.dumps(semantic_memory.metadata), semantic_memory.timestamp, 0,
             MemoryStatus.ACTIVE.value, False
         )
@@ -844,21 +840,20 @@ class UnifiedMemoryManager:
                 metadata={"source_memory_ids": memory_ids},
                 timestamp=datetime.now()
             )
-            embedding = await self.embedding_provider.get_embedding(consolidated_text)
             consolidated_id = await conn.fetchval(
                 """
                 INSERT INTO unified_memories (
                     entity_type, entity_id, user_id, conversation_id,
                     memory_text, memory_type, significance, emotional_intensity,
-                    tags, embedding, metadata, timestamp, times_recalled,
+                    tags, metadata, timestamp, times_recalled,
                     status, is_consolidated
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 RETURNING id
                 """,
                 self.entity_type, self.entity_id, self.user_id, self.conversation_id,
                 consolidated_memory.text, consolidated_memory.memory_type.value,
                 consolidated_memory.significance, consolidated_memory.emotional_intensity,
-                json.dumps(consolidated_memory.tags), embedding, json.dumps(consolidated_memory.metadata),
+                json.dumps(consolidated_memory.tags), json.dumps(consolidated_memory.metadata),
                 consolidated_memory.timestamp, 0, MemoryStatus.ACTIVE.value, False
             )
             consolidated_ids.append(consolidated_id)
