@@ -227,3 +227,76 @@ def test_add_memory_rejects_invalid_embedding(memory_config: Dict[str, Any]) -> 
             )
 
     asyncio.run(_run())
+
+
+def test_add_memory_accepts_pgvector_like_embedding(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
+    class _PgVector:
+        def __init__(self, values):
+            self._values = values
+
+        def tolist(self):
+            return list(self._values)
+
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=8,
+            conversation_id=12,
+            vector_store_type="faiss",
+            embedding_model="openai",
+            config=memory_config,
+        )
+
+        await service.initialize()
+
+        async def _fail_generate(text: str) -> List[float]:  # pragma: no cover - defensive
+            raise AssertionError("generate_embedding should not be called")
+
+        monkeypatch.setattr(service, "generate_embedding", _fail_generate)
+
+        vector = [float(i) for i in range(service._get_target_dimension())]
+        pg_vector = _PgVector(vector)
+
+        memory_id = await service.add_memory(
+            "Precomputed vector",
+            {"memory_id": "npc-1"},
+            entity_type="npc",
+            embedding=pg_vector,
+        )
+
+        stored = service.vector_db.records["npc_embeddings"][memory_id]
+        assert stored["vector"] == vector
+
+    asyncio.run(_run())
+
+
+def test_add_memory_regenerates_on_unusable_embedding(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=2,
+            conversation_id=3,
+            vector_store_type="chroma",
+            embedding_model="openai",
+            config=memory_config,
+        )
+
+        await service.initialize()
+
+        calls: List[str] = []
+
+        async def _generate(text: str) -> List[float]:
+            calls.append(text)
+            return [1.0 for _ in range(service._get_target_dimension())]
+
+        monkeypatch.setattr(service, "generate_embedding", _generate)
+
+        memory_id = await service.add_memory(
+            "Regenerate vector",
+            {},
+            embedding=object(),
+        )
+
+        assert calls == ["Regenerate vector"]
+        stored = service.vector_db.records["memory_embeddings"][memory_id]
+        assert stored["vector"][0] == pytest.approx(1.0)
+
+    asyncio.run(_run())

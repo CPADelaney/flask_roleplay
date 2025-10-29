@@ -214,3 +214,127 @@ async def test_schedule_canonical_memory_persist_handles_track_operation_shutdow
         "Skipping canonical memory persistence due to shutdown" in record.getMessage()
         for record in caplog.records
     )
+
+
+class _FakePgVector:
+    def __init__(self, values):
+        self._values = values
+
+    def tolist(self):
+        return list(self._values)
+
+
+def test_sync_embeddings_uses_precomputed_vectors(monkeypatch):
+    async def _run() -> None:
+        ctx = SimpleNamespace(user_id=9, conversation_id=27)
+        npc_vector = [0.1, 0.2, 0.3]
+        location_vector = [0.4, 0.5, 0.6]
+
+        class _Conn:
+            async def fetch(self, query, *args):
+                if "NPCStats" in query:
+                    return [
+                        {
+                            "npc_id": 1,
+                            "npc_name": "Watcher",
+                            "role": "guard",
+                            "affiliations": None,
+                            "embedding": _FakePgVector(npc_vector),
+                        }
+                    ]
+                if "Locations" in query:
+                    return [
+                        {
+                            "location_id": 11,
+                            "location_name": "Sanctum",
+                            "description": "Ancient hall",
+                            "location_type": "temple",
+                            "embedding": _FakePgVector(location_vector),
+                        }
+                    ]
+                return []
+
+            async def fetchval(self, *_, **__):  # pragma: no cover - not used
+                return 1
+
+        orchestrator_calls = []
+
+        class _Orchestrator:
+            async def add_to_vector_store(self, **kwargs):
+                orchestrator_calls.append(kwargs)
+
+        orchestrator = _Orchestrator()
+
+        async def _get_canon_memory_orchestrator(*_):
+            return orchestrator
+
+        monkeypatch.setattr(
+            "lore.core.canon.get_canon_memory_orchestrator",
+            _get_canon_memory_orchestrator,
+        )
+
+        await canon_module.sync_embeddings_to_memory_system(ctx, _Conn())
+
+        assert len(orchestrator_calls) == 2
+        npc_call = next(call for call in orchestrator_calls if call["entity_type"] == "npc")
+        loc_call = next(call for call in orchestrator_calls if call["entity_type"] == "location")
+
+        assert npc_call["embedding"] == pytest.approx(npc_vector)
+        assert loc_call["embedding"] == pytest.approx(location_vector)
+
+    asyncio.run(_run())
+
+
+def test_sync_embeddings_regenerates_when_vector_missing(monkeypatch):
+    async def _run() -> None:
+        ctx = SimpleNamespace(user_id=4, conversation_id=5)
+
+        class _Conn:
+            async def fetch(self, query, *args):
+                if "NPCStats" in query:
+                    return [
+                        {
+                            "npc_id": 3,
+                            "npc_name": "Traveler",
+                            "role": None,
+                            "affiliations": None,
+                            "embedding": None,
+                        }
+                    ]
+                if "Locations" in query:
+                    return [
+                        {
+                            "location_id": 7,
+                            "location_name": "Crossroads",
+                            "description": "",
+                            "location_type": "road",
+                            "embedding": None,
+                        }
+                    ]
+                return []
+
+            async def fetchval(self, *_, **__):  # pragma: no cover - not used
+                return 1
+
+        calls = []
+
+        class _Orchestrator:
+            async def add_to_vector_store(self, **kwargs):
+                calls.append(kwargs)
+
+        orchestrator = _Orchestrator()
+
+        async def _get_canon_memory_orchestrator(*_):
+            return orchestrator
+
+        monkeypatch.setattr(
+            "lore.core.canon.get_canon_memory_orchestrator",
+            _get_canon_memory_orchestrator,
+        )
+
+        await canon_module.sync_embeddings_to_memory_system(ctx, _Conn())
+
+        assert len(calls) == 2
+        assert all(call["embedding"] is None for call in calls)
+
+    asyncio.run(_run())

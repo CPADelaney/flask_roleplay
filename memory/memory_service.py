@@ -377,12 +377,36 @@ class MemoryEmbeddingService:
         """Get an empty embedding vector with the correct dimension."""
         return build_zero_vector(self._get_target_dimension())
     
+    def _coerce_embedding_input(
+        self,
+        embedding: Sequence[float],
+    ) -> Optional[List[float]]:
+        """Convert various embedding containers into a float list."""
+        try:
+            if hasattr(embedding, "tolist"):
+                candidate = embedding.tolist()  # type: ignore[assignment]
+            else:
+                candidate = list(embedding)
+        except TypeError as exc:
+            logger.warning("Provided embedding could not be iterated over; regenerating", exc_info=exc)
+            return None
+
+        coerced: List[float] = []
+        try:
+            for value in candidate:
+                coerced.append(float(value))
+        except (TypeError, ValueError) as exc:
+            logger.warning("Provided embedding contained non-numeric values; regenerating", exc_info=exc)
+            return None
+
+        return coerced
+
     async def add_memory(
         self,
         text: str,
         metadata: Dict[str, Any],
         entity_type: str = "memory",
-        embedding: Optional[List[float]] = None
+        embedding: Optional[Sequence[float]] = None
     ) -> str:
         """
         Add a memory to the vector store.
@@ -417,22 +441,24 @@ class MemoryEmbeddingService:
         
         # Generate embedding if not provided
         if embedding is None:
-            embedding = await self.generate_embedding(text)
+            embedding_vector = await self.generate_embedding(text)
         else:
-            expected_dim = self._get_target_dimension()
-            if len(embedding) != expected_dim:
-                raise ValueError(
-                    f"Provided embedding dimension {len(embedding)} does not match expected {expected_dim}"
-                )
-            if not isinstance(embedding, Sequence):
-                embedding = list(embedding)
-            embedding = [float(value) for value in embedding]
-        
+            coerced_embedding = self._coerce_embedding_input(embedding)
+            if coerced_embedding is None:
+                embedding_vector = await self.generate_embedding(text)
+            else:
+                expected_dim = self._get_target_dimension()
+                if len(coerced_embedding) != expected_dim:
+                    raise ValueError(
+                        f"Provided embedding dimension {len(coerced_embedding)} does not match expected {expected_dim}"
+                    )
+                embedding_vector = coerced_embedding
+
         # Add to vector store
         success = await self.vector_db.insert_vectors(
             collection_name=collection_name,
             ids=[memory_id],
-            vectors=[embedding],
+            vectors=[embedding_vector],
             metadata=[metadata]
         )
         

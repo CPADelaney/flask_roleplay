@@ -10,7 +10,7 @@ import asyncio
 import json
 import hashlib
 import time
-from typing import Dict, List, Any, Optional, Tuple, Set, Union, Iterable
+from typing import Dict, List, Any, Optional, Tuple, Set, Union, Iterable, Sequence
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
@@ -2573,16 +2573,18 @@ class MemoryOrchestrator:
         self,
         text: str,
         metadata: Dict[str, Any],
-        entity_type: str = "memory"
+        entity_type: str = "memory",
+        embedding: Optional[Sequence[float]] = None,
     ) -> str:
         """Add content directly to the vector store."""
         if not self.initialized:
             await self.initialize()
-        
+
         return await self.embedding_service.add_memory(
             text=text,
             metadata=metadata,
-            entity_type=entity_type
+            entity_type=entity_type,
+            embedding=embedding,
         )
     
     async def search_vector_store(
