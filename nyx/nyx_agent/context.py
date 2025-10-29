@@ -38,7 +38,7 @@ import re
 import dataclasses
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING, Callable, Awaitable
 from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
@@ -958,6 +958,8 @@ class ContextBroker:
         self._npc_alias_cache: Optional[Dict[str, int]] = None  # name→id map
         self._alias_cache_updated: float = 0
         self._alias_cache_ttl: float = 300.0  # 5 minutes
+        self._world_section_cache: Optional[BundleSection] = None
+        self._world_section_cache_expires_at: float = 0.0
         
         # Redis backoff state
         self._redis_failures = 0
@@ -1055,6 +1057,46 @@ class ContextBroker:
                 exc_info=True,
             )
             return False
+
+    async def perform_fetch_and_cache(
+        self,
+        *,
+        orchestrator_name: str,
+        cache_attribute: str,
+        expires_attribute: str,
+        fetcher: Callable[[], Awaitable[BundleSection]],
+        fallback_factory: Callable[[], BundleSection],
+        ttl: Optional[float] = None,
+    ) -> BundleSection:
+        """Fetch a section, caching the result with an optional TTL."""
+
+        now = time.time()
+        cached: Optional[BundleSection] = getattr(self, cache_attribute, None)
+        expires_at: float = getattr(self, expires_attribute, 0.0)
+        ttl_value = ttl if ttl is not None else self.section_ttls.get(orchestrator_name, 0.0)
+
+        if cached is not None and (ttl_value <= 0 or now < expires_at):
+            return cached
+
+        is_ready = await self.await_orchestrator(orchestrator_name)
+        if not is_ready:
+            return cached if cached is not None else fallback_factory()
+
+        try:
+            section = await fetcher()
+        except Exception:
+            logger.exception(
+                "[CONTEXT_BROKER] Failed to fetch section '%s'", orchestrator_name
+            )
+            return cached if cached is not None else fallback_factory()
+
+        setattr(self, cache_attribute, section)
+        if ttl_value > 0:
+            setattr(self, expires_attribute, time.time() + ttl_value)
+        else:
+            setattr(self, expires_attribute, 0.0)
+
+        return section
 
 
     async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:
@@ -2646,50 +2688,67 @@ class ContextBroker:
     
     async def _fetch_world_section(self, scope: SceneScope) -> BundleSection:
         """Fetch world state with safe field access and enum handling"""
-        if not await self.ctx.await_orchestrator("world"): return BundleSection(data={})
-        if not self.ctx.world_director:
-            return BundleSection(data={}, canonical=False, priority=0)
-        
-        world_data = {}
-        
-        try:
-            if hasattr(self.ctx.world_director, 'get_world_state'):
-                world_state = await self.ctx.world_director.get_world_state()
-                if world_state:
-                    # Safe extraction with getattr and enum handling
-                    mood = getattr(world_state, 'world_mood', None)
-                    if isinstance(mood, Enum):
-                        mood = mood.value
-                    
-                    weather = getattr(world_state, 'weather', None)
-                    if isinstance(weather, Enum):
-                        weather = weather.value
-                    
-                    world_data = {
-                        'time': getattr(world_state, 'current_time', None),
-                        'mood': mood,
-                        'weather': weather,
-                        'events': getattr(world_state, 'active_events', [])[:3]
-                    }
-                    
-                    # Add player vitals if available
-                    vitals = getattr(world_state, 'player_vitals', None)
-                    if vitals:
-                        world_data['vitals'] = {
-                            'fatigue': getattr(vitals, 'fatigue', 0),
-                            'hunger': getattr(vitals, 'hunger', 100),
-                            'thirst': getattr(vitals, 'thirst', 100)
+
+        def _empty_section() -> BundleSection:
+            return BundleSection(
+                data={},
+                canonical=False,
+                priority=0,
+                last_changed_at=time.time(),
+                version="world_empty",
+            )
+
+        async def _fetch() -> BundleSection:
+            if not self.ctx.world_director:
+                raise RuntimeError("World director unavailable")
+
+            world_data: Dict[str, Any] = {}
+
+            try:
+                if hasattr(self.ctx.world_director, "get_world_state"):
+                    world_state = await self.ctx.world_director.get_world_state()
+                    if world_state:
+                        mood = getattr(world_state, "world_mood", None)
+                        if isinstance(mood, Enum):
+                            mood = mood.value
+
+                        weather = getattr(world_state, "weather", None)
+                        if isinstance(weather, Enum):
+                            weather = weather.value
+
+                        world_data = {
+                            "time": getattr(world_state, "current_time", None),
+                            "mood": mood,
+                            "weather": weather,
+                            "events": getattr(world_state, "active_events", [])[:3],
                         }
-                    
-        except Exception as e:
-            logger.error(f"World fetch failed: {e}")
-        
-        return BundleSection(
-            data=world_data,
-            canonical=False,
-            priority=4,
-            last_changed_at=time.time(),
-            version=f"world_{time.time()}"
+
+                        vitals = getattr(world_state, "player_vitals", None)
+                        if vitals:
+                            world_data["vitals"] = {
+                                "fatigue": getattr(vitals, "fatigue", 0),
+                                "hunger": getattr(vitals, "hunger", 100),
+                                "thirst": getattr(vitals, "thirst", 100),
+                            }
+            except Exception as exc:
+                logger.error("World fetch failed: %s", exc)
+                raise
+
+            return BundleSection(
+                data=world_data,
+                canonical=False,
+                priority=4,
+                last_changed_at=time.time(),
+                version=f"world_{time.time()}",
+            )
+
+        return await self.perform_fetch_and_cache(
+            orchestrator_name="world",
+            cache_attribute="_world_section_cache",
+            expires_attribute="_world_section_cache_expires_at",
+            fetcher=_fetch,
+            fallback_factory=_empty_section,
+            ttl=self.section_ttls.get("world"),
         )
     
     async def _fetch_narrative_section(self, scope: SceneScope) -> BundleSection:
