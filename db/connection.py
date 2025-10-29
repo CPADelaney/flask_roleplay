@@ -387,13 +387,25 @@ async def create_pool_with_retry(
     current_loop: asyncio.AbstractEventLoop,
     max_retries: int = 3
 ) -> asyncpg.Pool:
-    """Create pool with exponential backoff retry logic."""
+    """Create pool with exponential backoff retry logic and TCP keepalives."""
     for attempt in range(max_retries):
         try:
             logger.info(
                 f"Creating asyncpg pool (attempt {attempt + 1}/{max_retries}), "
                 f"min={config['min_size']}, max={config['max_size']}"
             )
+
+            # *** THIS IS THE FIX: ADD TCP KEEPALIVE SETTINGS ***
+            # These settings will instruct the OS to periodically send a small packet
+            # on idle connections to prevent firewalls/load balancers from closing them.
+            server_settings = {
+                'application_name': f'nyx_worker_{os.getpid()}',
+                'jit': 'off',  # Disable JIT for pgbouncer compatibility
+                'tcp_keepalives': 'on',
+                'tcp_keepalives_idle': '60',      # Seconds of inactivity before sending a keepalive
+                'tcp_keepalives_interval': '10',  # Seconds between keepalive probes
+                'tcp_keepalives_count': '5'       # Number of failed probes before considering connection dead
+            }
             
             pool = await asyncio.wait_for(
                 asyncpg.create_pool(
@@ -406,17 +418,13 @@ async def create_pool_with_retry(
                     max_queries=config['max_queries'],
                     setup=setup_connection,
                     loop=current_loop,
-                    server_settings={
-                        'application_name': f'nyx_worker_{os.getpid()}',
-                        'jit': 'off'  # Disable JIT for pgbouncer compatibility
-                    }
+                    server_settings=server_settings # Use the new settings here
                 ),
                 timeout=30.0
             )
             
-            # Test the pool with statement_cache_size check
+            # Test the pool with a simple query
             async with pool.acquire() as conn:
-                # Verify statement cache is off
                 result = await conn.fetchval("SELECT 1")
                 assert result == 1
             
@@ -435,7 +443,7 @@ async def create_pool_with_retry(
             else:
                 logger.error(f"Failed to create pool after {max_retries} attempts")
                 raise
-
+                
 async def close_existing_pool():
     """Close the existing connection pool if one exists."""
     global DB_POOL, DB_POOL_LOOP
