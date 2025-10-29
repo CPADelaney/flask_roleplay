@@ -199,10 +199,10 @@ async def create_canonical_entity_transactional(
     ctx = ensure_canonical_context(ctx)
     memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
+# The database trigger will now handle embedding generation automatically.
+    # We just need to ensure the `embedding` key is not in the data we send to the INSERT query.
+    entity_data.pop('embedding', None)
     entity_name = entity_data.get('name', entity_data.get('npc_name', 'Unknown'))
-    if 'embedding' in entity_data:
-        entity_data = dict(entity_data)
-        entity_data.pop('embedding', None)
     
     # Ensure we're in a transaction
     if conn.is_in_transaction():
@@ -624,10 +624,6 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
             logger.info(f"LLM determined that proposal '{npc_name}' is NOT a duplicate. Proceeding with creation.")
     
     # Create the new NPC (already passed existence gate)
-    embedding_text = f"NPC: {npc_name}"
-    if role:
-        embedding_text += f", role: {role}"
-    
     affiliations = kwargs.get("affiliations", [])
     if isinstance(affiliations, list):
         affiliations_json = json.dumps(affiliations)
@@ -645,7 +641,7 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         ctx.conversation_id,
         npc_name,
         role,
-        affiliations_json,
+        affiliations_json
     )
     
     # Store in memory system
@@ -1151,6 +1147,7 @@ async def find_or_create_nation(
                     logger.info(f"Nation '{nation_name}' matched to existing (ID: {existing_id})")
                     return existing_id
     
+    # Step 3: Create new nation
     nation_id = await conn.fetchval("""
         INSERT INTO Nations (
             name, government_type, description, relative_power,
@@ -1171,7 +1168,7 @@ async def find_or_create_nation(
         kwargs.get('major_cities', []),
         kwargs.get('cultural_traits', []),
         kwargs.get('notable_features'),
-        kwargs.get('neighboring_nations', []),
+        kwargs.get('neighboring_nations', [])
     )
     
     # Store in memory system
@@ -1249,6 +1246,7 @@ async def find_or_create_conflict(
                         if agent_result.final_output.strip().lower() == 'true':
                             return conflict_id
     
+    # Create new conflict
     conflict_id = await conn.fetchval("""
         INSERT INTO NationalConflicts (
             name, conflict_type, description, severity, status,
@@ -1273,7 +1271,7 @@ async def find_or_create_conflict(
         kwargs.get('diplomatic_consequences', 'Developing'),
         json.dumps(kwargs.get('public_opinion', {})),
         kwargs.get('recent_developments', []),
-        kwargs.get('potential_resolution', 'Uncertain'),
+        kwargs.get('potential_resolution', 'Uncertain')
     )
     
     # Get nation names for logging
@@ -1544,8 +1542,6 @@ async def find_or_create_geographic_region(
 
 async def create_political_entity(ctx, conn, **kwargs) -> int:
     """Create a political entity."""
-    embedding_text = f"{kwargs['name']} {kwargs['entity_type']} {kwargs['description']}"
-
     entity_id = await conn.fetchval("""
         INSERT INTO PoliticalEntities (
             name, entity_type, description, region_id,
@@ -1570,9 +1566,6 @@ async def create_political_entity(ctx, conn, **kwargs) -> int:
 
 async def create_conflict_simulation(ctx, conn, **kwargs) -> int:
     """Create a conflict simulation record."""
-    # Create embedding from primary actors
-    actor_names = [a.get('name', '') for a in kwargs.get('primary_actors', [])]
-    embed_text = f"{kwargs['conflict_type']} involving {', '.join(actor_names)}"
     sim_id = await conn.fetchval("""
         INSERT INTO ConflictSimulations (
             conflict_type, primary_actors, timeline, intensity_progression,
@@ -1597,7 +1590,6 @@ async def create_conflict_simulation(ctx, conn, **kwargs) -> int:
 
 async def create_border_dispute(ctx, conn, **kwargs) -> int:
     """Create a border dispute record."""
-    embed_text = f"{kwargs['dispute_type']} {kwargs['description']} {kwargs['strategic_implications']}"
     dispute_id = await conn.fetchval("""
         INSERT INTO BorderDisputes (
             region1_id, region2_id, dispute_type, description,
@@ -1688,6 +1680,7 @@ async def find_or_create_urban_myth(
                     
                     return myth_id
     
+    # Create new myth
     myth_id = await conn.fetchval("""
         INSERT INTO UrbanMyths (
             name, description, origin_location, origin_event,
@@ -1739,8 +1732,6 @@ async def find_or_create_urban_myth(
 
 async def create_local_history(ctx, conn, **kwargs) -> int:
     """Create a local historical event."""
-    embedding_text = f"{kwargs['event_name']} {kwargs['description']} {kwargs['date_description']} {kwargs['narrative_category']}"
-
     event_id = await conn.fetchval("""
         INSERT INTO LocalHistories (
             location_id, event_name, description, date_description,
@@ -1956,8 +1947,6 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
                 return similar_name
     
     # Create new location (already passed existence gate)
-    search_vector = await memory_orchestrator.generate_embedding(embedding_text)
-
     metadata_payload = kwargs.get('metadata')
     extra_metadata: Dict[str, Any] = {}
     if isinstance(metadata_payload, dict):
@@ -1976,7 +1965,6 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         "hidden_aspects": kwargs.get('hidden_aspects', []),
         "access_restrictions": kwargs.get('access_restrictions', []),
         "local_customs": kwargs.get('local_customs', []),
-        "embedding": search_vector,
     }
 
     def _normalize_scope(value: Any) -> Optional[str]:
@@ -2458,6 +2446,7 @@ async def update_entity_with_governance(
 
             if embedding_parts:
                 embedding_text = ' '.join(embedding_parts)
+                # Update vector store
                 await memory_orchestrator.add_to_vector_store(
                     text=embedding_text,
                     metadata={
