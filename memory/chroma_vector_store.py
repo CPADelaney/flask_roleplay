@@ -47,6 +47,7 @@ class ChromaVectorDatabase(VectorDatabase):
         persist_directory: Optional[str] = None,
         collection_name: str = "memories",
         embedding_function=None,
+        expected_dimension: Optional[int] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -64,6 +65,21 @@ class ChromaVectorDatabase(VectorDatabase):
         self.default_collection_name = collection_name or self._DEFAULT_COLLECTION
         self.embedding_function = embedding_function
         self.config = config or {}
+
+        self.collection_dimensions: Dict[str, int] = {}
+
+        self._configured_dimension = self._coerce_positive_int(expected_dimension)
+        if self._configured_dimension is None:
+            self._configured_dimension = self._extract_dimension_from_config(self.config)
+        if self._configured_dimension:
+            self.collection_dimensions[self.default_collection_name] = self._configured_dimension
+
+        policy_flag = self.config.get("use_default_embedding_function")
+        self._force_default_embedding: Optional[bool]
+        if policy_flag is None:
+            self._force_default_embedding = None
+        else:
+            self._force_default_embedding = bool(policy_flag)
 
         self.client: Optional[chromadb.PersistentClient] = None
         self.collections: Dict[str, Any] = {}
@@ -90,9 +106,17 @@ class ChromaVectorDatabase(VectorDatabase):
             settings = Settings(anonymized_telemetry=False)
             self.client = chromadb.PersistentClient(path=self.persist_directory, settings=settings)
 
-            # Default to 1536-dim OpenAI embeddings for text-only queries
-            # (If you supply embeddings externally, this is only used when you query by text)
-            if not self.embedding_function:
+            should_attach_default = False
+            if self.embedding_function is None:
+                if self._force_default_embedding is True:
+                    should_attach_default = True
+                elif self._force_default_embedding is False:
+                    should_attach_default = False
+                else:
+                    # Auto mode – only attach the default if no explicit dimension was provided
+                    should_attach_default = self._configured_dimension in (None, 1536)
+
+            if should_attach_default:
                 api_key = os.getenv("OPENAI_API_KEY")
                 if not api_key:
                     raise RuntimeError(
@@ -102,6 +126,13 @@ class ChromaVectorDatabase(VectorDatabase):
                 self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
                     api_key=api_key,
                     model_name="text-embedding-3-small",  # 1536 dimensions
+                )
+                # We now know the expected dimension is 1536
+                self._configured_dimension = self._configured_dimension or 1536
+            elif self.embedding_function is None and self._configured_dimension is not None:
+                logger.info(
+                    "Chroma vector store configured for externally supplied embeddings (dimension=%d)",
+                    self._configured_dimension,
                 )
 
             logger.info("Chroma PersistentClient ready at %s", self.persist_directory)
@@ -191,11 +222,18 @@ class ChromaVectorDatabase(VectorDatabase):
         if cached is not None:
             return cached
 
+        metadata: Optional[Dict[str, Any]] = None
+        dimension = self.collection_dimensions.get(name) or self._configured_dimension
+        coerced_dimension = self._coerce_positive_int(dimension)
+        if coerced_dimension:
+            metadata = {"dimension": coerced_dimension}
+
         # New clients support get_or_create_collection — race-safe enough for single process
         collection = await self._retry_sync(
             self.client.get_or_create_collection,  # type: ignore[attr-defined]
             name=name,
             embedding_function=self.embedding_function,
+            metadata=metadata or None,
         )
         self.collections[name] = collection
         return collection
@@ -206,10 +244,14 @@ class ChromaVectorDatabase(VectorDatabase):
 
     async def create_collection(self, collection_name: str, dimension: int) -> bool:
         """
-        Create a collection. `dimension` is ignored by Chroma (kept for interface compat).
-        Keep your upstream embedding pipeline at 1536 dims to be consistent.
+        Create a collection and record the expected embedding dimension if provided.
         """
         try:
+            coerced_dimension = self._coerce_positive_int(dimension)
+            if coerced_dimension:
+                self.collection_dimensions[collection_name] = coerced_dimension
+                if self._configured_dimension is None:
+                    self._configured_dimension = coerced_dimension
             await self._get_collection(collection_name)
             return True
         except Exception as e:
@@ -365,3 +407,47 @@ class ChromaVectorDatabase(VectorDatabase):
         except Exception as e:
             logger.error("Error getting vectors by ID from ChromaDB: %s", e)
             return []
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> Optional[int]:
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced > 0 else None
+
+    @staticmethod
+    def _extract_dimension_from_config(config: Dict[str, Any]) -> Optional[int]:
+        if not isinstance(config, dict):
+            return None
+
+        candidate_keys = (
+            "embedding_dimension",
+            "embedding_dim",
+            "dimension",
+            "vector_dimension",
+            "vector_dim",
+            "dim",
+        )
+
+        for key in candidate_keys:
+            value = config.get(key)
+            coerced = ChromaVectorDatabase._coerce_positive_int(value)
+            if coerced:
+                return coerced
+
+        nested_keys = (
+            "vector_store",
+            "embedding",
+            "memory",
+            "vector",
+        )
+
+        for nested in nested_keys:
+            nested_config = config.get(nested)
+            if isinstance(nested_config, dict):
+                nested_value = ChromaVectorDatabase._extract_dimension_from_config(nested_config)
+                if nested_value:
+                    return nested_value
+
+        return None
