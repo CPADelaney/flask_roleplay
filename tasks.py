@@ -39,6 +39,7 @@ from lore.systems.regional_culture import RegionalCultureSystem
 # --- Core NyxBrain + checkpointing ---
 from nyx.core.brain.base import NyxBrain
 from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
+from nyx.nyx_agent.context import NyxContext
 
 # --- New scene-scoped SDK (lazy singleton) ---
 from nyx.nyx_agent_sdk import NyxAgentSDK, NyxSDKConfig
@@ -338,6 +339,39 @@ def refresh_all_cultural_conflict_caches(
         return {"status": "completed", "processed": len(results), "details": results}
 
     return run_async_in_worker_loop(_run())
+
+
+@shared_task(name="tasks.warm_user_context_cache_task")
+def warm_user_context_cache_task(user_id: int, conversation_id: int):
+    """Warm the Nyx user context cache for a given conversation."""
+
+    async def do_warm_up() -> Dict[str, Any]:
+        logger.info(
+            "Starting context cache warm-up for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
+        try:
+            context = NyxContext(user_id=user_id, conversation_id=conversation_id)
+            await context.initialize()
+            await context.build_context_for_input("", None)
+        except Exception as exc:
+            logger.exception(
+                "Failed context cache warm-up for user_id=%s conversation_id=%s: %s",
+                user_id,
+                conversation_id,
+                exc,
+            )
+            raise
+
+        logger.info(
+            "Successfully warmed context cache for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
+        return {"status": "warmed", "user_id": user_id, "conversation_id": conversation_id}
+
+    return run_async_in_worker_loop(do_warm_up())
 
 
 # === Nyx SDK lazy singleton ====================================================
