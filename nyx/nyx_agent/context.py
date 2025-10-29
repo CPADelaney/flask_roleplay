@@ -36,9 +36,10 @@ import random
 import os
 import re
 import dataclasses
+import contextlib
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING, Awaitable
 from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
@@ -2410,40 +2411,56 @@ class ContextBroker:
     
         # --- Fallback path (legacy calls) ---
         location_lore, world_lore, canonical_rules = {}, {}, []
+        location_task: Optional[asyncio.Task] = None
+        canonical_task: Optional[asyncio.Task] = None
         try:
-            # Location by id OR by name
+            location_coro: Optional[Awaitable[Dict[str, Any]]] = None
             if scope.location_id:
                 if isinstance(scope.location_id, int) and hasattr(self.ctx.lore_orchestrator, '_fetch_location_lore_for_bundle'):
-                    location_result = await self.ctx.lore_orchestrator._fetch_location_lore_for_bundle(scope.location_id)
+                    location_coro = self.ctx.lore_orchestrator._fetch_location_lore_for_bundle(scope.location_id)
                 else:
-                    # Treat anything not int as a name
-                    location_result = await self.ctx.lore_orchestrator.get_location_context(str(scope.location_id))
-    
-                if location_result:
-                    location_lore = {
-                        'description': (location_result.get('description') or '')[:200],
-                        'governance': location_result.get('governance') or {},
-                        'culture': location_result.get('culture') or {},
-                    }
-                    # Surface tags to scope so later calls can use them
-                    if 'tags' in location_result:
-                        scope.lore_tags.update(location_result['tags'][:10])
-    
-            # Topic/tag expansion + tag fetch
+                    location_coro = self.ctx.lore_orchestrator.get_location_context(str(scope.location_id))
+
+            if location_coro is not None:
+                location_task = asyncio.create_task(location_coro)
+
+            if hasattr(self.ctx.lore_orchestrator, 'check_canonical_consistency'):
+                canonical_task = asyncio.create_task(self.ctx.lore_orchestrator.check_canonical_consistency())
+
+            location_result: Optional[Dict[str, Any]] = None
+            if location_task is not None:
+                location_result = await location_task
+
+            if location_result:
+                location_lore = {
+                    'description': (location_result.get('description') or '')[:200],
+                    'governance': location_result.get('governance') or {},
+                    'culture': location_result.get('culture') or {},
+                }
+                if 'tags' in location_result:
+                    scope.lore_tags.update(location_result['tags'][:10])
+
             tag_seed = list(scope.lore_tags)[:5]
             if 'related_tags' in scope.link_hints:
                 tag_seed.extend(scope.link_hints['related_tags'][:3])
-    
+
             if tag_seed and hasattr(self.ctx.lore_orchestrator, 'get_tagged_lore'):
                 tagged_lore = await self.ctx.lore_orchestrator.get_tagged_lore(tags=tag_seed)
                 world_lore = tagged_lore or {}
-    
-            # Canon rules
-            if hasattr(self.ctx.lore_orchestrator, 'check_canonical_consistency'):
-                canonical = await self.ctx.lore_orchestrator.check_canonical_consistency()
+
+            if canonical_task is not None:
+                canonical = await canonical_task
                 canonical_rules = (canonical.get('rules') or [])[:5]
-    
+
         except Exception as e:
+            if location_task is not None and not location_task.done():
+                location_task.cancel()
+                with contextlib.suppress(Exception):
+                    await location_task
+            if canonical_task is not None and not canonical_task.done():
+                canonical_task.cancel()
+                with contextlib.suppress(Exception):
+                    await canonical_task
             logger.error(f"Lore fetch failed: {e}")
     
         section_data = LoreSectionData(
