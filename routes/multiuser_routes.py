@@ -4,6 +4,7 @@ from quart import Blueprint, request, jsonify, session
 import logging
 import asyncpg
 from db.connection import get_db_connection_context, get_db_dsn
+from tasks import warm_user_context_cache_task
 
 
 def _normalize_session_user_id():
@@ -207,6 +208,15 @@ async def create_conversation():
             VALUES ($1, $2) RETURNING id
         """, user_id, name)
         new_id = row['id']
+
+    try:
+        warm_user_context_cache_task.delay(int(user_id), int(new_id))
+    except (TypeError, ValueError):
+        logging.warning(
+            "Skipping context cache warm-up for new conversation due to non-integer identifiers: user_id=%s conversation_id=%s",
+            user_id,
+            new_id,
+        )
 
     return jsonify({"conversation_id": new_id, "conversation_name": name})
 
