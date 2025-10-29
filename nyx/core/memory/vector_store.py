@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 #  Embedding model loader                                                     #
 # --------------------------------------------------------------------------- #
-def _load_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransformer:
+def _load_embedding_model(model_name: str = "text-embedding-ada-002") -> SentenceTransformer:
     """
     Resolve a `SentenceTransformer` in three steps:
 
