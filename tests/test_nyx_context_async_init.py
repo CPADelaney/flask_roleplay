@@ -205,3 +205,55 @@ async def test_context_broker_waits_for_memory(monkeypatch):
 
     # Ensure the initialization task completed cleanly
     await ctx.await_orchestrator("memory")
+
+
+@pytest.mark.anyio
+async def test_context_broker_initialize_is_idempotent(monkeypatch):
+    class DummyRedisClient:
+        def __init__(self) -> None:
+            self.ping_calls = 0
+
+        async def ping(self):
+            self.ping_calls += 1
+            return True
+
+    dummy_redis = DummyRedisClient()
+
+    def fake_from_url(*_args, **_kwargs):
+        return dummy_redis
+
+    class DummyScheduler:
+        def get_processor(self, *_args, **_kwargs):
+            return None
+
+    class DummyNPCOrchestrator:
+        async def get_all_npcs(self):
+            return [{"name": "Alice", "id": 1}]
+
+    class DummyContext:
+        def __init__(self) -> None:
+            self.user_id = 123
+            self.conversation_id = 456
+            self.npc_orchestrator = DummyNPCOrchestrator()
+            self.awaited = []
+
+        async def await_orchestrator(self, name: str):
+            self.awaited.append(name)
+
+    monkeypatch.setattr(context_module.redis, "from_url", fake_from_url)
+    monkeypatch.setattr(context_module, "get_conflict_scheduler", lambda: DummyScheduler())
+
+    ctx = DummyContext()
+    broker = context_module.ContextBroker(ctx)
+
+    await broker.initialize()
+
+    assert broker._is_initialized is True
+    assert broker.redis_client is dummy_redis
+    assert dummy_redis.ping_calls == 1
+    assert broker._npc_alias_cache == {"alice": 1}
+    assert ctx.awaited == ["npc"]
+
+    await broker.initialize()
+
+    assert dummy_redis.ping_calls == 1
