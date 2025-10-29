@@ -66,7 +66,7 @@ _ST_MODEL: Optional[SentenceTransformer] = None
 def _get_st_model() -> SentenceTransformer:
     global _ST_MODEL           # pylint: disable=global-statement
     if _ST_MODEL is None:
-        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        _ST_MODEL = SentenceTransformer("text-embedding-ada-002")
     return _ST_MODEL
 
 
