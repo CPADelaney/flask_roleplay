@@ -1002,59 +1002,59 @@ class ContextBroker:
         # Metrics logging throttle
         self._metrics_log_counter = 0
         self._metrics_log_interval = 5  # Log every 5th turn
-    
+
+        self._init_lock = asyncio.Lock()
+        self._is_initialized = False
+
     async def initialize(self):
-        """
-        NON-BLOCKING: Starts initialization of all subsystems in the background.
-        Uses a lock to ensure this only runs once.
-        """
+        """Initialize broker resources such as Redis connections and caches."""
+
         async with self._init_lock:
-            # If initialization has already been started by another request, do nothing.
             if self._is_initialized:
                 return
 
-            logger.info(f"[CONTEXT_INIT] Starting NON-BLOCKING initialization for user {self.user_id}...")
-            
-            # --- Start all subsystem initializations in the background ---
-            self._init_tasks["memory"] = asyncio.create_task(self._init_memory_orchestrator())
-            self._init_tasks["lore"] = asyncio.create_task(self._init_lore_orchestrator())
-            self._init_tasks["npc"] = asyncio.create_task(self._init_npc_orchestrator())
-            self._init_tasks["conflict"] = asyncio.create_task(self._init_conflict_synthesizer())
-            if WORLD_SIMULATION_AVAILABLE:
-                self._init_tasks["world"] = asyncio.create_task(self._init_world_systems())
+            user_id = getattr(self.ctx, "user_id", "unknown")
+            conversation_id = getattr(self.ctx, "conversation_id", "unknown")
+            logger.info(
+                "[CONTEXT_BROKER] Starting initialization for user %s, conversation %s",
+                user_id,
+                conversation_id,
+            )
 
-            # --- Initialize components that depend on others (or are fast) ---
-            # The context_broker itself is fast to init, but it needs to await the others later.
-            self.context_broker = ContextBroker(self)
-            self._init_tasks["context_broker"] = asyncio.create_task(self.context_broker.initialize())
+            await self._try_connect_redis()
+            await self._build_npc_alias_cache()
 
-            # Mark as initialized so this block doesn't run again.
             self._is_initialized = True
-            logger.info("NyxContext non-blocking initialization has been launched.")
-    
+
+            logger.info(
+                "[CONTEXT_BROKER] Initialization complete for user %s, conversation %s",
+                user_id,
+                conversation_id,
+            )
+
     async def await_orchestrator(self, name: str) -> bool:
-        """
-        Safely awaits and returns True if the requested orchestrator is ready.
-        Returns False on failure.
-        """
-        if name not in self._init_tasks:
-            logger.warning(f"Attempted to await an unknown orchestrator: {name}")
-            return False
-            
-        # If the task isn't done yet, await it.
-        if not self._init_tasks[name].done():
-            try:
-                await self._init_tasks[name]
-            except Exception as e:
-                logger.error(f"Initialization for orchestrator '{name}' failed: {e}", exc_info=True)
-                return False
-        
-        # Check for exceptions that might have occurred during the task's run
-        if self._init_tasks[name].exception():
-            logger.error(f"Orchestrator '{name}' has a stored exception from initialization.")
+        """Delegate orchestrator readiness checks to the parent NyxContext."""
+
+        awaiter = getattr(self.ctx, "await_orchestrator", None)
+        if awaiter is None:
+            logger.warning(
+                "[CONTEXT_BROKER] NyxContext missing await_orchestrator; cannot await '%s'",
+                name,
+            )
             return False
 
-        return True
+        try:
+            await awaiter(name)
+            return True
+        except Exception:
+            logger.error(
+                "[CONTEXT_BROKER] Await for orchestrator '%s' failed for user %s conversation %s",
+                name,
+                getattr(self.ctx, "user_id", "unknown"),
+                getattr(self.ctx, "conversation_id", "unknown"),
+                exc_info=True,
+            )
+            return False
 
 
     async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:
