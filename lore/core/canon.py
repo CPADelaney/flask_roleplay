@@ -199,15 +199,8 @@ async def create_canonical_entity_transactional(
     ctx = ensure_canonical_context(ctx)
     memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    # Prepare embedding
+    # Avoid manual embedding generation; the database trigger will populate the column.
     entity_name = entity_data.get('name', entity_data.get('npc_name', 'Unknown'))
-    embedding_text = f"{entity_type}: {entity_name}"
-    for key, value in entity_data.items():
-        if key not in ['embedding', 'user_id', 'conversation_id'] and value:
-            embedding_text += f" {value}"
-    
-    embedding = await memory_orchestrator.generate_embedding(embedding_text[:1000])
-    entity_data['embedding'] = embedding
     
     # Ensure we're in a transaction
     if conn.is_in_transaction():
@@ -629,12 +622,6 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
             logger.info(f"LLM determined that proposal '{npc_name}' is NOT a duplicate. Proceeding with creation.")
     
     # Create the new NPC (already passed existence gate)
-    embedding_text = f"NPC: {npc_name}"
-    if role:
-        embedding_text += f", role: {role}"
-    
-    new_embedding = await memory_orchestrator.generate_embedding(embedding_text)
-    
     affiliations = kwargs.get("affiliations", [])
     if isinstance(affiliations, list):
         affiliations_json = json.dumps(affiliations)
@@ -642,8 +629,8 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         affiliations_json = affiliations
     
     insert_query = """
-        INSERT INTO NPCStats (user_id, conversation_id, npc_name, role, affiliations, embedding)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING npc_id
+        INSERT INTO NPCStats (user_id, conversation_id, npc_name, role, affiliations)
+        VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING npc_id
     """
     
     npc_id = await conn.fetchval(
@@ -652,8 +639,7 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         ctx.conversation_id,
         npc_name,
         role,
-        affiliations_json,
-        new_embedding
+        affiliations_json
     )
     
     # Store in memory system
@@ -771,13 +757,6 @@ async def find_or_create_entity(
     """
     
     entity_id = await conn.fetchval(insert_query, *create_data.values())
-    
-    # Generate and store embedding
-    search_vector = await memory_orchestrator.generate_embedding(embedding_text)
-    await conn.execute(
-        f"UPDATE {table_name} SET embedding = $1 WHERE id = $2",
-        search_vector, entity_id
-    )
     
     # Store creation as a memory
     await memory_orchestrator.store_memory(
@@ -1167,16 +1146,14 @@ async def find_or_create_nation(
                     return existing_id
     
     # Step 3: Create new nation
-    embedding = await memory_orchestrator.generate_embedding(search_text)
-    
     nation_id = await conn.fetchval("""
         INSERT INTO Nations (
             name, government_type, description, relative_power,
             matriarchy_level, population_scale, major_resources,
             major_cities, cultural_traits, notable_features,
-            neighboring_nations, embedding
+            neighboring_nations
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
     """,
         nation_name,
@@ -1189,8 +1166,7 @@ async def find_or_create_nation(
         kwargs.get('major_cities', []),
         kwargs.get('cultural_traits', []),
         kwargs.get('notable_features'),
-        kwargs.get('neighboring_nations', []),
-        embedding
+        kwargs.get('neighboring_nations', [])
     )
     
     # Store in memory system
@@ -1269,16 +1245,14 @@ async def find_or_create_conflict(
                             return conflict_id
     
     # Create new conflict
-    embedding = await memory_orchestrator.generate_embedding(search_text)
-    
     conflict_id = await conn.fetchval("""
         INSERT INTO NationalConflicts (
             name, conflict_type, description, severity, status,
             start_date, involved_nations, primary_aggressor, primary_defender,
             current_casualties, economic_impact, diplomatic_consequences,
-            public_opinion, recent_developments, potential_resolution, embedding
+            public_opinion, recent_developments, potential_resolution
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING id
     """,
         conflict_name,
@@ -1295,8 +1269,7 @@ async def find_or_create_conflict(
         kwargs.get('diplomatic_consequences', 'Developing'),
         json.dumps(kwargs.get('public_opinion', {})),
         kwargs.get('recent_developments', []),
-        kwargs.get('potential_resolution', 'Uncertain'),
-        embedding
+        kwargs.get('potential_resolution', 'Uncertain')
     )
     
     # Get nation names for logging
@@ -1544,9 +1517,9 @@ async def find_or_create_geographic_region(
             governing_faction, population_density, major_settlements,
             cultural_traits, dangers, terrain_features,
             defensive_characteristics, strategic_value,
-            matriarchal_influence, embedding
+            matriarchal_influence
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING id
     """,
     name, region_type, description, kwargs.get('climate'),
@@ -1554,8 +1527,7 @@ async def find_or_create_geographic_region(
     kwargs.get('population_density'), kwargs.get('major_settlements', []),
     kwargs.get('cultural_traits', []), kwargs.get('dangers', []),
     kwargs.get('terrain_features', []), kwargs.get('defensive_characteristics'),
-    kwargs.get('strategic_value', 5), kwargs.get('matriarchal_influence', 5),
-    search_vector)
+    kwargs.get('strategic_value', 5), kwargs.get('matriarchal_influence', 5))
     
     await log_canonical_event(
         ctx, conn,
@@ -1568,18 +1540,15 @@ async def find_or_create_geographic_region(
 
 async def create_political_entity(ctx, conn, **kwargs) -> int:
     """Create a political entity."""
-    embedding_text = f"{kwargs['name']} {kwargs['entity_type']} {kwargs['description']}"
-    embedding = await generate_embedding(embedding_text)
-    
     entity_id = await conn.fetchval("""
         INSERT INTO PoliticalEntities (
             name, entity_type, description, region_id,
             governance_style, leadership_structure, population_scale,
             cultural_identity, economic_focus, political_values,
             matriarchy_level, relations, military_strength,
-            diplomatic_stance, internal_conflicts, power_centers, embedding
+            diplomatic_stance, internal_conflicts, power_centers
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING id
     """,
     kwargs['name'], kwargs['entity_type'], kwargs['description'],
@@ -1589,25 +1558,20 @@ async def create_political_entity(ctx, conn, **kwargs) -> int:
     kwargs['political_values'], kwargs['matriarchy_level'],
     json.dumps(kwargs.get('relations', {})), kwargs.get('military_strength', 5),
     kwargs['diplomatic_stance'], kwargs.get('internal_conflicts', []),
-    json.dumps(kwargs.get('power_centers', [])), embedding)
+    json.dumps(kwargs.get('power_centers', [])))
     
     return entity_id
 
 async def create_conflict_simulation(ctx, conn, **kwargs) -> int:
     """Create a conflict simulation record."""
-    # Create embedding from primary actors
-    actor_names = [a.get('name', '') for a in kwargs.get('primary_actors', [])]
-    embed_text = f"{kwargs['conflict_type']} involving {', '.join(actor_names)}"
-    embedding = await generate_embedding(embed_text)
-    
     sim_id = await conn.fetchval("""
         INSERT INTO ConflictSimulations (
             conflict_type, primary_actors, timeline, intensity_progression,
             diplomatic_events, military_events, civilian_impact,
             resolution_scenarios, most_likely_outcome, duration_months,
-            confidence_level, simulation_basis, embedding
+            confidence_level, simulation_basis
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
     """,
     kwargs['conflict_type'], json.dumps(kwargs['primary_actors']),
@@ -1618,23 +1582,20 @@ async def create_conflict_simulation(ctx, conn, **kwargs) -> int:
     json.dumps(kwargs.get('resolution_scenarios', [])),
     json.dumps(kwargs['most_likely_outcome']),
     kwargs['duration_months'], kwargs['confidence_level'],
-    kwargs['simulation_basis'], embedding)
+    kwargs['simulation_basis'])
     
     return sim_id
 
 async def create_border_dispute(ctx, conn, **kwargs) -> int:
     """Create a border dispute record."""
-    embed_text = f"{kwargs['dispute_type']} {kwargs['description']} {kwargs['strategic_implications']}"
-    embedding = await generate_embedding(embed_text)
-    
     dispute_id = await conn.fetchval("""
         INSERT INTO BorderDisputes (
             region1_id, region2_id, dispute_type, description,
             severity, duration, causal_factors, status,
             resolution_attempts, strategic_implications,
-            female_leaders_involved, gender_dynamics, embedding
+            female_leaders_involved, gender_dynamics
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
     """,
     kwargs['region1_id'], kwargs['region2_id'], kwargs['dispute_type'],
@@ -1642,7 +1603,7 @@ async def create_border_dispute(ctx, conn, **kwargs) -> int:
     kwargs['causal_factors'], kwargs['status'],
     json.dumps(kwargs.get('resolution_attempts', [])),
     kwargs['strategic_implications'], kwargs.get('female_leaders_involved', []),
-    kwargs['gender_dynamics'], embedding)
+    kwargs['gender_dynamics'])
     
     return dispute_id
 
@@ -1718,22 +1679,19 @@ async def find_or_create_urban_myth(
                     return myth_id
     
     # Create new myth
-    embedding = await memory_orchestrator.generate_embedding(search_text)
-    
     myth_id = await conn.fetchval("""
         INSERT INTO UrbanMyths (
             name, description, origin_location, origin_event,
             believability, spread_rate, regions_known, narrative_style,
-            themes, matriarchal_elements, embedding
+            themes, matriarchal_elements
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id
     """,
         name, description, kwargs.get('origin_location'),
         kwargs.get('origin_event'), kwargs.get('believability', 6),
         kwargs.get('spread_rate', 5), kwargs.get('regions_known', []),
-        narrative_style, themes, kwargs.get('matriarchal_elements', []),
-        embedding
+        narrative_style, themes, kwargs.get('matriarchal_elements', [])
     )
     
     # Store in memory system
@@ -1772,24 +1730,21 @@ async def find_or_create_urban_myth(
 
 async def create_local_history(ctx, conn, **kwargs) -> int:
     """Create a local historical event."""
-    embedding_text = f"{kwargs['event_name']} {kwargs['description']} {kwargs['date_description']} {kwargs['narrative_category']}"
-    embedding = await generate_embedding(embedding_text)
-    
     event_id = await conn.fetchval("""
         INSERT INTO LocalHistories (
             location_id, event_name, description, date_description,
             significance, impact_type, notable_figures,
             current_relevance, commemoration, connected_myths,
-            related_landmarks, narrative_category, embedding
+            related_landmarks, narrative_category
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
     """,
     kwargs['location_id'], kwargs['event_name'], kwargs['description'],
     kwargs['date_description'], kwargs['significance'], kwargs['impact_type'],
     kwargs.get('notable_figures', []), kwargs.get('current_relevance'),
     kwargs.get('commemoration'), kwargs.get('connected_myths', []),
-    kwargs.get('related_landmarks', []), kwargs['narrative_category'], embedding)
+    kwargs.get('related_landmarks', []), kwargs['narrative_category'])
     
     return event_id
 
@@ -1841,17 +1796,16 @@ async def find_or_create_landmark(ctx, conn, **kwargs) -> int:
             name, location_id, landmark_type, description,
             historical_significance, current_use, controlled_by,
             legends, connected_histories, architectural_style,
-            symbolic_meaning, matriarchal_significance, embedding
+            symbolic_meaning, matriarchal_significance
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
     """,
     name, location_id, landmark_type, kwargs['description'],
     kwargs.get('historical_significance'), kwargs.get('current_use'),
     kwargs.get('controlled_by'), kwargs.get('legends', []),
     kwargs.get('connected_histories', []), kwargs.get('architectural_style'),
-    kwargs.get('symbolic_meaning'), kwargs.get('matriarchal_significance', 'moderate'),
-    search_vector)
+    kwargs.get('symbolic_meaning'), kwargs.get('matriarchal_significance', 'moderate'))
     
     await log_canonical_event(
         ctx, conn,
@@ -1879,14 +1833,6 @@ async def update_urban_myth(ctx, conn, myth_id: int, updates: Dict[str, Any]) ->
     
     await conn.execute(query, *values)
     
-    # Update embedding if description changed
-    if 'description' in updates:
-        myth = await conn.fetchrow("SELECT name FROM UrbanMyths WHERE id = $1", myth_id)
-        if myth:
-            embedding_text = f"{myth['name']} {updates['description']}"
-            embedding = await generate_embedding(embedding_text)
-            await conn.execute("UPDATE UrbanMyths SET embedding = $1 WHERE id = $2", embedding, myth_id)
-
 async def update_landmark(ctx, conn, landmark_id: int, updates: Dict[str, Any]) -> None:
     """Update a landmark."""
     set_clauses = []
@@ -1999,8 +1945,6 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
                 return similar_name
     
     # Create new location (already passed existence gate)
-    search_vector = await memory_orchestrator.generate_embedding(embedding_text)
-
     metadata_payload = kwargs.get('metadata')
     extra_metadata: Dict[str, Any] = {}
     if isinstance(metadata_payload, dict):
@@ -2019,7 +1963,6 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         "hidden_aspects": kwargs.get('hidden_aspects', []),
         "access_restrictions": kwargs.get('access_restrictions', []),
         "local_customs": kwargs.get('local_customs', []),
-        "embedding": search_vector,
     }
 
     def _normalize_scope(value: Any) -> Optional[str]:
@@ -2189,9 +2132,9 @@ async def find_or_create_faction(ctx, conn, faction_name: str, **kwargs) -> int:
             values, goals, hierarchy, resources, territory,
             rivals, allies, public_reputation, secret_activities,
             power_level, influence_scope, recruitment_methods,
-            leadership_structure, founding_story, embedding
+            leadership_structure, founding_story
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         RETURNING id
     """,
         ctx.user_id, ctx.conversation_id, faction_name, faction_type, description,
@@ -2208,8 +2151,7 @@ async def find_or_create_faction(ctx, conn, faction_name: str, **kwargs) -> int:
         kwargs.get('influence_scope', 'local'),
         kwargs.get('recruitment_methods', []),
         kwargs.get('leadership_structure', {}),
-        kwargs.get('founding_story', ''),
-        search_vector
+        kwargs.get('founding_story', '')
     )
     
     await log_canonical_event(
@@ -2281,9 +2223,9 @@ async def find_or_create_historical_event(ctx, conn, event_name: str, **kwargs) 
             date_description, event_type, significance,
             involved_entities, location, consequences,
             cultural_impact, disputed_facts, commemorations,
-            primary_sources, embedding
+            primary_sources
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING id
     """,
         ctx.user_id, ctx.conversation_id, event_name, description,
@@ -2296,8 +2238,7 @@ async def find_or_create_historical_event(ctx, conn, event_name: str, **kwargs) 
         kwargs.get('cultural_impact', 'moderate'),
         kwargs.get('disputed_facts', []),
         kwargs.get('commemorations', []),
-        kwargs.get('primary_sources', []),
-        search_vector
+        kwargs.get('primary_sources', [])
     )
     
     await log_canonical_event(
@@ -2368,9 +2309,9 @@ async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -
             achievements, failures, personality_traits,
             public_image, hidden_aspects, influence_areas,
             legacy, controversial_actions, relationships,
-            current_status, reputation, significance, embedding
+            current_status, reputation, significance
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         RETURNING id
     """,
         ctx.user_id, ctx.conversation_id, figure_name, title, description,
@@ -2388,8 +2329,7 @@ async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -
         json.dumps(kwargs.get('relationships', [])),         # Convert to JSON string
         kwargs.get('current_status', 'active'),
         kwargs.get('reputation', 50),
-        kwargs.get('significance', 5),
-        search_vector
+        kwargs.get('significance', 5)
     )
     
     await log_canonical_event(
@@ -2504,13 +2444,6 @@ async def update_entity_with_governance(
             
             if embedding_parts:
                 embedding_text = ' '.join(embedding_parts)
-                embedding = await memory_orchestrator.generate_embedding(embedding_text)
-                
-                await conn.execute(
-                    f"UPDATE {entity_type} SET embedding = $1 WHERE id = $2",
-                    embedding, entity_id
-                )
-                
                 # Update vector store
                 await memory_orchestrator.add_to_vector_store(
                     text=embedding_text,
@@ -2888,27 +2821,23 @@ async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kw
     
     metadata = {k: v for k, v in metadata.items() if v is not None}
     
-    # Generate embedding using memory orchestrator
-    embedding = await memory_orchestrator.generate_embedding(entry_text)
-    
     # Store in database
     entry_id = await conn.fetchval("""
         INSERT INTO PlayerJournal (
             user_id, conversation_id, entry_type, entry_text,
-            importance, tags, entry_metadata, embedding,
+            importance, tags, entry_metadata,
             created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, CURRENT_TIMESTAMP)
         RETURNING id
     """,
-        ctx.user_id, 
-        ctx.conversation_id, 
+        ctx.user_id,
+        ctx.conversation_id,
         entry_type,
         entry_text,
         significance,
         json.dumps(tags),
-        json.dumps(metadata),
-        embedding
+        json.dumps(metadata)
     )
     
     # Get player name from context or default
@@ -2983,19 +2912,16 @@ async def add_journal_entry(ctx, conn, entry_text: str, significance: float = No
         if "change" in q.lower():
             tags.append("transformation")
     
-    # Generate embedding
-    embedding = await memory_orchestrator.generate_embedding(entry_text)
-    
     entry_id = await conn.fetchval("""
         INSERT INTO PlayerJournal (
             user_id, conversation_id, entry_text,
-            importance, tags, embedding, created_at
+            importance, tags, created_at
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5::jsonb, CURRENT_TIMESTAMP)
         RETURNING id
     """,
         ctx.user_id, ctx.conversation_id, entry_text,
-        significance, json.dumps(tags), embedding
+        significance, json.dumps(tags)
     )
     
     # Store in memory system for better retrieval
@@ -3978,9 +3904,9 @@ async def find_or_create_event(ctx, conn, event_name: str, **kwargs) -> int:
         INSERT INTO Events (
             user_id, conversation_id, event_name, description,
             start_time, end_time, location, year, month, day,
-            time_of_day, embedding
+            time_of_day
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
     """,
         ctx.user_id, ctx.conversation_id, event_name, description,
@@ -3990,8 +3916,7 @@ async def find_or_create_event(ctx, conn, event_name: str, **kwargs) -> int:
         kwargs.get('year', 1),
         kwargs.get('month', 1),
         kwargs.get('day', 1),
-        kwargs.get('time_of_day', 'Morning'),
-        search_vector
+        kwargs.get('time_of_day', 'Morning')
     )
     
     await log_canonical_event(
