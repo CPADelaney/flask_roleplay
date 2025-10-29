@@ -2912,7 +2912,20 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         # If movement logic didn't produce a result, proceed with standard validation
         if not result_for_this_intent:
             # Check for missing NPCs/items (prerequisite check)
-            prereq_ok, prereq_reason = await _check_prerequisites(intent, setting_context)
+            ignore_tokens: Optional[Set[str]] = None
+            if is_movement and candidate_tokens:
+                ignore_tokens = set(candidate_tokens)
+                ignore_tokens |= {
+                    _normalize_location_phrase(token)
+                    for token in candidate_tokens
+                    if _normalize_location_phrase(token)
+                }
+
+            prereq_ok, prereq_reason = await _check_prerequisites(
+                intent,
+                setting_context,
+                ignore_tokens=ignore_tokens,
+            )
             if not prereq_ok:
                 categories_norm = _normalize_categories(cats)
                 guidance = prereq_reason
@@ -3692,7 +3705,12 @@ def _matches_impossibility_dynamic(intent: Dict, impossibility: Dict) -> bool:
     
     return False
 
-async def _check_prerequisites(intent: Dict, context: Dict) -> Tuple[bool, Optional[str]]:
+async def _check_prerequisites(
+    intent: Dict,
+    context: Dict,
+    *,
+    ignore_tokens: Optional[Iterable[str]] = None,
+) -> Tuple[bool, Optional[str]]:
     """Check if required elements for the action are present"""
 
     categories = {str(cat).lower() for cat in intent.get("categories", [])}
@@ -3745,6 +3763,20 @@ async def _check_prerequisites(intent: Dict, context: Dict) -> Tuple[bool, Optio
     available_items_tokens = _tokenize_scene_values(available_items)
     present_entities_tokens = _tokenize_scene_values(present_entities)
 
+    ignore_token_set: Set[str] = set()
+    if ignore_tokens:
+        for token in ignore_tokens:
+            normalized_ignore = _normalize_term(token)
+            if normalized_ignore:
+                ignore_token_set.add(normalized_ignore)
+            if isinstance(token, str):
+                normalized_phrase = _normalize_location_phrase(token)
+                if normalized_phrase:
+                    ignore_token_set.add(normalized_phrase)
+                    ignore_token_set.update(
+                        part for part in normalized_phrase.split() if part
+                    )
+
     has_scene_data = (
         available_items is not None
         or present_entities is not None
@@ -3767,6 +3799,8 @@ async def _check_prerequisites(intent: Dict, context: Dict) -> Tuple[bool, Optio
     for item in instruments_iter:
         normalized = _normalize_term(item)
         if not normalized:
+            continue
+        if normalized in ignore_token_set:
             continue
         if normalized not in available_items_tokens:
             reason = f"Required item '{_display_term(item)}' is not available here."
@@ -3794,6 +3828,10 @@ async def _check_prerequisites(intent: Dict, context: Dict) -> Tuple[bool, Optio
             return False, "No current location recorded."
 
         if not normalized:
+            continue
+        if normalized in ignore_token_set or (
+            display_normalized and display_normalized in ignore_token_set
+        ):
             continue
         if (
             normalized not in present_entities_tokens
@@ -5212,10 +5250,17 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                         if len(suggested) >= 3:
                             break
 
-                missing_location_phrase = _format_missing_names(missing_location_tokens)
-                reason_text = message or (
-                    f"{missing_location_phrase} isn't an established location right now."
+                missing_location_phrase = (
+                    _format_missing_names(missing_location_tokens)
+                    if missing_location_tokens
+                    else ""
                 )
+                default_reason = (
+                    f"{missing_location_phrase} isn't an established location right now."
+                    if missing_location_phrase
+                    else "That destination isn't an established location right now."
+                )
+                reason_text = message or default_reason
                 strategy = (
                     "ask"
                     if status in {STATUS_MULTIPLE, STATUS_ASK, STATUS_TRAVEL_PLAN}
@@ -5262,7 +5307,11 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     any_hard_block = True
                 continue
 
-            missing_location_phrase = _format_missing_names(missing_location_tokens)
+            missing_location_phrase = (
+                _format_missing_names(missing_location_tokens)
+                if missing_location_tokens
+                else ""
+            )
             lead_candidates = _scene_alternatives(
                 _display_scene_values(scene_npcs),
                 _display_scene_values(scene_items),
@@ -5271,6 +5320,8 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             )
             reason_text = (
                 f"{missing_location_phrase} isn't an established location right now."
+                if missing_location_phrase
+                else "That destination isn't an established location right now."
             )
             logger.info(
                 "[FEASIBILITY] Hard deny - fabricated location -> %s",
@@ -5358,8 +5409,16 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
             missing_item_tokens = filtered_tokens
         if missing_target_tokens or missing_item_tokens:
             violations: List[Dict[str, str]] = []
-            missing_target_phrase = _format_missing_names(missing_target_tokens)
-            missing_item_phrase = _format_missing_names(missing_item_tokens)
+            missing_target_phrase = (
+                _format_missing_names(missing_target_tokens)
+                if missing_target_tokens
+                else ""
+            )
+            missing_item_phrase = (
+                _format_missing_names(missing_item_tokens)
+                if missing_item_tokens
+                else ""
+            )
             if missing_target_tokens:
                 violations.append({
                     "rule": "npc_absent",

@@ -492,6 +492,67 @@ async def test_fast_feasibility_location_deny_trumps_ask(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_fast_feasibility_allows_movement_to_new_location(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["movement"],
+                "direct_object": ["Disneyland"],
+            }
+        ]
+
+    scene_payload = {
+        "npcs": [],
+        "items": [],
+        "location": {"name": "Hotel Lobby"},
+        "location_features": [],
+        "time_phase": "day",
+    }
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps(scene_payload)},
+                    {"key": "CurrentLocation", "value": "Hotel Lobby"},
+                    {"key": "SettingCapabilities", "value": json.dumps({})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            if "Locations" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_resolve_place_or_travel(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+    monkeypatch.setattr(feasibility, "resolve_place_or_travel", fake_resolve_place_or_travel)
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=11,
+        conversation_id=29,
+        text="I go to Disneyland",
+    )
+
+    overall = result["overall"]
+    assert overall["strategy"] in {"allow", "ask", "defer"}
+    per_intent = result["per_intent"][0]
+    assert not any(v.get("rule") == "npc_absent" for v in per_intent.get("violations", []))
+
+
+@pytest.mark.anyio
 async def test_fast_feasibility_ignores_inherent_instruments(monkeypatch):
     async def fake_parse_action_intents(_text):
         return [
