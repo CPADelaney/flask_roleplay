@@ -978,20 +978,25 @@ class LoreKnowledgeAccess(BaseDataAccess):
             
         try:
             # Get the lore details based on type
-            if lore_type == "Factions":
-                query = "SELECT * FROM Factions WHERE id = $1"
-            elif lore_type == "WorldLore":
-                query = "SELECT * FROM WorldLore WHERE id = $1"
-            elif lore_type == "CulturalElements":
-                query = "SELECT * FROM CulturalElements WHERE id = $1"
-            elif lore_type == "HistoricalEvents":
-                query = "SELECT * FROM HistoricalEvents WHERE id = $1"
-            elif lore_type == "LocationLore":
-                query = "SELECT * FROM LocationLore WHERE location_id = $1"
-            else:
+            table_mapping = {
+                "Factions": ("Factions", "id"),
+                "WorldLore": ("WorldLore", "id"),
+                "CulturalElements": ("CulturalElements", "id"),
+                "HistoricalEvents": ("HistoricalEvents", "id"),
+                "LocationLore": ("LocationLore", "location_id"),
+            }
+
+            if lore_type not in table_mapping:
                 # Unknown lore type
                 return {}
-            
+
+            table_name, key_column = table_mapping[lore_type]
+
+            query = (
+                f"SELECT l.embedding AS embedding, l.* FROM {table_name} AS l "
+                f"WHERE l.{key_column} = $1"
+            )
+
             params = [lore_id]
             
             # Add user/conversation filters
@@ -1147,30 +1152,32 @@ class LoreKnowledgeAccess(BaseDataAccess):
                 # Get the full lore item
                 lore_type = knowledge["lore_type"]
                 lore_id = knowledge["lore_id"]
-                
+
                 lore_item = await self.get_lore_by_id(lore_type, lore_id)
-                
+
                 if not lore_item:
                     continue
-                    
-                # Skip if no embedding - FIXED: proper check for numpy array
+
                 if "embedding" not in lore_item or lore_item["embedding"] is None:
-                    # Try to generate an embedding from the description
-                    if "description" in lore_item:
-                        try:
-                            lore_item["embedding"] = await generate_embedding(lore_item["description"])
-                        except Exception:
-                            continue
-                    else:
-                        continue
-                
+                    logger.warning(
+                        "Lore item missing embedding; skipping. lore_type=%s lore_id=%s",
+                        lore_type,
+                        lore_id,
+                    )
+                    continue
+
                 # Convert embedding to list if it's not already
                 embedding = lore_item["embedding"]
                 if hasattr(embedding, 'tolist'):
                     embedding = embedding.tolist()
-                
+
                 # Skip if embedding is empty
                 if not embedding or len(embedding) == 0:
+                    logger.warning(
+                        "Lore item has empty embedding; skipping. lore_type=%s lore_id=%s",
+                        lore_type,
+                        lore_id,
+                    )
                     continue
                 
                 # Calculate similarity
