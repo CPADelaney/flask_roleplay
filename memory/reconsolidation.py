@@ -57,7 +57,7 @@ class ReconsolidationManager:
         # Fetch the memory
         row = await conn.fetchrow("""
             SELECT id, memory_text, memory_type, significance, emotional_intensity,
-                   tags, metadata, timestamp, times_recalled, last_recalled
+                   tags, metadata, timestamp, times_recalled, last_recalled, embedding
             FROM unified_memories
             WHERE id = $1
               AND entity_type = $2
@@ -111,7 +111,7 @@ class ReconsolidationManager:
         
         # Check for source confusion with similar memories
         similar_memories = await self._find_similar_memories(
-            memory_id, entity_type, entity_id, memory.text, conn
+            memory_id, entity_type, entity_id, memory.text, memory.embedding, conn
         )
         
         # Adjust alteration strength based on factors
@@ -170,27 +170,13 @@ class ReconsolidationManager:
         new_fidelity = max(0.1, min(1.0, current_fidelity + fidelity_change))
         memory.metadata["fidelity"] = new_fidelity
         
-        # Generate embedding for the altered text using the helper function
-        embedding = None
-        try:
-            from logic.chatgpt_integration import get_async_openai_client, get_openai_client
-            client = get_async_openai_client()
-            response = await client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=altered_text
-            )
-            embedding = response.data[0].embedding
-        except Exception as e:
-            logger.error(f"Error generating embedding for reconsolidated memory: {e}")
-        
         # Update the memory in the database
         await conn.execute("""
             UPDATE unified_memories
             SET memory_text = $1,
-                metadata = $2,
-                embedding = COALESCE($3, embedding)
-            WHERE id = $4
-        """, altered_text, json.dumps(memory.metadata), embedding, memory_id)
+                metadata = $2
+            WHERE id = $3
+        """, altered_text, json.dumps(memory.metadata), memory_id)
         
         # Return the updated memory info
         return {
@@ -282,63 +268,41 @@ class ReconsolidationManager:
         
         return default_schemas
     
-    async def _find_similar_memories(self, 
-                                    memory_id: int, 
-                                    entity_type: str, 
-                                    entity_id: int, 
+    async def _find_similar_memories(self,
+                                    memory_id: int,
+                                    entity_type: str,
+                                    entity_id: int,
                                     memory_text: str,
+                                    memory_embedding: Optional[List[float]],
                                     conn) -> List[Dict[str, Any]]:
         """
         Find memories similar to the given one that could cause source confusion.
         """
-        # Generate embedding for comparison using the helper function
-        embedding = None
-        try:
-            from logic.chatgpt_integration import get_async_openai_client, get_openai_client
-            client = get_async_openai_client()
-            response = await client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=memory_text
-            )
-            embedding = response.data[0].embedding
-        except Exception as e:
-            logger.error(f"Error generating embedding for similar memory search: {e}")
-            # If embedding fails, try keyword search as fallback
-            if embedding is None:
-                # Extract keywords from memory text
-                words = set(memory_text.lower().split())
-                significant_words = [w for w in words if len(w) > 4]
-                
-                if significant_words:
-                    # Use OR query with the significant words
-                    conditions = " OR ".join([f"memory_text ILIKE '%' || $" + str(i+6) + " || '%'" for i, _ in enumerate(significant_words[:5])])
-                    params = [memory_id, entity_type, entity_id, self.user_id, self.conversation_id] + significant_words[:5]
-                    
-                    query = f"""
-                        SELECT id, memory_text, significance, emotional_intensity
-                        FROM unified_memories
-                        WHERE id != $1
-                          AND entity_type = $2
-                          AND entity_id = $3
-                          AND user_id = $4
-                          AND conversation_id = $5
-                          AND ({conditions})
-                        LIMIT 3
-                    """
-                    
-                    rows = await conn.fetch(query, *params)
-                    return [dict(row) for row in rows]
-                
-                return []
-        
-        # If we have an embedding, use vector search
-        if embedding:
-            # Convert to PostgreSQL array format if needed
-            embedding_array = embedding if isinstance(embedding, list) else list(embedding)
-            
+        # Prefer the embedding stored on the memory record. If it is missing,
+        # attempt to refetch it before falling back to keyword matching.
+        query_embedding: Optional[List[float]] = memory_embedding
+
+        if query_embedding is None:
+            row = await conn.fetchrow("""
+                SELECT embedding
+                FROM unified_memories
+                WHERE id = $1
+                  AND entity_type = $2
+                  AND entity_id = $3
+                  AND user_id = $4
+                  AND conversation_id = $5
+            """, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
+            if row and row["embedding"] is not None:
+                stored_embedding = row["embedding"]
+                query_embedding = stored_embedding if isinstance(stored_embedding, list) else list(stored_embedding)
+
+        if query_embedding is not None:
+            if not isinstance(query_embedding, list):
+                query_embedding = list(query_embedding)
+
             rows = await conn.fetch("""
                 SELECT id, memory_text, significance, emotional_intensity,
-                       embedding <-> $1::vector AS similarity
+                       embedding <=> $1::vector AS similarity
                 FROM unified_memories
                 WHERE id != $2
                   AND entity_type = $3
@@ -346,19 +310,44 @@ class ReconsolidationManager:
                   AND user_id = $5
                   AND conversation_id = $6
                   AND embedding IS NOT NULL
-                ORDER BY similarity
+                ORDER BY embedding <=> $1::vector
                 LIMIT 3
-            """, embedding_array, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
-            
-            similar_memories = []
+            """, query_embedding, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
+
+            similar_memories: List[Dict[str, Any]] = []
             for row in rows:
-                # Only include if similarity is high enough
-                if row["similarity"] < 0.25:  # Lower is more similar for PostgreSQL vector operators
+                similarity = row["similarity"]
+                if similarity is not None and similarity < 0.25:
                     similar_memories.append(dict(row))
-            
-            return similar_memories
-        
-        return []
+            if similar_memories:
+                return similar_memories
+
+        # Fall back to keyword search if no embedding is available
+        words = set(memory_text.lower().split())
+        significant_words = [w for w in words if len(w) > 4]
+
+        if not significant_words:
+            return []
+
+        conditions = " OR ".join(
+            [f"memory_text ILIKE '%' || $" + str(i + 6) + " || '%'" for i, _ in enumerate(significant_words[:5])]
+        )
+        params = [memory_id, entity_type, entity_id, self.user_id, self.conversation_id] + significant_words[:5]
+
+        query = f"""
+            SELECT id, memory_text, significance, emotional_intensity
+            FROM unified_memories
+            WHERE id != $1
+              AND entity_type = $2
+              AND entity_id = $3
+              AND user_id = $4
+              AND conversation_id = $5
+              AND ({conditions})
+            LIMIT 3
+        """
+
+        rows = await conn.fetch(query, *params)
+        return [dict(row) for row in rows]
     
     async def _alter_memory_text(
         self,

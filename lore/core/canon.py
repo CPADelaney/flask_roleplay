@@ -199,7 +199,9 @@ async def create_canonical_entity_transactional(
     ctx = ensure_canonical_context(ctx)
     memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    # Avoid manual embedding generation; the database trigger will populate the column.
+# The database trigger will now handle embedding generation automatically.
+    # We just need to ensure the `embedding` key is not in the data we send to the INSERT query.
+    entity_data.pop('embedding', None)
     entity_name = entity_data.get('name', entity_data.get('npc_name', 'Unknown'))
     
     # Ensure we're in a transaction
@@ -632,7 +634,7 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         INSERT INTO NPCStats (user_id, conversation_id, npc_name, role, affiliations)
         VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING npc_id
     """
-    
+
     npc_id = await conn.fetchval(
         insert_query,
         ctx.user_id,
@@ -2434,14 +2436,14 @@ async def update_entity_with_governance(
             }
         )
         
-        # Update embedding if text fields changed
+        # Refresh vector store if text fields changed
         text_fields = ['name', 'description', 'title']
         if any(field in updates for field in text_fields):
             embedding_parts = []
             for field in text_fields:
                 if field in result:
                     embedding_parts.append(str(result[field]))
-            
+
             if embedding_parts:
                 embedding_text = ' '.join(embedding_parts)
                 # Update vector store
