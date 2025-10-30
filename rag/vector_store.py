@@ -32,8 +32,13 @@ def _normalize_bool(value: Optional[str]) -> bool:
 
 
 def legacy_vector_store_enabled(config: Optional[Dict[str, Any]] = None) -> bool:
-    if _normalize_bool(os.getenv("ALLOW_LEGACY_EMBEDDINGS")):
-        return True
+    legacy_env = os.getenv("ENABLE_LEGACY_VECTOR_STORE")
+    if legacy_env is not None:
+        return _normalize_bool(legacy_env)
+
+    fallback_env = os.getenv("ALLOW_LEGACY_EMBEDDINGS")
+    if fallback_env is not None:
+        return _normalize_bool(fallback_env)
 
     vector_config = {}
     if isinstance(config, dict):

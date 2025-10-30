@@ -73,6 +73,9 @@ previous pgvector implementation. Setting either `DISABLE_AGENTS_RAG` or
 `DISABLE_AGENTS_VECTOR_STORE` also bypasses the hosted experience; the loader
 script exits early when those guards are active.
 
+> **Note:** `ALLOW_LEGACY_EMBEDDINGS` remains a deprecated compatibility toggle
+> while older deployments transition to `ENABLE_LEGACY_VECTOR_STORE`.
+
 ## Integration tests
 
 The integration tests that exercise the hosted stack are **opt-in** and require
