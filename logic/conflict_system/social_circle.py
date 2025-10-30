@@ -6,12 +6,17 @@ Refactored to work as a ConflictSubsystem with the synthesizer.
 
 import logging
 import json
+import os
+import hashlib
 import random
 import weakref
+from collections import defaultdict
 from typing import Dict, List, Any, Optional, Set, Tuple
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+import redis.asyncio as redis
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
@@ -19,8 +24,167 @@ from logic.conflict_system.conflict_synthesizer import (
     ConflictSubsystem, SubsystemType, EventType,
     SystemEvent, SubsystemResponse
 )
+from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+SOCIAL_BUNDLE_CACHE_KEY_TEMPLATE = (
+    "conflict:social:bundle:{user_id}:{conversation_id}:{scene_key}"
+)
+SOCIAL_BUNDLE_LOCK_TEMPLATE = (
+    "conflict:social:bundle:{user_id}:{conversation_id}:{scene_key}:lock"
+)
+SOCIAL_BUNDLE_TTL_SECONDS = 300
+SOCIAL_BUNDLE_LOCK_SECONDS = 60
+
+_redis_client: Optional[redis.Redis] = None
+
+
+async def _get_social_redis_client() -> redis.Redis:
+    """Lazy-initialize a module-level async Redis client."""
+
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    return _redis_client
+
+
+def _make_json_safe(value: Any) -> Any:
+    """Recursively convert sets/enums to JSON-safe structures."""
+
+    if isinstance(value, dict):
+        return {k: _make_json_safe(v) for k, v in value.items()}
+    if isinstance(value, set):
+        return sorted([_make_json_safe(v) for v in value])
+    if isinstance(value, (list, tuple)):
+        return [_make_json_safe(v) for v in value]
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _extract_npc_ids(scene_context: Dict[str, Any]) -> List[int]:
+    """Pull integer NPC identifiers from a scene context payload."""
+
+    candidates = scene_context.get('present_npcs') or scene_context.get('npcs') or []
+    ids: Set[int] = set()
+    for npc in candidates:
+        if npc is None:
+            continue
+        if isinstance(npc, int):
+            ids.add(npc)
+            continue
+        try:
+            ids.add(int(npc))
+        except (TypeError, ValueError):
+            continue
+    return sorted(ids)
+
+
+def _normalize_scene_descriptor(
+    scope: Optional[Any] = None,
+    scene_context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Create a deterministic descriptor for cache key computation."""
+
+    descriptor: Dict[str, Any] = {
+        'location': None,
+        'npc_ids': [],
+        'topics': [],
+        'activity': None,
+        'scene_id': None,
+    }
+
+    if scope is not None:
+        if isinstance(scope, dict):
+            location = scope.get('location_id') or scope.get('location_name')
+            npc_ids = scope.get('npc_ids') or []
+            topics = scope.get('topics') or []
+        else:
+            location = getattr(scope, 'location_id', None) or getattr(scope, 'location_name', None)
+            npc_ids = getattr(scope, 'npc_ids', []) or []
+            topics = getattr(scope, 'topics', []) or []
+
+        descriptor['location'] = location
+        normalized_npcs: List[int] = []
+        for npc in npc_ids:
+            if npc is None:
+                continue
+            if isinstance(npc, int):
+                normalized_npcs.append(npc)
+                continue
+            try:
+                normalized_npcs.append(int(npc))
+            except (TypeError, ValueError):
+                continue
+        descriptor['npc_ids'] = sorted(normalized_npcs)
+        descriptor['topics'] = sorted([str(t) for t in topics])
+
+    if isinstance(scene_context, dict):
+        descriptor['location'] = (
+            scene_context.get('location_id')
+            or scene_context.get('location')
+            or descriptor['location']
+        )
+        descriptor['activity'] = (
+            scene_context.get('activity')
+            or scene_context.get('current_activity')
+            or descriptor['activity']
+        )
+        descriptor['scene_id'] = scene_context.get('scene_id') or descriptor['scene_id']
+        if not descriptor['npc_ids']:
+            descriptor['npc_ids'] = _extract_npc_ids(scene_context)
+        if not descriptor['topics']:
+            topics = scene_context.get('topics') or scene_context.get('conversation_topics') or []
+            if isinstance(topics, set):
+                topics = list(topics)
+            descriptor['topics'] = sorted([str(t) for t in topics])
+
+    descriptor['npc_ids'] = sorted(set(descriptor['npc_ids']))
+    descriptor['topics'] = sorted(set(descriptor['topics']))
+    return descriptor
+
+
+def compute_social_scene_key(
+    scope: Optional[Any] = None,
+    scene_context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Compute a stable cache key fragment for a scene."""
+
+    if scope is not None and hasattr(scope, 'to_cache_key'):
+        try:
+            return scope.to_cache_key()
+        except Exception:
+            pass
+
+    descriptor = _normalize_scene_descriptor(scope=scope, scene_context=scene_context)
+    key_source = json.dumps(descriptor, sort_keys=True, default=str)
+    return hashlib.md5(key_source.encode('utf-8')).hexdigest()
+
+
+def build_social_bundle_cache_key(
+    user_id: int,
+    conversation_id: int,
+    scene_key: str
+) -> str:
+    return SOCIAL_BUNDLE_CACHE_KEY_TEMPLATE.format(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        scene_key=scene_key,
+    )
+
+
+def build_social_bundle_lock_key(
+    user_id: int,
+    conversation_id: int,
+    scene_key: str
+) -> str:
+    return SOCIAL_BUNDLE_LOCK_TEMPLATE.format(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        scene_key=scene_key,
+    )
 
 # ===============================================================================
 # SOCIAL STRUCTURES (Preserved from original)
@@ -111,15 +275,16 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.synthesizer = None
-        
+
         # Components
         self.manager = SocialCircleManager(user_id, conversation_id)
-        
+
         # State tracking
         self._active_gossip: Dict[int, GossipItem] = {}
         self._reputation_cache: Dict[int, Dict[ReputationType, float]] = {}
         self._social_circles: Dict[int, SocialCircle] = {}
-    
+        self._npc_presence_meter: Dict[int, int] = defaultdict(int)
+
     # ========== ConflictSubsystem Interface Implementation ==========
     
     @property
@@ -223,55 +388,106 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             'reputation_tracking': len(self._reputation_cache),
             'social_tension': self._calculate_social_tension()
         }
-    
+
+    async def get_scene_bundle(self, scope) -> Dict[str, Any]:
+        """Fast-path bundle retrieval served from Redis cache."""
+
+        scene_key = compute_social_scene_key(scope=scope)
+        cache_key = build_social_bundle_cache_key(self.user_id, self.conversation_id, scene_key)
+
+        try:
+            redis_client = await _get_social_redis_client()
+            cached = await redis_client.get(cache_key)
+            if cached:
+                bundle = json.loads(cached)
+                if not isinstance(bundle, dict):
+                    return {'gossip': [], 'reputations': {}}
+                bundle.setdefault('gossip', [])
+                bundle.setdefault('reputations', {})
+                return bundle
+        except Exception as exc:
+            logger.debug("Social bundle cache lookup failed: %s", exc)
+
+        return {'gossip': [], 'reputations': {}}
+
     # ========== Event Handlers ==========
-    
+
     async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
         """Handle scene state synchronization"""
-        scene_context = event.payload
-        present_npcs = scene_context.get('present_npcs', [])
-        
-        side_effects = []
-        
-        # Check for gossip opportunities
-        if present_npcs and len(present_npcs) >= 2:
-            if random.random() < 0.3:  # 30% chance of gossip
-                gossip = await self.manager.generate_gossip(
-                    {'scene': scene_context.get('activity', 'unknown')},
-                    present_npcs[:2]
-                )
-                
-                if gossip:
-                    self._active_gossip[gossip.gossip_id] = gossip
-                    
-                    # Emit gossip event
-                    side_effects.append(SystemEvent(
-                        event_id=f"gossip_{gossip.gossip_id}",
-                        event_type=EventType.NPC_REACTION,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'gossip': gossip.content,
-                            'about': gossip.about,
-                            'spreaders': list(gossip.spreaders)
-                        },
-                        priority=7
-                    ))
-        
-        # Update reputation based on recent actions
+        payload = event.payload or {}
+        scene_context = payload.get('scene_context') or payload
+        scope_payload = payload.get('scene_scope') or payload.get('scope') or scene_context
+
+        if hasattr(scope_payload, 'to_dict'):
+            scope_payload = scope_payload.to_dict()
+
+        present_npcs = _extract_npc_ids(scene_context)
         for npc_id in present_npcs:
-            if npc_id not in self._reputation_cache:
-                reputation = await self.manager.calculate_reputation(npc_id)
-                self._reputation_cache[npc_id] = reputation
-        
+            self._npc_presence_meter[npc_id] += 1
+
+        scene_key = compute_social_scene_key(scope=scope_payload, scene_context=scene_context)
+        cache_key = build_social_bundle_cache_key(self.user_id, self.conversation_id, scene_key)
+
+        bundle_cached = False
+        task_dispatched = False
+
+        try:
+            redis_client = await _get_social_redis_client()
+            cached = await redis_client.get(cache_key)
+            if cached:
+                bundle_cached = True
+        except Exception as exc:
+            logger.debug("Social bundle cache read failed during state sync: %s", exc)
+
+        if not bundle_cached:
+            serialized_scope = scope_payload if isinstance(scope_payload, dict) else {}
+            safe_scope = _make_json_safe(serialized_scope)
+            safe_context = _make_json_safe(scene_context)
+            lock_key = build_social_bundle_lock_key(self.user_id, self.conversation_id, scene_key)
+
+            try:
+                redis_client = await _get_social_redis_client()
+                lock_acquired = await redis_client.set(
+                    lock_key,
+                    "1",
+                    ex=SOCIAL_BUNDLE_LOCK_SECONDS,
+                    nx=True
+                )
+            except Exception as exc:
+                logger.debug("Failed to acquire social bundle lock: %s", exc)
+                lock_acquired = False
+
+            if lock_acquired:
+                try:
+                    celery_app.send_task(
+                        'tasks.social.generate_bundle',
+                        kwargs={
+                            'user_id': self.user_id,
+                            'conversation_id': self.conversation_id,
+                            'scene_context': safe_context,
+                            'scope_payload': safe_scope,
+                            'scene_key': scene_key,
+                        }
+                    )
+                    task_dispatched = True
+                except Exception as exc:
+                    logger.warning("Failed to enqueue social bundle generation: %s", exc)
+                    try:
+                        redis_client = await _get_social_redis_client()
+                        await redis_client.delete(lock_key)
+                    except Exception:
+                        pass
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
             data={
-                'gossip_generated': len(side_effects) > 0,
-                'reputations_updated': len(present_npcs)
+                'bundle_cached': bundle_cached,
+                'npc_presence_updates': len(present_npcs),
+                'task_dispatched': task_dispatched,
             },
-            side_effects=side_effects
+            side_effects=[]
         )
     
     async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:

@@ -946,6 +946,226 @@ def update_tension_bundle_cache(user_id: int, conversation_id: int, scene_contex
         return {"status": "error", "error": str(e)}
 
 
+@celery_app.task(name="tasks.social.generate_bundle", max_retries=1)
+def generate_social_bundle(
+    user_id: int,
+    conversation_id: int,
+    scene_context: Dict[str, Any],
+    scope_payload: Optional[Dict[str, Any]] = None,
+    scene_key: Optional[str] = None,
+):
+    """Generate and cache the social-circle bundle asynchronously."""
+
+    logger.info(
+        "Starting social bundle generation for user=%s conversation=%s",
+        user_id,
+        conversation_id,
+    )
+
+    async def do_generation():
+        from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+        from logic.conflict_system.social_circle import (
+            GossipItem,
+            ReputationType,
+            compute_social_scene_key,
+            build_social_bundle_cache_key,
+            build_social_bundle_lock_key,
+            SOCIAL_BUNDLE_TTL_SECONDS,
+            _extract_npc_ids as extract_npc_ids,
+        )
+        from nyx.nyx_agent.context import SceneScope
+
+        synthesizer = await get_synthesizer(user_id, conversation_id)
+        subsystem = synthesizer._subsystems.get(SubsystemType.SOCIAL)
+        if subsystem is None:
+            logger.error(
+                "Social subsystem missing for user=%s conversation=%s",
+                user_id,
+                conversation_id,
+            )
+            return {"status": "error", "reason": "missing_subsystem"}
+
+        scope_obj = None
+        if scope_payload:
+            try:
+                scope_obj = SceneScope.from_dict(scope_payload)
+            except Exception:
+                scope_obj = None
+
+        resolved_scene_key = scene_key or compute_social_scene_key(
+            scope=scope_obj,
+            scene_context=scene_context,
+        )
+        cache_key = build_social_bundle_cache_key(user_id, conversation_id, resolved_scene_key)
+        lock_key = build_social_bundle_lock_key(user_id, conversation_id, resolved_scene_key)
+
+        present_npcs = extract_npc_ids(scene_context)
+        if not present_npcs and scope_obj is not None:
+            present_npcs = sorted(list(getattr(scope_obj, 'npc_ids', []) or []))
+
+        context_for_gossip = {
+            'scene': scene_context.get('activity')
+            or scene_context.get('current_activity')
+            or 'unknown',
+            'location': scene_context.get('location') or scene_context.get('location_id'),
+            'topics': scene_context.get('topics')
+            or scene_context.get('conversation_topics')
+            or [],
+        }
+
+        gossip_payload: List[Dict[str, Any]] = []
+        if present_npcs:
+            try:
+                gossip_item = await subsystem.manager.generate_gossip(
+                    context_for_gossip,
+                    present_npcs[:3],
+                )
+                if isinstance(gossip_item, GossipItem):
+                    gossip_payload.append({
+                        'gossip_id': gossip_item.gossip_id,
+                        'type': gossip_item.gossip_type.value,
+                        'content': gossip_item.content,
+                        'about': gossip_item.about,
+                        'spreaders': list(gossip_item.spreaders),
+                        'believers': list(gossip_item.believers),
+                        'deniers': list(gossip_item.deniers),
+                        'spread_rate': gossip_item.spread_rate,
+                        'truthfulness': gossip_item.truthfulness,
+                        'impact': gossip_item.impact,
+                    })
+            except Exception as exc:
+                logger.warning(
+                    "Failed to generate gossip for social bundle user=%s conv=%s: %s",
+                    user_id,
+                    conversation_id,
+                    exc,
+                )
+
+        async def fetch_existing_reputations(
+            npc_ids: List[int],
+        ) -> Dict[int, Dict[ReputationType, float]]:
+            if not npc_ids:
+                return {}
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT target_id, reputation_type, score
+                      FROM reputation_scores
+                     WHERE user_id = $1
+                       AND conversation_id = $2
+                       AND target_id = ANY($3::int[])
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_ids,
+                )
+
+            grouped: Dict[int, Dict[ReputationType, float]] = {}
+            for row in rows:
+                try:
+                    rep_type = ReputationType(row['reputation_type'])
+                except ValueError:
+                    continue
+                grouped.setdefault(row['target_id'], {})[rep_type] = float(row['score'])
+            return grouped
+
+        old_reputations = await fetch_existing_reputations(present_npcs)
+        reputation_payload: Dict[int, Dict[str, float]] = {}
+        narratives: Dict[int, str] = {}
+
+        for npc_id in present_npcs:
+            try:
+                new_rep = await subsystem.manager.calculate_reputation(npc_id)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to calculate reputation for npc=%s user=%s conv=%s: %s",
+                    npc_id,
+                    user_id,
+                    conversation_id,
+                    exc,
+                )
+                continue
+
+            reputation_payload[npc_id] = {
+                rep.value: float(score) for rep, score in new_rep.items()
+            }
+
+            old_rep = old_reputations.get(npc_id)
+            if old_rep:
+                try:
+                    narrative = await subsystem.manager.narrate_reputation_change(
+                        npc_id,
+                        old_rep,
+                        new_rep,
+                    )
+                    if narrative:
+                        narratives[npc_id] = narrative
+                except Exception as exc:
+                    logger.debug(
+                        "Narration failed for npc=%s user=%s conv=%s: %s",
+                        npc_id,
+                        user_id,
+                        conversation_id,
+                        exc,
+                    )
+
+        alliances: List[Dict[str, Any]] = []
+        if len(present_npcs) >= 2:
+            initiator, target = present_npcs[0], present_npcs[1]
+            reason = context_for_gossip.get('scene') or 'shared_scene'
+            try:
+                alliance = await subsystem.manager.form_alliance(initiator, target, reason)
+                if alliance:
+                    alliances.append(alliance)
+            except Exception as exc:
+                logger.debug(
+                    "Alliance formation failed for user=%s conv=%s: %s",
+                    user_id,
+                    conversation_id,
+                    exc,
+                )
+
+        bundle = {
+            'gossip': gossip_payload,
+            'reputations': {
+                str(npc_id): scores for npc_id, scores in reputation_payload.items()
+            },
+            'reputation_narratives': {
+                str(npc_id): text for npc_id, text in narratives.items()
+            },
+            'alliances': alliances,
+            'generated_at': datetime.datetime.utcnow().isoformat(),
+            'scene_key': resolved_scene_key,
+        }
+
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.set(cache_key, json.dumps(bundle), ex=SOCIAL_BUNDLE_TTL_SECONDS)
+        redis_client.delete(lock_key)
+
+        return {
+            'status': 'success',
+            'cache_key': cache_key,
+            'npc_count': len(present_npcs),
+        }
+
+    try:
+        result = run_async_in_worker_loop(do_generation())
+        logger.info(
+            "Finished social bundle generation for user=%s conversation=%s result=%s",
+            user_id,
+            conversation_id,
+            result,
+        )
+        return result
+    except Exception as exc:
+        logger.exception(
+            "Critical error in social bundle generation for user=%s conversation=%s",
+            user_id,
+            conversation_id,
+        )
+        return {'status': 'error', 'error': str(exc)}
+
+
 @celery_app.task(name="tasks.periodic_edge_case_maintenance")
 def periodic_edge_case_maintenance():
     """
