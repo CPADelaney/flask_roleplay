@@ -25,8 +25,8 @@ from rag import ask as rag_ask
 # Database configuration
 from .config import DB_CONFIG, EMBEDDING_CONFIG
 
-EMBEDDING_DIMENSION = 1536  # OpenAI Ada-002 dimensionality
-EMBEDDING_MODEL = EMBEDDING_CONFIG.get("model", "text-embedding-ada-002")
+EMBEDDING_DIMENSION = 1536  # OpenAI text-embedding-3-small dimensionality
+EMBEDDING_MODEL = EMBEDDING_CONFIG.get("model", "text-embedding-3-small")
 EMBEDDING_BATCH_SIZE = EMBEDDING_CONFIG.get("batch_size", 5)
 MEMORY_CACHE_TTL = 300  # 5 minutes
 

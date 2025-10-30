@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
         "memory_decay_rate": 0.1,         # Rate at which memory significance decays
         "maintenance_interval": 86400,    # Memory maintenance interval in seconds (24 hours)
         "minimal_similarity_threshold": 0.65,  # Threshold for memory similarity (0.0-1.0)
-        "embedding_model": "text-embedding-ada-002"  # Model to use for embeddings
+        "embedding_model": "text-embedding-3-small"  # Model to use for embeddings
     },
     
     # Decision Engine Configuration

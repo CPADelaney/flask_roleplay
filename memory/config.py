@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
         "max_inactive_connection_lifetime": 300
     },
     "embedding": {
-        "model": "text-embedding-ada-002",  # This model outputs 1536 dimensions
+        "model": "text-embedding-3-small",  # This model outputs 1536 dimensions
         "batch_size": 5
         # The "fallback_model" has been removed to prevent dimension mismatch.
     },

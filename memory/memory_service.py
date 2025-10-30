@@ -276,7 +276,7 @@ class MemoryEmbeddingService:
                     exc,
                 )
         else:
-            model_name = "text-embedding-ada-002"
+            model_name = "sentence-transformers/all-mpnet-base-v2"
             if isinstance(embedding_section, dict):
                 candidate = embedding_section.get("model_name") or embedding_section.get("hf_embedding_model")
                 if isinstance(candidate, str) and candidate.strip():
