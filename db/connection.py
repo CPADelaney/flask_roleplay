@@ -231,6 +231,8 @@ DEFAULT_CONNECTION_LIFETIME = 300  # seconds
 DEFAULT_COMMAND_TIMEOUT = 120  # seconds
 DEFAULT_MAX_QUERIES = 50000
 DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
+DEFAULT_SETUP_TIMEOUT = 30.0  # Timeout for connection setup (pgvector registration)
+DEFAULT_ACQUIRE_TIMEOUT = 60.0  # Timeout for acquiring connection from pool
 
 
 def get_db_dsn() -> str:
@@ -286,6 +288,26 @@ def get_release_timeout() -> float:
     command_timeout = float(os.getenv("DB_COMMAND_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT)))
     default_timeout = command_timeout if command_timeout > 0 else DEFAULT_RELEASE_TIMEOUT
     return float(os.getenv("DB_RELEASE_TIMEOUT", str(default_timeout)))
+
+
+def get_setup_timeout() -> float:
+    """
+    Get timeout for connection setup operations (like pgvector registration).
+    
+    Returns:
+        Timeout in seconds
+    """
+    return float(os.getenv("DB_SETUP_TIMEOUT", str(DEFAULT_SETUP_TIMEOUT)))
+
+
+def get_acquire_timeout() -> float:
+    """
+    Get default timeout for acquiring connections from pool.
+    
+    Returns:
+        Timeout in seconds
+    """
+    return float(os.getenv("DB_ACQUIRE_TIMEOUT", str(DEFAULT_ACQUIRE_TIMEOUT)))
 
 
 def get_db_connection_sync():
@@ -617,6 +639,22 @@ class _ResilientConnectionWrapper:
             if old_conn is not None:
                 try:
                     await self._pool.release(old_conn, timeout=self._release_timeout)
+                except asyncpg.exceptions.InterfaceError as iface_err:
+                    # Connection already released or in invalid state
+                    error_msg = str(iface_err)
+                    if "released back to the pool" in error_msg:
+                        logger.debug(
+                            f"Connection {old_conn_id} was already released during refresh"
+                        )
+                    else:
+                        logger.warning(
+                            f"InterfaceError releasing old connection {old_conn_id} "
+                            f"during refresh: {iface_err}"
+                        )
+                        try:
+                            old_conn.terminate()
+                        except Exception:
+                            pass  # Best effort
                 except Exception:
                     logger.warning(
                         "Releasing connection after waiter cancellation bug failed; "
@@ -655,38 +693,63 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
     Setup function called for each new connection in the pool.
     
     Registers pgvector extension with retry logic and timeout protection.
+    If pgvector registration fails after retries, the connection is still
+    considered valid (pgvector is optional for basic DB operations).
     
     Args:
         conn: Connection to set up
         
     Raises:
-        asyncpg.PostgresError: If setup fails after all retries
+        asyncpg.PostgresError: If critical setup fails (not including pgvector)
     """
     max_retries = 3
     retry_delay = 0.5  # Start with 0.5 seconds
+    setup_timeout = get_setup_timeout()
     
     for attempt in range(max_retries):
         try:
-            # IMPROVEMENT: Added timeout to prevent indefinite hang
+            # IMPROVEMENT: Added configurable timeout to prevent indefinite hang
             await asyncio.wait_for(
                 pgvector_asyncpg.register_vector(conn),
-                timeout=10.0
+                timeout=setup_timeout
             )
-            logger.debug(f"Successfully registered pgvector on connection {id(conn)}")
+            logger.debug(
+                f"Successfully registered pgvector on connection {id(conn)} "
+                f"(attempt {attempt + 1}/{max_retries})"
+            )
             return  # Success
         except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
             logger.warning(
                 f"Connection setup failed on attempt {attempt + 1}/{max_retries} "
-                f"({e.__class__.__name__}): {e}"
+                f"({e.__class__.__name__}): {e} (timeout={setup_timeout}s)"
             )
             if attempt + 1 == max_retries:
-                logger.error("All attempts to set up DB connection failed")
-                raise
+                # IMPORTANT: Don't fail the connection completely if only pgvector fails
+                # The connection is still usable for non-vector operations
+                logger.error(
+                    f"All {max_retries} attempts to register pgvector failed on "
+                    f"connection {id(conn)}. Connection will be marked as available "
+                    f"but vector operations may not work. Consider increasing "
+                    f"DB_SETUP_TIMEOUT (current: {setup_timeout}s) or checking database load."
+                )
+                # Don't raise - allow connection to be used
+                return
             
             await asyncio.sleep(retry_delay)
             retry_delay *= 2  # Exponential backoff
+        except asyncpg.exceptions.UndefinedFunctionError as e:
+            # pgvector extension might not be installed
+            logger.warning(
+                f"pgvector extension not available: {e}. "
+                f"Connection {id(conn)} will work but vector operations will fail."
+            )
+            return  # Don't fail the connection
         except Exception as e:
-            logger.error(f"Unexpected error setting up connection: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error setting up connection {id(conn)}: {e}",
+                exc_info=True
+            )
+            # For truly unexpected errors, we should fail
             raise
 
 
@@ -948,6 +1011,75 @@ async def initialize_connection_pool(
             return False
 
 
+async def warm_connection_pool(test_count: int = 5, timeout: float = 10.0) -> Dict[str, Any]:
+    """
+    Warm up the connection pool by acquiring and testing connections.
+    
+    This is useful for:
+    - Early detection of connection/setup issues
+    - Pre-warming connections before production load
+    - Validating pool configuration
+    
+    Args:
+        test_count: Number of connections to test (up to pool max_size)
+        timeout: Timeout for each connection test
+        
+    Returns:
+        Dictionary with warming results and diagnostics
+    """
+    results = {
+        "success": False,
+        "tested": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "errors": [],
+        "avg_acquire_time": 0.0,
+        "pool_state": None
+    }
+    
+    pool = await get_db_connection_pool()
+    max_size = pool.get_max_size() if hasattr(pool, 'get_max_size') else test_count
+    test_count = min(test_count, max_size)
+    
+    logger.info(f"Warming connection pool with {test_count} test connections")
+    
+    acquire_times = []
+    
+    for i in range(test_count):
+        try:
+            start_time = asyncio.get_event_loop().time()
+            async with get_db_connection_context(timeout=timeout) as conn:
+                await conn.fetchval("SELECT 1")
+            acquire_time = asyncio.get_event_loop().time() - start_time
+            acquire_times.append(acquire_time)
+            
+            results["tested"] += 1
+            results["succeeded"] += 1
+            logger.debug(f"Pool warm-up: connection {i+1}/{test_count} OK ({acquire_time:.3f}s)")
+        except Exception as e:
+            results["tested"] += 1
+            results["failed"] += 1
+            results["errors"].append(f"Connection {i+1}: {str(e)}")
+            logger.error(f"Pool warm-up: connection {i+1}/{test_count} failed: {e}")
+    
+    if acquire_times:
+        results["avg_acquire_time"] = sum(acquire_times) / len(acquire_times)
+    
+    results["success"] = results["failed"] == 0
+    results["pool_state"] = {
+        "size": pool.get_size(),
+        "idle": pool.get_idle_size(),
+        "in_use": pool.get_size() - pool.get_idle_size()
+    }
+    
+    logger.info(
+        f"Pool warm-up complete: {results['succeeded']}/{results['tested']} succeeded, "
+        f"avg time: {results['avg_acquire_time']:.3f}s"
+    )
+    
+    return results
+
+
 async def get_db_connection_pool() -> asyncpg.Pool:
     """
     Get the current database connection pool with automatic initialization.
@@ -991,7 +1123,7 @@ async def get_db_connection_pool() -> asyncpg.Pool:
 
 @asynccontextmanager
 async def get_db_connection_context(
-    timeout: Optional[float] = 30.0,
+    timeout: Optional[float] = None,
     app: Optional[Quart] = None
 ):
     """
@@ -1005,7 +1137,8 @@ async def get_db_connection_context(
     - Handles pool initialization if needed
     
     Args:
-        timeout: Maximum time to wait for connection acquisition
+        timeout: Maximum time to wait for connection acquisition.
+                If None, uses DB_ACQUIRE_TIMEOUT env var (default 60s)
         app: Optional Quart application for pool access
         
     Yields:
@@ -1019,6 +1152,9 @@ async def get_db_connection_context(
         async with get_db_connection_context() as conn:
             result = await conn.fetchval("SELECT 1")
     """
+    # Use configurable default timeout if not specified
+    if timeout is None:
+        timeout = get_acquire_timeout()
     # Early shutdown check
     if is_shutting_down():
         raise ConnectionError(
@@ -1029,6 +1165,7 @@ async def get_db_connection_context(
     conn: Optional[asyncpg.Connection] = None
     conn_id: Optional[int] = None
     wrapped_conn: Optional[_ResilientConnectionWrapper] = None
+    connection_already_released = False  # Track if we manually released the connection
     
     # Verify pool is for current loop
     if _state.pool and _state.pool_loop != current_loop:
@@ -1072,6 +1209,7 @@ async def get_db_connection_context(
         # Re-check shutdown status after acquiring (race condition protection)
         if is_shutting_down():
             await current_pool_to_use.release(conn)
+            connection_already_released = True  # Mark as released
             raise ConnectionError(
                 f"Shutdown initiated during connection acquisition in process {os.getpid()}"
             )
@@ -1127,7 +1265,19 @@ async def get_db_connection_context(
                 )
         
     except asyncio.TimeoutError:
-        logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool")
+        # Enhanced diagnostics for timeout errors
+        pool_size = current_pool_to_use.get_size() if current_pool_to_use else 0
+        pool_free = current_pool_to_use.get_idle_size() if current_pool_to_use else 0
+        pool_used = pool_size - pool_free
+        
+        logger.error(
+            f"Timeout ({timeout}s) acquiring DB connection from pool. "
+            f"Pool stats: size={pool_size}, free={pool_free}, in_use={pool_used}. "
+            f"This may indicate: (1) All connections are busy, (2) Connection setup is slow, "
+            f"(3) Database is overloaded. Consider: (1) Increasing DB_POOL_MAX_SIZE, "
+            f"(2) Increasing DB_ACQUIRE_TIMEOUT (current: {timeout}s), "
+            f"(3) Increasing DB_SETUP_TIMEOUT (current: {get_setup_timeout()}s)"
+        )
         _state.metrics.failed_acquisitions += 1
         raise
     except asyncpg.exceptions.PostgresError as pg_err:
@@ -1140,55 +1290,97 @@ async def get_db_connection_context(
         raise
     finally:
         # Clean up connection tracking
-        lock = _state.get_connection_ops_lock()
-        active_conn_obj: Optional[asyncpg.Connection] = None
-        active_conn_id = None
-        
-        if wrapped_conn is not None:
-            active_conn_obj = wrapped_conn.raw_connection
-            active_conn_id = wrapped_conn.conn_id
-        else:
-            active_conn_obj = conn
-            active_conn_id = conn_id
-        
-        # Remove connection from tracking (prevents memory leak)
-        if active_conn_id is not None:
-            async with lock:
-                _state.connection_pending_ops.pop(active_conn_id, None)
-        
-        # Release connection back to pool
-        if active_conn_obj and current_pool_to_use:
+        # CRITICAL: This block must handle all possible error states during shutdown
+        try:
+            lock = _state.get_connection_ops_lock()
+            active_conn_obj: Optional[asyncpg.Connection] = None
+            active_conn_id = None
+            
+            # Safely extract connection reference
+            # During shutdown, even property access can fail
             try:
-                # IMPROVEMENT: Safer closed check
-                if not getattr(active_conn_obj, 'is_closed', lambda: True)():
-                    release_timeout = get_release_timeout()
-                    try:
-                        await current_pool_to_use.release(
-                            active_conn_obj,
-                            timeout=release_timeout
-                        )
-                    except Exception as release_err:
-                        logger.error(
-                            f"Error releasing connection {active_conn_id}: {release_err}. "
-                            f"Terminating instead.",
-                            exc_info=True
-                        )
-                        try:
-                            active_conn_obj.terminate()
-                        except Exception as term_err:
-                            logger.exception(
-                                f"Failed to terminate connection {active_conn_id} "
-                                f"after release error: {term_err}"
-                            )
+                if wrapped_conn is not None:
+                    active_conn_obj = wrapped_conn.raw_connection
+                    active_conn_id = wrapped_conn.conn_id
                 else:
-                    logger.warning(
-                        f"Connection {active_conn_id} was already closed before release"
-                    )
-            except Exception as outer_err:
-                logger.error(
-                    f"Unhandled error during connection cleanup: {outer_err}",
-                    exc_info=True
+                    active_conn_obj = conn
+                    active_conn_id = conn_id
+            except Exception as extract_err:
+                logger.debug(
+                    f"Could not extract connection reference during cleanup: {extract_err}"
                 )
+                # Continue with best effort - use what we have
+                active_conn_obj = conn
+                active_conn_id = conn_id
+            
+            # Remove connection from tracking (prevents memory leak)
+            if active_conn_id is not None:
+                try:
+                    async with lock:
+                        _state.connection_pending_ops.pop(active_conn_id, None)
+                except Exception as tracking_err:
+                    logger.debug(
+                        f"Could not remove connection tracking for {active_conn_id}: {tracking_err}"
+                    )
+            
+            # Release connection back to pool (if not already released)
+            if active_conn_obj and current_pool_to_use and not connection_already_released:
+                try:
+                    # Try to release the connection
+                    release_timeout = get_release_timeout()
+                    await current_pool_to_use.release(
+                        active_conn_obj,
+                        timeout=release_timeout
+                    )
+                    logger.debug(f"Connection {active_conn_id} released successfully")
+                except asyncpg.exceptions.InterfaceError as iface_err:
+                    # Connection was already released or is in invalid state
+                    # This is expected during shutdown or after errors
+                    error_msg = str(iface_err)
+                    if "released back to the pool" in error_msg:
+                        logger.debug(
+                            f"Connection {active_conn_id} was already released to pool"
+                        )
+                    elif "connection is closed" in error_msg or "connection has been released" in error_msg:
+                        logger.debug(
+                            f"Connection {active_conn_id} is already closed/released"
+                        )
+                    else:
+                        logger.debug(
+                            f"InterfaceError releasing connection {active_conn_id}: {iface_err}"
+                        )
+                except asyncpg.exceptions.PostgresConnectionError as conn_err:
+                    # Connection lost - try to terminate
+                    logger.debug(
+                        f"Connection {active_conn_id} lost during release: {conn_err}"
+                    )
+                    try:
+                        if hasattr(active_conn_obj, 'terminate'):
+                            active_conn_obj.terminate()
+                    except Exception:
+                        pass  # Best effort termination
+                except Exception as release_err:
+                    # Other errors - log and try to terminate
+                    logger.debug(
+                        f"Error releasing connection {active_conn_id}: {release_err}. "
+                        f"Attempting termination."
+                    )
+                    try:
+                        if hasattr(active_conn_obj, 'terminate'):
+                            active_conn_obj.terminate()
+                    except Exception:
+                        pass  # Best effort termination
+            elif connection_already_released:
+                logger.debug(
+                    f"Skipping connection release for {active_conn_id} - already released manually"
+                )
+        except Exception as cleanup_err:
+            # Absolute last resort - catch any error in the entire cleanup
+            # This ensures the finally block never raises
+            logger.debug(
+                f"Error in connection cleanup finally block: {cleanup_err}. "
+                f"This is likely due to shutdown race conditions."
+            )
 
 
 async def close_connection_pool(
@@ -1506,9 +1698,13 @@ __all__ = [
     'get_db_dsn',
     'get_pool_config',
     'get_db_connection_sync',
+    'get_setup_timeout',
+    'get_acquire_timeout',
+    'get_release_timeout',
     
     # Pool Management
     'initialize_connection_pool',
+    'warm_connection_pool',
     'get_db_connection_pool',
     'get_db_connection_context',
     'close_connection_pool',
