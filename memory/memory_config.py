@@ -7,7 +7,14 @@ This module provides configuration settings for the memory embedding and retriev
 """
 
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+
+
+def _env_bool(key: str) -> Optional[bool]:
+    value = os.getenv(key)
+    if value is None:
+        return None
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 # Default memory system configuration
 DEFAULT_MEMORY_CONFIG = {
@@ -19,6 +26,8 @@ DEFAULT_MEMORY_CONFIG = {
         "similarity_threshold": 0.7,  # Minimum similarity score for retrieval
         "max_results": 10,  # Maximum number of results to return
         "optimized_for_render": True,  # Optimization for Render hosting
+        "hosted_vector_store_ids": [],
+        "use_legacy_vector_store": False,
 
         # ChromaDB specific settings
         "chroma": {
@@ -103,6 +112,15 @@ def get_memory_config() -> Dict[str, Any]:
     # Override with environment variables
     if os.getenv("MEMORY_VECTOR_STORE_TYPE"):
         config["vector_store"]["type"] = os.getenv("MEMORY_VECTOR_STORE_TYPE")
+
+    hosted_ids_env = os.getenv("HOSTED_VECTOR_STORE_IDS") or os.getenv("AGENTS_VECTOR_STORE_IDS")
+    if hosted_ids_env:
+        ids: List[str] = [part.strip() for part in hosted_ids_env.split(",") if part.strip()]
+        config["vector_store"]["hosted_vector_store_ids"] = ids
+
+    legacy_flag = _env_bool("ENABLE_LEGACY_VECTOR_STORE")
+    if legacy_flag is not None:
+        config["vector_store"]["use_legacy_vector_store"] = legacy_flag
     
     if os.getenv("MEMORY_EMBEDDING_TYPE"):
         config["embedding"]["type"] = os.getenv("MEMORY_EMBEDDING_TYPE")

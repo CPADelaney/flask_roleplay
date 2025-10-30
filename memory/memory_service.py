@@ -30,15 +30,34 @@ from langchain.output_parsers import PydanticOutputParser
 
 
 # Import vector store implementations - dynamic for flexibility
-from memory.chroma_vector_store import ChromaVectorDatabase
-from memory.faiss_vector_store import FAISSVectorDatabase
-from context.optimized_db import QdrantDatabase, create_vector_database
 from utils.embedding_dimensions import (
     DEFAULT_EMBEDDING_DIMENSION,
     build_zero_vector,
     measure_embedding_dimension,
 )
 from rag import ask as rag_ask
+from rag.vector_store import (
+    get_hosted_vector_store_ids,
+    hosted_vector_store_enabled,
+    legacy_vector_store_enabled,
+    search_hosted_vector_store,
+    upsert_hosted_vector_documents,
+)
+
+try:  # pragma: no cover - optional legacy backends
+    from memory.chroma_vector_store import ChromaVectorDatabase  # type: ignore
+except Exception:  # pragma: no cover
+    ChromaVectorDatabase = None  # type: ignore
+
+try:  # pragma: no cover - optional legacy backends
+    from memory.faiss_vector_store import FAISSVectorDatabase  # type: ignore
+except Exception:  # pragma: no cover
+    FAISSVectorDatabase = None  # type: ignore
+
+try:  # pragma: no cover - optional legacy backend
+    from context.optimized_db import create_vector_database  # type: ignore
+except Exception:  # pragma: no cover
+    create_vector_database = None  # type: ignore
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -146,9 +165,21 @@ class MemoryEmbeddingService:
         self.embedding_model = embedding_model.lower()
         self.config = config or {}
         self._configured_dimension = _extract_configured_dimension(self.config)
-        
-        # Set persist directory
-        if not persist_directory:
+
+        self._hosted_vector_store_ids = get_hosted_vector_store_ids(self.config)
+        self._use_hosted_vector_store = hosted_vector_store_enabled(
+            self._hosted_vector_store_ids,
+            config=self.config,
+        )
+        if legacy_vector_store_enabled(self.config):
+            self._use_hosted_vector_store = False
+
+        self._primary_vector_store_id: Optional[str] = (
+            self._hosted_vector_store_ids[0] if self._hosted_vector_store_ids else None
+        )
+
+        # Set persist directory for legacy vector stores only.
+        if not persist_directory and not self._use_hosted_vector_store:
             persist_base = self.config.get("persist_base_dir", "./vector_stores")
             self.persist_directory = f"{persist_base}/{vector_store_type}/{user_id}_{conversation_id}"
         else:
@@ -177,11 +208,17 @@ class MemoryEmbeddingService:
             # 1. Set up the embedding model
             await self._setup_embeddings()
             
-            # 2. Set up the vector store
-            await self._setup_vector_store()
-            
+            # 2. Set up the vector store when using the legacy backends
+            if not self._use_hosted_vector_store:
+                await self._setup_vector_store()
+
             self.initialized = True
-            logger.info(f"Memory embedding service initialized with {self.vector_store_type} and {self.embedding_model} embeddings")
+            backend_label = "hosted" if self._use_hosted_vector_store else self.vector_store_type
+            logger.info(
+                "Memory embedding service initialized with %s vector backend and %s embeddings",
+                backend_label,
+                self.embedding_model,
+            )
             
         except Exception as e:
             logger.error(f"Error initializing memory embedding service: {e}")
@@ -312,13 +349,21 @@ class MemoryEmbeddingService:
 
     async def _setup_vector_store(self) -> None:
         """Set up the vector store."""
+        if self._use_hosted_vector_store:
+            self.vector_db = None
+            return
+
         if self.vector_store_type == "chroma":
+            if ChromaVectorDatabase is None:
+                raise RuntimeError("Chroma vector store backend is not available")
             self.vector_db = ChromaVectorDatabase(
                 persist_directory=self.persist_directory,
                 expected_dimension=self._get_target_dimension(),
                 config=self.config,
             )
         elif self.vector_store_type == "faiss":
+            if FAISSVectorDatabase is None:
+                raise RuntimeError("FAISS vector store backend is not available")
             self.vector_db = FAISSVectorDatabase(
                 persist_directory=self.persist_directory,
                 config=self.config
@@ -330,6 +375,9 @@ class MemoryEmbeddingService:
                 "url": self.config.get("qdrant_url", os.getenv("QDRANT_URL", "http://localhost:6333")),
                 "api_key": self.config.get("qdrant_api_key", os.getenv("QDRANT_API_KEY"))
             }
+            if create_vector_database is None:
+                raise RuntimeError("Qdrant vector store backend is not available")
+
             self.vector_db = create_vector_database(vector_db_config)
         else:
             raise ValueError(f"Unsupported vector store type: {self.vector_store_type}")
@@ -445,10 +493,32 @@ class MemoryEmbeddingService:
             "timestamp": datetime.now().isoformat(),
             "content": text
         })
-        
+
         # Get collection name
         collection_name = self.collection_mapping.get(entity_type, "memory_embeddings")
-        
+
+        if self._use_hosted_vector_store:
+            hosted_metadata = dict(metadata)
+            hosted_metadata["collection"] = collection_name
+
+            await upsert_hosted_vector_documents(
+                [
+                    {
+                        "id": memory_id,
+                        "text": text,
+                        "metadata": hosted_metadata,
+                    }
+                ],
+                vector_store_id=self._primary_vector_store_id,
+                metadata={
+                    "component": "memory.memory_service",
+                    "operation": "insert",
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id,
+                },
+            )
+            return memory_id
+
         # Generate embedding if not provided
         if embedding is None:
             embedding_vector = await self.generate_embedding(text)
@@ -501,9 +571,6 @@ class MemoryEmbeddingService:
         if not self.initialized:
             await self.initialize()
         
-        # Generate query embedding
-        query_embedding = await self.generate_embedding(query_text)
-        
         # Apply user and conversation filters
         base_filter = {
             "user_id": self.user_id,
@@ -521,6 +588,50 @@ class MemoryEmbeddingService:
         else:
             collection_name = "memory_embeddings"  # Default collection
         
+        if self._use_hosted_vector_store:
+            hosted_filters = dict(base_filter)
+            hosted_filters["collection"] = collection_name
+            hosted_results = await search_hosted_vector_store(
+                query_text,
+                vector_store_ids=self._hosted_vector_store_ids or None,
+                max_results=top_k,
+                attributes=hosted_filters,
+                metadata={
+                    "component": "memory.memory_service",
+                    "operation": "search",
+                    "entity_type": entity_type or "*",
+                    "collection": collection_name,
+                },
+            )
+
+            results: List[Dict[str, Any]] = []
+            for record in hosted_results:
+                payload = dict(record.get("metadata") or {})
+                memory_id = payload.get("memory_id") or record.get("id")
+                memory_data = {
+                    "id": memory_id,
+                    "relevance": record.get("score") or 0.0,
+                    "metadata": {},
+                }
+
+                for key, value in payload.items():
+                    if key == "content" and not fetch_content:
+                        continue
+                    memory_data["metadata"][key] = value
+
+                if fetch_content:
+                    if "content" in payload:
+                        memory_data["memory_text"] = payload["content"]
+                    elif record.get("text"):
+                        memory_data["memory_text"] = record["text"]
+
+                results.append(memory_data)
+
+            return results
+
+        # Generate query embedding
+        query_embedding = await self.generate_embedding(query_text)
+
         # Search vector store
         search_results = await self.vector_db.search_vectors(
             collection_name=collection_name,
@@ -569,30 +680,72 @@ class MemoryEmbeddingService:
         if not self.initialized:
             await self.initialize()
         
+        if self._use_hosted_vector_store:
+            attributes = {
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "memory_id": memory_id,
+            }
+            if entity_type:
+                attributes["entity_type"] = entity_type
+                attributes["collection"] = self.collection_mapping.get(entity_type, "memory_embeddings")
+            else:
+                attributes["collection"] = "memory_embeddings"
+
+            hosted_result = await search_hosted_vector_store(
+                str(memory_id),
+                vector_store_ids=self._hosted_vector_store_ids or None,
+                max_results=1,
+                attributes=attributes,
+                metadata={
+                    "component": "memory.memory_service",
+                    "operation": "get-by-id",
+                    "entity_type": entity_type or "*",
+                },
+            )
+
+            if not hosted_result:
+                return None
+
+            record = hosted_result[0]
+            payload = dict(record.get("metadata") or {})
+            payload.setdefault("memory_id", memory_id)
+            memory_data = {
+                "id": payload.get("memory_id") or record.get("id"),
+                "metadata": payload,
+            }
+
+            if "content" in payload:
+                memory_data["memory_text"] = payload["content"]
+            elif record.get("text"):
+                memory_data["memory_text"] = record["text"]
+
+            return memory_data
+
         if entity_type:
             collection_name = self.collection_mapping.get(entity_type, "memory_embeddings")
         else:
             collection_name = "memory_embeddings"
-        
+
         # Get from vector store
         results = await self.vector_db.get_by_id(
             collection_name=collection_name,
             ids=[memory_id]
         )
-        
+
         if not results:
             return None
-        
+
         # Format result
         memory_data = {
             "id": results[0]["id"],
             "metadata": results[0]["metadata"],
         }
-        
+
         # Add memory_text field for convenience
         if "content" in results[0]["metadata"]:
             memory_data["memory_text"] = results[0]["metadata"]["content"]
-        
+
         return memory_data
     
     async def close(self) -> None:
