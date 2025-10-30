@@ -43,6 +43,7 @@ from rag.vector_store import (
     search_hosted_vector_store,
     upsert_hosted_vector_documents,
 )
+from rag import vector_store as rag_vector_store
 
 try:  # pragma: no cover - optional legacy backends
     from memory.chroma_vector_store import ChromaVectorDatabase  # type: ignore
@@ -174,6 +175,24 @@ class MemoryEmbeddingService:
         )
         if self._legacy_vector_store_enabled:
             self._use_hosted_vector_store = False
+
+        agents_import_error = getattr(rag_vector_store, "_AGENTS_IMPORT_ERROR", None)
+        agents_setup_missing = getattr(rag_vector_store, "agents_setup", None) is None
+
+        if (
+            not self._use_hosted_vector_store
+            and not self._legacy_vector_store_enabled
+            and self._hosted_vector_store_ids
+            and agents_setup_missing
+            and agents_import_error is not None
+        ):
+            logger.warning(
+                "Hosted vector store disabled because Agents SDK is unavailable;"
+                " falling back to legacy vector store backend."
+            )
+            vector_store_config = self.config.setdefault("vector_store", {})
+            vector_store_config["use_legacy_vector_store"] = True
+            self._legacy_vector_store_enabled = True
 
         if not self._use_hosted_vector_store and not self._legacy_vector_store_enabled:
             raise RuntimeError(
