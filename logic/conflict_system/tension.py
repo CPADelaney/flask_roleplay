@@ -27,9 +27,7 @@ import weakref
 from agents import Agent, Runner, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-
-# Import your Celery app instance here
-# from tasks import celery_app
+from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
 
