@@ -141,7 +141,12 @@ async def _legacy_backend(
     legacy_fallback: Optional[LegacyCallback],
 ) -> Dict[str, Any]:
     if mode == "embedding":
-        embedding, provider = await _legacy_embedding(prompt, model=model, dimensions=dimensions)
+        embedding, provider = await _legacy_embedding(
+            prompt,
+            metadata=metadata,
+            model=model,
+            dimensions=dimensions,
+        )
         return {"embedding": embedding, "provider": provider, "metadata": metadata}
 
     if legacy_fallback is None:
@@ -190,36 +195,51 @@ def _normalise_agent_response(response: Any, mode: str, metadata: Dict[str, Any]
 async def _legacy_embedding(
     prompt: str,
     *,
+    metadata: Dict[str, Any],
     model: str,
     dimensions: Optional[int],
 ) -> tuple[List[float], str]:
-    provider = "local"
+    request_metadata = dict(metadata)
+    request_metadata.setdefault("component", "rag.backend")
+    request_metadata.setdefault("operation", "legacy-embedding-redirect")
 
-    if _normalize_bool(os.getenv("ENABLE_LEGACY_EMBEDDINGS")):
-        try:
-            from logic import chatgpt_integration as chatgpt
+    agents_response = await _call_agents_backend(
+        prompt,
+        mode="embedding",
+        metadata=request_metadata,
+        model=model,
+        dimensions=dimensions,
+        limit=None,
+    )
 
-            client = chatgpt._client_manager.async_client  # type: ignore[attr-defined]
-            params: Dict[str, Any] = {
-                "model": model,
-                "input": prompt.replace("\n", " ").strip() or " ",
-                "encoding_format": "float",
-            }
-            if dimensions:
-                params["dimensions"] = dimensions
+    if agents_response and isinstance(agents_response, dict):
+        embedding = agents_response.get("embedding")
+        if embedding is not None:
+            provider = agents_response.get("provider", "agents")
+            return _coerce_embedding(embedding), provider
 
-            response = await client.embeddings.create(**params)
-            data = response.data[0].embedding
-            embedding = _coerce_embedding(data)
-            provider = "legacy-openai"
-            return embedding, provider
-        except Exception as exc:
-            logger.warning("Legacy OpenAI embedding failed, using local fallback: %s", exc)
+    message = (
+        "Embedding requests require the Agents FileSearchTool backend; the legacy "
+        "embedding shim is no longer available."
+    )
+    _raise_legacy_guard_stub(message)
+    raise RuntimeError(message)
 
-    from embedding.vector_store import generate_embedding
 
-    embedding = await generate_embedding(prompt)
-    return _coerce_embedding(embedding), provider
+def _raise_legacy_guard_stub(message: str) -> None:
+    try:
+        from agents import legacy_guard_stub  # type: ignore
+    except Exception:
+        logger.error("Agents stack unavailable for embedding request: %s", message)
+        raise RuntimeError(message)
+
+    for attr in ("raise_guard", "raise_legacy_guard", "raise_unavailable"):
+        handler = getattr(legacy_guard_stub, attr, None)
+        if callable(handler):
+            handler(message)
+            return
+
+    raise RuntimeError(message)
 
 
 def _coerce_embedding(value: Any) -> List[float]:
