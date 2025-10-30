@@ -13,7 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from rag import backend as rag_backend
+from rag.ask import ask as rag_ask
 from scripts import load_vector_store
 
 pytestmark = pytest.mark.integration
@@ -22,7 +22,10 @@ pytestmark = pytest.mark.integration
 @pytest.mark.requires_openai
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY is required")
 def test_loader_script_upserts_documents(monkeypatch, tmp_path):
-    fixture_path = tmp_path / "memories.json"
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+
+    fixture_path = fixture_dir / "memories.json"
     payload = [
         {
             "id": "memory-1",
@@ -63,7 +66,8 @@ def test_loader_script_upserts_documents(monkeypatch, tmp_path):
 
     exit_code = load_vector_store.main(
         [
-            str(fixture_path),
+            "--dir",
+            str(fixture_dir),
             "--vector-store-id",
             "vs-explicit",
             "--collection",
@@ -80,6 +84,7 @@ def test_loader_script_upserts_documents(monkeypatch, tmp_path):
     metadata = captured["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["component"] == "scripts.load_vector_store"
+    assert metadata["document_path"] == str(fixture_dir)
 
     uploaded = captured["documents"]
     assert isinstance(uploaded, list)
@@ -126,7 +131,7 @@ def test_agents_retrieval_integration(monkeypatch):
     monkeypatch.setitem(sys.modules, "agents", fake_agents_module)
 
     result = asyncio.run(
-        rag_backend.ask(
+        rag_ask(
             "Find the latest memory",
             backend="agents",
             metadata={"request_id": "req-123"},
