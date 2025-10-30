@@ -254,6 +254,7 @@ def test_legacy_vector_store_guard(monkeypatch: pytest.MonkeyPatch, memory_confi
     monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
     monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])
     monkeypatch.delenv("ENABLE_LEGACY_VECTOR_STORE", raising=False)
+    monkeypatch.delenv("ALLOW_LEGACY_EMBEDDINGS", raising=False)
 
     legacy_config = {
         **memory_config,
@@ -296,6 +297,23 @@ def test_add_memory_rejects_invalid_embedding(
             )
 
     asyncio.run(_run())
+
+
+def test_legacy_vector_store_enabled_via_env(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
+    monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
+    monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])
+    monkeypatch.setenv("ENABLE_LEGACY_VECTOR_STORE", "1")
+    monkeypatch.delenv("ALLOW_LEGACY_EMBEDDINGS", raising=False)
+
+    service = MemoryEmbeddingService(
+        user_id=11,
+        conversation_id=21,
+        vector_store_type="chroma",
+        embedding_model="openai",
+        config=memory_config,
+    )
+
+    assert service._legacy_vector_store_enabled is True
 
 
 def test_add_memory_accepts_pgvector_like_embedding(

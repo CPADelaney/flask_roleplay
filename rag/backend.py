@@ -99,7 +99,7 @@ async def _invoke_legacy(
 ) -> Dict[str, Any]:
     if not _legacy_embeddings_enabled():
         message = (
-            "Legacy embedding/retrieval helpers are disabled. Set ALLOW_LEGACY_EMBEDDINGS=1 "
+            "Legacy embedding/retrieval helpers are disabled. Set ENABLE_LEGACY_VECTOR_STORE=1 "
             "to opt back in temporarily."
         )
         if error:
@@ -144,7 +144,15 @@ def _normalize_bool(value: Optional[str]) -> bool:
 
 
 def _legacy_embeddings_enabled() -> bool:
-    return _normalize_bool(os.getenv("ALLOW_LEGACY_EMBEDDINGS"))
+    legacy_env = os.getenv("ENABLE_LEGACY_VECTOR_STORE")
+    if legacy_env is not None:
+        return _normalize_bool(legacy_env)
+
+    fallback_env = os.getenv("ALLOW_LEGACY_EMBEDDINGS")
+    if fallback_env is not None:
+        return _normalize_bool(fallback_env)
+
+    return False
 
 
 __all__ = ["ask", "get_configured_backend", "BackendPreference"]
