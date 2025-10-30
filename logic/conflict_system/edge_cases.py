@@ -22,15 +22,16 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 
+from celery_config import celery_app
+
 from agents import Agent, Runner, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis_client: Optional[redis.Redis] = None
+_extract_runner_response_fn = None
 
 async def get_redis_client() -> redis.Redis:
     """Lazy-loads and returns a singleton async Redis client instance."""
@@ -722,7 +723,7 @@ class ConflictEdgeCaseSubsystem:
         
         try:
             response = await Runner.run(self.recovery_strategist, prompt)
-            data = json.loads(extract_runner_response(response))
+            data = json.loads(_extract_runner_response(response))
             return data.get('options', [])
         except Exception as e:
             logger.error(f"Failed to generate orphan recovery options: {e}")
@@ -761,7 +762,7 @@ class ConflictEdgeCaseSubsystem:
         
         try:
             response = await Runner.run(self.recovery_strategist, prompt)
-            data = json.loads(extract_runner_response(response))
+            data = json.loads(_extract_runner_response(response))
             return data.get('options', [])
         except Exception as e:
             logger.error(f"Failed to generate stale recovery options: {e}")
@@ -795,7 +796,7 @@ class ConflictEdgeCaseSubsystem:
         
         try:
             response = await Runner.run(self.recovery_strategist, prompt)
-            data = json.loads(extract_runner_response(response))
+            data = json.loads(_extract_runner_response(response))
             return data.get('options', [])
         except Exception as e:
             logger.error(f"Failed to generate loop recovery options: {e}")
@@ -830,7 +831,7 @@ class ConflictEdgeCaseSubsystem:
         
         try:
             response = await Runner.run(self.graceful_degrader, prompt)
-            data = json.loads(extract_runner_response(response))
+            data = json.loads(_extract_runner_response(response))
             return data.get('options', [])
         except Exception as e:
             logger.error(f"Failed to generate overload recovery options: {e}")
@@ -869,7 +870,7 @@ class ConflictEdgeCaseSubsystem:
         
         try:
             response = await Runner.run(self.narrative_healer, prompt)
-            data = json.loads(extract_runner_response(response))
+            data = json.loads(_extract_runner_response(response))
             return data.get('options', [])
         except Exception as e:
             logger.error(f"Failed to generate contradiction recovery options: {e}")
@@ -1421,3 +1422,15 @@ async def auto_recover_conflicts(
         'recovery_results': recovery_results,
         'error': error,
     }
+
+
+def _extract_runner_response(response: Any) -> Any:
+    global _extract_runner_response_fn
+    if _extract_runner_response_fn is None:
+        from logic.conflict_system.dynamic_conflict_template import (
+            extract_runner_response as _impl,
+        )
+
+        _extract_runner_response_fn = _impl
+
+    return _extract_runner_response_fn(response)
