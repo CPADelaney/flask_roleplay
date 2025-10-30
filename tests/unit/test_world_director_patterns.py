@@ -1,3 +1,4 @@
+import enum
 import json
 import types
 from pathlib import Path
@@ -272,6 +273,34 @@ def stub_world_director_dependencies():
     logic_chatgpt.analyze_preferences = analyze_preferences
     logic_chatgpt.create_semantic_abstraction = create_semantic_abstraction
     logic_chatgpt.cosine_similarity = cosine_similarity
+
+    # rag backend stub
+    rag_module = create_module("rag")
+    rag_backend_module = create_module("rag.backend")
+
+    class _BackendPreference(enum.Enum):  # pragma: no cover - helper
+        AUTO = "auto"
+        AGENTS = "agents"
+        LEGACY = "legacy"
+
+    async def fake_rag_ask(prompt, **kwargs):
+        metadata = kwargs.get("metadata") or {}
+        if kwargs.get("mode") == "embedding":
+            return {"embedding": [float(len(prompt))], "provider": "test", "metadata": metadata}
+
+        legacy = kwargs.get("legacy_fallback")
+        documents = []
+        if callable(legacy):
+            documents = await legacy()
+        return {"documents": documents, "provider": "legacy", "metadata": metadata}
+
+    rag_backend_module.BackendPreference = _BackendPreference
+    rag_backend_module.ask = fake_rag_ask
+    rag_backend_module.get_configured_backend = lambda: _BackendPreference.AUTO
+
+    rag_module.ask = fake_rag_ask
+    rag_module.BackendPreference = _BackendPreference
+    rag_module.get_configured_backend = rag_backend_module.get_configured_backend
 
     with mock.patch.dict(sys.modules, modules):
         yield

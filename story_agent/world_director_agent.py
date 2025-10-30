@@ -62,6 +62,7 @@ from story_agent.world_simulation_models import (
 
 from db.connection import get_db_connection_context
 from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContextWrapper
+from rag import ask as rag_ask
 
 # ------------------------------------------------------------------------------
 # Function tool invocation helper
@@ -2588,7 +2589,6 @@ async def check_all_emergent_patterns(
     result = EmergentPatternsResult()
 
     chatgpt_funcs = _get_chatgpt_functions()
-    get_text_embedding = chatgpt_funcs['get_text_embedding']
     cosine_similarity = chatgpt_funcs['cosine_similarity']
     generate_text_completion = chatgpt_funcs['generate_text_completion']
 
@@ -2602,16 +2602,51 @@ async def check_all_emergent_patterns(
         recent = [m for m in recent_iterable if isinstance(m, dict) and m.get('text')]
         if len(recent) > 5:
             try:
-                embs = [await get_text_embedding(m['text']) for m in recent[:10]]
-                for i in range(len(embs)):
-                    for j in range(i+1, len(embs)):
-                        sim = float(cosine_similarity(embs[i], embs[j]))
+                subset = recent[:10]
+                embedding_tasks = [
+                    rag_ask(
+                        m['text'],
+                        mode="embedding",
+                        metadata={
+                            "component": "world_director",
+                            "operation": "memory_pattern_embedding",
+                            "memory_index": idx,
+                            "conversation_id": context.conversation_id,
+                            "user_id": context.user_id,
+                        },
+                    )
+                    for idx, m in enumerate(subset)
+                ]
+                embedding_results = await asyncio.gather(*embedding_tasks, return_exceptions=True)
+                embeddings: List[Optional[List[float]]] = [None] * len(subset)
+                for idx, embedding_response in enumerate(embedding_results):
+                    if isinstance(embedding_response, Exception):
+                        logger.error("Error generating embedding for memory %s: %s", idx, embedding_response)
+                        continue
+                    if not isinstance(embedding_response, dict):
+                        logger.error("Unexpected embedding payload for memory %s: %r", idx, embedding_response)
+                        continue
+                    vector = embedding_response.get("embedding")
+                    if vector is None:
+                        logger.error("Missing embedding vector for memory %s", idx)
+                        continue
+                    embeddings[idx] = vector
+
+                for i in range(len(embeddings)):
+                    left = embeddings[i]
+                    if left is None:
+                        continue
+                    for j in range(i + 1, len(embeddings)):
+                        right = embeddings[j]
+                        if right is None:
+                            continue
+                        sim = float(cosine_similarity(left, right))
                         if sim > 0.8:
                             result.memory_patterns.append(MemorySimilarity(
                                 m1_index=i,
                                 m2_index=j,
-                                m1_excerpt=str(recent[i]['text'])[:160],
-                                m2_excerpt=str(recent[j]['text'])[:160],
+                                m1_excerpt=str(subset[i]['text'])[:160],
+                                m2_excerpt=str(subset[j]['text'])[:160],
                                 similarity=sim
                             ))
             except Exception as e:

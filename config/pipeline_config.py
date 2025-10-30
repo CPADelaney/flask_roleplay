@@ -1,7 +1,8 @@
 # config/pipeline_config.py:
 
 import os
-from typing import Optional
+
+from rag.backend import BackendPreference, get_configured_backend
 
 class PipelineConfig:
     """Central configuration for the unified pipeline"""
@@ -13,6 +14,18 @@ class PipelineConfig:
     
     # Model settings
     DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-5-nano")
+
+    @classmethod
+    def get_rag_backend(cls) -> BackendPreference:
+        """Return the configured RAG backend preference."""
+
+        return get_configured_backend()
+
+    @classmethod
+    def prefer_legacy_rag(cls) -> bool:
+        """Convenience helper for legacy fallbacks."""
+
+        return cls.get_rag_backend() is BackendPreference.LEGACY
     
     @classmethod
     def get_system_prompt(cls) -> str:

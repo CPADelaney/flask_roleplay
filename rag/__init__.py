@@ -1,5 +1,5 @@
-"""Lightweight helpers for retrieval via the Agents backend."""
+"""Lightweight helpers for retrieval via the configured RAG backend."""
 
-from .ask import ask
+from .backend import ask, BackendPreference, get_configured_backend
 
-__all__ = ["ask"]
+__all__ = ["ask", "BackendPreference", "get_configured_backend"]
