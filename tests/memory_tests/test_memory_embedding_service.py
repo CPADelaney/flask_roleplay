@@ -250,6 +250,43 @@ def test_add_and_search_memory_returns_inserted_record(
     asyncio.run(_run())
 
 
+def test_service_initializes_when_agents_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    memory_config: Dict[str, Any],
+) -> None:
+    from rag import vector_store as rag_vector_store
+
+    monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
+    monkeypatch.setattr(
+        "memory.memory_service.get_hosted_vector_store_ids",
+        lambda *_: ["agents-memory"],
+    )
+    monkeypatch.setattr(rag_vector_store, "agents_setup", None, raising=False)
+    monkeypatch.setattr(
+        rag_vector_store,
+        "_AGENTS_IMPORT_ERROR",
+        ImportError("Agents SDK missing"),
+        raising=False,
+    )
+
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=14,
+            conversation_id=28,
+            vector_store_type="chroma",
+            embedding_model="openai",
+            config=memory_config,
+        )
+
+        assert service._legacy_vector_store_enabled is True
+        assert service._use_hosted_vector_store is False
+
+        await service.initialize()
+        assert isinstance(service.vector_db, _StubVectorDatabase)
+
+    asyncio.run(_run())
+
+
 def test_legacy_vector_store_guard(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
     monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
     monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])

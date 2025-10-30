@@ -9,6 +9,11 @@ This module provides configuration settings for the memory embedding and retriev
 import os
 from typing import Dict, Any, List, Optional
 
+from rag.vector_store import (
+    get_hosted_vector_store_ids,
+    hosted_vector_store_enabled,
+)
+
 LEGACY_EMBEDDING_DIMENSION = 1536
 
 
@@ -154,6 +159,19 @@ def get_memory_config() -> Dict[str, Any]:
         if os.getenv("RENDER_PERSIST_DIR"):
             config["vector_store"]["persist_base_dir"] = os.getenv("RENDER_PERSIST_DIR")
     
+    configured_ids = get_hosted_vector_store_ids(config)
+    if configured_ids:
+        config["vector_store"]["hosted_vector_store_ids"] = configured_ids
+    else:
+        config["vector_store"]["hosted_vector_store_ids"] = []
+
+    agents_hosted_available = bool(configured_ids) and hosted_vector_store_enabled(
+        configured_ids,
+        config=config,
+    )
+    if not configured_ids or not agents_hosted_available:
+        config["vector_store"]["use_legacy_vector_store"] = True
+
     prefer_legacy = config["vector_store"].get("use_legacy_vector_store")
     if prefer_legacy:
         if config["vector_store"].get("dimension") is None:
