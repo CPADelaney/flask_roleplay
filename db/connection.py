@@ -1,3 +1,4 @@
+# db/connection.py
 """
 Database connection pool management for asyncpg with Celery worker support.
 
