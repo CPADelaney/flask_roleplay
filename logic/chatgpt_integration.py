@@ -2128,90 +2128,6 @@ async def generate_text_completion(
         return "I'm having trouble processing your request right now."
 
 
-async def get_text_embedding(text: str, model: str = "text-embedding-3-small", dimensions: Optional[int] = None) -> List[float]:
-    """
-    Get embedding vector for text using OpenAI's latest embedding models.
-    """
-    try:
-        # Get async client from centralized manager before retry loop
-        client = _client_manager.async_client
-        
-        # Validate model choice
-        valid_models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
-        if model not in valid_models:
-            logger.warning(f"Invalid model {model}, using text-embedding-3-small")
-            model = "text-embedding-3-small"
-        
-        # Check dimensions parameter
-        max_dimensions = {
-            "text-embedding-3-small": 1536,
-            "text-embedding-3-large": 3072,
-            "text-embedding-ada-002": 1536
-        }
-        
-        if dimensions:
-            if dimensions > max_dimensions[model]:
-                logger.warning(f"Requested dimensions {dimensions} exceeds max {max_dimensions[model]} for {model}")
-                dimensions = None
-            elif dimensions < 1:
-                logger.warning(f"Invalid dimensions {dimensions}, must be positive")
-                dimensions = None
-        
-        # Clean and validate text
-        text = text.replace("\n", " ").strip()
-        if not text:
-            logger.warning("Empty text provided for embedding, returning zero vector")
-            return [0.0] * (dimensions or max_dimensions[model])
-        
-        # Truncate if too long (simplified version)
-        max_chars = 32000  # ~8000 tokens
-        if len(text) > max_chars:
-            logger.warning(f"Text too long ({len(text)} chars), truncating to {max_chars} chars")
-            text = text[:max_chars] + "..."
-        
-        # Build request parameters
-        params = {
-            "model": model,
-            "input": text,
-            "encoding_format": "float"
-        }
-        
-        if dimensions:
-            params["dimensions"] = dimensions
-        
-        # Make request with retries
-        for attempt in range(3):
-            try:
-                response = await client.embeddings.create(**params)
-                
-                # Extract embedding
-                embedding = response.data[0].embedding
-                
-                # Ensure all values are floats
-                return list(map(float, embedding))
-                
-            except Exception as e:
-                if attempt < 2:
-                    wait_time = 2 ** (attempt + 1)
-                    logger.warning(f"Embedding error on attempt {attempt + 1}, retrying in {wait_time}s: {e}")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Failed to get embedding after retries: {e}")
-                    raise
-        
-    except Exception as e:
-        logger.error(f"Error getting text embedding: {e}")
-        
-        # Return zero vector with appropriate dimensions
-        default_dims = 1536
-        if model == "text-embedding-3-large" and not dimensions:
-            default_dims = 3072
-        elif dimensions:
-            default_dims = dimensions
-            
-        return [0.0] * default_dims
-
-
 async def create_semantic_abstraction(memory_text: str) -> str:
     """Create a semantic abstraction from a specific memory."""
     prompt = f"""
@@ -2379,17 +2295,24 @@ async def analyze_preferences(text: str) -> Dict[str, Any]:
 
 
 async def generate_embedding(text: str) -> List[float]:
-    """
-    Generate an embedding vector for text using OpenAI's API.
-    Legacy wrapper that calls get_text_embedding.
-    
-    Args:
-        text: Text to generate embedding for
-        
-    Returns:
-        Embedding vector as list of floats
-    """
-    return await get_text_embedding(text, model="text-embedding-3-small")
+    """Generate an embedding vector for *text* via the Agents shim."""
+    from rag import ask as rag_ask  # Local import to avoid circular dependencies
+
+    try:
+        response = await rag_ask(
+            text,
+            mode="embedding",
+            metadata={"component": "logic.chatgpt_integration", "operation": "generate_embedding"},
+        )
+        vector = response.get("embedding") if isinstance(response, dict) else None
+        if vector is None:
+            raise ValueError("Embedding payload missing")
+        return [float(v) for v in vector]
+    except Exception as exc:
+        logger.error("Failed to generate embedding via Agents shim: %s", exc)
+        from embedding.vector_store import generate_embedding as local_generate
+
+        return await local_generate(text)
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:

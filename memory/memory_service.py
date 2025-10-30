@@ -38,7 +38,7 @@ from utils.embedding_dimensions import (
     build_zero_vector,
     measure_embedding_dimension,
 )
-from logic.chatgpt_integration import get_text_embedding
+from rag import ask as rag_ask
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -209,11 +209,20 @@ class MemoryEmbeddingService:
                     model_name = candidate
 
             async def _openai_provider(text: str, *, _model: str = model_name) -> Sequence[float]:
-                return await get_text_embedding(
+                response = await rag_ask(
                     text,
+                    mode="embedding",
+                    metadata={
+                        "component": "memory.memory_service",
+                        "operation": "openai-provider",
+                        "model": _model,
+                    },
                     model=_model,
-                    dimensions=None,
                 )
+                vector = response.get("embedding") if isinstance(response, dict) else None
+                if vector is None:
+                    raise ValueError("Embedding response missing vector")
+                return [float(v) for v in vector]
 
             self.embeddings = None
             self._embedding_provider = _openai_provider
