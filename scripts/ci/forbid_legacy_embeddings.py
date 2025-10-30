@@ -123,12 +123,15 @@ def main(argv: List[str]) -> int:
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parents[2]
+    script_path = Path(__file__).resolve()
     allowlist = load_allowlist(args.allowlist)
 
     violations_found = False
     repo_files = list_repo_files(repo_root)
 
     for file_path in repo_files:
+        if file_path.resolve() == script_path:
+            continue
         if file_path.suffix != ".py":
             continue
         relative = file_path.relative_to(repo_root).as_posix()
