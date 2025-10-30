@@ -1,0 +1,60 @@
+name: Hot Path Guard
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'claude/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  check-hotpath:
+    name: Check for blocking LLM calls in hot path
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run hot path guard
+        run: |
+          python scripts/ci/forbid_hotpath_llm.py
+
+      - name: Comment on PR (if violations found)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.name,
+              body: `## ❌ Hot Path Guard Failed
+
+            Blocking LLM calls were detected in hot-path code. This violates our hot/slow path separation architecture.
+
+            ### How to Fix:
+            1. Move blocking LLM calls to \`nyx/tasks/background/*.py\`
+            2. Update hot-path code to dispatch Celery tasks instead
+            3. Use fast helper functions from \`*_hotpath.py\` modules
+            4. See \`docs/hot_path_blockers.md\` for detailed guidance
+
+            ### Allowed Patterns:
+            - \`nyx/tasks/**/*.py\` - Background task modules
+            - \`tasks.py\`, \`celery_tasks/**/*.py\` - Celery task definitions
+            - \`tests/**/*.py\` - Test files
+            - \`scripts/**/*.py\` - Scripts and utilities
+            - \`*_hotpath.py\` - Hot path helper modules
+
+            Run \`python scripts/ci/forbid_hotpath_llm.py\` locally to see violations.
+            `
+            })
