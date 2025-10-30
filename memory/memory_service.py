@@ -166,13 +166,20 @@ class MemoryEmbeddingService:
         self.config = config or {}
         self._configured_dimension = _extract_configured_dimension(self.config)
 
+        self._legacy_vector_store_enabled = legacy_vector_store_enabled(self.config)
         self._hosted_vector_store_ids = get_hosted_vector_store_ids(self.config)
         self._use_hosted_vector_store = hosted_vector_store_enabled(
             self._hosted_vector_store_ids,
             config=self.config,
         )
-        if legacy_vector_store_enabled(self.config):
+        if self._legacy_vector_store_enabled:
             self._use_hosted_vector_store = False
+
+        if not self._use_hosted_vector_store and not self._legacy_vector_store_enabled:
+            raise RuntimeError(
+                "Legacy vector store backend disabled; configure Agents hosted vector "
+                "stores or set ENABLE_LEGACY_VECTOR_STORE=1 to keep local embeddings."
+            )
 
         self._primary_vector_store_id: Optional[str] = (
             self._hosted_vector_store_ids[0] if self._hosted_vector_store_ids else None

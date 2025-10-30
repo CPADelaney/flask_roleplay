@@ -142,6 +142,13 @@ def _patch_vector_backends(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("memory.memory_service.FAISSVectorDatabase", _StubVectorDatabase)
     monkeypatch.setattr("memory.memory_service.create_vector_database", lambda _: _StubVectorDatabase())
     monkeypatch.setattr("memory.memory_service.HuggingFaceEmbeddings", _DummyHFEmbeddings)
+    monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: True)
+    monkeypatch.setattr(
+        "memory.memory_service.get_hosted_vector_store_ids",
+        lambda *_: ["agents-memory"],
+    )
+    monkeypatch.setattr("memory.memory_service.search_hosted_vector_store", lambda *_, **__: [])
+    monkeypatch.setattr("memory.memory_service.upsert_hosted_vector_documents", lambda *_, **__: None)
 
 
 @pytest.fixture
@@ -149,14 +156,37 @@ def memory_config() -> Dict[str, Any]:
     return {
         "vector_store": {
             "persist_base_dir": "./vector_stores",
-            "dimension": 1536,
+            "use_legacy_vector_store": False,
+            "hosted_vector_store_ids": ["agents-memory"],
         },
         "embedding": {
             "type": "openai",
             "openai_model": "text-embedding-3-small",
-            "embedding_dim": 1536,
         },
     }
+
+
+@pytest.fixture
+def legacy_memory_config(memory_config: Dict[str, Any]) -> Dict[str, Any]:
+    config = {
+        "vector_store": {
+            **memory_config["vector_store"],
+            "use_legacy_vector_store": True,
+            "hosted_vector_store_ids": [],
+            "dimension": 8,
+        },
+        "embedding": {
+            **memory_config["embedding"],
+            "embedding_dim": 8,
+        },
+    }
+    return config
+
+
+@pytest.fixture
+def legacy_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
+    monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])
 
 
 @pytest.fixture(autouse=True)
@@ -172,13 +202,14 @@ def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
         legacy_fallback=None,
     ) -> Dict[str, Any]:
         base = float(len(text) % 31)
-        embedding = [base + i for i in range(1536)]
+        size = dimensions or 8
+        embedding = [base + i for i in range(size)]
         return {"embedding": embedding, "provider": "test"}
 
     monkeypatch.setattr("memory.memory_service.rag_ask", _fake_ask)
 
 
-def test_generate_embedding_matches_configured_dimension(memory_config: Dict[str, Any]) -> None:
+def test_generate_embedding_uses_agents_dimension(memory_config: Dict[str, Any]) -> None:
     async def _run() -> None:
         service = MemoryEmbeddingService(
             user_id=1,
@@ -191,20 +222,22 @@ def test_generate_embedding_matches_configured_dimension(memory_config: Dict[str
         await service.initialize()
         embedding = await service.generate_embedding("hello world")
 
-        assert len(embedding) == 1536
-        assert service._get_target_dimension() == 1536
+        assert len(embedding) == 8
+        assert service._get_target_dimension() == 8
 
     asyncio.run(_run())
 
 
-def test_add_and_search_memory_returns_inserted_record(memory_config: Dict[str, Any]) -> None:
+def test_add_and_search_memory_returns_inserted_record(
+    legacy_backend: None, legacy_memory_config: Dict[str, Any]
+) -> None:
     async def _run() -> None:
         service = MemoryEmbeddingService(
             user_id=7,
             conversation_id=99,
             vector_store_type="faiss",
             embedding_model="openai",
-            config=memory_config,
+            config=legacy_memory_config,
         )
 
         await service.initialize()
@@ -217,14 +250,40 @@ def test_add_and_search_memory_returns_inserted_record(memory_config: Dict[str, 
     asyncio.run(_run())
 
 
-def test_add_memory_rejects_invalid_embedding(memory_config: Dict[str, Any]) -> None:
+def test_legacy_vector_store_guard(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
+    monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
+    monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])
+    monkeypatch.delenv("ENABLE_LEGACY_VECTOR_STORE", raising=False)
+
+    legacy_config = {
+        **memory_config,
+        "vector_store": {
+            **memory_config["vector_store"],
+            "use_legacy_vector_store": False,
+            "hosted_vector_store_ids": [],
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="Legacy vector store backend disabled"):
+        MemoryEmbeddingService(
+            user_id=7,
+            conversation_id=13,
+            vector_store_type="chroma",
+            embedding_model="openai",
+            config=legacy_config,
+        )
+
+
+def test_add_memory_rejects_invalid_embedding(
+    legacy_backend: None, legacy_memory_config: Dict[str, Any]
+) -> None:
     async def _run() -> None:
         service = MemoryEmbeddingService(
             user_id=3,
             conversation_id=5,
             vector_store_type="chroma",
             embedding_model="openai",
-            config=memory_config,
+            config=legacy_memory_config,
         )
 
         await service.initialize()
@@ -239,7 +298,11 @@ def test_add_memory_rejects_invalid_embedding(memory_config: Dict[str, Any]) -> 
     asyncio.run(_run())
 
 
-def test_add_memory_accepts_pgvector_like_embedding(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
+def test_add_memory_accepts_pgvector_like_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_backend: None,
+    legacy_memory_config: Dict[str, Any],
+) -> None:
     class _PgVector:
         def __init__(self, values):
             self._values = values
@@ -253,7 +316,7 @@ def test_add_memory_accepts_pgvector_like_embedding(monkeypatch: pytest.MonkeyPa
             conversation_id=12,
             vector_store_type="faiss",
             embedding_model="openai",
-            config=memory_config,
+            config=legacy_memory_config,
         )
 
         await service.initialize()
@@ -279,14 +342,18 @@ def test_add_memory_accepts_pgvector_like_embedding(monkeypatch: pytest.MonkeyPa
     asyncio.run(_run())
 
 
-def test_add_memory_regenerates_on_unusable_embedding(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
+def test_add_memory_regenerates_on_unusable_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_backend: None,
+    legacy_memory_config: Dict[str, Any],
+) -> None:
     async def _run() -> None:
         service = MemoryEmbeddingService(
             user_id=2,
             conversation_id=3,
             vector_store_type="chroma",
             embedding_model="openai",
-            config=memory_config,
+            config=legacy_memory_config,
         )
 
         await service.initialize()
