@@ -3032,6 +3032,71 @@ def lore_evolve_task(affected_entities: Optional[List[str]] = None):
     return run_async_in_worker_loop(_run())
 
 
+@celery_app.task(name="canon.canonize_conflict", queue="background")
+def canon_canonize_conflict_task(
+    user_id: int,
+    conversation_id: int,
+    conflict_id: int,
+    snapshot_id: int,
+):
+    """Background task to perform canon evaluation and persistence."""
+
+    async def _run():
+        from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
+
+        subsystem = ConflictCanonSubsystem(int(user_id), int(conversation_id))
+        await subsystem.process_canonization_snapshot(int(snapshot_id), int(conflict_id))
+        return {"ok": True, "snapshot_id": int(snapshot_id)}
+
+    return run_async_in_worker_loop(_run())
+
+
+@celery_app.task(name="canon.generate_lore_suggestions", queue="background")
+def canon_generate_lore_suggestions_task(
+    user_id: int,
+    conversation_id: int,
+    cache_id: int,
+    conflict_type: str,
+    conflict_context: Optional[Dict[str, Any]] = None,
+    matching_event_ids: Optional[List[int]] = None,
+):
+    """Produce human-readable lore alignment suggestions in the background."""
+
+    async def _run():
+        from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
+
+        subsystem = ConflictCanonSubsystem(int(user_id), int(conversation_id))
+        await subsystem.build_compliance_suggestions(
+            int(cache_id),
+            conflict_type,
+            conflict_context or {},
+            [int(e) for e in (matching_event_ids or [])],
+        )
+        return {"ok": True, "cache_id": int(cache_id)}
+
+    return run_async_in_worker_loop(_run())
+
+
+@celery_app.task(name="canon.generate_canon_references", queue="background")
+def canon_generate_references_task(
+    user_id: int,
+    conversation_id: int,
+    cache_id: int,
+    event_id: int,
+    context: str,
+):
+    """Build and cache canon references asynchronously."""
+
+    async def _run():
+        from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
+
+        subsystem = ConflictCanonSubsystem(int(user_id), int(conversation_id))
+        await subsystem.build_reference_cache(int(cache_id), int(event_id), context)
+        return {"ok": True, "cache_id": int(cache_id)}
+
+    return run_async_in_worker_loop(_run())
+
+
 @celery_app.task(name="conflict.update_tensions")
 def conflict_update_tensions_task(active_conflicts: Optional[List[int]] = None):
     """Update conflict tensions. Implement routing if you can map conflict → (user, conversation)."""
