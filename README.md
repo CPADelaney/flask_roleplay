@@ -119,6 +119,10 @@ JWT_SECRET=your-secret-key
 API_RATE_LIMIT=100
 ```
 
+### RAG / vector store migration
+
+Refer to [docs/rag_platform_migration.md](docs/rag_platform_migration.md) for instructions on configuring the Agents-backed RAG workflow, loading historical memories into the hosted vector store, and opting into the associated integration tests.
+
 ### Database connection tuning
 
 - `DB_COMMAND_TIMEOUT` controls how long queries are allowed to run before asyncpg raises a timeout.
