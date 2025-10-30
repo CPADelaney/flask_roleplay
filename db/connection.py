@@ -36,7 +36,7 @@ import asyncpg
 import threading
 import weakref
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any, Set, List, Tuple
+from typing import Optional, Dict, Any, Set, List, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -53,6 +53,8 @@ from celery.signals import worker_process_init, worker_process_shutdown
 # ============================================================================
 
 logger = logging.getLogger(__name__)
+
+AsyncpgConnection = Union[asyncpg.Connection, '_ResilientConnectionWrapper']
 
 # ============================================================================
 # Type Definitions and Enums
@@ -1730,4 +1732,5 @@ __all__ = [
     # Types (for external use)
     'PoolState',
     'PoolMetrics',
+    'AsyncpgConnection',
 ]
