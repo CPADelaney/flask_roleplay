@@ -72,6 +72,7 @@ def get_hosted_vector_store_ids(config: Optional[Dict[str, Any]] = None) -> List
     candidates: List[str] = []
 
     for env_key in (
+        "OPENAI_VECTOR_STORE_NAME",
         "AGENTS_VECTOR_STORE_IDS",
         "HOSTED_VECTOR_STORE_IDS",
         "VECTOR_STORE_IDS",
