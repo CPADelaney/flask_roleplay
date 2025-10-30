@@ -31,6 +31,12 @@ from utils.conversation_history import fetch_recent_turns
 
 # --- LLM + NPC + memory integration (unchanged external modules) ---
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
+from logic.conflict_system.autonomous_stakeholder_actions import (
+    StakeholderAction,
+    StakeholderAutonomySystem,
+    cache_autonomous_action_result,
+    release_autonomous_action_lock_sync,
+)
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
@@ -1817,6 +1823,75 @@ def generate_initial_conflict_task(user_id: int, conversation_id: int) -> Dict[s
             }
 
     return run_async_in_worker_loop(run_conflict_generation())
+
+
+# === Autonomous stakeholder action generation ==================================
+
+@celery_app.task(name="tasks.generate_stakeholder_action", queue="background")
+def generate_stakeholder_action_task(
+    user_id: int,
+    conversation_id: int,
+    stakeholder_id: int,
+    conflict_state: Optional[Dict[str, Any]] = None,
+    available_options: Optional[List[str]] = None,
+    turn_marker: Optional[Any] = None,
+) -> Dict[str, Any]:
+    logger.info(
+        "Generating autonomous action for stakeholder %s (turn=%s)",
+        stakeholder_id,
+        turn_marker,
+    )
+
+    conflict_state = conflict_state if isinstance(conflict_state, dict) else {}
+    metadata: Dict[str, Any] = {
+        "turn_marker": turn_marker,
+        "queued_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    if conflict_state:
+        metadata["keys"] = list(conflict_state.keys())[:8]
+    if available_options:
+        metadata["options_count"] = len(available_options)
+
+    async def _run() -> Optional[StakeholderAction]:
+        system = StakeholderAutonomySystem(user_id, conversation_id)
+        await system._load_active_stakeholders()
+        stakeholder = system._active_stakeholders.get(stakeholder_id)
+        if not stakeholder:
+            return None
+        return await system.make_autonomous_decision(
+            stakeholder,
+            conflict_state,
+            available_options,
+        )
+
+    action: Optional[StakeholderAction] = None
+    error_message: Optional[str] = None
+
+    try:
+        action = run_async_in_worker_loop(_run())
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception(
+            "Autonomous action generation failed for stakeholder %s", stakeholder_id
+        )
+        error_message = str(exc)
+
+    stored = False
+    if isinstance(action, StakeholderAction):
+        stored = cache_autonomous_action_result(action, turn_marker, metadata)
+        if not stored and error_message is None:
+            error_message = "cache_failed"
+    elif error_message is None:
+        error_message = "stakeholder_missing"
+
+    release_autonomous_action_lock_sync(stakeholder_id, turn_marker)
+
+    return {
+        "stakeholder_id": stakeholder_id,
+        "turn_marker": turn_marker,
+        "stored": stored,
+        "action_id": getattr(action, "action_id", None) if stored else None,
+        "error": error_message,
+    }
 
 
 # === GPT opening line ===========================================================

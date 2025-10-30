@@ -11,6 +11,7 @@ ConflictSubsystem under the Conflict Synthesizer orchestrator.
 
 import logging
 import json
+import os
 import random
 import re
 from typing import Dict, List, Any, Optional, Tuple, Set
@@ -19,8 +20,11 @@ from dataclasses import dataclass
 from datetime import datetime
 import weakref
 
+import redis
+import redis.asyncio as aioredis
 from openai import AsyncOpenAI
 
+from celery_config import celery_app
 from db.connection import get_db_connection_context
 from agents import function_tool, RunContextWrapper  # kept for public API tools
 
@@ -34,6 +38,61 @@ from logic.conflict_system.conflict_synthesizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ===============================================================================
+# Redis helpers for asynchronous action planning
+# ===============================================================================
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+ACTION_CACHE_PREFIX = "stakeholder:autonomy:actions"
+ACTION_INFLIGHT_PREFIX = "stakeholder:autonomy:inflight"
+ACTION_CACHE_TTL_SECONDS = 600
+ACTION_LOCK_TTL_SECONDS = 120
+
+_async_action_redis: Optional[aioredis.Redis] = None
+_sync_action_redis: Optional[redis.Redis] = None
+
+
+async def _get_async_action_redis() -> Optional[aioredis.Redis]:
+    global _async_action_redis
+    if _async_action_redis is None:
+        try:
+            _async_action_redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        except Exception as exc:
+            logger.warning(f"Failed to initialize async Redis client for autonomy cache: {exc}")
+            return None
+    return _async_action_redis
+
+
+def _get_sync_action_redis() -> Optional[redis.Redis]:
+    global _sync_action_redis
+    if _sync_action_redis is None:
+        try:
+            _sync_action_redis = redis.from_url(REDIS_URL, decode_responses=True)
+        except Exception as exc:
+            logger.warning(f"Failed to initialize sync Redis client for autonomy cache: {exc}")
+            return None
+    return _sync_action_redis
+
+
+def _action_cache_key(stakeholder_id: int) -> str:
+    return f"{ACTION_CACHE_PREFIX}:{stakeholder_id}"
+
+
+def _action_lock_key(stakeholder_id: int, turn_field: str) -> str:
+    return f"{ACTION_INFLIGHT_PREFIX}:{stakeholder_id}:{turn_field}"
+
+
+def _turn_field(turn_marker: Optional[Any]) -> str:
+    if turn_marker is None:
+        return "default"
+    return str(turn_marker)
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 # ===============================================================================
 # OpenAI Responses API Helper
@@ -375,29 +434,71 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         acting_stakeholders = self._select_acting_stakeholders(update_type or "")
         actions: List[StakeholderAction] = []
         side_effects: List[SystemEvent] = []
-        
+        turn_marker = self._extract_turn_marker(payload.get('data', {}) or {}, payload)
+        enqueued_jobs = 0
+
         for s in acting_stakeholders:
-            action = await self.make_autonomous_decision(s, payload)
-            if action:
-                actions.append(action)
-                self._pending_actions.append(action)
+            cached = await self._consume_cached_action(s.stakeholder_id, turn_marker)
+            if cached:
+                actions.append(cached)
+                self._pending_actions.append(cached)
                 side_effects.append(SystemEvent(
-                    event_id=f"action_{action.action_id}",
+                    event_id=f"action_{cached.action_id}",
                     event_type=EventType.STAKEHOLDER_ACTION,
                     source_subsystem=self.subsystem_type,
                     payload={
                         'stakeholder_id': s.stakeholder_id,
-                        'action_type': action.action_type.value,
-                        'target_id': action.target,
-                        'intensity': action.success_probability
+                        'action_type': cached.action_type.value,
+                        'target_id': cached.target,
+                        'intensity': cached.success_probability
                     }
                 ))
-        
+                continue
+
+            should_enqueue = await self._should_take_autonomous_action(s, payload, turn_marker)
+            if not should_enqueue:
+                continue
+
+            available_options = (
+                payload.get('available_options')
+                or (payload.get('data') or {}).get('available_options')
+                or (payload.get('data') or {}).get('options')
+                or payload.get('options')
+            )
+            enqueue_result = await self._enqueue_autonomous_action_job(
+                stakeholder=s,
+                conflict_state=payload,
+                available_options=available_options,
+                turn_marker=turn_marker,
+            )
+            if enqueue_result == "enqueued":
+                enqueued_jobs += 1
+            elif enqueue_result == "failed":
+                fallback_action = await self._fallback_generate_action(s, payload, available_options, turn_marker)
+                if fallback_action:
+                    actions.append(fallback_action)
+                    self._pending_actions.append(fallback_action)
+                    side_effects.append(SystemEvent(
+                        event_id=f"action_{fallback_action.action_id}",
+                        event_type=EventType.STAKEHOLDER_ACTION,
+                        source_subsystem=self.subsystem_type,
+                        payload={
+                            'stakeholder_id': s.stakeholder_id,
+                            'action_type': fallback_action.action_type.value,
+                            'target_id': fallback_action.target,
+                            'intensity': fallback_action.success_probability
+                        }
+                    ))
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'actions_taken': len(actions), 'action_types': [a.action_type.value for a in actions]},
+            data={
+                'actions_taken': len(actions),
+                'action_types': [a.action_type.value for a in actions],
+                'autonomy_jobs_enqueued': enqueued_jobs,
+            },
             side_effects=side_effects
         )
     
@@ -494,14 +595,39 @@ class StakeholderAutonomySystem(ConflictSubsystem):
             s = self._find_stakeholder_by_npc(npc_id)
             if s:
                 npc_behaviors[npc_id] = self._determine_scene_behavior(s)
-        
-        autonomous_actions = []
+
+        turn_marker = self._extract_turn_marker(scene_context, raw)
+        autonomous_actions: List[StakeholderAction] = []
+        enqueued_jobs = 0
+
         for s in self._active_stakeholders.values():
-            if s.npc_id in npcs_present and self._should_take_autonomous_action(s, scene_context):
-                action = await self.make_autonomous_decision(s, scene_context)
-                if action:
-                    autonomous_actions.append(action)
-        
+            if s.npc_id not in npcs_present:
+                continue
+
+            cached = await self._consume_cached_action(s.stakeholder_id, turn_marker)
+            if cached:
+                autonomous_actions.append(cached)
+                self._pending_actions.append(cached)
+                continue
+
+            should_act = await self._should_take_autonomous_action(s, scene_context, turn_marker)
+            if not should_act:
+                continue
+
+            enqueue_result = await self._enqueue_autonomous_action_job(
+                stakeholder=s,
+                conflict_state=scene_context,
+                available_options=None,
+                turn_marker=turn_marker,
+            )
+            if enqueue_result == "enqueued":
+                enqueued_jobs += 1
+            elif enqueue_result == "failed":
+                fallback_action = await self._fallback_generate_action(s, scene_context, None, turn_marker)
+                if fallback_action:
+                    autonomous_actions.append(fallback_action)
+                    self._pending_actions.append(fallback_action)
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -513,6 +639,7 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                     for a in autonomous_actions
                 ],
                 'stakeholders_created_after_defer': created_after_defer,
+                'autonomy_jobs_enqueued': enqueued_jobs,
             },
             side_effects=[]
         )
@@ -888,7 +1015,201 @@ Return JSON:
                 self._active_stakeholders[sh.stakeholder_id] = sh
             except Exception as e:
                 logger.debug(f"Skipping stakeholder row due to error: {e}")
-    
+
+    def _extract_turn_marker(
+        self,
+        scene_context: Dict[str, Any],
+        raw_payload: Optional[Dict[str, Any]] = None
+    ) -> Optional[Any]:
+        candidates: List[Dict[str, Any]] = []
+        if isinstance(scene_context, dict):
+            candidates.append(scene_context)
+            metadata = scene_context.get('metadata') if isinstance(scene_context.get('metadata'), dict) else None
+            if metadata:
+                candidates.append(metadata)
+        if isinstance(raw_payload, dict):
+            candidates.append(raw_payload)
+
+        for candidate in candidates:
+            for key in (
+                'turn_marker', 'turn_number', 'turn', 'tick', 'scene_tick', 'sequence', 'round', 'phase_step'
+            ):
+                value = candidate.get(key) if candidate else None
+                if value is not None:
+                    return value
+        return None
+
+    def _sanitize_context_for_queue(self, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(context, dict):
+            return {}
+        try:
+            return json.loads(json.dumps(context, default=_json_default))
+        except (TypeError, ValueError):
+            def _coerce(value: Any) -> Any:
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    return value
+                if isinstance(value, datetime):
+                    return value.isoformat()
+                if isinstance(value, dict):
+                    return {k: _coerce(v) for k, v in value.items()}
+                if isinstance(value, list):
+                    return [_coerce(item) for item in value]
+                return str(value)
+
+            return _coerce(context)
+
+    async def _consume_cached_action(
+        self,
+        stakeholder_id: int,
+        turn_marker: Optional[Any]
+    ) -> Optional[StakeholderAction]:
+        redis_client = await _get_async_action_redis()
+        if not redis_client:
+            return None
+
+        field = _turn_field(turn_marker)
+        key = _action_cache_key(stakeholder_id)
+        payload: Optional[str]
+        try:
+            payload = await redis_client.hget(key, field)
+            if not payload:
+                return None
+            await redis_client.hdel(key, field)
+        except Exception as exc:
+            logger.debug(f"Failed to read cached action for stakeholder {stakeholder_id}: {exc}")
+            return None
+
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError) as exc:
+            logger.warning(f"Invalid cached action payload for stakeholder {stakeholder_id}: {exc}")
+            return None
+
+        return self._deserialize_cached_action(data, stakeholder_id)
+
+    def _deserialize_cached_action(
+        self,
+        payload: Dict[str, Any],
+        stakeholder_id: Optional[int] = None
+    ) -> Optional[StakeholderAction]:
+        try:
+            action_type_raw = (payload.get('action_type') or 'observant').upper()
+            action_type = ActionType.__members__.get(action_type_raw, ActionType.OBSERVANT)
+            timestamp_str = payload.get('timestamp')
+            timestamp = datetime.fromisoformat(timestamp_str) if timestamp_str else datetime.now()
+            return StakeholderAction(
+                action_id=int(payload.get('action_id', 0) or 0),
+                stakeholder_id=int(payload.get('stakeholder_id') or stakeholder_id or 0),
+                action_type=action_type,
+                description=payload.get('description', 'Takes action'),
+                target=payload.get('target'),
+                resources_used=payload.get('resources_used', {}),
+                success_probability=float(payload.get('success_probability', 0.5) or 0.5),
+                consequences=payload.get('consequences', {}),
+                timestamp=timestamp,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to deserialize cached action payload: {exc}")
+            return None
+
+    async def _has_cached_action(self, stakeholder_id: int, turn_marker: Optional[Any]) -> bool:
+        redis_client = await _get_async_action_redis()
+        if not redis_client:
+            return False
+        try:
+            return bool(await redis_client.hexists(_action_cache_key(stakeholder_id), _turn_field(turn_marker)))
+        except Exception:
+            return False
+
+    async def _is_action_inflight(self, stakeholder_id: int, turn_marker: Optional[Any]) -> bool:
+        redis_client = await _get_async_action_redis()
+        if not redis_client:
+            return False
+        try:
+            return bool(await redis_client.exists(_action_lock_key(stakeholder_id, _turn_field(turn_marker))))
+        except Exception:
+            return False
+
+    async def _acquire_action_lock(self, stakeholder_id: int, turn_marker: Optional[Any]) -> bool:
+        redis_client = await _get_async_action_redis()
+        if not redis_client:
+            return True
+        try:
+            return bool(
+                await redis_client.set(
+                    _action_lock_key(stakeholder_id, _turn_field(turn_marker)),
+                    "1",
+                    nx=True,
+                    ex=ACTION_LOCK_TTL_SECONDS,
+                )
+            )
+        except Exception:
+            return True
+
+    async def _release_action_lock(self, stakeholder_id: int, turn_marker: Optional[Any]) -> None:
+        redis_client = await _get_async_action_redis()
+        if not redis_client:
+            return
+        try:
+            await redis_client.delete(_action_lock_key(stakeholder_id, _turn_field(turn_marker)))
+        except Exception:
+            return
+
+    async def _enqueue_autonomous_action_job(
+        self,
+        stakeholder: Stakeholder,
+        conflict_state: Dict[str, Any],
+        available_options: Optional[List[str]],
+        turn_marker: Optional[Any]
+    ) -> str:
+        if not await self._acquire_action_lock(stakeholder.stakeholder_id, turn_marker):
+            return "locked"
+
+        # If Redis is unavailable we fall back to synchronous generation immediately.
+        if _get_sync_action_redis() is None:
+            await self._release_action_lock(stakeholder.stakeholder_id, turn_marker)
+            return "failed"
+
+        payload = {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'stakeholder_id': stakeholder.stakeholder_id,
+            'conflict_state': self._sanitize_context_for_queue(conflict_state),
+            'available_options': available_options,
+            'turn_marker': turn_marker,
+        }
+
+        try:
+            celery_app.send_task(
+                'tasks.generate_stakeholder_action',
+                kwargs=payload,
+                queue='background',
+            )
+            return "enqueued"
+        except Exception as exc:
+            logger.warning(
+                f"Failed to enqueue autonomous action job for stakeholder {stakeholder.stakeholder_id}: {exc}"
+            )
+            await self._release_action_lock(stakeholder.stakeholder_id, turn_marker)
+            return "failed"
+
+    async def _fallback_generate_action(
+        self,
+        stakeholder: Stakeholder,
+        conflict_state: Dict[str, Any],
+        available_options: Optional[List[str]],
+        turn_marker: Optional[Any]
+    ) -> Optional[StakeholderAction]:
+        try:
+            return await self.make_autonomous_decision(stakeholder, conflict_state, available_options)
+        except Exception as exc:
+            logger.warning(
+                f"Fallback autonomous decision failed for stakeholder {stakeholder.stakeholder_id}: {exc}"
+            )
+            return None
+        finally:
+            await self._release_action_lock(stakeholder.stakeholder_id, turn_marker)
+
     def _determine_initial_role(self, conflict_type: str) -> str:
         ct = (conflict_type or '').lower()
         if 'power' in ct:
@@ -962,7 +1283,17 @@ Return JSON:
             return "observant"
         return "engaged"
     
-    def _should_take_autonomous_action(self, stakeholder: Stakeholder, scene_context: Dict[str, Any]) -> bool:
+    async def _should_take_autonomous_action(
+        self,
+        stakeholder: Stakeholder,
+        scene_context: Dict[str, Any],
+        turn_marker: Optional[Any]
+    ) -> bool:
+        if await self._has_cached_action(stakeholder.stakeholder_id, turn_marker):
+            return True
+        if await self._is_action_inflight(stakeholder.stakeholder_id, turn_marker):
+            return False
+
         if stakeholder.stress_level > 0.7:
             return random.random() < 0.5
         if stakeholder.current_role in [StakeholderRole.INSTIGATOR, StakeholderRole.ESCALATOR]:
@@ -999,6 +1330,58 @@ Return JSON:
         )
         response = await self.handle_event(system_event)
         return response.data
+
+# ===============================================================================
+# Redis cache helpers (shared with Celery workers)
+# ===============================================================================
+
+def cache_autonomous_action_result(
+    action: StakeholderAction,
+    turn_marker: Optional[Any],
+    metadata: Optional[Dict[str, Any]] = None
+) -> bool:
+    client = _get_sync_action_redis()
+    if not client:
+        return False
+
+    key = _action_cache_key(action.stakeholder_id)
+    field = _turn_field(turn_marker)
+    payload = {
+        'action_id': action.action_id,
+        'stakeholder_id': action.stakeholder_id,
+        'action_type': action.action_type.value,
+        'description': action.description,
+        'target': action.target,
+        'resources_used': action.resources_used,
+        'success_probability': action.success_probability,
+        'consequences': action.consequences,
+        'timestamp': action.timestamp.isoformat(),
+    }
+    if metadata:
+        payload['metadata'] = metadata
+
+    try:
+        client.hset(key, field, json.dumps(payload, default=_json_default))
+        client.expire(key, ACTION_CACHE_TTL_SECONDS)
+        return True
+    except Exception as exc:
+        logger.warning(
+            f"Failed to cache autonomous action for stakeholder {action.stakeholder_id}: {exc}"
+        )
+        return False
+
+
+def release_autonomous_action_lock_sync(
+    stakeholder_id: int,
+    turn_marker: Optional[Any]
+) -> None:
+    client = _get_sync_action_redis()
+    if not client:
+        return
+    try:
+        client.delete(_action_lock_key(stakeholder_id, _turn_field(turn_marker)))
+    except Exception:
+        return
 
 # ===============================================================================
 # PUBLIC API - Routes Through Orchestrator
