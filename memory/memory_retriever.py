@@ -29,7 +29,9 @@ from pydantic import BaseModel, Field
 from typing import List
 
 # Import our memory service
+from config.pipeline_config import PipelineConfig
 from memory.memory_service import MemoryEmbeddingService
+from rag import ask as rag_ask
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -220,33 +222,48 @@ class MemoryRetrieverAgent:
         if not entity_types:
             entity_types = ["memory", "npc", "location", "narrative"]
         
-        # Collect memories from all entity types
-        all_memories = []
-        
-        for entity_type in entity_types:
-            try:
-                # Search for memories of this entity type
-                memories = await self.memory_service.search_memories(
-                    query_text=query,
-                    entity_type=entity_type,
-                    top_k=top_k,
-                    fetch_content=True
-                )
-                
-                # Filter by threshold
-                memories = [m for m in memories if m["relevance"] >= threshold]
-                
-                all_memories.extend(memories)
-                
-            except Exception as e:
-                logger.error(f"Error retrieving {entity_type} memories: {e}")
-        
-        # Sort by relevance
-        all_memories.sort(key=lambda x: x["relevance"], reverse=True)
-        
-        # Limit to top_k overall
-        return all_memories[:top_k]
-    
+        async def _legacy_retrieval() -> List[Dict[str, Any]]:
+            collected: List[Dict[str, Any]] = []
+
+            for entity_type in entity_types:
+                try:
+                    memories = await self.memory_service.search_memories(
+                        query_text=query,
+                        entity_type=entity_type,
+                        top_k=top_k,
+                        fetch_content=True
+                    )
+                except Exception as exc:
+                    logger.error(f"Error retrieving {entity_type} memories: {exc}")
+                    continue
+
+                for memory in memories:
+                    relevance = float(memory.get("relevance", 0.0))
+                    if relevance >= threshold:
+                        collected.append(memory)
+
+            collected.sort(key=lambda item: item.get("relevance", 0.0), reverse=True)
+            return collected[:top_k]
+
+        response = await rag_ask(
+            query,
+            mode="retrieval",
+            limit=top_k,
+            metadata={
+                "component": "memory_retriever",
+                "operation": "retrieve_memories",
+                "entity_types": entity_types,
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "threshold": threshold,
+            },
+            legacy_fallback=_legacy_retrieval,
+            backend=PipelineConfig.get_rag_backend().value,
+        )
+
+        documents = response.get("documents", [])
+        return self._normalise_documents(documents, threshold, top_k)
+
     async def analyze_memories(
         self,
         query: str,
@@ -366,10 +383,58 @@ class MemoryRetrieverAgent:
             "memories": memories,
             "analysis": analysis
         }
-    
+
     async def close(self) -> None:
         """Close the memory retriever agent."""
         if self.memory_service:
             await self.memory_service.close()
-        
+
         self.initialized = False
+
+    @staticmethod
+    def _normalise_documents(
+        documents: Any,
+        threshold: float,
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        normalised: List[Dict[str, Any]] = []
+
+        if not isinstance(documents, list):
+            documents = [documents]
+
+        for raw in documents:
+            if not isinstance(raw, dict):
+                continue
+
+            entry = dict(raw)
+            metadata = entry.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            entry["metadata"] = metadata
+
+            if "entity_type" not in metadata and entry.get("entity_type"):
+                metadata["entity_type"] = entry["entity_type"]
+
+            relevance = entry.get("relevance")
+            if relevance is None:
+                relevance = entry.get("score") or metadata.get("relevance") or metadata.get("score")
+            try:
+                relevance_value = float(relevance) if relevance is not None else 0.0
+            except (TypeError, ValueError):
+                relevance_value = 0.0
+
+            if relevance_value < threshold:
+                continue
+
+            entry["relevance"] = relevance_value
+
+            text = entry.get("memory_text")
+            if text is None:
+                text = entry.get("text") or entry.get("content") or entry.get("value")
+            if text is not None:
+                entry["memory_text"] = str(text)
+
+            normalised.append(entry)
+
+        normalised.sort(key=lambda item: item.get("relevance", 0.0), reverse=True)
+        return normalised[:top_k]
