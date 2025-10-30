@@ -230,46 +230,42 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         """Handle scene state synchronization"""
         scene_context = event.payload
         present_npcs = scene_context.get('present_npcs', [])
-        
+
+        # HOT PATH: Use cached social data and dispatch background tasks
+        from logic.conflict_system.social_circle_hotpath import (
+            get_scene_bundle,
+            queue_gossip_generation,
+            get_cached_reputation,
+        )
+
+        # Compute scene hash for cache lookups
+        import hashlib, json
+        scene_hash = hashlib.sha256(json.dumps(scene_context, sort_keys=True).encode()).hexdigest()[:16]
+
+        # Get cached social bundle (fast)
+        social_bundle = get_scene_bundle(scene_hash)
+
         side_effects = []
-        
-        # Check for gossip opportunities
-        if present_npcs and len(present_npcs) >= 2:
+
+        # If bundle is generating, queue explicit gossip generation for these NPCs
+        if present_npcs and len(present_npcs) >= 2 and social_bundle.get('status') == 'generating':
             if random.random() < 0.3:  # 30% chance of gossip
-                gossip = await self.manager.generate_gossip(
-                    {'scene': scene_context.get('activity', 'unknown')},
-                    present_npcs[:2]
-                )
-                
-                if gossip:
-                    self._active_gossip[gossip.gossip_id] = gossip
-                    
-                    # Emit gossip event
-                    side_effects.append(SystemEvent(
-                        event_id=f"gossip_{gossip.gossip_id}",
-                        event_type=EventType.NPC_REACTION,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'gossip': gossip.content,
-                            'about': gossip.about,
-                            'spreaders': list(gossip.spreaders)
-                        },
-                        priority=7
-                    ))
-        
-        # Update reputation based on recent actions
+                queue_gossip_generation(scene_context, present_npcs[:2])
+
+        # Get cached reputations (fast)
         for npc_id in present_npcs:
             if npc_id not in self._reputation_cache:
-                reputation = await self.manager.calculate_reputation(npc_id)
+                reputation = await get_cached_reputation(npc_id)
                 self._reputation_cache[npc_id] = reputation
-        
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
             data={
-                'gossip_generated': len(side_effects) > 0,
-                'reputations_updated': len(present_npcs)
+                'social_bundle_status': social_bundle.get('status', 'cached'),
+                'gossip_count': len(social_bundle.get('gossip', [])),
+                'reputations_cached': len(present_npcs)
             },
             side_effects=side_effects
         )
@@ -278,57 +274,42 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         """Handle stakeholder actions affecting social dynamics"""
         stakeholder_id = event.payload.get('stakeholder_id')
         action_type = event.payload.get('action_type')
-        
+
+        # HOT PATH: Fast reputation updates and task dispatch
+        from logic.conflict_system.social_circle_hotpath import (
+            apply_reputation_change,
+            queue_reputation_narration,
+            queue_alliance_formation,
+        )
+
         side_effects = []
-        
-        # Actions can affect reputation
+
+        # Actions can affect reputation (fast numeric update)
         if action_type in ['betray', 'support', 'oppose']:
             old_reputation = self._reputation_cache.get(stakeholder_id, {})
             new_reputation = await self._adjust_reputation_from_action(
                 stakeholder_id, action_type
             )
-            
-            # Narrate reputation change if significant
+
+            # Apply fast numeric reputation changes
+            for rep_type, delta in self._calculate_reputation_delta(action_type).items():
+                apply_reputation_change(stakeholder_id, rep_type, delta)
+
+            # Queue background narration if significant
             if old_reputation:
-                narrative = await self.manager.narrate_reputation_change(
-                    stakeholder_id, old_reputation, new_reputation
-                )
-                
-                if narrative:
-                    side_effects.append(SystemEvent(
-                        event_id=f"reputation_{stakeholder_id}_{datetime.now().timestamp()}",
-                        event_type=EventType.NPC_REACTION,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'npc_id': stakeholder_id,
-                            'narrative': narrative,
-                            'reputation_change': True
-                        },
-                        priority=8
-                    ))
-        
-        # Check for alliance formation/betrayal
+                queue_reputation_narration(stakeholder_id, old_reputation, new_reputation)
+
+        # Check for alliance formation (dispatch to background)
         if action_type == 'ally':
             target_id = event.payload.get('target_id')
             if target_id:
-                alliance = await self.manager.form_alliance(
-                    stakeholder_id, target_id, 'mutual_benefit'
-                )
-                
-                if alliance:
-                    side_effects.append(SystemEvent(
-                        event_id=f"alliance_{alliance['alliance_id']}",
-                        event_type=EventType.STATE_SYNC,
-                        source_subsystem=self.subsystem_type,
-                        payload={'alliance': alliance},
-                        priority=6
-                    ))
-        
+                queue_alliance_formation(stakeholder_id, target_id, 'mutual_benefit')
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'social_impact_processed': True},
+            data={'social_impact_processed': True, 'tasks_dispatched': True},
             side_effects=side_effects
         )
     
@@ -369,24 +350,19 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         """Handle new conflict creation with social dimensions"""
         conflict_id = event.payload.get('conflict_id')
         participants = event.payload.get('participants', [])
-        
-        # Generate gossip about the new conflict
+
+        # HOT PATH: Dispatch gossip generation to background
         if participants:
-            gossip = await self.manager.generate_gossip(
-                {'conflict_start': True},
-                participants
+            from logic.conflict_system.social_circle_hotpath import queue_gossip_generation
+            queue_gossip_generation({'conflict_start': True, 'conflict_id': conflict_id}, participants)
+
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'gossip_queued': True, 'message': 'Gossip generation dispatched to background'}
             )
-            
-            if gossip:
-                self._active_gossip[gossip.gossip_id] = gossip
-                
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'gossip_generated': True, 'gossip_id': gossip.gossip_id}
-                )
-        
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -394,17 +370,36 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             data={'no_social_dimension': True}
         )
     
+    def _calculate_reputation_delta(self, action_type: str) -> Dict[str, float]:
+        """Fast rule-based reputation delta calculation (no LLM)."""
+        deltas = {
+            'betray': {'trustworthy': -0.3, 'scandalous': 0.2, 'dangerous': 0.1},
+            'support': {'trustworthy': 0.2, 'nurturing': 0.1, 'influential': 0.1},
+            'oppose': {'rebellious': 0.2, 'dangerous': 0.1, 'mysterious': 0.05},
+        }
+        return deltas.get(action_type, {})
+
     async def _handle_conflict_resolved(self, event: SystemEvent) -> SubsystemResponse:
         """Handle conflict resolution affecting social dynamics"""
         conflict_id = event.payload.get('conflict_id')
         resolution = event.payload.get('resolution', {})
-        
+
+        # HOT PATH: Dispatch gossip generation about resolution
+        from logic.conflict_system.social_circle_hotpath import queue_gossip_generation
+
         # Resolution affects reputations
         winners = resolution.get('winners', [])
         losers = resolution.get('losers', [])
-        
+
+        # Queue gossip about resolution
+        if winners or losers:
+            queue_gossip_generation(
+                {'conflict_resolved': True, 'conflict_id': conflict_id, 'resolution': resolution},
+                winners + losers
+            )
+
         side_effects = []
-        
+
         for winner_id in winners:
             await self._adjust_reputation_from_action(winner_id, 'victory')
         
