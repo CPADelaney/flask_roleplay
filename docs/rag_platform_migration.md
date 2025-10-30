@@ -5,6 +5,16 @@ vector store and the hosted OpenAI Agents vector store. It also explains how to
 load historical memories into the hosted platform and how to run the associated
 integration tests.
 
+## Migration checklist
+
+- ✅ Review the feature flag table below and align your `.env` with the hosted
+  vector store defaults.
+- ✅ Run `python scripts/ci/forbid_legacy_embeddings.py` to ensure no new
+  references to the legacy `HuggingFaceEmbeddings`/`OpenAIEmbeddings` helpers
+  slip into the codebase during the migration.
+- ✅ Exercise the integration tests to validate the hosted vector store path
+  once the environment is configured.
+
 ## Hosted vector store loader
 
 Use [`scripts/load_vector_store.py`](../scripts/load_vector_store.py) to push
