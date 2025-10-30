@@ -37,7 +37,7 @@ jobs:
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
-              repo: context.repo.name,
+              repo: context.repo.repo,
               body: `## ❌ Hot Path Guard Failed
 
             Blocking LLM calls were detected in hot-path code. This violates our hot/slow path separation architecture.
