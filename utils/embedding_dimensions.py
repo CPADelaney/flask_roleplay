@@ -13,19 +13,32 @@ import logging
 import os
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+try:  # pragma: no cover - defensive import for optional dependency graph
+    from rag.vector_store import legacy_vector_store_enabled as _legacy_vector_store_enabled
+except Exception:  # pragma: no cover - tests may import without rag package
+    def _legacy_vector_store_enabled(config: Optional[Dict[str, Any]] = None) -> bool:
+        """Fallback legacy flag resolver used when rag module is unavailable."""
+
+        return True
+
 logger = logging.getLogger(__name__)
 
 # Default width used historically across the codebase.  We still fall back
 # to this when neither configuration nor runtime detection yields a value.
+# The legacy pgvector schema assumed OpenAI's 1,536-wide embeddings.  We keep
+# the constant for compatibility but treat it as a *legacy fallback* – modern
+# deployments should prefer dynamically detected dimensions from the Agents
+# backend and only rely on this value when the legacy escape hatch is enabled.
 DEFAULT_EMBEDDING_DIMENSION: int = 1536
 
 # Probe text for inexpensive dimension checks.  Using a constant keeps the
 # detection deterministic and makes caching easier.
 _PROBE_TEXT: str = "embedding-dimension-probe"
 
-# Cache for the resolved target dimension – most callers only need a single
-# consistent number per process, so we memoise it here.
-_CACHED_TARGET_DIMENSION: Optional[int] = None
+# Cache the resolved dimension keyed by whether the legacy vector store is in
+# play.  This keeps the Agents-first (non-legacy) resolution from leaking the
+# legacy fallback value (and vice versa).
+_CACHED_TARGET_DIMENSION: Dict[bool, int] = {}
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -139,7 +152,9 @@ def measure_embedding_dimension(
 def determine_embedding_dimension(
     embedding_model: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
-) -> int:
+    *,
+    allow_default: bool = True,
+) -> Optional[int]:
     """Best-effort detection of the *source* embedding dimension."""
 
     model_type = _resolve_embedding_model(embedding_model, config)
@@ -196,7 +211,9 @@ def determine_embedding_dimension(
         env_override = _extract_dimension_from_env()
         if env_override:
             return env_override
-        return DEFAULT_EMBEDDING_DIMENSION
+        if allow_default:
+            return DEFAULT_EMBEDDING_DIMENSION
+        return None
 
 
 def get_target_embedding_dimension(
@@ -205,22 +222,34 @@ def get_target_embedding_dimension(
 ) -> int:
     """Return the dimension that persisted vectors should conform to."""
 
-    global _CACHED_TARGET_DIMENSION
+    legacy_enabled = _legacy_vector_store_enabled(config)
 
-    if _CACHED_TARGET_DIMENSION is not None:
-        return _CACHED_TARGET_DIMENSION
+    cached = _CACHED_TARGET_DIMENSION.get(legacy_enabled)
+    if cached is not None:
+        return cached
 
     dimension = _extract_dimension_from_env()
     if dimension is None and config is not None:
         dimension = _extract_dimension_from_config(config)
 
     if dimension is None:
-        dimension = determine_embedding_dimension(embedding_model, config)
+        dimension = determine_embedding_dimension(
+            embedding_model,
+            config,
+            allow_default=legacy_enabled,
+        )
 
     if dimension is None:
+        logger.warning(
+            "Unable to determine embedding dimension without legacy fallback; "
+            "defaulting to legacy width %s. Set ENABLE_LEGACY_VECTOR_STORE=1 "
+            "or configure MEMORY_EMBEDDING_DIMENSION explicitly if you rely on "
+            "local vector stores.",
+            DEFAULT_EMBEDDING_DIMENSION,
+        )
         dimension = DEFAULT_EMBEDDING_DIMENSION
 
-    _CACHED_TARGET_DIMENSION = dimension
+    _CACHED_TARGET_DIMENSION[legacy_enabled] = dimension
     return dimension
 
 

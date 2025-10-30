@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from typing import List
+from typing import List, Set
 # Import connection and pool management functions
 # Import connection and pool management functions
 from db.connection import (
@@ -30,6 +30,7 @@ from utils.embedding_dimensions import (
     apply_embedding_dimension,
     get_target_embedding_dimension,
 )
+from rag.vector_store import legacy_vector_store_enabled
 
 try:
     from memory.memory_config import get_memory_config
@@ -53,7 +54,55 @@ except Exception as exc:  # pragma: no cover - defensive logging for init script
     )
     _MEMORY_CONFIG = {}
 
-EMBEDDING_VECTOR_DIMENSION = get_target_embedding_dimension(config=_MEMORY_CONFIG)
+LEGACY_VECTOR_STORE_ENABLED = legacy_vector_store_enabled(_MEMORY_CONFIG)
+if LEGACY_VECTOR_STORE_ENABLED:
+    EMBEDDING_VECTOR_DIMENSION = get_target_embedding_dimension(config=_MEMORY_CONFIG)
+else:
+    EMBEDDING_VECTOR_DIMENSION = None
+
+
+def _register_legacy_table(command: str, registry: Set[str]) -> None:
+    match = re.search(r"table\s+(?:if\s+not\s+exists\s+)?([A-Za-z0-9_]+)", command, re.IGNORECASE)
+    if match:
+        registry.add(match.group(1))
+
+
+def _strip_legacy_vector_columns(sql: str, registry: Set[str]) -> str:
+    lines = sql.splitlines()
+    current_table = None
+    output: List[str] = []
+    for line in lines:
+        create_match = re.search(r"create\s+table\s+(?:if\s+not\s+exists\s+)?([A-Za-z0-9_]+)", line, re.IGNORECASE)
+        if create_match:
+            current_table = create_match.group(1)
+
+        if "embedding" in line.lower() and "vector" in line.lower():
+            if current_table:
+                registry.add(current_table)
+            if output:
+                previous = output[-1].rstrip()
+                if previous.endswith(","):
+                    output[-1] = previous[:-1]
+            continue
+
+        output.append(line)
+
+    cleaned = "\n".join(output).strip()
+    return cleaned
+
+
+def _is_vector_column_statement(sql: str) -> bool:
+    lowered = sql.lower()
+    if "vector(" not in lowered:
+        if "has incorrect dimension" in lowered or "raise warning" in lowered:
+            return True
+        return False
+    return (
+        "alter table" in lowered
+        or "add column" in lowered
+        or "update all vector columns" in lowered
+        or "has incorrect dimension" in lowered
+    )
 
 def parse_system_prompt_to_memories(prompt: str, private_instructions: str = None) -> List[Dict[str, Any]]:
     """
@@ -4461,10 +4510,33 @@ async def create_all_tables():
                 '''
             ]  # End of sql_commands list
 
-            sql_commands = [
-                apply_embedding_dimension(cmd, EMBEDDING_VECTOR_DIMENSION)
-                for cmd in sql_commands
-            ]
+            legacy_vector_tables: Set[str] = set()
+            if LEGACY_VECTOR_STORE_ENABLED and EMBEDDING_VECTOR_DIMENSION:
+                sql_commands = [
+                    apply_embedding_dimension(cmd, EMBEDDING_VECTOR_DIMENSION)
+                    for cmd in sql_commands
+                ]
+            else:
+                processed_commands: List[str] = []
+                for cmd in sql_commands:
+                    if _is_vector_column_statement(cmd):
+                        _register_legacy_table(cmd, legacy_vector_tables)
+                        continue
+
+                    cleaned = _strip_legacy_vector_columns(cmd, legacy_vector_tables)
+                    if cleaned:
+                        processed_commands.append(cleaned)
+
+                sql_commands = processed_commands
+
+                if legacy_vector_tables:
+                    logger.info(
+                        "Skipping legacy embedding columns for QA tables: %s",
+                        ", ".join(sorted(legacy_vector_tables)),
+                    )
+                    logger.info(
+                        "Enable ENABLE_LEGACY_VECTOR_STORE=1 to retain these vector columns.",
+                    )
 
             # Execute commands sequentially
             logger.info(f"Found {len(sql_commands)} SQL commands for schema creation.")

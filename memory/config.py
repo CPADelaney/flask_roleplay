@@ -18,8 +18,9 @@ DEFAULT_CONFIG = {
         "max_inactive_connection_lifetime": 300
     },
     "embedding": {
-        "model": "text-embedding-3-small",  # This model outputs 1536 dimensions
-        "batch_size": 5
+        "model": "text-embedding-3-small",
+        "batch_size": 5,
+        "provider": "agents",
         # The "fallback_model" has been removed to prevent dimension mismatch.
     },
     "memory": {
@@ -28,7 +29,9 @@ DEFAULT_CONFIG = {
         "default_emotional_intensity": 30,
         "consolidation_threshold_days": 7,
         "decay_rate": 0.2,
-        "archive_threshold_days": 60
+        "archive_threshold_days": 60,
+        "rag_backend": "agents",
+        "allow_legacy_vector_store": False,
     },
     "emotional": {
         "default_intensity": 0.5,
@@ -106,6 +109,14 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
                     
                     logger.info(f"Configuration overridden by environment variable {env_var}")
     
+    backend_override = os.getenv("RAG_BACKEND")
+    if backend_override:
+        new_config["memory"]["rag_backend"] = backend_override.lower()
+
+    legacy_override = os.getenv("ENABLE_LEGACY_VECTOR_STORE")
+    if legacy_override is not None:
+        new_config["memory"]["allow_legacy_vector_store"] = legacy_override.lower() in ("1", "true", "yes", "on")
+
     # Update global config
     config = new_config
     

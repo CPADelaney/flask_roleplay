@@ -9,6 +9,8 @@ This module provides configuration settings for the memory embedding and retriev
 import os
 from typing import Dict, Any, List, Optional
 
+LEGACY_EMBEDDING_DIMENSION = 1536
+
 
 def _env_bool(key: str) -> Optional[bool]:
     value = os.getenv(key)
@@ -22,7 +24,7 @@ DEFAULT_MEMORY_CONFIG = {
     "vector_store": {
         "type": "chroma",  # Options: "chroma", "faiss", "qdrant"
         "persist_base_dir": "./vector_stores",
-        "dimension": 1536,  # Default dimension for OpenAI embeddings
+        "dimension": None,  # Dimension only required for legacy vector stores
         "similarity_threshold": 0.7,  # Minimum similarity score for retrieval
         "max_results": 10,  # Maximum number of results to return
         "optimized_for_render": True,  # Optimization for Render hosting
@@ -55,7 +57,7 @@ DEFAULT_MEMORY_CONFIG = {
         "openai_model": "text-embedding-3-small",
         "normalize": True,
         "batch_size": 32,
-        "embedding_dim": 1536,  # Dimension of text-embedding-3-small outputs
+        "embedding_dim": None,  # Set when legacy vector store is enabled
     },
     
     # LLM settings for memory retrieval
@@ -121,6 +123,12 @@ def get_memory_config() -> Dict[str, Any]:
     legacy_flag = _env_bool("ENABLE_LEGACY_VECTOR_STORE")
     if legacy_flag is not None:
         config["vector_store"]["use_legacy_vector_store"] = legacy_flag
+
+    backend_env = os.getenv("RAG_BACKEND", "").strip().lower()
+    if backend_env in {"legacy", "fallback"}:
+        config["vector_store"]["use_legacy_vector_store"] = True
+    elif backend_env in {"agents", "agent"}:
+        config["vector_store"]["use_legacy_vector_store"] = False
     
     if os.getenv("MEMORY_EMBEDDING_TYPE"):
         config["embedding"]["type"] = os.getenv("MEMORY_EMBEDDING_TYPE")
@@ -146,4 +154,15 @@ def get_memory_config() -> Dict[str, Any]:
         if os.getenv("RENDER_PERSIST_DIR"):
             config["vector_store"]["persist_base_dir"] = os.getenv("RENDER_PERSIST_DIR")
     
+    prefer_legacy = config["vector_store"].get("use_legacy_vector_store")
+    if prefer_legacy:
+        if config["vector_store"].get("dimension") is None:
+            config["vector_store"]["dimension"] = LEGACY_EMBEDDING_DIMENSION
+        if config["embedding"].get("embedding_dim") is None:
+            config["embedding"]["embedding_dim"] = LEGACY_EMBEDDING_DIMENSION
+    else:
+        config["vector_store"]["dimension"] = None
+        config["embedding"]["embedding_dim"] = None
+        config["embedding"]["type"] = config["embedding"].get("type", "openai")
+
     return config
