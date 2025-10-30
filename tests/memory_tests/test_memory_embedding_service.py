@@ -287,6 +287,35 @@ def test_service_initializes_when_agents_sdk_missing(
     asyncio.run(_run())
 
 
+def test_get_memory_service_defaults_to_central_config(
+    monkeypatch: pytest.MonkeyPatch,
+    memory_config: Dict[str, Any],
+) -> None:
+    from memory import memory_integration
+
+    monkeypatch.setattr(memory_integration, "get_memory_config", lambda: memory_config)
+    monkeypatch.delenv("ENABLE_LEGACY_VECTOR_STORE", raising=False)
+    monkeypatch.delenv("ALLOW_LEGACY_EMBEDDINGS", raising=False)
+
+    async def _run() -> None:
+        await memory_integration.cleanup_memory_services()
+        service = await memory_integration.get_memory_service(
+            user_id=101,
+            conversation_id=202,
+            vector_store_type="chroma",
+            embedding_model="openai",
+        )
+
+        assert isinstance(service, MemoryEmbeddingService)
+        assert service.config is memory_config
+        assert service._legacy_vector_store_enabled is False
+        assert service._use_hosted_vector_store is True
+
+        await memory_integration.cleanup_memory_services()
+
+    asyncio.run(_run())
+
+
 def test_legacy_vector_store_guard(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
     monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
     monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])
