@@ -21,6 +21,11 @@ from memory.memory_retriever import MemoryRetrieverAgent
 from memory.memory_nyx_integration import MemoryNyxBridge
 from memory.core import MemoryType, MemorySignificance
 
+try:  # Optional dependency used for centralised configuration defaults
+    from memory.memory_config import get_memory_config
+except Exception:  # pragma: no cover - runtime guard for optional helper
+    get_memory_config = None  # type: ignore
+
 # Import database connection
 from db.connection import get_db_connection_context, run_async_in_worker_loop
 
@@ -34,6 +39,21 @@ logger = logging.getLogger(__name__)
 # Global registry to avoid recreating services
 _memory_services = {}
 _memory_retrievers = {}
+
+
+def _resolve_memory_config(config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return an explicit config, falling back to the global getter when unset."""
+
+    if config is not None:
+        return config
+
+    if callable(get_memory_config):
+        try:
+            return get_memory_config()
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            logger.warning("Failed to load memory config via helper: %s", exc)
+
+    return None
 
 async def get_memory_service(
     user_id: int,
@@ -57,19 +77,21 @@ async def get_memory_service(
     """
     global _memory_services
     
+    resolved_config = _resolve_memory_config(config)
+
     key = f"{user_id}:{conversation_id}:{vector_store_type}:{embedding_model}"
-    
+
     if key not in _memory_services:
         service = MemoryEmbeddingService(
             user_id=user_id,
             conversation_id=conversation_id,
             vector_store_type=vector_store_type,
             embedding_model=embedding_model,
-            config=config
+            config=resolved_config
         )
         await service.initialize()
         _memory_services[key] = service
-    
+
     return _memory_services[key]
 
 async def get_memory_retriever(
@@ -96,8 +118,10 @@ async def get_memory_retriever(
     """
     global _memory_retrievers
     
+    resolved_config = _resolve_memory_config(config)
+
     key = f"{user_id}:{conversation_id}:{llm_type}:{vector_store_type}:{embedding_model}"
-    
+
     if key not in _memory_retrievers:
         # Get or create memory service
         memory_service = await get_memory_service(
@@ -105,16 +129,16 @@ async def get_memory_retriever(
             conversation_id=conversation_id,
             vector_store_type=vector_store_type,
             embedding_model=embedding_model,
-            config=config
+            config=resolved_config
         )
-        
+
         # Create retriever
         retriever = MemoryRetrieverAgent(
             user_id=user_id,
             conversation_id=conversation_id,
             llm_type=llm_type,
             memory_service=memory_service,
-            config=config
+            config=resolved_config
         )
         await retriever.initialize()
         _memory_retrievers[key] = retriever
@@ -331,15 +355,18 @@ async def enrich_context_with_memories(
         Enriched context dictionary
     """
     try:
+        resolved_config = _resolve_memory_config(None)
+
         # Get memory retriever
         retriever = await get_memory_retriever(
             user_id=user_id,
             conversation_id=conversation_id,
             llm_type="openai",  # Use "huggingface" if preferred
             vector_store_type="chroma",  # Or "faiss" or "qdrant"
-            embedding_model="local"  # Or "openai"
+            embedding_model="local",  # Or "openai"
+            config=resolved_config,
         )
-        
+
         # Retrieve and analyze memories
         memory_result = await retriever.retrieve_and_analyze(
             query=user_input,
