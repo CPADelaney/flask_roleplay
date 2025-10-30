@@ -371,34 +371,30 @@ class StakeholderAutonomySystem(ConflictSubsystem):
     async def _on_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
         payload = event.payload or {}
         update_type = payload.get('update_type')
-        
+
         acting_stakeholders = self._select_acting_stakeholders(update_type or "")
-        actions: List[StakeholderAction] = []
-        side_effects: List[SystemEvent] = []
-        
+
+        # HOT PATH: Dispatch background action generation instead of blocking
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
+            should_dispatch_action_generation,
+            dispatch_action_generation,
+        )
+
+        dispatched = 0
         for s in acting_stakeholders:
-            action = await self.make_autonomous_decision(s, payload)
-            if action:
-                actions.append(action)
-                self._pending_actions.append(action)
-                side_effects.append(SystemEvent(
-                    event_id=f"action_{action.action_id}",
-                    event_type=EventType.STAKEHOLDER_ACTION,
-                    source_subsystem=self.subsystem_type,
-                    payload={
-                        'stakeholder_id': s.stakeholder_id,
-                        'action_type': action.action_type.value,
-                        'target_id': action.target,
-                        'intensity': action.success_probability
-                    }
-                ))
-        
+            if should_dispatch_action_generation(s, payload):
+                dispatch_action_generation(s, payload)
+                dispatched += 1
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'actions_taken': len(actions), 'action_types': [a.action_type.value for a in actions]},
-            side_effects=side_effects
+            data={
+                'actions_dispatched': dispatched,
+                'message': f'Dispatched {dispatched} background action generations'
+            },
+            side_effects=[]
         )
     
     async def _on_phase_transition(self, event: SystemEvent) -> SubsystemResponse:
@@ -424,32 +420,27 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         payload = event.payload or {}
         choice_type = payload.get('choice_type')
         target_npc = payload.get('target_npc')
-        
-        reactions: List[StakeholderReaction] = []
+
+        # HOT PATH: Dispatch background reaction generation instead of blocking
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import dispatch_reaction_generation
+
+        dispatched = 0
         for s in self._active_stakeholders.values():
             if self._should_react_to_choice(s, choice_type, target_npc):
-                triggering_action = StakeholderAction(
-                    action_id=0,
-                    stakeholder_id=0,
-                    action_type=ActionType.STRATEGIC,
-                    description=f"Player choice: {choice_type}",
-                    target=target_npc,
-                    resources_used={},
-                    success_probability=1.0,
-                    consequences={},
-                    timestamp=datetime.now()
-                )
-                reaction = await self.generate_reaction(s, triggering_action, payload)
-                reactions.append(reaction)
-                # Update stress lightly based on emotion
-                if reaction.emotional_response in ['angry', 'fearful', 'frustrated']:
+                dispatch_reaction_generation(s, payload, event.event_id)
+                dispatched += 1
+                # Update stress lightly (still fast, rule-based)
+                if choice_type in ['aggressive', 'confrontational', 'escalating']:
                     s.stress_level = min(1.0, s.stress_level + 0.1)
-        
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'reactions_generated': len(reactions), 'emotional_responses': [r.emotional_response for r in reactions]},
+            data={
+                'reactions_dispatched': dispatched,
+                'message': f'Dispatched {dispatched} background reaction generations'
+            },
             side_effects=[]
         )
     
@@ -474,7 +465,7 @@ class StakeholderAutonomySystem(ConflictSubsystem):
     async def _on_state_sync(self, event: SystemEvent) -> SubsystemResponse:
         raw = event.payload or {}
         scene_context = raw.get('scene_context', raw) or {}
-        
+
         # Finalize deferred stakeholder creation if conflict_id now known
         created_after_defer = 0
         op_id = raw.get('operation_id')
@@ -487,31 +478,46 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                 conflict_type=pending.get('conflict_type'),
             )
             created_after_defer = len(created)
-        
+
+        # HOT PATH: Use fast helper functions
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
+            fetch_ready_actions_for_scene,
+            determine_scene_behavior,
+            dispatch_action_generation,
+        )
+
         npcs_present = scene_context.get('npcs', []) or []
+
+        # Fast rule-based behavior hints (no LLM)
         npc_behaviors: Dict[int, str] = {}
         for npc_id in npcs_present:
             s = self._find_stakeholder_by_npc(npc_id)
             if s:
-                npc_behaviors[npc_id] = self._determine_scene_behavior(s)
-        
-        autonomous_actions = []
+                npc_behaviors[npc_id] = determine_scene_behavior(s, scene_context)
+
+        # Fetch ready actions from DB (precomputed by workers)
+        ready_actions = await fetch_ready_actions_for_scene(scene_context, limit=10)
+
+        # Dispatch background generation for stakeholders that need fresh actions
+        dispatched = 0
         for s in self._active_stakeholders.values():
             if s.npc_id in npcs_present and self._should_take_autonomous_action(s, scene_context):
-                action = await self.make_autonomous_decision(s, scene_context)
-                if action:
-                    autonomous_actions.append(action)
-        
+                # Check if we have a recent action; if not, dispatch generation
+                has_recent = any(
+                    a.get("stakeholder_id") == s.stakeholder_id for a in ready_actions
+                )
+                if not has_recent:
+                    dispatch_action_generation(s, scene_context)
+                    dispatched += 1
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
             data={
                 'npc_behaviors': npc_behaviors,
-                'autonomous_actions': [
-                    {'stakeholder': a.stakeholder_id, 'action': a.description, 'type': a.action_type.value}
-                    for a in autonomous_actions
-                ],
+                'ready_actions_count': len(ready_actions),
+                'actions_dispatched': dispatched,
                 'stakeholders_created_after_defer': created_after_defer,
             },
             side_effects=[]
@@ -574,28 +580,20 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                 data={'error': 'stakeholder not found'},
                 side_effects=[]
             )
+
+        # HOT PATH: Dispatch background action generation
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import dispatch_action_generation
+
         conflict_state = payload.get('conflict_state') or {}
-        options = payload.get('options')  # optional list[str]
-        action = await self.make_autonomous_decision(s, conflict_state, options)
-        if not action:
-            return SubsystemResponse(
-                subsystem=self.subsystem_type,
-                event_id=event.event_id,
-                success=False,
-                data={'error': 'no action generated'},
-                side_effects=[]
-            )
-        self._pending_actions.append(action)
+        dispatch_action_generation(s, conflict_state)
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
             data={
-                'action_id': action.action_id,
-                'action_type': action.action_type.value,
-                'description': action.description,
-                'success_probability': action.success_probability,
-                'target': action.target,
+                'message': 'Action generation dispatched to background',
+                'stakeholder_id': stakeholder_id,
             },
             side_effects=[]
         )

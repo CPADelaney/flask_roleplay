@@ -169,7 +169,83 @@ def generate_canon_references(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "generated", "conflict_id": conflict_id, "reference_count": reference_count}
 
 
+def _idempotency_key_lore_check(payload: Dict[str, Any]) -> str:
+    """Generate idempotency key for lore compliance check."""
+    content_hash = payload.get("content_hash", "")
+    category = payload.get("category", "general")
+    return f"lore_check:{category}:{content_hash}"
+
+
+async def _check_lore_compliance_async(
+    content: str, category: str
+) -> Dict[str, Any]:
+    """Check lore compliance with detailed LLM analysis (slow)."""
+    from logic.conflict_system.conflict_canon import check_lore_compliance
+
+    # This involves vector search + LLM analysis
+    compliance_result = check_lore_compliance(content, category)
+    return compliance_result
+
+
+@shared_task(
+    name="nyx.tasks.background.canon_tasks.check_lore_compliance",
+    bind=True,
+    max_retries=2,
+    acks_late=True,
+)
+@with_retry
+@idempotent(key_fn=_idempotency_key_lore_check)
+def check_lore_compliance(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Check content for lore compliance with detailed analysis (slow LLM call).
+
+    This task performs a full semantic analysis of content against existing lore,
+    using vector similarity + LLM analysis. The hot path uses a fast rule-based
+    check and dispatches this for thorough review.
+
+    Args:
+        payload: Dict with keys:
+            - content: str (content to check)
+            - category: str (lore category)
+            - content_hash: str (for caching)
+            - ttl: int (optional, cache TTL in seconds, default 3600)
+
+    Returns:
+        Dict with status and compliance result
+    """
+    content = payload.get("content", "")
+    category = payload.get("category", "general")
+    content_hash = payload.get("content_hash", "")
+    ttl = payload.get("ttl", 3600)
+
+    if not content:
+        raise ValueError("content is required")
+
+    logger.info(f"Checking lore compliance for content (hash={content_hash}, category={category})")
+
+    # Run the slow LLM analysis
+    compliance_result = run_coro(_check_lore_compliance_async(content, category))
+
+    # Cache the result
+    from infra.cache import cache_key, set_json
+    key = cache_key("lore_check", category, content_hash)
+    set_json(key, compliance_result, ex=ttl)
+
+    logger.info(
+        f"Cached lore compliance result at {key}: "
+        f"compliant={compliance_result.get('is_compliant')}"
+    )
+
+    return {
+        "status": "checked",
+        "content_hash": content_hash,
+        "cache_key": key,
+        "is_compliant": compliance_result.get("is_compliant", True),
+        "conflicts": compliance_result.get("conflicts", []),
+    }
+
+
 __all__ = [
     "canonize_conflict",
     "generate_canon_references",
+    "check_lore_compliance",
 ]
