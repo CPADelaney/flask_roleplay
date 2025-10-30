@@ -245,7 +245,7 @@ def stub_world_director_dependencies():
     class OpenAIClientManager:  # pragma: no cover - helper
         pass
 
-    async def get_text_embedding(text: str):
+    async def generate_embedding(text: str):
         return [float(len(text))]
 
     def cosine_similarity(left, right):
@@ -266,7 +266,8 @@ def stub_world_director_dependencies():
     logic_chatgpt.OpenAIClientManager = OpenAIClientManager
     logic_chatgpt.get_chatgpt_response = generate_text_completion
     logic_chatgpt.generate_text_completion = generate_text_completion
-    logic_chatgpt.get_text_embedding = get_text_embedding
+    logic_chatgpt.generate_embedding = generate_embedding
+    logic_chatgpt.get_text_embedding = generate_embedding
     logic_chatgpt.generate_reflection = generate_reflection
     logic_chatgpt.analyze_preferences = analyze_preferences
     logic_chatgpt.create_semantic_abstraction = create_semantic_abstraction

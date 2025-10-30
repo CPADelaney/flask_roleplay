@@ -9,13 +9,10 @@ import random
 from collections import Counter
 from functools import lru_cache
 
-# Import OpenAI SDK for client integration
-from openai import OpenAI
+# Agents-based retrieval shim
+from rag import ask as rag_ask
 
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client (will use environment variables for API key)
-client = OpenAI()
 
 class ActionTemplate(BaseModel):
     """Generic template for an action that can be mapped across domains"""
@@ -1138,46 +1135,48 @@ class TransferLearningOptimizer:
         if not domains_to_generate:
             return {d: self.domain_embeddings[d] for d in domains}
         
-        # Try to use OpenAI Embeddings API
-        try:
-            embeddings_dict = {}
-            
-            # Process domains in smaller batches to avoid token limits
-            batch_size = 10
-            for i in range(0, len(domains_to_generate), batch_size):
-                batch = domains_to_generate[i:i+batch_size]
-                
-                # Create domain descriptions
-                domain_descriptions = [
-                    f"Domain for {d} related procedures and actions" for d in batch
-                ]
-                
-                # Get embeddings from OpenAI API
-                response = client.embeddings.create(
-                    model="text-embedding-ada-002",
-                    input=domain_descriptions
-                )
-                
-                # Process results
-                for j, domain in enumerate(batch):
-                    embedding = response.data[j].embedding
-                    embeddings_dict[domain] = embedding
-                    self.domain_embeddings[domain] = embedding
-            
-            # Add existing embeddings
-            for domain in domains:
-                if domain not in embeddings_dict and domain in self.domain_embeddings:
-                    embeddings_dict[domain] = self.domain_embeddings[domain]
-                    
-            return embeddings_dict
-            
-        except Exception as e:
-            logger.warning(f"Error using OpenAI Embeddings API: {str(e)}, falling back to basic embeddings")
-            # Fallback to simple embeddings
-            for domain in domains_to_generate:
+        embeddings_dict: Dict[str, List[float]] = {}
+        fallback_domains: Set[str] = set()
+
+        # Process domains in smaller batches to avoid token limits
+        batch_size = 10
+        for i in range(0, len(domains_to_generate), batch_size):
+            batch = domains_to_generate[i : i + batch_size]
+            domain_descriptions = [
+                f"Domain for {d} related procedures and actions" for d in batch
+            ]
+
+            for domain, description in zip(batch, domain_descriptions):
+                try:
+                    response = await rag_ask(
+                        description,
+                        mode="embedding",
+                        metadata={
+                            "component": "procedural_memory",
+                            "operation": "domain-batch",
+                            "domain": domain,
+                        },
+                    )
+                    vector = response.get("embedding") if isinstance(response, dict) else None
+                    if vector is None:
+                        raise ValueError("Missing embedding payload")
+                    coerced = [float(v) for v in vector]
+                    embeddings_dict[domain] = coerced
+                    self.domain_embeddings[domain] = coerced
+                except Exception as exc:
+                    logger.warning("Embedding lookup failed for domain %s: %s", domain, exc)
+                    fallback_domains.add(domain)
+
+        if fallback_domains:
+            for domain in fallback_domains:
                 self.domain_embeddings[domain] = [random.uniform(-1, 1) for _ in range(10)]
-            
-            return {d: self.domain_embeddings[d] for d in domains}
+                embeddings_dict[domain] = self.domain_embeddings[domain]
+
+        for domain in domains:
+            if domain not in embeddings_dict and domain in self.domain_embeddings:
+                embeddings_dict[domain] = self.domain_embeddings[domain]
+
+        return embeddings_dict
     
     async def _get_domain_embedding(self, domain: str) -> List[float]:
         """Get embedding vector for a domain using sophisticated embedding techniques"""
@@ -1186,10 +1185,8 @@ class TransferLearningOptimizer:
             return self.domain_embeddings[domain]
         
         try:
-            # Try to use OpenAI Embeddings API
             domain_description = f"Domain related to {domain} activities, procedures, and actions."
-            
-            # Add domain-specific context if available
+
             domain_contexts = {
                 "gaming": " Gaming domain includes player movements, interactions, character controls, and game mechanics.",
                 "driving": " Driving domain includes vehicle controls, navigation, road rules, and traffic interactions.",
@@ -1197,23 +1194,30 @@ class TransferLearningOptimizer:
                 "ui": " UI domain includes interface navigation, button interactions, gestures, and form submissions.",
                 "programming": " Programming domain includes coding, debugging, version control, and software design.",
             }
-            
+
             if domain in domain_contexts:
                 domain_description += domain_contexts[domain]
-            
-            # Get embedding from OpenAI API
-            response = client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=[domain_description]
+
+            response = await rag_ask(
+                domain_description,
+                mode="embedding",
+                metadata={
+                    "component": "procedural_memory",
+                    "operation": "domain-single",
+                    "domain": domain,
+                },
             )
-            
-            embedding = response.data[0].embedding
+
+            vector = response.get("embedding") if isinstance(response, dict) else None
+            if vector is None:
+                raise ValueError("Missing embedding payload")
+
+            embedding = [float(v) for v in vector]
             self.domain_embeddings[domain] = embedding
             return embedding
-            
+
         except Exception as e:
-            logger.warning(f"Error using OpenAI Embeddings API: {str(e)}, falling back to basic embedding")
-            # Fallback to simple embedding
+            logger.warning(f"Error using Agents embedding shim for domain %s: %s; falling back to basic embedding", domain, str(e))
             embedding = [random.uniform(-1, 1) for _ in range(10)]
             self.domain_embeddings[domain] = embedding
             return embedding

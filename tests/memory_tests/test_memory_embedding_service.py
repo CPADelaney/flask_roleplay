@@ -161,11 +161,21 @@ def memory_config() -> Dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_embedding(text: str, model: str = "text-embedding-3-small", dimensions: Optional[int] = None) -> List[float]:
+    async def _fake_ask(
+        text: str,
+        *,
+        mode: str = "retrieval",
+        metadata: Optional[Dict[str, Any]] = None,
+        model: str = "text-embedding-3-small",
+        dimensions: Optional[int] = None,
+        limit: Optional[int] = None,
+        legacy_fallback=None,
+    ) -> Dict[str, Any]:
         base = float(len(text) % 31)
-        return [base + i for i in range(1536)]
+        embedding = [base + i for i in range(1536)]
+        return {"embedding": embedding, "provider": "test"}
 
-    monkeypatch.setattr("memory.memory_service.get_text_embedding", _fake_embedding)
+    monkeypatch.setattr("memory.memory_service.rag_ask", _fake_ask)
 
 
 def test_generate_embedding_matches_configured_dimension(memory_config: Dict[str, Any]) -> None:

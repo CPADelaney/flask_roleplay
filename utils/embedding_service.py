@@ -80,10 +80,16 @@ async def get_embedding(text: str) -> np.ndarray:
         # In a production implementation, you would call an actual embedding service
         # For this example, we'll simulate with a basic embedding approach
         
-        from logic.chatgpt_integration import get_text_embedding
-        
-        # Get embedding from LLM service
-        embedding = await get_text_embedding(text)
+        from rag import ask as rag_ask
+
+        response = await rag_ask(
+            text,
+            mode="embedding",
+            metadata={"component": "utils.embedding_service"},
+        )
+        embedding = response.get("embedding") if isinstance(response, dict) else None
+        if embedding is None:
+            raise ValueError("Embedding payload missing")
         
         # Cache the result
         EMBEDDING_CACHE[text_hash] = (embedding, datetime.now())

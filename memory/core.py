@@ -8,29 +8,19 @@ import asyncio
 import json
 import random
 from enum import Enum
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Tuple, Union, Sequence
 from datetime import datetime, timedelta
 import numpy as np
 from functools import wraps
 from dataclasses import dataclass, field
 from collections import OrderedDict
 
-# Attempt to load SentenceTransformers
-try:
-    from sentence_transformers import SentenceTransformer
-    HAVE_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    HAVE_SENTENCE_TRANSFORMERS = False
-
-# For OpenAI fallback
-import openai
-from openai import AsyncOpenAI
-
 logger = logging.getLogger("memory_system")
 
 # Telemetry setup
 # (Assuming there's a .telemetry module with MemoryTelemetry)
 from .telemetry import MemoryTelemetry
+from rag import ask as rag_ask
 
 # Database configuration
 from .config import DB_CONFIG, EMBEDDING_CONFIG
@@ -39,6 +29,53 @@ EMBEDDING_DIMENSION = 1536  # OpenAI Ada-002 dimensionality
 EMBEDDING_MODEL = EMBEDDING_CONFIG.get("model", "text-embedding-ada-002")
 EMBEDDING_BATCH_SIZE = EMBEDDING_CONFIG.get("batch_size", 5)
 MEMORY_CACHE_TTL = 300  # 5 minutes
+
+
+def _ensure_metadata(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = dict(base)
+    if extra:
+        merged.update(extra)
+    return merged
+
+
+def _coerce_embedding_dimension(values: Sequence[float]) -> List[float]:
+    raw = [float(v) for v in values][:EMBEDDING_DIMENSION]
+    if len(raw) < EMBEDDING_DIMENSION:
+        raw.extend([0.0] * (EMBEDDING_DIMENSION - len(raw)))
+    return raw
+
+
+async def _generate_embedding(text: str, *, metadata: Optional[Dict[str, Any]] = None) -> List[float]:
+    try:
+        response = await rag_ask(
+            text,
+            mode="embedding",
+            metadata=_ensure_metadata({"component": "memory.core"}, metadata),
+            model=EMBEDDING_MODEL,
+        )
+        vector = response.get("embedding") if isinstance(response, dict) else None
+        if vector is None:
+            raise ValueError("Embedding payload missing")
+        return _coerce_embedding_dimension(vector)
+    except Exception as exc:
+        logger.warning("Embedding generation failed, returning zero vector: %s", exc)
+        return [0.0] * EMBEDDING_DIMENSION
+
+
+async def _generate_embeddings(texts: Sequence[str], *, metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
+    tasks = [
+        _generate_embedding(text, metadata=_ensure_metadata({"batch_index": idx}, metadata))
+        for idx, text in enumerate(texts)
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    embeddings: List[List[float]] = []
+    for idx, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.warning("Embedding batch item %s failed: %s", idx, result)
+            embeddings.append([0.0] * EMBEDDING_DIMENSION)
+        else:
+            embeddings.append(result)
+    return embeddings
 
 class MemoryType(str, Enum):
     OBSERVATION = "observation"
@@ -222,155 +259,6 @@ class MemoryCache:
             self._cache.clear()
             self._timestamps.clear()
 
-class EmbeddingProvider:
-    async def get_embedding(self, text: str) -> List[float]:
-        raise NotImplementedError("Subclasses must implement get_embedding")
-
-    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        raise NotImplementedError("Subclasses must implement get_embeddings")
-
-class SentenceTransformerEmbedding(EmbeddingProvider):
-    def __init__(self, model_name: str = "text-embedding-ada-002"):
-        if not HAVE_SENTENCE_TRANSFORMERS:
-            raise ImportError("SentenceTransformers is not installed.")
-        self.model = SentenceTransformer(model_name)
-
-    async def get_embedding(self, text: str) -> List[float]:
-        loop = asyncio.get_event_loop()
-        embedding = await loop.run_in_executor(None, lambda: self.model.encode(text))
-        return embedding.tolist()
-
-    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        loop = asyncio.get_event_loop()
-        embeddings = await loop.run_in_executor(None, lambda: self.model.encode(texts))
-        return embeddings.tolist()
-
-class OpenAIEmbedding(EmbeddingProvider):
-    def __init__(self, api_key: Optional[str] = None, model: str = EMBEDDING_MODEL):
-        self.client = AsyncOpenAI(api_key=api_key)
-        self.model = model
-        self._last_call = 0
-        self._min_interval = 0.1
-
-    async def _rate_limit(self) -> None:
-        now = time.time()
-        elapsed = now - self._last_call
-        if elapsed < self._min_interval:
-            await asyncio.sleep(self._min_interval - elapsed)
-        self._last_call = time.time()
-
-    async def get_embedding(self, text: str) -> List[float]:
-        await self._rate_limit()
-        try:
-            response = await self.client.embeddings.create(model=self.model, input=text)
-            return response.data[0].embedding
-        except Exception as e:
-            logger.error(f"OpenAI embedding error: {e}")
-            return [0.0] * EMBEDDING_DIMENSION
-
-    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        await self._rate_limit()
-        try:
-            response = await self.client.embeddings.create(model=self.model, input=texts)
-            sorted_data = sorted(response.data, key=lambda x: x.index)
-            return [item.embedding for item in sorted_data]
-        except Exception as e:
-            logger.error(f"OpenAI batch embedding error: {e}")
-            return [[0.0] * EMBEDDING_DIMENSION for _ in texts]
-
-class FallbackEmbedding(EmbeddingProvider):
-    DEFAULT_CACHE_TTL = 300
-    DEFAULT_CACHE_MAXSIZE = 256
-
-    def __init__(
-        self,
-        providers: Optional[List[EmbeddingProvider]] = None,
-        *,
-        cache_ttl: Optional[int] = None,
-        cache_maxsize: Optional[int] = None,
-    ):
-        self.providers = providers or []
-
-        cache_config = EMBEDDING_CONFIG.get("cache", {}) if isinstance(EMBEDDING_CONFIG, dict) else {}
-        self._cache_ttl = cache_ttl if cache_ttl is not None else cache_config.get("ttl_seconds", self.DEFAULT_CACHE_TTL)
-        self._cache_maxsize = (
-            cache_maxsize if cache_maxsize is not None else cache_config.get("maxsize", self.DEFAULT_CACHE_MAXSIZE)
-        )
-        self._cache: "OrderedDict[Tuple[str, str], Tuple[float, List[float]]]" = OrderedDict()
-        self._cache_lock = asyncio.Lock()
-
-        if not self.providers:
-            # Check if we should use OpenAI first based on config
-            if EMBEDDING_MODEL == "text-embedding-ada-002" or os.getenv("FORCE_OPENAI_EMBEDDINGS"):
-                try:
-                    self.providers.append(OpenAIEmbedding())
-                    logger.info("Using OpenAI for embeddings (1536 dimensions)")
-                except Exception as e:
-                    logger.warning(f"OpenAI embedding unavailable: {e}")
-
-            # Only fall back to SentenceTransformers if OpenAI isn't available
-            if not self.providers:
-                try:
-                    self.providers.append(SentenceTransformerEmbedding())
-                    logger.info("Using SentenceTransformers for embeddings (1536 dimensions)")
-                    logger.warning("WARNING: Dimension mismatch - database expects 1536!")
-                except (ImportError, Exception) as e:
-                    logger.warning(f"SentenceTransformers unavailable: {e}")
-
-        if not self.providers:
-            logger.error("No embedding providers available! Using zero vectors.")
-
-    async def _get_cached_embedding(self, key: Tuple[str, str]) -> Optional[List[float]]:
-        async with self._cache_lock:
-            cached = self._cache.get(key)
-            if not cached:
-                return None
-
-            expires_at, embedding = cached
-            now = time.time()
-            if expires_at <= now:
-                del self._cache[key]
-                return None
-
-            self._cache.move_to_end(key)
-            return embedding
-
-    async def _set_cached_embedding(self, key: Tuple[str, str], embedding: List[float]) -> None:
-        async with self._cache_lock:
-            expires_at = time.time() + max(self._cache_ttl, 0)
-            self._cache[key] = (expires_at, embedding)
-            self._cache.move_to_end(key)
-
-            while len(self._cache) > max(self._cache_maxsize, 1):
-                self._cache.popitem(last=False)
-
-    async def get_embedding(self, text: str) -> List[float]:
-        for provider in self.providers:
-            key = (provider.__class__.__name__, text)
-
-            cached = await self._get_cached_embedding(key)
-            if cached is not None:
-                return cached
-
-            try:
-                embedding = await provider.get_embedding(text)
-                await self._set_cached_embedding(key, embedding)
-                return embedding
-            except Exception as e:
-                logger.warning(f"Embedding provider {provider.__class__.__name__} failed: {e}")
-
-        logger.error("All embedding providers failed")
-        return [0.0] * EMBEDDING_DIMENSION
-
-    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        for provider in self.providers:
-            try:
-                return await provider.get_embeddings(texts)
-            except Exception as e:
-                logger.warning(f"Batch embedding provider {provider.__class__.__name__} failed: {e}")
-        logger.error("All batch embedding providers failed")
-        return [[0.0] * EMBEDDING_DIMENSION for _ in texts]
-
 class DBConnectionManager:
     """
     Legacy connection manager for backward compatibility.
@@ -490,7 +378,6 @@ class UnifiedMemoryManager:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.cache = MemoryCache(ttl_seconds=MEMORY_CACHE_TTL)
-        self.embedding_provider = FallbackEmbedding()
 
     @with_transaction
     async def add_memory(self,
@@ -668,31 +555,69 @@ class UnifiedMemoryManager:
                 return cached
 
         if use_embedding and query:
-            query_embedding = await self.embedding_provider.get_embedding(query)
-            rows = await conn.fetch(
-                """
-                SELECT id, memory_text, memory_type, significance, emotional_intensity,
-                       tags, metadata, timestamp, times_recalled, last_recalled,
-                       status, is_consolidated,
-                       embedding <-> $1 AS similarity
-                FROM unified_memories
-                WHERE entity_type = $2
-                  AND entity_id = $3
-                  AND user_id = $4
-                  AND conversation_id = $5
-                  AND memory_type = ANY($6)
-                  AND significance >= $7
-                  AND id != ALL($8)
-                  AND status != 'deleted'
-                ORDER BY similarity
-                LIMIT $9
-                """,
-                query_embedding, self.entity_type, self.entity_id,
-                self.user_id, self.conversation_id, memory_types,
-                min_significance, exclude_ids, limit
+
+            async def _legacy_vector_search() -> List[Dict[str, Any]]:
+                query_embedding = await _generate_embedding(
+                    query,
+                    metadata={
+                        "operation": "vector-query",
+                        "entity_type": self.entity_type,
+                        "entity_id": self.entity_id,
+                    },
+                )
+                records = await conn.fetch(
+                    """
+                    SELECT id, memory_text, memory_type, significance, emotional_intensity,
+                           tags, metadata, timestamp, times_recalled, last_recalled,
+                           status, is_consolidated,
+                           embedding <-> $1 AS similarity
+                    FROM unified_memories
+                    WHERE entity_type = $2
+                      AND entity_id = $3
+                      AND user_id = $4
+                      AND conversation_id = $5
+                      AND memory_type = ANY($6)
+                      AND significance >= $7
+                      AND id != ALL($8)
+                      AND status != 'deleted'
+                    ORDER BY similarity
+                    LIMIT $9
+                    """,
+                    query_embedding,
+                    self.entity_type,
+                    self.entity_id,
+                    self.user_id,
+                    self.conversation_id,
+                    memory_types,
+                    min_significance,
+                    exclude_ids,
+                    limit,
+                )
+                return [dict(row) for row in records]
+
+            response = await rag_ask(
+                query,
+                mode="retrieval",
+                metadata={
+                    "component": "memory.core",
+                    "operation": "retrieve_memories",
+                    "entity_type": self.entity_type,
+                    "entity_id": self.entity_id,
+                },
+                model=EMBEDDING_MODEL,
+                legacy_fallback=_legacy_vector_search,
             )
+            raw_rows = response.get("documents", []) if isinstance(response, dict) else []
+            rows = []
+            for item in raw_rows:
+                if isinstance(item, dict):
+                    rows.append(item)
+                elif item is None:
+                    continue
+                else:
+                    rows.append(dict(item))
         else:
-            rows = await conn.fetch(
+            records = await conn.fetch(
                 """
                 SELECT id, memory_text, memory_type, significance, emotional_intensity,
                        tags, metadata, timestamp, times_recalled, last_recalled,
@@ -709,12 +634,18 @@ class UnifiedMemoryManager:
                 ORDER BY significance DESC, timestamp DESC
                 LIMIT $8
                 """,
-                self.entity_type, self.entity_id,
-                self.user_id, self.conversation_id, memory_types,
-                min_significance, exclude_ids, limit
+                self.entity_type,
+                self.entity_id,
+                self.user_id,
+                self.conversation_id,
+                memory_types,
+                min_significance,
+                exclude_ids,
+                limit,
             )
+            rows = [dict(row) for row in records]
 
-        memories = [Memory.from_db_row(dict(row)) for row in rows]
+        memories = [Memory.from_db_row(row) for row in rows]
         if tags:
             memories = [m for m in memories if any(tag in m.tags for tag in tags)]
 
@@ -1007,7 +938,14 @@ class UnifiedMemoryManager:
             metadata["original_form"] = original_form
 
         altered_text = await self._alter_memory_text(memory_text, alteration_strength)
-        embedding = await self.embedding_provider.get_embedding(altered_text)
+        embedding = await _generate_embedding(
+            altered_text,
+            metadata={
+                "operation": "reconsolidate",
+                "entity_type": self.entity_type,
+                "entity_id": self.entity_id,
+            },
+        )
         metadata["fidelity"] = max(0.0, metadata.get("fidelity", 1.0) - (alteration_strength * 0.1))
 
         await conn.execute(
@@ -1094,7 +1032,14 @@ class UnifiedMemoryManager:
         memory_ids = []
         for batch in memory_batches:
             texts = [memory.text for memory in batch]
-            embeddings = await self.embedding_provider.get_embeddings(texts)
+            embeddings = await _generate_embeddings(
+                texts,
+                metadata={
+                    "operation": "batch-add",
+                    "entity_type": self.entity_type,
+                    "entity_id": self.entity_id,
+                },
+            )
             for i, memory in enumerate(batch):
                 if "fidelity" not in memory.metadata:
                     memory.metadata["fidelity"] = memory.fidelity
