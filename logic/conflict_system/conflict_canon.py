@@ -738,10 +738,31 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                 conflict_id = event.payload.get('conflict_id')
                 resolution_data = event.payload.get('context', {}) or {}
 
-                # Evaluate + possibly create canon, with metadata
-                eval_result = await self.evaluate_for_canon(conflict_id, resolution_data)
-                canonical_event_id = eval_result.get('canonical_event_id')
-                became_canonical = bool(eval_result.get('became_canonical', False))
+                # HOT PATH: Fast rule-based canonization check and queue background work
+                from logic.conflict_system.conflict_canon_hotpath import (
+                    should_canonize,
+                    queue_canonization,
+                    get_cached_canon_record,
+                )
+
+                # Fast rule-based check
+                should_canon = should_canonize(
+                    type('Conflict', (), {'intensity': resolution_data.get('intensity', 0.5)}),
+                    resolution_data
+                )
+
+                canonical_event_id = None
+                became_canonical = False
+
+                if should_canon:
+                    # Check cache first
+                    cached_record = await get_cached_canon_record(conflict_id)
+                    if cached_record:
+                        canonical_event_id = cached_record.get('canon_id')
+                        became_canonical = True
+                    else:
+                        # Queue background canonization
+                        queue_canonization(conflict_id, resolution_data)
 
                 side_effects = []
                 if became_canonical and canonical_event_id:
@@ -751,9 +772,9 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                         source_subsystem=self.subsystem_type,
                         payload={
                             'canonical_event': canonical_event_id,
-                            'name': eval_result.get('name'),
-                            'significance': eval_result.get('significance'),
-                            'creates_precedent': eval_result.get('creates_precedent')
+                            'name': resolution_data.get('name', 'Unnamed Event'),
+                            'significance': resolution_data.get('significance_score', 0.5),
+                            'creates_precedent': True
                         },
                         priority=3
                     ))
@@ -765,21 +786,21 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                     data={
                         'became_canonical': became_canonical,
                         'canonical_event': canonical_event_id,
-                        'legacy': eval_result.get('legacy'),
-                        'snapshot_id': eval_result.get('snapshot_id'),
-                        'pending': eval_result.get('pending', not became_canonical),
-                        # Provide metadata for tools
-                        'reason': eval_result.get('reason', ''),
-                        'significance': float(eval_result.get('significance', 0.0) or 0.0),
-                        'tags': eval_result.get('tags', []),
+                        'pending': not became_canonical and should_canon,
+                        'reason': 'Canonization queued' if not became_canonical and should_canon else 'Not significant enough',
+                        'significance': float(resolution_data.get('significance_score', 0.0) or 0.0),
+                        'tags': resolution_data.get('tags', []),
+                        'message': 'Canon evaluation fast, LLM work queued' if should_canon else 'Not canonical'
                     },
                     side_effects=side_effects
                 )
-            
+
             elif event.event_type == EventType.PHASE_TRANSITION:
                 if event.payload.get('phase') == 'resolution':
                     conflict_id = event.payload.get('conflict_id')
-                    significance = await self._assess_conflict_significance(conflict_id)
+                    # Fast rule-based significance assessment
+                    intensity = event.payload.get('intensity', 0.5)
+                    significance = min(1.0, intensity * 1.2)  # Simple heuristic
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,
@@ -807,16 +828,23 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                         'location': event.payload.get('location', 'unknown'),
                         'notes': event.payload.get('notes', ''),
                     }
-                    result = await self.check_lore_compliance(conflict_type, context)
+
+                    # HOT PATH: Fast compliance check, queue detailed analysis
+                    from logic.conflict_system.conflict_canon_hotpath import check_lore_conflicts_fast
+
+                    content = f"{conflict_type} at {context.get('location')} with {len(context.get('participants', []))} participants"
+                    result = await check_lore_conflicts_fast(content, conflict_type)
+
                     # Normalize minimal shape for tool
                     out = {
                         'is_compliant': bool(result.get('is_compliant', True)),
-                        'conflicts': [str(x) for x in (result.get('matching_event_ids') or [])],
-                        'matching_event_ids': [int(x) for x in (result.get('matching_event_ids') or [])],
-                        'matching_tradition_ids': [int(x) for x in (result.get('matching_tradition_ids') or [])],
-                        'suggestions': [str(x) for x in (result.get('suggestions') or [])],
-                        'suggestions_pending': bool(result.get('suggestions_pending', False)),
-                        'cache_id': result.get('cache_id'),
+                        'conflicts': result.get('conflicts', []),
+                        'matching_event_ids': [],
+                        'matching_tradition_ids': [],
+                        'suggestions': [],
+                        'suggestions_pending': result.get('needs_review', False),
+                        'cache_id': None,
+                        'message': 'Fast check complete, detailed analysis queued' if result.get('needs_review') else 'Compliant'
                     }
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
@@ -827,18 +855,35 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                     )
                 elif req == 'generate_canon_references':
                     ev_id = int(event.payload.get('event_id', 0) or 0)
-                    style = event.payload.get('context', 'casual') or 'casual'
-                    refs = await self.generate_canon_references(ev_id, context=style)
+                    # HOT PATH: Get cached references or queue generation
+                    from logic.conflict_system.conflict_canon_hotpath import (
+                        get_cached_canon_references,
+                        queue_canon_reference_generation,
+                    )
+
+                    cached_refs = await get_cached_canon_references(ev_id)
+                    if not cached_refs:
+                        queue_canon_reference_generation(ev_id, event.payload.get('context', {}))
+
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,
                         success=True,
-                        data=refs,
+                        data={
+                            'references': cached_refs,
+                            'pending': len(cached_refs) == 0,
+                            'message': 'References queued for generation' if not cached_refs else 'References retrieved'
+                        },
                         side_effects=[]
                     )
                 elif req == 'generate_mythology':
                     conflict_id = int(event.payload.get('conflict_id', 0) or 0)
-                    mythology = await self._generate_mythology_text(conflict_id)
+                    # HOT PATH: Return cached or fallback
+                    from logic.conflict_system.conflict_canon_hotpath import get_cached_canon_record
+
+                    cached = await get_cached_canon_record(conflict_id)
+                    mythology = cached.get('canon_text', 'Mythology pending generation...') if cached else 'No canonical record yet'
+
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,

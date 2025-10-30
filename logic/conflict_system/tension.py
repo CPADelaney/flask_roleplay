@@ -250,69 +250,31 @@ class TensionSubsystem:
     async def _on_state_sync_non_blocking(self, event):
         """
         Handles scene processing by serving a cached bundle or triggering a background update.
+        REFACTORED: Now uses hotpath helpers for consistency.
         """
         SubsystemType, EventType, SystemEvent, SubsystemResponse = _orch()
         payload = event.payload or {}
         scene_context = payload.get('scene_context') or payload
-        
-        scene_hash = self._hash_scene_context(scene_context)
-        cache_key = CACHE_KEY_TEMPLATE.format(
-            user_id=self.user_id, conv_id=self.conversation_id, scene_hash=scene_hash
-        )
-        
-        # 1. Fast Path: Check Redis Cache (using async client)
-        try:
-            redis_client = await get_redis_client()
-            cached_bundle = await redis_client.get(cache_key)
-            if cached_bundle:
-                logger.debug(f"Tension bundle cache HIT for scene: {scene_hash}")
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type, event_id=event.event_id,
-                    success=True, data=json.loads(cached_bundle)
-                )
-        except Exception as e:
-            logger.warning(f"Redis cache check for tension bundle failed: {e}")
-        
-        # 2. Cache Miss: Trigger background generation
-        logger.debug(f"Tension bundle cache MISS for scene: {scene_hash}. Triggering background job.")
-        lock_key = GENERATION_LOCK_KEY_TEMPLATE.format(
-            user_id=self.user_id, conv_id=self.conversation_id, scene_hash=scene_hash
-        )
-        
-        try:
-            redis_client = await get_redis_client()
-            lock_acquired = await redis_client.set(lock_key, "1", ex=GENERATION_LOCK_TIMEOUT_SECONDS, nx=True)
-            
-            if lock_acquired:
-                try:
-                    # This name MUST match the name in the @celery_app.task decorator
-                    celery_app.send_task(
-                        'tasks.update_tension_bundle_cache',
-                        args=[self.user_id, self.conversation_id, scene_context]
-                    )
-                    logger.info(f"Dispatched background tension bundle generation for scene: {scene_hash}")
-                except Exception as e:
-                    logger.warning("Celery task not available, running generation inline as a fallback.")
-                    asyncio.create_task(self.perform_bundle_generation_and_cache(scene_context))
-            else:
-                logger.debug("Tension bundle generation is already in progress (lock held).")
-        except Exception as e:
-            logger.error(f"Failed to acquire lock or dispatch task for tension bundle: {e}")
 
-        # 3. Immediately return a minimal, non-LLM fallback response
-        dominant_type, dominant_level = self._get_dominant_tension()
-        fallback_manifestation = self._create_fallback_manifestation(dominant_type, dominant_level)
-        
-        fallback_bundle = {
-            'manifestation': dataclasses.asdict(fallback_manifestation),
-            'breaking_point': None,
-            'current_tensions': {t.value: v for t, v in self._current_tensions.items()},
-            'status': 'generation_in_progress',
-        }
-        
+        scene_hash = self._hash_scene_context(scene_context)
+
+        # HOT PATH: Use hotpath helper for cache-first retrieval
+        from logic.conflict_system.tension_hotpath import get_tension_bundle
+
+        tension_bundle = get_tension_bundle(scene_hash)
+
+        # If still generating, augment with current numeric state
+        if tension_bundle.get('status') == 'generating':
+            dominant_type, dominant_level = self._get_dominant_tension()
+            tension_bundle['current_tensions'] = {t.value: v for t, v in self._current_tensions.items()}
+            tension_bundle['dominant_type'] = dominant_type.value if dominant_type else None
+            tension_bundle['dominant_level'] = dominant_level
+
         return SubsystemResponse(
-            subsystem=self.subsystem_type, event_id=event.event_id,
-            success=True, data=fallback_bundle
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=tension_bundle
         )
 
     
