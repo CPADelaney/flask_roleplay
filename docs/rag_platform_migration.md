@@ -21,7 +21,7 @@ Use [`scripts/load_vector_store.py`](../scripts/load_vector_store.py) to push
 JSON or JSON Lines documents into the configured OpenAI vector store.
 
 ```bash
-python scripts/load_vector_store.py path/to/memories.json \
+python scripts/load_vector_store.py --dir path/to/memory-fixtures \
   --collection memory_embeddings \
   --metadata component=backfill \
   --metadata import_batch=2024-05-10
@@ -29,6 +29,8 @@ python scripts/load_vector_store.py path/to/memories.json \
 
 Key options:
 
+- `--dir` &mdash; bulk load every `*.json`/`*.jsonl` file in the directory. Provide a
+  positional path to ingest a single file instead.
 - `--vector-store-id` &mdash; override the destination vector store. When omitted,
   the loader uses `OPENAI_VECTOR_STORE_NAME` (or the first ID from
   `AGENTS_VECTOR_STORE_IDS`).
@@ -42,6 +44,15 @@ Each document must contain a `text` field and may optionally provide
 per-document metadata with the extra CLI-supplied values before uploading. Any
 errors during parsing or feature flag validation abort the run with a non-zero
 exit code.
+
+## Canonical modules
+
+- Retrieval and embedding entry point: `from rag.ask import ask`. Prefer calling
+  `rag.ask.ask(..., mode="embedding")` instead of the legacy
+  `embedding.vector_store` helpers.
+- Scripts and services should interact with the hosted vector store via
+  [`rag.vector_store`](../rag/vector_store.py) utilities and
+  `utils.embedding_service.get_embedding` for cache-aware embeddings.
 
 ## Feature flags and environment variables
 
@@ -78,7 +89,7 @@ includes:
 
 1. `test_loader_script_upserts_documents` &mdash; validates the loader CLI against
    fixture payloads and ensures it calls `upsert_hosted_vector_documents`.
-2. `test_agents_retrieval_integration` &mdash; ensures `rag.backend.ask` routes
+2. `test_agents_retrieval_integration` &mdash; ensures `rag.ask.ask` routes
    retrievals through the Agents shim when requested.
 
 Refer back to `.env.example` for a quick-start template covering the required

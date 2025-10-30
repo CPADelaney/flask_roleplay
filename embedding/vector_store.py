@@ -6,6 +6,8 @@ for semantic search in the lore system.
 """
 
 import logging
+import os
+
 import asyncio
 import numpy as np
 from typing import List, Dict, Any, Optional, Union
@@ -33,6 +35,26 @@ except Exception:  # pragma: no cover - configuration failures should not block 
 # dimension for the application so downstream pgvector writes do not fail.
 EMBEDDING_DIMENSIONS = get_target_embedding_dimension(config=_MEMORY_CONFIG)
 
+
+def _legacy_embeddings_enabled() -> bool:
+    flag = os.getenv("ENABLE_LEGACY_EMBEDDINGS")
+    if flag is None:
+        return False
+    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _require_legacy_embeddings(feature: str) -> None:
+    if _legacy_embeddings_enabled():
+        return
+    raise RuntimeError(
+        (
+            "Legacy embedding helper '%s' is disabled. "
+            "Set ENABLE_LEGACY_EMBEDDINGS=1 temporarily or migrate to rag.ask.ask "
+            "with mode='embedding'."
+        )
+        % feature
+    )
+
 async def generate_embedding(text: str) -> List[float]:
     """
     Generate an embedding vector for the given text.
@@ -49,6 +71,8 @@ async def generate_embedding(text: str) -> List[float]:
     Returns:
         A list of floats representing the embedding vector
     """
+    _require_legacy_embeddings("generate_embedding")
+
     logger.info(f"Generating embedding for text: {text[:50]}...")
     
     try:
@@ -80,6 +104,8 @@ async def compute_similarity(embedding1: List[float], embedding2: List[float]) -
     Returns:
         Similarity score between 0 and 1
     """
+    _require_legacy_embeddings("compute_similarity")
+
     try:
         # Convert to numpy arrays
         vec1 = np.array(embedding1)
@@ -109,6 +135,8 @@ async def find_most_similar(
     Returns:
         List of {id, similarity} dictionaries sorted by similarity
     """
+    _require_legacy_embeddings("find_most_similar")
+
     try:
         results = []
         

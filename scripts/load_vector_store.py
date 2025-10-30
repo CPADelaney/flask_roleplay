@@ -103,6 +103,12 @@ def _load_documents(path: Path) -> List[Dict[str, Any]]:
     return [_normalise_document(payload, source=path, index=1)]
 
 
+def _iter_document_paths(directory: Path) -> Iterable[Path]:
+    for entry in sorted(directory.iterdir()):
+        if entry.is_file() and entry.suffix.lower() in {".json", ".jsonl"}:
+            yield entry
+
+
 def _resolve_vector_store_id(
     explicit_id: Optional[str], configured_ids: Iterable[str]
 ) -> Optional[str]:
@@ -122,16 +128,39 @@ def _resolve_vector_store_id(
 async def _async_main(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO)
 
-    document_path = Path(args.input).expanduser().resolve()
-    if not document_path.exists():
-        logger.error("Input file does not exist: %s", document_path)
+    if args.input and args.directory:
+        logger.error("Specify either an input file or --dir, not both")
         return 2
 
-    try:
-        documents = _load_documents(document_path)
-    except ValueError as exc:
-        logger.error("%s", exc)
+    document_sources: List[Path] = []
+
+    if args.directory:
+        directory = Path(args.directory).expanduser().resolve()
+        if not directory.exists() or not directory.is_dir():
+            logger.error("Input directory does not exist: %s", directory)
+            return 2
+        document_sources.extend(_iter_document_paths(directory))
+        if not document_sources:
+            logger.warning("No JSON/JSONL documents found in %s; nothing to upload", directory)
+            return 0
+        document_path = directory
+    elif args.input:
+        document_path = Path(args.input).expanduser().resolve()
+        if not document_path.exists():
+            logger.error("Input file does not exist: %s", document_path)
+            return 2
+        document_sources.append(document_path)
+    else:
+        logger.error("No input provided. Pass a JSON file or --dir pointing to fixtures")
         return 2
+
+    documents: List[Dict[str, Any]] = []
+    for source in document_sources:
+        try:
+            documents.extend(_load_documents(source))
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 2
 
     if not documents:
         logger.warning("No documents found in %s; nothing to upload", document_path)
@@ -203,7 +232,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "input",
+        nargs="?",
         help="Path to a JSON or JSONL file containing documents with text and metadata",
+    )
+    parser.add_argument(
+        "--dir",
+        dest="directory",
+        help="Load every JSON/JSONL document from this directory",
     )
     parser.add_argument(
         "--vector-store-id",
