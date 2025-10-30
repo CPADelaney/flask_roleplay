@@ -1,19 +1,17 @@
 from __future__ import annotations
 """
-Creative‑System core (v2.2) – **scalable semantic layer**
-=========================================================
+Creative‑System core (v2.2) – **hosted semantic retrieval**
+===========================================================
 Implements the three requested upgrades:
 
-1.  **Annoy‑backed ANN search** – switches to Facebook's Annoy when
-    available and automatically re‑indexes when the vector store exceeds
-    50 k chunks.  Falls back to brute‑force numpy search for small repos
-    or if Annoy is missing.
-2.  **Multi‑language embedding** – any text‑based file (`.py`, `.js`,
-    `.ts`, `.java`, `.go`, `.sql`, `.md`, etc.) is chunked (≈120 lines)
-    and embedded.
-3.  **Prompt builder** – `prepare_prompt(query, user_msg)` returns a
-    context‑augmented prompt ready for o3/o4‑mini; it automatically
-    streams the top‑K retrieved snippets with delimiters.
+1.  **Agents FileSearchTool integration** – semantic lookups route
+    through the hosted vector store via the Agents stack instead of a
+    local Annoy index.
+2.  **Change-aware analysis** – Git change tracking feeds the
+    lightweight metrics pipeline to surface modified modules.
+3.  **Prompt builder** – `prepare_prompt(query, user_msg)` returns a
+    context-augmented prompt ready for o3/o4-mini; it automatically
+    streams the top-K retrieved snippets with delimiters.
 
 Legacy imports (`AgenticCreativitySystem`, `CreativeContentSystem`,
 `ContentType`) still resolve.
@@ -27,43 +25,74 @@ import logging
 import os
 import sqlite3
 import subprocess
-from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from textwrap import indent
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import numpy as np
-import requests
+from rag import ask as rag_ask
 
 logger = logging.getLogger(__name__)
 
-EMBED_MODEL = "text-embedding-3-small"
-OPENAI_ENDPOINT = "https://api.openai.com/v1/embeddings"
-CHUNK_MAX_LINES = 120  # for non‑Python files
 
-try:
-    from annoy import AnnoyIndex  # type: ignore
+def _coerce_float(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return None
+    return None
 
-    _ANNOY_OK = True
-except ModuleNotFoundError:
-    _ANNOY_OK = False
 
-# ---------------------------------------------------------------------------
-# 0. Embedding helper (mock if no API key)
-# ---------------------------------------------------------------------------
+def _coerce_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+    return None
 
-def _embed(texts: List[str]) -> np.ndarray:  # (n, 1536)
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        rng = np.random.default_rng([hash(t) % (2**32) for t in texts])
-        return rng.random((len(texts), 1536), dtype=np.float32)
-    headers = {"Authorization": f"Bearer {key}"}
-    data = {"model": EMBED_MODEL, "input": texts}
-    r = requests.post(OPENAI_ENDPOINT, headers=headers, json=data, timeout=30)
-    r.raise_for_status()
-    vecs = [d["embedding"] for d in r.json()["data"]]
-    return np.asarray(vecs, dtype=np.float32)
+
+def _extract_line_bounds(metadata: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+    start = _coerce_int(metadata.get("line_start") or metadata.get("start_line") or metadata.get("lineStart"))
+    end = _coerce_int(metadata.get("line_end") or metadata.get("end_line") or metadata.get("lineEnd"))
+
+    range_payload = metadata.get("line_range") or metadata.get("lineRange")
+    if isinstance(range_payload, dict):
+        start = start or _coerce_int(range_payload.get("start") or range_payload.get("from"))
+        end = end or _coerce_int(range_payload.get("end") or range_payload.get("to"))
+    elif isinstance(range_payload, str):
+        pieces = [piece.strip() for piece in range_payload.split("-") if piece.strip()]
+        if pieces:
+            start = start or _coerce_int(pieces[0])
+            if len(pieces) > 1:
+                end = end or _coerce_int(pieces[-1])
+
+    return start, end
+
+
+def _resolve_filepath(metadata: Dict[str, Any]) -> str:
+    for key in ("filename", "filepath", "path", "file", "source", "document", "name"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    memory_id = metadata.get("memory_id")
+    if isinstance(memory_id, str) and memory_id.strip():
+        return memory_id
+
+    return "unknown"
+
 
 # ---------------------------------------------------------------------------
 # 1. Git change tracker
@@ -210,115 +239,6 @@ class SQLiteContentSystem:
         return {"id": cid, "filepath": str(fp)}
 
 # ---------------------------------------------------------------------------
-# 3. Vector index – Annoy + fallback numpy
-# ---------------------------------------------------------------------------
-
-class VectorIndex:
-    def __init__(self, path: str = "ai_creations/code_index") -> None:
-        self.path = Path(path)
-        self.meta_path = self.path.with_suffix(".json")
-        self.dim = 1536
-        self._use_annoy = _ANNOY_OK
-        self._meta: List[Tuple[str, str, int, int]] = []  # file, snippet, line_start, line_end
-        if self._use_annoy:
-            self.idx = AnnoyIndex(self.dim, "angular")
-        else:
-            self._vecs = np.empty((0, self.dim), dtype=np.float32)
-        self._load()
-
-    # ------- persistence --------
-    def _load(self):
-        if self.meta_path.exists():
-            self._meta = json.loads(self.meta_path.read_text())
-        if self._use_annoy and self.path.with_suffix(".ann").exists():
-            self.idx.load(str(self.path.with_suffix(".ann")))
-        elif not self._use_annoy and self.path.with_suffix(".npz").exists():
-            self._vecs = np.load(self.path.with_suffix(".npz"))["v"]
-
-    def _save(self):
-        self.meta_path.parent.mkdir(parents=True, exist_ok=True)
-        self.meta_path.write_text(json.dumps(self._meta))
-        if self._use_annoy:
-            self.idx.save(str(self.path.with_suffix(".ann")))
-        else:
-            np.savez_compressed(self.path.with_suffix(".npz"), v=self._vecs)
-
-    # ------- add/search --------
-    def add(self, vecs: np.ndarray, metas: List[Tuple[str, str, int, int]]):
-        start_id = len(self._meta)
-        self._meta.extend(metas)
-        if self._use_annoy:
-            for i, v in enumerate(vecs):
-                self.idx.add_item(start_id + i, v)
-            if len(self._meta) % 1000 == 0:  # periodic rebuild
-                self.idx.build(10)
-        else:
-            self._vecs = np.vstack([self._vecs, vecs]) if self._vecs.size else vecs
-        self._save()
-
-    def search(self, q: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
-        if not self._meta:
-            return []
-        if self._use_annoy and len(self._meta) > 50000:
-            idxs = self.idx.get_nns_by_vector(q.flatten(), k, include_distances=True)
-            ids, dists = idxs
-        else:  # brute force
-            if self._use_annoy:
-                # small index not yet built
-                sims = [self.idx.get_item_vector(i) for i in range(len(self._meta))]
-                sims = np.asarray(sims) @ q.flatten()
-            else:
-                sims = (self._vecs @ q.T).flatten()
-            ids = sims.argsort()[-k:][::-1]
-            dists = 1 - sims[ids]
-        return [
-            {
-                "similarity": float(1 - dists[i] if self._use_annoy else sims[ids[i]]),
-                "filepath": self._meta[ids[i]][0],
-                "snippet": self._meta[ids[i]][1],
-                "line_start": self._meta[ids[i]][2],
-                "line_end": self._meta[ids[i]][3],
-            }
-            for i in range(len(ids))
-        ]
-
-# ---------------------------------------------------------------------------
-# 4. Multi‑language embedder
-# ---------------------------------------------------------------------------
-
-class CodeEmbedder:
-    PY_EXTS = {".py"}
-
-    def __init__(self, index: VectorIndex):
-        self.index = index
-
-    # ---- chunk helpers ----
-
-    def _py_chunks(self, path: Path):
-        src = path.read_text("utf-8")
-        tree = ast.parse(src)
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                start = node.lineno - 1
-                end = node.body[-1].end_lineno if hasattr(node.body[-1], "end_lineno") else node.body[-1].lineno
-                yield "\n".join(src.splitlines()[start:end]), start + 1, end
-        if not tree.body:
-            yield src, 1, len(src.splitlines())
-
-    def _generic_chunks(self, path: Path):
-        lines = path.read_text("utf-8", errors="ignore").splitlines()
-        for i in range(0, len(lines), CHUNK_MAX_LINES):
-            chunk = "\n".join(lines[i : i + CHUNK_MAX_LINES])
-            yield chunk, i + 1, min(len(lines), i + CHUNK_MAX_LINES)
-
-    def embed_file(self, path: Path):
-        chunks = list(self._py_chunks(path) if path.suffix in self.PY_EXTS else self._generic_chunks(path))
-        texts = [c[0] for c in chunks]
-        vecs = _embed(texts)
-        metas = [(str(path), t[:120] + ("…" if len(t) > 120 else ""), s, e) for (t, s, e) in chunks]
-        self.index.add(vecs, metas)
-
-# ---------------------------------------------------------------------------
 # 5. Parallel AST scan (python only, unchanged)
 # ---------------------------------------------------------------------------
 
@@ -389,8 +309,6 @@ class AgenticCreativitySystemV2:
         self.tracker = GitChangeTracker(repo_root)
         self.storage = SQLiteContentSystem()
         self.analyzer = ParallelCodeAnalyzer()
-        self.index = VectorIndex()
-        self.embedder = CodeEmbedder(self.index)
         self.review_interval_days = review_interval_days
 
     # --------------- ingestion ----------------
@@ -421,12 +339,11 @@ class AgenticCreativitySystemV2:
         metrics = self.analyzer.analyze(changed) # analyzer now uses ThreadPoolExecutor
 
         files_embedded_count = 0
-        for p in changed: # Only iterate if 'changed' is not empty
-            try:
-                self.embedder.embed_file(p)
-                files_embedded_count +=1
-            except Exception as exc:
-                logger.warning("Embedding failed for changed file %s: %s", p, exc)
+        if changed:
+            logger.debug(
+                "Skipping local embedding for %s files; retrieval now routes through FileSearchTool",
+                len(changed),
+            )
         
         analyzed_count = len(metrics)
         summary = {
@@ -453,16 +370,85 @@ class AgenticCreativitySystemV2:
 
     # --------------- retrieval ----------------
     async def semantic_search(self, query: str, k: int = 5):
-        qvec = _embed([query])[0:1]
-        return self.index.search(qvec, k)
+        try:
+            response = await rag_ask(
+                query,
+                mode="retrieval",
+                limit=k,
+                backend="agents",
+                metadata={
+                    "component": "nyx.creative.agentic_system",
+                    "operation": "semantic_search",
+                },
+            )
+        except Exception as exc:
+            logger.warning("FileSearchTool retrieval failed for query '%s': %s", query, exc)
+            return []
+
+        documents: List[Dict[str, Any]] = []
+        provider: Optional[str] = None
+
+        if isinstance(response, dict):
+            raw_documents = response.get("documents")
+            if isinstance(raw_documents, list):
+                documents = [d for d in raw_documents if isinstance(d, dict)]
+            provider_value = response.get("provider")
+            if isinstance(provider_value, str):
+                provider = provider_value
+
+        results: List[Dict[str, Any]] = []
+        for doc in documents:
+            doc_metadata = doc.get("metadata")
+            if not isinstance(doc_metadata, dict):
+                doc_metadata = {}
+
+            score = _coerce_float(doc.get("score"))
+            snippet_source = doc.get("text") or doc.get("content") or doc.get("value") or ""
+            snippet = str(snippet_source).strip()
+            filepath = _resolve_filepath(doc_metadata)
+            line_start, line_end = _extract_line_bounds(doc_metadata)
+
+            results.append(
+                {
+                    "score": score,
+                    "snippet": snippet,
+                    "filepath": filepath,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "metadata": doc_metadata,
+                    "provider": provider or doc.get("provider"),
+                }
+            )
+
+        return results
 
     async def prepare_prompt(self, query: str, user_msg: str, k: int = 5) -> str:
         """Return a full prompt with top‑K context snippets prepended."""
         hits = await self.semantic_search(query, k)
-        ctx_parts = [
-            f"# Context snippet {i+1} (similarity {h['similarity']:.3f})\n# {h['filepath']} L{h['line_start']}-{h['line_end']}\n" + indent(h["snippet"].rstrip(), "# ")
-            for i, h in enumerate(hits)
-        ]
+        ctx_parts: List[str] = []
+        for index, hit in enumerate(hits):
+            score = hit.get("score")
+            score_text = f"{float(score):.3f}" if isinstance(score, (int, float)) else "n/a"
+
+            filepath = hit.get("filepath") or "unknown"
+            line_start = hit.get("line_start")
+            line_end = hit.get("line_end")
+
+            if line_start is not None and line_end is not None:
+                location = f"{filepath} L{line_start}-{line_end}"
+            elif line_start is not None:
+                location = f"{filepath} L{line_start}"
+            else:
+                location = filepath
+
+            snippet = str(hit.get("snippet") or "").rstrip()
+            if not snippet:
+                snippet = "[no content returned]"
+
+            ctx_parts.append(
+                f"# Context snippet {index + 1} (score {score_text})\n# {location}\n"
+                + indent(snippet, "# ")
+            )
         context = "\n\n".join(ctx_parts)
         return f"{context}\n\n# User question\n{user_msg}"
 
