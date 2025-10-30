@@ -1,6 +1,7 @@
 import importlib
 import pathlib
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,32 +18,23 @@ def anyio_backend():
 
 
 @pytest.mark.anyio
-async def test_legacy_embedding_helpers_raise_without_flag(monkeypatch):
-    monkeypatch.delenv("ENABLE_LEGACY_EMBEDDINGS", raising=False)
+async def test_generate_embedding_routes_through_rag(monkeypatch):
+    stub = AsyncMock(return_value={"embedding": [0.1, 0.2, 0.3]})
+    monkeypatch.setattr(legacy_vector_store, "rag_ask", stub)
 
-    with pytest.raises(RuntimeError):
-        await legacy_vector_store.generate_embedding("hello world")
-
-    with pytest.raises(RuntimeError):
-        await legacy_vector_store.compute_similarity([0.1], [0.2])
-
-    with pytest.raises(RuntimeError):
-        await legacy_vector_store.find_most_similar([0.1], {"a": [0.2]})
+    embedding = await legacy_vector_store.generate_embedding("hello world")
+    assert embedding[:3] == [0.1, 0.2, 0.3]
+    assert len(embedding) == legacy_vector_store.EMBEDDING_DIMENSIONS
+    stub.assert_awaited_once()
 
 
 @pytest.mark.anyio
-async def test_legacy_embedding_helpers_respect_feature_flag(monkeypatch):
-    monkeypatch.setenv("ENABLE_LEGACY_EMBEDDINGS", "1")
-
+async def test_similarity_helpers_continue_to_work(monkeypatch):
     module = importlib.reload(legacy_vector_store)
-
-    embedding = await module.generate_embedding("hello world")
-    assert isinstance(embedding, list)
-    assert len(embedding) == module.EMBEDDING_DIMENSIONS
-
-    similarity = await module.compute_similarity(embedding, embedding)
+    vector = [0.2, 0.3, 0.4]
+    similarity = await module.compute_similarity(vector, vector)
     assert similarity == pytest.approx(1.0, rel=1e-3)
 
-    results = await module.find_most_similar(embedding, {"memory": embedding})
+    results = await module.find_most_similar(vector, {"memory": vector})
     assert results[0]["id"] == "memory"
     assert results[0]["similarity"] == pytest.approx(1.0, rel=1e-3)

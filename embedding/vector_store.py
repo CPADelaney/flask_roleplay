@@ -6,7 +6,6 @@ for semantic search in the lore system.
 """
 
 import logging
-import os
 
 import asyncio
 import numpy as np
@@ -17,6 +16,8 @@ from utils.embedding_dimensions import (
     build_zero_vector,
     get_target_embedding_dimension,
 )
+
+from rag import ask as rag_ask
 
 try:
     from memory.memory_config import get_memory_config
@@ -35,62 +36,32 @@ except Exception:  # pragma: no cover - configuration failures should not block 
 # dimension for the application so downstream pgvector writes do not fail.
 EMBEDDING_DIMENSIONS = get_target_embedding_dimension(config=_MEMORY_CONFIG)
 
-
-def _legacy_embeddings_enabled() -> bool:
-    flag = os.getenv("ENABLE_LEGACY_EMBEDDINGS")
-    if flag is None:
-        return False
-    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _require_legacy_embeddings(feature: str) -> None:
-    if _legacy_embeddings_enabled():
-        return
-    raise RuntimeError(
-        (
-            "Legacy embedding helper '%s' is disabled. "
-            "Set ENABLE_LEGACY_EMBEDDINGS=1 temporarily or migrate to rag.ask.ask "
-            "with mode='embedding'."
-        )
-        % feature
-    )
-
 async def generate_embedding(text: str) -> List[float]:
-    """
-    Generate an embedding vector for the given text.
-    
-    In a production environment, this would call an embedding service
-    like OpenAI's text-embedding-3-small or a local model.
-    
-    For this implementation, we create a deterministic mock embedding
-    that's consistent for the same input text.
-    
-    Args:
-        text: The text to generate an embedding for
-        
-    Returns:
-        A list of floats representing the embedding vector
-    """
-    _require_legacy_embeddings("generate_embedding")
+    """Generate an embedding vector for the given text via :func:`rag.ask.ask`."""
+    logger.info("Generating embedding via rag.ask for text preview=%s", text[:50])
 
-    logger.info(f"Generating embedding for text: {text[:50]}...")
-    
     try:
-        # Create a deterministic seed from the text
-        seed = sum(ord(c) for c in text) % 10000
-        
-        # Use numpy to generate a deterministic vector
-        np.random.seed(seed)
-        
-        # Generate a normalized embedding vector
-        embedding = np.random.normal(0, 1, EMBEDDING_DIMENSIONS)
-        normalized_embedding = embedding / np.linalg.norm(embedding)
-        
-        # Convert to list for JSON serialization and normalise length
-        return adjust_embedding_vector(normalized_embedding.tolist(), EMBEDDING_DIMENSIONS)
-    except Exception as e:
-        logger.error(f"Error generating embedding: {e}")
-        # Return a zero vector as fallback
+        response = await rag_ask(
+            text,
+            mode="embedding",
+            metadata={"component": "embedding.vector_store"},
+        )
+    except Exception as exc:
+        logger.error("rag.ask embedding request failed: %s", exc)
+        return build_zero_vector(EMBEDDING_DIMENSIONS)
+
+    vector = []
+    if isinstance(response, dict):
+        vector = response.get("embedding") or []
+
+    if not vector:
+        logger.warning("Embedding response missing vector; returning zero vector")
+        return build_zero_vector(EMBEDDING_DIMENSIONS)
+
+    try:
+        return adjust_embedding_vector([float(v) for v in vector], EMBEDDING_DIMENSIONS)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.error("Failed to coerce embedding payload: %s", exc)
         return build_zero_vector(EMBEDDING_DIMENSIONS)
 
 async def compute_similarity(embedding1: List[float], embedding2: List[float]) -> float:
@@ -104,8 +75,6 @@ async def compute_similarity(embedding1: List[float], embedding2: List[float]) -
     Returns:
         Similarity score between 0 and 1
     """
-    _require_legacy_embeddings("compute_similarity")
-
     try:
         # Convert to numpy arrays
         vec1 = np.array(embedding1)
@@ -135,8 +104,6 @@ async def find_most_similar(
     Returns:
         List of {id, similarity} dictionaries sorted by similarity
     """
-    _require_legacy_embeddings("find_most_similar")
-
     try:
         results = []
         
