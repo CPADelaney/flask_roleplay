@@ -259,7 +259,60 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             'phase_distribution': self._get_phase_distribution(),
             'average_intensity': self._get_average_intensity()
         }
-    
+
+    async def _initialize_conflict_flow_fast(
+        self,
+        conflict_id: int,
+        conflict_type: str,
+        context: Dict[str, Any]
+    ) -> ConflictFlow:
+        """Fast conflict flow initialization with rule-based defaults (no LLM).
+
+        The slow LLM-based refinement is dispatched to background tasks.
+        """
+        # Rule-based defaults based on conflict type
+        if 'interpersonal' in conflict_type.lower():
+            phase = ConflictPhase.EMERGING
+            pacing = PacingStyle.SLOW_BURN
+            intensity = 0.3
+            momentum = 0.2
+        elif 'crisis' in conflict_type.lower() or 'urgent' in conflict_type.lower():
+            phase = ConflictPhase.RISING
+            pacing = PacingStyle.RAPID_ESCALATION
+            intensity = 0.6
+            momentum = 0.5
+        else:
+            phase = ConflictPhase.SEEDS
+            pacing = PacingStyle.STEADY
+            intensity = 0.2
+            momentum = 0.1
+
+        # Persist to DB
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO conflict_flows
+                    (user_id, conversation_id, conflict_id, current_phase, pacing_style, intensity, momentum, phase_progress)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 0.0)
+                ON CONFLICT (conflict_id) DO UPDATE
+                SET current_phase = EXCLUDED.current_phase,
+                    pacing_style = EXCLUDED.pacing_style,
+                    intensity = EXCLUDED.intensity,
+                    momentum = EXCLUDED.momentum
+            """, self.user_id, self.conversation_id, conflict_id,
+               phase.value, pacing.value, intensity, momentum)
+
+        return ConflictFlow(
+            conflict_id=conflict_id,
+            current_phase=phase,
+            pacing_style=pacing,
+            intensity=intensity,
+            momentum=momentum,
+            phase_progress=0.0,
+            transitions_history=[],
+            dramatic_beats=[],
+            next_transition_conditions=[]
+        )
+
     # ========== Event Handlers ==========
     
     async def _handle_conflict_created(self, event: "SystemEvent") -> "SubsystemResponse":
@@ -269,7 +322,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
         conflict_id = payload.get('conflict_id')
         conflict_type = payload.get('conflict_type') or 'unknown'
         context = payload.get('context', {}) or {}
-        
+
         # If no id yet (common in creation), defer and wait for STATE_SYNC with operation id
         if not conflict_id:
             self._pending_init[event.event_id] = {
@@ -283,26 +336,15 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
                 data={'flow_initialized': False, 'deferred': True, 'operation_id': event.event_id},
                 side_effects=[]
             )
-        
-        flow = await self.initialize_conflict_flow(conflict_id, conflict_type, context)
+
+        # HOT PATH: Fast initialization with defaults, dispatch LLM work to background
+        flow = await self._initialize_conflict_flow_fast(conflict_id, conflict_type, context)
         self._flow_states[conflict_id] = flow
-        
-        side_effects: List[SystemEvent] = []
-        if flow.pacing_style == PacingStyle.RAPID_ESCALATION:
-            beat = await self.generate_dramatic_beat(flow, context)
-            if beat:
-                side_effects.append(SystemEvent(
-                    event_id=f"beat_{conflict_id}_{datetime.now().timestamp()}",
-                    event_type=EventType.INTENSITY_CHANGED,
-                    source_subsystem=self.subsystem_type,
-                    payload={
-                        'conflict_id': conflict_id,
-                        'beat': beat.description,
-                        'new_intensity': flow.intensity
-                    },
-                    priority=6
-                ))
-        
+
+        # Queue background LLM-based flow initialization
+        from logic.conflict_system.conflict_flow_hotpath import queue_phase_narration
+        queue_phase_narration(conflict_id, None, flow.current_phase.value, context)
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -310,9 +352,10 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             data={
                 'flow_initialized': True,
                 'initial_phase': flow.current_phase.value,
-                'pacing_style': flow.pacing_style.value
+                'pacing_style': flow.pacing_style.value,
+                'message': 'Flow initialized with defaults, LLM refinement queued'
             },
-            side_effects=side_effects
+            side_effects=[]
         )
     
     async def _handle_state_sync(self, event: "SystemEvent") -> "SubsystemResponse":
@@ -323,12 +366,19 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
         conflict_id = payload.get('conflict_id')
         if op_id and conflict_id and op_id in self._pending_init:
             pending = self._pending_init.pop(op_id)
-            flow = await self.initialize_conflict_flow(
+
+            # HOT PATH: Fast initialization with defaults
+            flow = await self._initialize_conflict_flow_fast(
                 conflict_id,
                 pending.get('conflict_type', 'unknown'),
                 pending.get('context', {}) or {}
             )
             self._flow_states[conflict_id] = flow
+
+            # Queue background LLM work
+            from logic.conflict_system.conflict_flow_hotpath import queue_phase_narration
+            queue_phase_narration(conflict_id, None, flow.current_phase.value, pending.get('context', {}))
+
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
@@ -337,7 +387,8 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
                     'flow_initialized': True,
                     'initial_phase': flow.current_phase.value,
                     'pacing_style': flow.pacing_style.value,
-                    'finalized_from_operation': op_id
+                    'finalized_from_operation': op_id,
+                    'message': 'Flow initialized with defaults, LLM refinement queued'
                 },
                 side_effects=[]
             )
@@ -364,7 +415,7 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
                 data={'error': 'Missing conflict_id'},
                 side_effects=[]
             )
-        
+
         flow = self._flow_states.get(conflict_id) or await self._load_flow_state(conflict_id)
         if not flow:
             return SubsystemResponse(
@@ -375,30 +426,63 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
                 side_effects=[]
             )
         self._flow_states[conflict_id] = flow
-        
-        result = await self.update_conflict_flow(flow, payload)
+
+        # HOT PATH: Fast numeric updates only
+        from logic.conflict_system.conflict_flow_hotpath import apply_event_math, should_trigger_beat
+
+        old_intensity = flow.intensity
+        apply_event_math(flow, payload)
+
+        # Check if phase transition needed (fast rule-based)
         side_effects: List[SystemEvent] = []
-        
-        if result.get('transition'):
-            transition: PhaseTransition = result['transition']
+        transition_occurred = False
+
+        if flow.phase_progress >= 1.0:
+            # Fast phase transition logic
+            from_phase = flow.current_phase
+            to_phase = await self._determine_next_phase(flow, payload)
+            flow.current_phase = to_phase
+            flow.phase_progress = 0.0
+            transition_occurred = True
+
+            # Queue background narration
+            from logic.conflict_system.conflict_flow_hotpath import queue_phase_narration
+            queue_phase_narration(conflict_id, from_phase.value, to_phase.value, payload)
+
             side_effects.append(SystemEvent(
                 event_id=f"transition_{conflict_id}_{datetime.now().timestamp()}",
                 event_type=EventType.PHASE_TRANSITION,
                 source_subsystem=self.subsystem_type,
                 payload={
                     'conflict_id': conflict_id,
-                    'from_phase': transition.from_phase.value,
-                    'to_phase': transition.to_phase.value,
-                    'narrative': transition.narrative
+                    'from_phase': from_phase.value,
+                    'to_phase': to_phase.value,
+                    'narrative': 'Transition narration queued for background generation'
                 },
                 priority=4
             ))
-        
+
+        # Check for dramatic beats (fast rule-based)
+        beat_type = should_trigger_beat(flow)
+        if beat_type:
+            from logic.conflict_system.conflict_flow_hotpath import queue_beat_description
+            beat_meta = {'type': beat_type, 'id': f"{conflict_id}_{datetime.now().timestamp()}"}
+            queue_beat_description(conflict_id, beat_type, beat_meta)
+
+        await self._save_flow_state(flow)
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data=result,
+            data={
+                'intensity_change': flow.intensity - old_intensity,
+                'new_momentum': flow.momentum,
+                'phase_progress': flow.phase_progress,
+                'transition_occurred': transition_occurred,
+                'beat_queued': beat_type is not None,
+                'message': 'Flow updated fast, narration queued'
+            },
             side_effects=side_effects
         )
     
