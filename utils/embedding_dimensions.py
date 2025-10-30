@@ -175,7 +175,7 @@ def determine_embedding_dimension(
             if not isinstance(model_name, str) or not model_name.strip():
                 # langchain defaults to sentence-transformers/all-mpnet-base-v2 when omitted,
                 # but we stay explicit for reproducibility.
-                model_name = "text-embedding-ada-002"
+                model_name = "sentence-transformers/all-mpnet-base-v2"
 
             embeddings = HuggingFaceEmbeddings(
                 model_name=model_name,

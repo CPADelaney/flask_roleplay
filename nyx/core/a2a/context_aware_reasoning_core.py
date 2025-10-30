@@ -190,7 +190,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
                 
                 # Try to load the model
                 self.semantic_model = SentenceTransformer(
-                    'text-embedding-ada-002',
+                    'text-embedding-3-small',
                     cache_folder=cache_folder
                 )
                 

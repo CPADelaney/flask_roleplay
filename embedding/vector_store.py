@@ -38,7 +38,7 @@ async def generate_embedding(text: str) -> List[float]:
     Generate an embedding vector for the given text.
     
     In a production environment, this would call an embedding service
-    like OpenAI's text-embedding-ada-002 or a local model.
+    like OpenAI's text-embedding-3-small or a local model.
     
     For this implementation, we create a deterministic mock embedding
     that's consistent for the same input text.

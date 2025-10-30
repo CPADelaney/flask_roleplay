@@ -1235,8 +1235,8 @@ The memory system uses vector embeddings for semantic memory operations:
 
 Multiple embedding providers with fallback chain:
 
-Primary: OpenAI Embedding API (text-embedding-ada-002)
-Fallback: SentenceTransformer (all-MiniLM-L6-v2)
+Primary: OpenAI Embedding API (text-embedding-3-small)
+Fallback: SentenceTransformer (all-mpnet-base-v2)
 Last resort: Zero vectors with logging
 
 
@@ -1259,6 +1259,19 @@ Batch processing:
 Batched embedding generation for efficiency
 Configurable batch size via EMBEDDING_BATCH_SIZE
 Error handling with individual retry for batch items
+
+
+Hosted retrieval pipeline (Agents default):
+
+Nyx now assumes the Agents-backed retrieval flow (`RAG_BACKEND=agents`) unless
+explicitly overridden. Vector store identifiers are resolved through
+`rag.vector_store.get_hosted_vector_store_ids`, which merges environment
+overrides (`OPENAI_VECTOR_STORE_NAME`, `AGENTS_VECTOR_STORE_IDS`, etc.) with the
+runtime memory configuration. Inserts and lookups delegate to the same module so
+that metadata is shaped consistently for the OpenAI hosted vector store
+lifecycle (upload via `upsert_hosted_vector_documents`, retrieval via
+`search_hosted_vector_store`). This keeps trace metadata and document attributes
+aligned across MemorySystem, context builders, and Nyx brain adapters.
 
 
 
