@@ -111,12 +111,19 @@ _COLLECTOR_DEFINITIONS: Dict[str, Tuple[Type[CollectorType], Tuple[Any, ...], Di
         (
             "conflict_router_timeouts_total",
             "Number of orchestrator routing timeouts",
+            ["source"],
+        ),
+        {},
+    ),
     "MODE_RECOMMENDATION_SOURCE": (
         Counter,
         (
             "mode_recommendation_source_total",
             "Count of mode recommendation selections by source",
             ["source"],
+        ),
+        {},
+    ),
     "CONFLICT_TEMPLATE_WARMUPS": (
         Counter,
         (
