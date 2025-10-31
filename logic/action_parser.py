@@ -5,7 +5,10 @@ from typing import List, Dict, Any, Tuple
 
 from pydantic import BaseModel, Field, ValidationError
 
-from agents import Agent, Runner
+from agents import Agent
+
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -81,17 +84,21 @@ def _loads_maybe_double(s: str) -> Dict[str, Any]:
 async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
     # Ask Runner to enforce JSON via whatever schema tooling it supports; otherwise the request is still safe to ignore.
     try:
-        run = await Runner.run(INTENT_AGENT, user_input)
+        result = await llm_gateway.execute(
+            LLMRequest(agent=INTENT_AGENT, prompt=user_input)
+        )
     except Exception:
         logger.exception("ActionIntent extractor agent run failed")
         raise
     # Pull the text payload safely (Runner implementations vary)
-    text = getattr(run, "final_output", None)
-    if not text:
-        # try common shapes
-        text = getattr(getattr(run, "output", None), "text", None) \
-               or getattr(getattr(run, "output", None), "content", None) \
-               or ""
+    text = result.text or ""
+    if not text and result.raw is not None:
+        raw = result.raw
+        text = getattr(raw, "final_output", None)
+        if not text:
+            text = getattr(getattr(raw, "output", None), "text", None) \
+                   or getattr(getattr(raw, "output", None), "content", None) \
+                   or ""
     try:
         payload = _loads_maybe_double(text)
         raw_intents = payload.get("intents", [])

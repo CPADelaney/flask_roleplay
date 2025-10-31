@@ -37,7 +37,8 @@ from .validation import CanonValidationAgent
 
 from typing import List, Dict, Any, Union, Optional
 from datetime import datetime, timedelta
-from agents import Runner
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 from memory.memory_orchestrator import get_memory_orchestrator, EntityType
 from nyx.location.hierarchy import get_or_create_location
@@ -741,8 +742,10 @@ async def find_or_create_entity(
             Are these the same {entity_type}? Answer with only 'true' or 'false'.
             """
             
-            result = await Runner.run(validation_agent.agent, prompt)
-            is_duplicate = result.final_output.strip().lower() == 'true'
+            result = await llm_gateway.execute(
+                LLMRequest(agent=validation_agent.agent, prompt=prompt)
+            )
+            is_duplicate = (result.text or "").strip().lower() == 'true'
             
             if is_duplicate:
                 logger.info(f"LLM confirmed '{entity_name}' is a duplicate of existing {entity_type} ID {entity_id}")
@@ -1142,8 +1145,10 @@ async def find_or_create_nation(
                 Answer only 'true' or 'false'.
                 """
                 
-                agent_result = await Runner.run(validation_agent.agent, prompt)
-                if agent_result.final_output.strip().lower() == 'true':
+                agent_result = await llm_gateway.execute(
+                    LLMRequest(agent=validation_agent.agent, prompt=prompt)
+                )
+                if (agent_result.text or "").strip().lower() == 'true':
                     logger.info(f"Nation '{nation_name}' matched to existing (ID: {existing_id})")
                     return existing_id
     
@@ -1242,8 +1247,10 @@ async def find_or_create_conflict(
                         Answer only 'true' or 'false'.
                         """
                         
-                        agent_result = await Runner.run(validation_agent.agent, prompt)
-                        if agent_result.final_output.strip().lower() == 'true':
+                        agent_result = await llm_gateway.execute(
+                            LLMRequest(agent=validation_agent.agent, prompt=prompt)
+                        )
+                        if (agent_result.text or "").strip().lower() == 'true':
                             return conflict_id
     
     # Create new conflict
@@ -1940,9 +1947,10 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
             Answer only 'true' or 'false'.
             """
             
-            from agents import Runner
-            result = await Runner.run(validation_agent.agent, prompt)
-            if result.final_output.strip().lower() == 'true':
+            result = await llm_gateway.execute(
+                LLMRequest(agent=validation_agent.agent, prompt=prompt)
+            )
+            if (result.text or "").strip().lower() == 'true':
                 logger.info(f"Location '{location_name}' matched to existing '{similar_name}'")
                 return similar_name
     
@@ -2123,8 +2131,10 @@ async def find_or_create_faction(ctx, conn, faction_name: str, **kwargs) -> int:
         Answer only 'true' or 'false'.
         """
         
-        result = await Runner.run(validation_agent.agent, prompt)
-        if result.final_output.strip().lower() == 'true':
+        result = await llm_gateway.execute(
+            LLMRequest(agent=validation_agent.agent, prompt=prompt)
+        )
+        if (result.text or "").strip().lower() == 'true':
             return similar['id']
     
     # Create new faction
@@ -2214,8 +2224,10 @@ async def find_or_create_historical_event(ctx, conn, event_name: str, **kwargs) 
         Answer only 'true' or 'false'.
         """
         
-        result = await Runner.run(validation_agent.agent, prompt)
-        if result.final_output.strip().lower() == 'true':
+        result = await llm_gateway.execute(
+            LLMRequest(agent=validation_agent.agent, prompt=prompt)
+        )
+        if (result.text or "").strip().lower() == 'true':
             return similar['id']
     
     # Create new event
@@ -2299,8 +2311,10 @@ async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -
         Answer only 'true' or 'false'.
         """
         
-        result = await Runner.run(validation_agent.agent, prompt)
-        if result.final_output.strip().lower() == 'true':
+        result = await llm_gateway.execute(
+            LLMRequest(agent=validation_agent.agent, prompt=prompt)
+        )
+        if (result.text or "").strip().lower() == 'true':
             return similar['id']
     
     # Create new figure - CONVERT ALL LISTS/DICTS TO JSON STRINGS
@@ -3897,8 +3911,10 @@ async def find_or_create_event(ctx, conn, event_name: str, **kwargs) -> int:
         Answer only 'true' or 'false'.
         """
         
-        result = await Runner.run(validation_agent.agent, prompt)
-        if result.final_output.strip().lower() == 'true':
+        result = await llm_gateway.execute(
+            LLMRequest(agent=validation_agent.agent, prompt=prompt)
+        )
+        if (result.text or "").strip().lower() == 'true':
             return similar['id']
     
     # Create new event
