@@ -127,7 +127,6 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
         
         # Lazy-loaded LLM agents
         self._pacing_director = None
-        self._transition_narrator = None
         self._beat_generator = None
         self._flow_analyzer = None
     
@@ -649,18 +648,6 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
                 model="gpt-5-nano",
             )
         return self._pacing_director
-    
-    @property
-    def transition_narrator(self) -> Agent:
-        if self._transition_narrator is None:
-            self._transition_narrator = Agent(
-                name="Transition Narrator",
-                instructions="""
-                Narrate transitions between conflict phases with clear, earned shifts.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._transition_narrator
     
     @property
     def beat_generator(self) -> Agent:
