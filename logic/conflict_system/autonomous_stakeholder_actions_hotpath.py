@@ -225,6 +225,72 @@ def dispatch_reaction_generation(
         logger.warning(f"Failed to dispatch reaction generation: {e}")
 
 
+def dispatch_stakeholder_creation(
+    npc_id: int,
+    conflict_id: int,
+    conflict_type: str,
+    user_id: int,
+    conversation_id: int,
+    suggested_role: Optional[str] = None
+) -> None:
+    """Dispatch background task to create stakeholder with LLM (non-blocking).
+
+    Args:
+        npc_id: NPC ID
+        conflict_id: Conflict ID
+        conflict_type: Type of conflict
+        user_id: User ID
+        conversation_id: Conversation ID
+        suggested_role: Optional suggested role for the stakeholder
+    """
+    try:
+        from nyx.tasks.background.stakeholder_tasks import create_stakeholder_background
+
+        payload = {
+            "npc_id": npc_id,
+            "conflict_id": conflict_id,
+            "conflict_type": conflict_type,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "suggested_role": suggested_role,
+            "priority": 6,  # Stakeholder creation is medium priority
+        }
+        create_stakeholder_background.delay(payload)
+        logger.debug(f"Dispatched stakeholder creation for NPC {npc_id} in conflict {conflict_id}")
+    except Exception as e:
+        logger.warning(f"Failed to dispatch stakeholder creation: {e}")
+
+
+def dispatch_role_adaptation(
+    stakeholder_id: int,
+    adaptation_context: Dict[str, Any],
+    user_id: int,
+    conversation_id: int
+) -> None:
+    """Dispatch background task to adapt stakeholder role with LLM (non-blocking).
+
+    Args:
+        stakeholder_id: Stakeholder ID
+        adaptation_context: Context for role adaptation (e.g., phase transition)
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    try:
+        from nyx.tasks.background.stakeholder_tasks import adapt_stakeholder_role_background
+
+        payload = {
+            "stakeholder_id": stakeholder_id,
+            "adaptation_context": adaptation_context,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "priority": 5,  # Role adaptation is lower priority
+        }
+        adapt_stakeholder_role_background.delay(payload)
+        logger.debug(f"Dispatched role adaptation for stakeholder {stakeholder_id}")
+    except Exception as e:
+        logger.warning(f"Failed to dispatch role adaptation: {e}")
+
+
 async def cleanup_expired_actions(age_hours: int = 24) -> int:
     """Cleanup old consumed/expired actions (maintenance task).
 

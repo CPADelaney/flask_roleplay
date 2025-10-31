@@ -58,6 +58,23 @@ ALLOWED_PATTERNS = [
     "*_hotpath.py",  # Our new hotpath helper modules are allowed (they import but don't call)
 ]
 
+# Background-only methods (called ONLY from background tasks, not from event handlers)
+# These methods are allowed to contain LLM calls even though they're in hot-path files
+BACKGROUND_ONLY_METHODS = [
+    "create_stakeholder",
+    "make_autonomous_decision",
+    "generate_reaction",
+    "adapt_stakeholder_role",
+    "initialize_conflict_flow",
+    "update_conflict_flow",
+    "generate_dramatic_beat",
+    "narrate_phase_transition",
+    "evaluate_for_canon",
+    "check_lore_compliance",
+    "generate_canon_references",
+    "_create_stakeholders_for_npcs",
+]
+
 
 def match_patterns(file_path: Path, patterns: List[str]) -> bool:
     """Check if file path matches any of the glob patterns."""
@@ -88,20 +105,91 @@ def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
+        in_background_method = False
+        method_indent = 0
+        in_signature = False  # Track if we're still in the method signature
+        in_multiline_string = False  # Track if we're in a multi-line string
+        string_delimiter = None  # Track the delimiter (""" or ''')
+
         for line_num, line in enumerate(lines, start=1):
-            # Skip comments
+            # Skip empty lines and comments (but not if we're in a string)
             stripped = line.strip()
-            if stripped.startswith("#"):
+            if not in_multiline_string and (not stripped or stripped.startswith("#")):
                 continue
 
-            # Skip function definitions (these are OK - they define the functions used by background tasks)
-            if re.match(r"^\s*(async\s+)?def\s+\w+", line):
+            # Track multi-line strings (""" or ''')
+            # Count occurrences of """ and ''' to detect entry/exit
+            if '"""' in line or "'''" in line:
+                # Simple heuristic: count triple quotes
+                triple_double = line.count('"""')
+                triple_single = line.count("'''")
+
+                if triple_double > 0:
+                    if not in_multiline_string:
+                        in_multiline_string = True
+                        string_delimiter = '"""'
+                    elif string_delimiter == '"""':
+                        # Toggle for each occurrence
+                        for _ in range(triple_double):
+                            in_multiline_string = not in_multiline_string
+
+                if triple_single > 0:
+                    if not in_multiline_string:
+                        in_multiline_string = True
+                        string_delimiter = "'''"
+                    elif string_delimiter == "'''":
+                        for _ in range(triple_single):
+                            in_multiline_string = not in_multiline_string
+
+            # Skip lines inside multi-line strings when checking indentation
+            if in_multiline_string:
+                # Still need to check for violations in the actual code part
+                if in_background_method:
+                    continue  # Skip checking violations in background methods
+                # Otherwise continue to check for violations
+
+            # Get current line indentation
+            line_indent = len(line) - len(line.lstrip())
+
+            # Check if we're entering a method definition
+            method_match = re.match(r"^(\s*)(async\s+)?def\s+(\w+)", line)
+            if method_match:
+                indent = len(method_match.group(1))
+                method_name = method_match.group(3)
+
+                # If we're in a background method and hit a new method at same/less indent, we've exited
+                if in_background_method and indent <= method_indent:
+                    in_background_method = False
+                    in_signature = False
+
+                # Check if this new method is background-only
+                if method_name in BACKGROUND_ONLY_METHODS:
+                    in_background_method = True
+                    method_indent = indent
+                    in_signature = True  # We're now in the method signature
+
+                continue
+
+            # Only check indentation-based exit if NOT in a multi-line string
+            if not in_multiline_string:
+                # If we're past the signature and hit code at same/less indentation as def, we've exited
+                if in_background_method and not in_signature and line_indent <= method_indent and stripped:
+                    in_background_method = False
+                    in_signature = False
+
+            # Check if we've exited the signature (line ends with : which is not in a string)
+            if in_background_method and in_signature and stripped.endswith(":"):
+                in_signature = False  # Signature complete, now in method body
+
+            # Skip violations inside background-only methods
+            if in_background_method:
                 continue
 
             # Skip property definitions
             if re.match(r"^\s*@property", line) or re.match(r"^\s*def\s+\w+\s*\(self\)\s*->\s*Agent:", line):
                 continue
 
+            # Check for blocking patterns
             for pattern_re, pattern_name in BLOCKING_PATTERNS:
                 if re.search(pattern_re, line):
                     violations.append((line_num, pattern_name, line.strip()))

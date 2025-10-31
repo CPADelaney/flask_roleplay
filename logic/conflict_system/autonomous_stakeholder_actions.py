@@ -349,23 +349,31 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                 data={'stakeholders_created': 0, 'deferred': True, 'operation_id': event.event_id},
                 side_effects=[]
             )
-        
-        created = await self._create_stakeholders_for_npcs(npcs, conflict_id, conflict_type)
-        side_effects = [
-            SystemEvent(
-                event_id=f"stakeholder_created_{s.stakeholder_id}",
-                event_type=EventType.STAKEHOLDER_ACTION,
-                source_subsystem=self.subsystem_type,
-                payload={'stakeholder_id': s.stakeholder_id, 'action_type': 'joined_conflict', 'role': s.current_role.value},
+
+        # HOT PATH: Dispatch background stakeholder creation instead of blocking
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import dispatch_stakeholder_creation
+
+        dispatched = 0
+        for npc_id in (npcs or [])[:5]:  # safety cap
+            dispatch_stakeholder_creation(
+                npc_id=npc_id,
+                conflict_id=conflict_id,
+                conflict_type=conflict_type or "unknown",
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                suggested_role=self._determine_initial_role(conflict_type or "")
             )
-            for s in created
-        ]
+            dispatched += 1
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'stakeholders_created': len(created), 'stakeholder_ids': [s.stakeholder_id for s in created]},
-            side_effects=side_effects
+            data={
+                'stakeholders_dispatched': dispatched,
+                'message': f'Dispatched {dispatched} background stakeholder creations'
+            },
+            side_effects=[]
         )
     
     async def _on_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
@@ -400,19 +408,29 @@ class StakeholderAutonomySystem(ConflictSubsystem):
     async def _on_phase_transition(self, event: SystemEvent) -> SubsystemResponse:
         payload = event.payload or {}
         to_phase = payload.get('to_phase')
-        
-        adaptations = []
+
+        # HOT PATH: Dispatch background role adaptation instead of blocking
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import dispatch_role_adaptation
+
+        dispatched = 0
         for s in self._active_stakeholders.values():
             if self._should_adapt_role(s, to_phase or ""):
-                adaptation = await self.adapt_stakeholder_role(s, {'phase': to_phase})
-                if adaptation.get('role_changed'):
-                    adaptations.append(adaptation)
-        
+                dispatch_role_adaptation(
+                    stakeholder_id=s.stakeholder_id,
+                    adaptation_context={'phase': to_phase},
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+                dispatched += 1
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'adaptations': len(adaptations), 'phase_response': 'stakeholders_adapted'},
+            data={
+                'adaptations_dispatched': dispatched,
+                'message': f'Dispatched {dispatched} background role adaptations'
+            },
             side_effects=[]
         )
     
@@ -467,17 +485,23 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         scene_context = raw.get('scene_context', raw) or {}
 
         # Finalize deferred stakeholder creation if conflict_id now known
-        created_after_defer = 0
+        dispatched_deferred = 0
         op_id = raw.get('operation_id')
         cid = raw.get('conflict_id')
         if op_id and cid and op_id in self._pending_creations:
             pending = self._pending_creations.pop(op_id)
-            created = await self._create_stakeholders_for_npcs(
-                npcs=pending.get('npcs') or [],
-                conflict_id=cid,
-                conflict_type=pending.get('conflict_type'),
-            )
-            created_after_defer = len(created)
+            # HOT PATH: Dispatch background stakeholder creation instead of blocking
+            from logic.conflict_system.autonomous_stakeholder_actions_hotpath import dispatch_stakeholder_creation
+            for npc_id in (pending.get('npcs') or [])[:5]:  # safety cap
+                dispatch_stakeholder_creation(
+                    npc_id=npc_id,
+                    conflict_id=cid,
+                    conflict_type=pending.get('conflict_type') or "unknown",
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                    suggested_role=self._determine_initial_role(pending.get('conflict_type') or "")
+                )
+                dispatched_deferred += 1
 
         # HOT PATH: Use fast helper functions
         from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
@@ -518,7 +542,7 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                 'npc_behaviors': npc_behaviors,
                 'ready_actions_count': len(ready_actions),
                 'actions_dispatched': dispatched,
-                'stakeholders_created_after_defer': created_after_defer,
+                'stakeholders_dispatched_after_defer': dispatched_deferred,
             },
             side_effects=[]
         )
@@ -541,6 +565,7 @@ class StakeholderAutonomySystem(ConflictSubsystem):
             npc_id = payload.get('npc_id')
             conflict_id = payload.get('conflict_id')
             suggested_role = payload.get('suggested_role')
+            conflict_type = payload.get('conflict_type', 'unknown')
             if not (npc_id and conflict_id):
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
@@ -549,15 +574,26 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                     data={'error': 'npc_id and conflict_id required'},
                     side_effects=[]
                 )
-            stakeholder = await self.create_stakeholder(npc_id, conflict_id, suggested_role)
-            ok = stakeholder is not None
-            if ok:
-                self._active_stakeholders[stakeholder.stakeholder_id] = stakeholder
+
+            # HOT PATH: Dispatch background stakeholder creation instead of blocking
+            from logic.conflict_system.autonomous_stakeholder_actions_hotpath import dispatch_stakeholder_creation
+            dispatch_stakeholder_creation(
+                npc_id=npc_id,
+                conflict_id=conflict_id,
+                conflict_type=conflict_type,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                suggested_role=suggested_role
+            )
+
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
-                success=ok,
-                data={'stakeholder_created': ok, 'stakeholder_id': getattr(stakeholder, 'stakeholder_id', 0)},
+                success=True,
+                data={
+                    'stakeholder_creation_dispatched': True,
+                    'message': 'Stakeholder creation queued in background'
+                },
                 side_effects=[]
             )
 

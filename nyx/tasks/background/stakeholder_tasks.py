@@ -50,6 +50,20 @@ def _idempotency_key_populate(payload: Dict[str, Any]) -> str:
     return f"stakeholder_populate:{stakeholder_id}"
 
 
+def _idempotency_key_create(payload: Dict[str, Any]) -> str:
+    """Generate idempotency key for stakeholder creation."""
+    npc_id = payload.get("npc_id")
+    conflict_id = payload.get("conflict_id")
+    return f"stakeholder_create:{npc_id}:{conflict_id}"
+
+
+def _idempotency_key_adapt(payload: Dict[str, Any]) -> str:
+    """Generate idempotency key for role adaptation."""
+    stakeholder_id = payload.get("stakeholder_id")
+    phase = payload.get("adaptation_context", {}).get("phase", "")
+    return f"stakeholder_adapt:{stakeholder_id}:{phase}"
+
+
 async def _make_autonomous_decision_async(
     stakeholder_id: int, scene_context: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -250,8 +264,138 @@ def populate_stakeholder_details(self, payload: Dict[str, Any]) -> Dict[str, Any
     return {"status": "populated", "stakeholder_id": stakeholder_id, "result": enrichment_result}
 
 
+@shared_task(
+    name="nyx.tasks.background.stakeholder_tasks.create_stakeholder_background",
+    bind=True,
+    max_retries=2,
+    acks_late=True,
+)
+@with_retry
+@idempotent(key_fn=_idempotency_key_create)
+def create_stakeholder_background(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a stakeholder with LLM-generated profile (slow LLM call).
+
+    This task is dispatched from event handlers when a new stakeholder needs to be created.
+    The LLM generates personality, role, goals, etc. based on the NPC and conflict context.
+
+    Args:
+        payload: Dict with keys:
+            - npc_id: int
+            - conflict_id: int
+            - conflict_type: str
+            - user_id: int
+            - conversation_id: int
+            - suggested_role: optional str
+
+    Returns:
+        Dict with status and stakeholder_id
+    """
+    npc_id = payload.get("npc_id")
+    conflict_id = payload.get("conflict_id")
+    conflict_type = payload.get("conflict_type", "unknown")
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+    suggested_role = payload.get("suggested_role")
+
+    if not all([npc_id, conflict_id, user_id, conversation_id]):
+        raise ValueError("npc_id, conflict_id, user_id, and conversation_id are required")
+
+    logger.info(f"Creating stakeholder for NPC {npc_id} in conflict {conflict_id}")
+
+    # Import the subsystem class and call the LLM method
+    # Note: This is a workaround to avoid circular imports
+    from logic.conflict_system.autonomous_stakeholder_actions import AutonomousStakeholderActions
+    from nyx.tasks.utils import run_coro
+
+    async def _create_stakeholder():
+        # Instantiate the subsystem (lightweight, no heavy initialization)
+        subsystem = AutonomousStakeholderActions(user_id=user_id, conversation_id=conversation_id)
+        # Call the LLM method to create the stakeholder
+        stakeholder = await subsystem.create_stakeholder(npc_id, conflict_id, suggested_role)
+        return stakeholder
+
+    stakeholder = run_coro(_create_stakeholder())
+
+    if stakeholder:
+        logger.info(f"Created stakeholder {stakeholder.stakeholder_id} for NPC {npc_id}")
+        return {
+            "status": "created",
+            "stakeholder_id": stakeholder.stakeholder_id,
+            "npc_id": npc_id,
+            "conflict_id": conflict_id,
+        }
+    else:
+        logger.warning(f"Failed to create stakeholder for NPC {npc_id}")
+        return {"status": "failed", "npc_id": npc_id, "conflict_id": conflict_id}
+
+
+@shared_task(
+    name="nyx.tasks.background.stakeholder_tasks.adapt_stakeholder_role_background",
+    bind=True,
+    max_retries=2,
+    acks_late=True,
+)
+@with_retry
+@idempotent(key_fn=_idempotency_key_adapt)
+def adapt_stakeholder_role_background(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Adapt stakeholder role based on context with LLM (slow LLM call).
+
+    This task is dispatched when a stakeholder's role needs to adapt (e.g., phase transition).
+    The LLM evaluates the new context and may change the stakeholder's role.
+
+    Args:
+        payload: Dict with keys:
+            - stakeholder_id: int
+            - adaptation_context: dict (e.g., {"phase": "climax"})
+            - user_id: int
+            - conversation_id: int
+
+    Returns:
+        Dict with status and adaptation result
+    """
+    stakeholder_id = payload.get("stakeholder_id")
+    adaptation_context = payload.get("adaptation_context", {})
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+
+    if not all([stakeholder_id, user_id, conversation_id]):
+        raise ValueError("stakeholder_id, user_id, and conversation_id are required")
+
+    logger.info(f"Adapting role for stakeholder {stakeholder_id}")
+
+    from logic.conflict_system.autonomous_stakeholder_actions import AutonomousStakeholderActions
+    from nyx.tasks.utils import run_coro
+
+    async def _adapt_role():
+        subsystem = AutonomousStakeholderActions(user_id=user_id, conversation_id=conversation_id)
+        # Get the stakeholder from the subsystem's active stakeholders
+        stakeholder = subsystem._active_stakeholders.get(stakeholder_id)
+        if not stakeholder:
+            # Try to load from DB if not in memory
+            logger.warning(f"Stakeholder {stakeholder_id} not in memory, skipping adaptation")
+            return None
+        # Call the LLM method to adapt the role
+        result = await subsystem.adapt_stakeholder_role(stakeholder, adaptation_context)
+        return result
+
+    adaptation_result = run_coro(_adapt_role())
+
+    if adaptation_result:
+        logger.info(f"Adapted role for stakeholder {stakeholder_id}: {adaptation_result}")
+        return {
+            "status": "adapted",
+            "stakeholder_id": stakeholder_id,
+            "adaptation": adaptation_result,
+        }
+    else:
+        logger.warning(f"Failed to adapt role for stakeholder {stakeholder_id}")
+        return {"status": "failed", "stakeholder_id": stakeholder_id}
+
+
 __all__ = [
     "generate_stakeholder_action",
     "generate_stakeholder_reaction",
     "populate_stakeholder_details",
+    "create_stakeholder_background",
+    "adapt_stakeholder_role_background",
 ]
