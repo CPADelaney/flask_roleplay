@@ -1236,7 +1236,10 @@ The memory system uses vector embeddings for semantic memory operations:
 Multiple embedding providers with fallback chain:
 
 Primary: OpenAI Embedding API (text-embedding-3-small)
-Fallback: SentenceTransformer (all-mpnet-base-v2)
+Fallback: `nyx.core.memory.embeddings` loads a lightweight SentenceTransformer
+pipeline when the API is unavailable (e.g. offline test rigs). The helper pads
+or truncates vectors so they retain the OpenAI dimensionality (1,536) and FAISS
+indices/pgvector schemas remain compatible.
 Last resort: Zero vectors with logging
 
 

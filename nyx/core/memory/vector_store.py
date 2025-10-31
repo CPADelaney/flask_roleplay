@@ -1,9 +1,11 @@
 # ── nyx/core/memory/vector_store.py ──────────────────────────────────────────
-"""
-FAISS-backed vector store used by :mod:`nyx.core`.
+"""FAISS-backed vector store used by :mod:`nyx.core`.
 
-This header adds a resilient embedding-model loader that works even when
-the Hugging-Face hub is rate-limited or unreachable.
+Embeddings are generated via :mod:`nyx.core.memory.embeddings`, which routes to
+OpenAI's Embeddings API when configured and gracefully falls back to a local
+SentenceTransformer pipeline when offline.  Vectors are always coerced to the
+configured OpenAI dimensionality so FAISS indices and pgvector schemas remain
+compatible across environments.
 """
 
 from __future__ import annotations
@@ -15,51 +17,24 @@ import json
 import logging
 import os
 import uuid
-from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer, models
+
+from .embeddings import embed_texts, get_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
-#  Embedding model loader                                                     #
-# --------------------------------------------------------------------------- #
-def _load_embedding_model(model_name: str = "text-embedding-3-small") -> SentenceTransformer:
-    """
-    Resolve a `SentenceTransformer` in three steps:
-
-    1.  **Local path**   —  $HF_MODEL_DIR/<model_name>
-    2.  **HF download**  —  `SentenceTransformer(model_name)`
-    3.  **Offline stub** —  DistilBERT + mean pooling
-    """
-    local_root = Path(os.getenv("HF_MODEL_DIR", "/app/models/embeddings"))
-    local_path = local_root / model_name
-
-    # 1️⃣  already vendored inside the image?
-    if local_path.exists():
-        logger.info("Loading sentence-transformer from %s", local_path)
-        return SentenceTransformer(str(local_path))
-
-    # 2️⃣  normal online path (works on dev boxes)
-    try:
-        logger.info("Attempting download of %s from Hugging Face hub…", model_name)
-        return SentenceTransformer(model_name)
-    except Exception as exc:  # hub unreachable / 429 / etc.
-        logger.warning("HF load failed (%s). Using offline stub.", exc)
-
-    # 3️⃣  tiny offline model so the app can still boot
-    bert = models.Transformer("distilbert-base-uncased", max_seq_length=256)
-    pool = models.Pooling(bert.get_word_embedding_dimension(), pooling_mode="mean")
-    return SentenceTransformer(modules=[bert, pool])
+_dim: int = get_embedding_dimension()
+VECTOR_DIMENSION: int = _dim
 
 
-# Instantiate once and reuse
-_model: SentenceTransformer = _load_embedding_model()
-_dim: int = _model.get_sentence_embedding_dimension()
+def get_vector_dimension() -> int:
+    """Return the dimension used by the in-process FAISS index."""
+
+    return _dim
 
 # --------------------------------------------------------------------------- #
 #  Original FAISS store implementation (unchanged below this comment)        #
@@ -76,15 +51,14 @@ _next_id = 0
 _DATA_PATH = os.path.join(os.path.dirname(__file__), "vector_store")
 
 
-def _to_vec(texts: List[str]) -> np.ndarray:
+async def _to_vec(texts: Sequence[str]) -> np.ndarray:
     """Encode text to normalised float32 vectors (batch-safe)."""
-    vec = _model.encode(
-        texts,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
-    return vec.astype("float32").reshape(len(texts), -1)
+
+    vectors = await embed_texts(list(texts))
+    arr = np.asarray(vectors, dtype="float32")
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    return arr.reshape(len(texts), -1)
 
 
 
@@ -110,7 +84,7 @@ async def add(text: str, meta: Dict) -> str:
         await _remove_by_uid(_memory_uid[mid])
 
     uid = str(uuid.uuid4())
-    vec = _to_vec([text])
+    vec = await _to_vec([text])
     async with _lock:
         _index.add_with_ids(vec, np.array([_next_id], dtype="int64"))
 
@@ -133,7 +107,7 @@ async def query(query_text: str, k: int = 5) -> List[Dict]:
     """Return top-``k`` texts with similarity scores."""
     if _index.ntotal == 0:
         return []
-    vec = _to_vec([query_text])
+    vec = await _to_vec([query_text])
     D, I = await _faiss_search(vec, k)
     async with _lock:
         entries = [
