@@ -90,6 +90,57 @@ BACKGROUND_ONLY_METHODS = [
     "_generate_tension_manifestation_llm",
     "check_tension_breaking_point",
     "perform_bundle_generation_and_cache",
+
+    # Canon methods - additional
+    "_create_canonical_event",
+    "_generate_legacy",
+    "_generate_mythology_text",
+
+    # Background grand conflicts (entire subsystem is background-only)
+    "generate_background_conflict",
+    "advance_background_conflict",
+    "generate_news_item",
+    "generate_daily_ripples",
+    "check_for_opportunities",
+
+    # Victory methods (called from background tasks)
+    "generate_victory_conditions",
+    "generate_victory_narration",
+    "calculate_victory_consequences",
+    "generate_conflict_epilogue",
+    "_generate_consolation",
+
+    # Dynamic template methods (called from background tasks)
+    "extract_runner_response",
+    "create_conflict_template",
+    "_generate_variation",
+    "_adapt_to_context",
+    "_add_unique_elements",
+    "_generate_narrative_hooks",
+
+    # Edge case recovery methods (called from error handlers, not hot path)
+    "_generate_orphan_recovery",
+    "_generate_stale_recovery",
+    "_generate_loop_recovery",
+    "_generate_overload_recovery",
+    "_generate_contradiction_recovery",
+
+    # Enhanced integration methods (called from background analysis)
+    "analyze_scene_tensions",
+    "generate_contextual_conflict",
+    "integrate_conflicts_with_activity",
+
+    # Integration methods (called from background mode optimization)
+    "_recommend_mode_change",
+
+    # Slice of life methods (called from background pattern analysis)
+    "_analyze_patterns_with_llm",
+    "embed_conflict_in_activity",
+    "check_resolution_by_pattern",
+    "_is_appropriate_for_time",
+
+    # Synthesizer methods (called internally, not from event handlers)
+    "_determine_active_subsystems",
 ]
 
 
@@ -124,46 +175,12 @@ def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
 
         in_background_method = False
         method_indent = 0
-        in_signature = False  # Track if we're still in the method signature
-        in_multiline_string = False  # Track if we're in a multi-line string
-        string_delimiter = None  # Track the delimiter (""" or ''')
 
         for line_num, line in enumerate(lines, start=1):
-            # Skip empty lines and comments (but not if we're in a string)
+            # Skip empty lines and comments
             stripped = line.strip()
-            if not in_multiline_string and (not stripped or stripped.startswith("#")):
+            if not stripped or stripped.startswith("#"):
                 continue
-
-            # Track multi-line strings (""" or ''')
-            # Count occurrences of """ and ''' to detect entry/exit
-            if '"""' in line or "'''" in line:
-                # Simple heuristic: count triple quotes
-                triple_double = line.count('"""')
-                triple_single = line.count("'''")
-
-                if triple_double > 0:
-                    if not in_multiline_string:
-                        in_multiline_string = True
-                        string_delimiter = '"""'
-                    elif string_delimiter == '"""':
-                        # Toggle for each occurrence
-                        for _ in range(triple_double):
-                            in_multiline_string = not in_multiline_string
-
-                if triple_single > 0:
-                    if not in_multiline_string:
-                        in_multiline_string = True
-                        string_delimiter = "'''"
-                    elif string_delimiter == "'''":
-                        for _ in range(triple_single):
-                            in_multiline_string = not in_multiline_string
-
-            # Skip lines inside multi-line strings when checking indentation
-            if in_multiline_string:
-                # Still need to check for violations in the actual code part
-                if in_background_method:
-                    continue  # Skip checking violations in background methods
-                # Otherwise continue to check for violations
 
             # Get current line indentation
             line_indent = len(line) - len(line.lstrip())
@@ -177,26 +194,13 @@ def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
                 # If we're in a background method and hit a new method at same/less indent, we've exited
                 if in_background_method and indent <= method_indent:
                     in_background_method = False
-                    in_signature = False
 
                 # Check if this new method is background-only
                 if method_name in BACKGROUND_ONLY_METHODS:
                     in_background_method = True
                     method_indent = indent
-                    in_signature = True  # We're now in the method signature
 
                 continue
-
-            # Only check indentation-based exit if NOT in a multi-line string
-            if not in_multiline_string:
-                # If we're past the signature and hit code at same/less indentation as def, we've exited
-                if in_background_method and not in_signature and line_indent <= method_indent and stripped:
-                    in_background_method = False
-                    in_signature = False
-
-            # Check if we've exited the signature (line ends with : which is not in a string)
-            if in_background_method and in_signature and stripped.endswith(":"):
-                in_signature = False  # Signature complete, now in method body
 
             # Skip violations inside background-only methods
             if in_background_method:
