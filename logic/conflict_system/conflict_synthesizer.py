@@ -40,9 +40,12 @@ from logic.conflict_system.background_processor import (
     BackgroundConflictProcessor
 )
 
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from logic.conflict_system.integration_hooks import ConflictEventHooks
 from agents import function_tool, RunContextWrapper, Runner
+from logic.conflict_system.conflict_synthesizer_hotpath import (
+    compute_scene_hash as hotpath_compute_scene_hash,
+    route_scene_subsystems,
+)
 
 if TYPE_CHECKING:
     from nyx.nyx_agent.context import SceneScope
@@ -1190,7 +1193,7 @@ class ConflictSynthesizer:
             asyncio.create_task(self._handle_scene_transition(self._last_scene, scope_sig))
             self._last_scene = scope_sig
     
-        # Determine which subsystems should be active (LLM-routed w/ fallback)
+        # Determine which subsystems should be active (cache/heuristic routed)
         active = await self._determine_active_subsystems(scene_context)
     
         # Build and emit routing event
@@ -1787,48 +1790,50 @@ class ConflictSynthesizer:
         """Determine required subsystems for a conflict type (async safe)"""
         return await self._determine_subsystems_for_operation('create', conflict_type, context)
     
+    def _heuristic_active_subsystems(self, scene_context: Dict[str, Any]) -> Set[SubsystemType]:
+        """Compute a heuristic subsystem set for the current scene context."""
+
+        subsystems: Set[SubsystemType] = {
+            SubsystemType.TENSION,
+            SubsystemType.FLOW,
+            SubsystemType.STAKEHOLDER,
+            SubsystemType.SLICE_OF_LIFE,
+            SubsystemType.EDGE_HANDLER,
+            SubsystemType.LEVERAGE,
+        }
+
+        if scene_context.get('conflicts_active') or scene_context.get('phase'):
+            subsystems.add(SubsystemType.PHASE)
+
+        if scene_context.get('is_multiparty') or (scene_context.get('party_count') or 0) >= 3:
+            subsystems.add(SubsystemType.MULTIPARTY)
+            subsystems.add(SubsystemType.LEVERAGE)
+
+        if scene_context.get('tension_source') or scene_context.get('intensity'):
+            subsystems.add(SubsystemType.TENSION)
+
+        if scene_context.get('recent_events'):
+            subsystems.add(SubsystemType.DETECTION)
+
+        return subsystems
+
     async def _determine_active_subsystems(
         self,
         scene_context: Dict[str, Any]
     ) -> Set[SubsystemType]:
-        """Determine active subsystems for scene processing with LLM timeout"""
-        
-        # Use LLM if orchestrator available
-        if self._orchestrator:
-            prompt = f"""
-            Analyze this scene context and determine which conflict subsystems should be active:
-            {json.dumps(scene_context, indent=2)}
-            
-            Available subsystems: {[s.value for s in SubsystemType]}
-            
-            Return a JSON list of subsystem names that should process this scene.
-            """
-            
-            try:
-                # Add timeout to LLM call
-                response = await asyncio.wait_for(
-                    Runner.run(self._orchestrator, prompt),
-                    timeout=LLM_ROUTE_TIMEOUT
-                )
-                response_text = extract_runner_response(response)
-                subsystem_names = json.loads(response_text)
-                return {SubsystemType(name) for name in subsystem_names if name in SubsystemType._value2member_map_}
-            except asyncio.TimeoutError:
-                logger.warning(f"LLM routing timed out after {LLM_ROUTE_TIMEOUT}s, using fallback")
-                self._performance_metrics['timeouts_count'] += 1
-            except Exception:
-                logger.exception("Failed to parse LLM response")
-                self._performance_metrics['failures_count'] += 1
-        
-        # Fallback to default set
-        return {
-        SubsystemType.TENSION,
-        SubsystemType.FLOW,
-        SubsystemType.STAKEHOLDER,
-        SubsystemType.SLICE_OF_LIFE,
-        SubsystemType.EDGE_HANDLER,
-        SubsystemType.LEVERAGE, # add this
-        }
+        """Determine active subsystems for scene processing via hot-path helper."""
+
+        fallback = self._heuristic_active_subsystems(scene_context)
+        scene_hash = hotpath_compute_scene_hash(scene_context)
+        return route_scene_subsystems(
+            scene_context,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            fallback_subsystems=fallback,
+            orchestrator_available=self._orchestrator is not None,
+            cache_ttl=int(getattr(self, "_cache_ttl", 300)),
+            scene_hash=scene_hash,
+        )
     
     def _aggregate_conflict_creation(self, responses: List[SubsystemResponse]) -> Dict[str, Any]:
         """Aggregate subsystem responses for conflict creation"""
