@@ -1,6 +1,7 @@
 """Public entrypoint for Nyx gateway helpers."""
 
 from .llm_gateway import (
+    LLMOperation,
     LLMRequest,
     LLMResult,
     execute,
@@ -8,6 +9,7 @@ from .llm_gateway import (
 )
 
 __all__ = [
+    "LLMOperation",
     "LLMRequest",
     "LLMResult",
     "execute",
