@@ -215,3 +215,34 @@ def should_trigger_beat(conflict: Any) -> Optional[str]:
         return "complication"
 
     return None
+
+
+def queue_phase_transition(
+    conflict_id: int,
+    current_phase: str,
+    trigger_event: Dict[str, Any]
+) -> None:
+    """Queue background task to handle phase transition with LLM (non-blocking).
+
+    Args:
+        conflict_id: Conflict ID
+        current_phase: Current phase name
+        trigger_event: Event that triggered the transition
+    """
+    try:
+        from nyx.tasks.background.flow_tasks import handle_phase_transition_background
+
+        payload = {
+            "conflict_id": conflict_id,
+            "current_phase": current_phase,
+            "trigger_event": trigger_event,
+            "timestamp": datetime.utcnow().isoformat(),
+            "priority": 7,  # High priority for phase transitions
+        }
+
+        handle_phase_transition_background.delay(payload)
+        logger.debug(
+            f"Queued phase transition: conflict={conflict_id}, phase={current_phase}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to queue phase transition: {e}")

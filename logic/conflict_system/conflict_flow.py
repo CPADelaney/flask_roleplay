@@ -540,24 +540,24 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             flow.phase_progress = max(0.0, min(1.5, flow.phase_progress))
             
             if flow.phase_progress >= 1.0:
-                transition = await self._handle_phase_transition(flow, payload)
+                # HOT PATH: Queue phase transition in background instead of blocking
+                from logic.conflict_system.conflict_flow_hotpath import queue_phase_transition
+                queue_phase_transition(
+                    conflict_id=conflict_id,
+                    current_phase=flow.current_phase.value,
+                    trigger_event=payload
+                )
+
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data={'phase_transition': transition.to_phase.value},
-                    side_effects=[SystemEvent(
-                        event_id=f"transition_{conflict_id}_{datetime.now().timestamp()}",
-                        event_type=EventType.PHASE_TRANSITION,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'conflict_id': conflict_id,
-                            'from_phase': transition.from_phase.value,
-                            'to_phase': transition.to_phase.value,
-                            'narrative': transition.narrative
-                        },
-                        priority=5
-                    )]
+                    data={
+                        'phase_transition_queued': True,
+                        'current_phase': flow.current_phase.value,
+                        'message': 'Phase transition queued in background'
+                    },
+                    side_effects=[]
                 )
         
         return SubsystemResponse(

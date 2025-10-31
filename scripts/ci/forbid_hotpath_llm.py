@@ -69,10 +69,13 @@ BACKGROUND_ONLY_METHODS = [
     "update_conflict_flow",
     "generate_dramatic_beat",
     "narrate_phase_transition",
+    "_handle_phase_transition",
     "evaluate_for_canon",
     "check_lore_compliance",
     "generate_canon_references",
     "_create_stakeholders_for_npcs",
+    "generate_manifestations",
+    "narrate_escalation",
 ]
 
 
