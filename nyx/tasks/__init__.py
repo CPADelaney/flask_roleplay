@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 
     logging.getLogger(__name__).exception("Failed to import realtime.post_turn")
 
-for _module in ("world_tasks", "conflict_tasks", "npc_tasks", "lore_tasks"):
+for _module in ("world_tasks", "conflict_tasks", "npc_tasks", "lore_tasks", "canon_tasks"):
     try:  # pragma: no cover - defensive import
         __import__(f"nyx.tasks.background.{_module}")
     except Exception:

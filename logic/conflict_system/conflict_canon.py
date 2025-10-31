@@ -8,16 +8,15 @@ import logging
 import json
 import random
 import hashlib
-from typing import Dict, List, Any, Optional, Set, TypedDict
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from celery import current_app
-
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from agents import Agent, function_tool, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
+from infra.cache import cache_key, get_json, set_json
 
 # Orchestrator interface
 from logic.conflict_system.conflict_synthesizer import (
@@ -309,7 +308,10 @@ class ConflictCanonSubsystem(ConflictSubsystem):
 
         resolution_data = snapshot.get('resolution') or {}
         try:
-            result = await self._perform_canon_evaluation(resolved_conflict_id, resolution_data)
+            result = await self._perform_canon_evaluation_background(
+                resolved_conflict_id,
+                resolution_data,
+            )
             await self._mark_snapshot_status(snapshot_id, 'completed', result=result)
         except Exception as exc:
             logger.exception("Canon snapshot processing failed", exc_info=exc)
@@ -322,6 +324,51 @@ class ConflictCanonSubsystem(ConflictSubsystem):
             raise
 
     async def _perform_canon_evaluation(
+        self,
+        conflict_id: int,
+        resolution_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Hot-path canon evaluation: return cached result or queue background work."""
+
+        from logic.conflict_system.conflict_canon_hotpath import (
+            get_cached_canon_record,
+            queue_canonization,
+        )
+
+        cached = await get_cached_canon_record(conflict_id)
+        if cached:
+            return {
+                'became_canonical': True,
+                'reason': 'Cached canon record available',
+                'significance': float(cached.get('significance_score') or 0.0),
+                'tags': cached.get('tags', []),
+                'canonical_event_id': int(cached.get('canon_id', 0) or 0),
+                'legacy': cached.get('legacy'),
+                'name': cached.get('canon_text'),
+                'creates_precedent': cached.get('creates_precedent'),
+                'pending': False,
+            }
+
+        queue_canonization(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+            resolution_data,
+        )
+
+        return {
+            'became_canonical': False,
+            'reason': 'Canon evaluation queued',
+            'significance': float(resolution_data.get('significance_score', 0.0) or 0.0),
+            'tags': resolution_data.get('tags', []),
+            'canonical_event_id': 0,
+            'legacy': None,
+            'name': None,
+            'creates_precedent': None,
+            'pending': True,
+        }
+
+    async def _perform_canon_evaluation_background(
         self,
         conflict_id: int,
         resolution_data: Dict[str, Any],
@@ -381,7 +428,7 @@ Return JSON:
 
         event_type_str = data.get('event_type', CanonEventType.LEGENDARY_MOMENT.value)
         event_type = CanonEventType(event_type_str)
-        event, tags = await self._create_canonical_event(
+        event, tags = await self._create_canonical_event_background(
             conflict_id, conflict, resolution_data, event_type, significance
         )
 
@@ -484,21 +531,18 @@ Return JSON:
         conflict_context: Dict[str, Any],
         matching_event_ids: List[int],
     ) -> None:
-        try:
-            current_app.send_task(
-                "canon.generate_lore_suggestions",
-                args=[
-                    self.user_id,
-                    self.conversation_id,
-                    cache_id,
-                    conflict_type,
-                    conflict_context,
-                    matching_event_ids,
-                ],
-                queue="background",
-            )
-        except Exception as exc:
-            logger.exception("Failed to enqueue lore suggestion task", exc_info=exc)
+        from logic.conflict_system.conflict_canon_hotpath import (
+            queue_compliance_suggestions,
+        )
+
+        queue_compliance_suggestions(
+            self.user_id,
+            self.conversation_id,
+            cache_id,
+            conflict_type,
+            conflict_context,
+            matching_event_ids,
+        )
 
     async def update_compliance_suggestions(
         self,
@@ -593,20 +637,17 @@ Return JSON:
         event_id: int,
         context: str,
     ) -> None:
-        try:
-            current_app.send_task(
-                "canon.generate_canon_references",
-                args=[
-                    self.user_id,
-                    self.conversation_id,
-                    cache_id,
-                    event_id,
-                    context,
-                ],
-                queue="background",
-            )
-        except Exception as exc:
-            logger.exception("Failed to enqueue canon reference task", exc_info=exc)
+        from logic.conflict_system.conflict_canon_hotpath import (
+            queue_canon_reference_generation,
+        )
+
+        queue_canon_reference_generation(
+            self.user_id,
+            self.conversation_id,
+            cache_id,
+            event_id,
+            context,
+        )
 
     async def update_reference_cache(
         self,
@@ -632,6 +673,26 @@ Return JSON:
             )
 
     async def build_reference_cache(
+        self,
+        cache_id: int,
+        event_id: int,
+        context: str,
+    ) -> None:
+        """Hot-path wrapper: queue reference generation and return immediately."""
+
+        from logic.conflict_system.conflict_canon_hotpath import (
+            queue_canon_reference_generation,
+        )
+
+        queue_canon_reference_generation(
+            self.user_id,
+            self.conversation_id,
+            cache_id,
+            event_id,
+            context,
+        )
+
+    async def build_reference_cache_background(
         self,
         cache_id: int,
         event_id: int,
@@ -688,6 +749,28 @@ Return JSON:
             await self.update_reference_cache(cache_id, [], status='failed')
 
     async def build_compliance_suggestions(
+        self,
+        cache_id: int,
+        conflict_type: str,
+        conflict_context: Dict[str, Any],
+        matching_event_ids: List[int],
+    ) -> None:
+        """Hot-path wrapper to queue lore compliance suggestion generation."""
+
+        from logic.conflict_system.conflict_canon_hotpath import (
+            queue_compliance_suggestions,
+        )
+
+        queue_compliance_suggestions(
+            self.user_id,
+            self.conversation_id,
+            cache_id,
+            conflict_type,
+            conflict_context,
+            matching_event_ids,
+        )
+
+    async def build_compliance_suggestions_background(
         self,
         cache_id: int,
         conflict_type: str,
@@ -762,7 +845,12 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                         became_canonical = True
                     else:
                         # Queue background canonization
-                        queue_canonization(conflict_id, resolution_data)
+                        queue_canonization(
+                            self.user_id,
+                            self.conversation_id,
+                            conflict_id,
+                            resolution_data,
+                        )
 
                 side_effects = []
                 if became_canonical and canonical_event_id:
@@ -855,40 +943,25 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                     )
                 elif req == 'generate_canon_references':
                     ev_id = int(event.payload.get('event_id', 0) or 0)
-                    # HOT PATH: Get cached references or queue generation
-                    from logic.conflict_system.conflict_canon_hotpath import (
-                        get_cached_canon_references,
-                        queue_canon_reference_generation,
-                    )
-
-                    cached_refs = await get_cached_canon_references(ev_id)
-                    if not cached_refs:
-                        queue_canon_reference_generation(ev_id, event.payload.get('context', {}))
+                    context = event.payload.get('context', 'casual') or 'casual'
+                    result = await self.generate_canon_references(ev_id, context)
 
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,
                         success=True,
-                        data={
-                            'references': cached_refs,
-                            'pending': len(cached_refs) == 0,
-                            'message': 'References queued for generation' if not cached_refs else 'References retrieved'
-                        },
+                        data=result,
                         side_effects=[]
                     )
                 elif req == 'generate_mythology':
                     conflict_id = int(event.payload.get('conflict_id', 0) or 0)
-                    # HOT PATH: Return cached or fallback
-                    from logic.conflict_system.conflict_canon_hotpath import get_cached_canon_record
-
-                    cached = await get_cached_canon_record(conflict_id)
-                    mythology = cached.get('canon_text', 'Mythology pending generation...') if cached else 'No canonical record yet'
+                    mythology_result = await self.get_mythological_reinterpretation(conflict_id)
 
                     return SubsystemResponse(
                         subsystem=self.subsystem_type,
                         event_id=event.event_id,
                         success=True,
-                        data={'mythology': mythology},
+                        data=mythology_result,
                         side_effects=[]
                     )
                 # Unknown STATE_SYNC request
@@ -1083,25 +1156,15 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
         """
         snapshot_id = await self._store_resolution_snapshot(conflict_id, resolution_data)
 
-        try:
-            current_app.send_task(
-                "canon.canonize_conflict",
-                args=[
-                    self.user_id,
-                    self.conversation_id,
-                    int(conflict_id),
-                    snapshot_id,
-                ],
-                queue="background",
-            )
-        except Exception as exc:
-            logger.exception("Failed to enqueue canonization task", exc_info=exc)
-            await self._mark_snapshot_status(
-                snapshot_id,
-                'failed',
-                result={'became_canonical': False},
-                error=str(exc),
-            )
+        from logic.conflict_system.conflict_canon_hotpath import queue_canonization
+
+        queue_canonization(
+            self.user_id,
+            self.conversation_id,
+            int(conflict_id),
+            resolution_data,
+            snapshot_id=snapshot_id,
+        )
 
         return {
             'event': None,
@@ -1124,7 +1187,28 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
         resolution_data: Dict[str, Any],
         event_type: CanonEventType,
         significance: float
-    ) -> (CanonicalEvent, List[str]):
+    ) -> Tuple[Optional[CanonicalEvent], List[str]]:
+        """Hot-path stub that queues canonization work and returns placeholders."""
+
+        from logic.conflict_system.conflict_canon_hotpath import queue_canonization
+
+        queue_canonization(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+            resolution_data,
+        )
+
+        return None, []
+
+    async def _create_canonical_event_background(
+        self,
+        conflict_id: int,
+        conflict: Dict[str, Any],
+        resolution_data: Dict[str, Any],
+        event_type: CanonEventType,
+        significance: float
+    ) -> Tuple[CanonicalEvent, List[str]]:
         """Create a new canonical event using the core canon system (returns event, tags)."""
         prompt = f"""
 Create a canonical description for this event:
@@ -1151,7 +1235,7 @@ Return JSON:
         response = await Runner.run(self.cultural_interpreter, prompt)
         data = json.loads(extract_runner_response(response))
         
-        legacy = await self._generate_legacy(conflict, resolution_data, data)
+        legacy = await self._generate_legacy_background(conflict, resolution_data, data)
         
         tags = [
             'conflict',
@@ -1194,7 +1278,7 @@ Return JSON:
             json.dumps(data.get('cultural_impact', {})), bool(data.get('creates_precedent', False)), 
             legacy, json.dumps({'name': data.get('canonical_name', '')}))
         
-        return CanonicalEvent(
+        canonical_event = CanonicalEvent(
             event_id=event_id,
             conflict_id=conflict_id,
             event_type=event_type,
@@ -1205,9 +1289,36 @@ Return JSON:
             referenced_by=[],
             creates_precedent=bool(data.get('creates_precedent', False)),
             legacy=legacy
-        ), tags
-    
+        )
+
+        await self._persist_canon_summary(
+            conflict_id,
+            canonical_event,
+            tags,
+        )
+
+        return canonical_event, tags
+
     async def _generate_legacy(
+        self,
+        conflict: Dict[str, Any],
+        resolution: Dict[str, Any],
+        cultural_data: Dict[str, Any]
+    ) -> str:
+        """Hot-path stub that queues background legacy generation."""
+
+        from logic.conflict_system.conflict_canon_hotpath import queue_canonization
+
+        queue_canonization(
+            self.user_id,
+            self.conversation_id,
+            int(conflict.get('conflict_id') or conflict.get('id') or 0),
+            resolution,
+        )
+
+        return "Legacy generation pending"
+
+    async def _generate_legacy_background(
         self,
         conflict: Dict[str, Any],
         resolution: Dict[str, Any],
@@ -1223,6 +1334,89 @@ Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
 """
         response = await Runner.run(self.legacy_writer, prompt)
         return extract_runner_response(response)
+
+    async def _persist_canon_summary(
+        self,
+        conflict_id: int,
+        canonical_event: CanonicalEvent,
+        tags: List[str],
+    ) -> None:
+        """Persist canon summary for hot-path retrieval."""
+
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conflict_canon (
+                    canon_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    conflict_id INTEGER NOT NULL,
+                    canon_text TEXT,
+                    significance_score NUMERIC,
+                    cultural_impact JSONB,
+                    creates_precedent BOOLEAN,
+                    legacy TEXT,
+                    tags JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, conversation_id, conflict_id)
+                )
+                """
+            )
+
+            row = await conn.fetchrow(
+                """
+                INSERT INTO conflict_canon (
+                    user_id,
+                    conversation_id,
+                    conflict_id,
+                    canon_text,
+                    significance_score,
+                    cultural_impact,
+                    creates_precedent,
+                    legacy,
+                    tags
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb)
+                ON CONFLICT (user_id, conversation_id, conflict_id)
+                DO UPDATE SET
+                    canon_text = EXCLUDED.canon_text,
+                    significance_score = EXCLUDED.significance_score,
+                    cultural_impact = EXCLUDED.cultural_impact,
+                    creates_precedent = EXCLUDED.creates_precedent,
+                    legacy = EXCLUDED.legacy,
+                    tags = EXCLUDED.tags,
+                    created_at = NOW()
+                RETURNING canon_id, created_at
+                """,
+                self.user_id,
+                self.conversation_id,
+                conflict_id,
+                canonical_event.description,
+                canonical_event.significance,
+                json.dumps(canonical_event.cultural_impact or {}),
+                canonical_event.creates_precedent,
+                canonical_event.legacy,
+                json.dumps(tags or []),
+            )
+
+        canon_id = int(row["canon_id"]) if row and row["canon_id"] is not None else None
+        created_at_value = row["created_at"] if row else None
+        created_at = created_at_value.isoformat() if created_at_value else None
+
+        cache_payload = {
+            "canon_id": canon_id,
+            "conflict_id": conflict_id,
+            "canon_text": canonical_event.description,
+            "significance_score": canonical_event.significance,
+            "cultural_impact": canonical_event.cultural_impact,
+            "created_at": created_at,
+            "creates_precedent": canonical_event.creates_precedent,
+            "legacy": canonical_event.legacy,
+            "tags": tags,
+        }
+
+        cache_key_name = cache_key("canon", "conflict", conflict_id)
+        set_json(cache_key_name, cache_payload, ex=3600)
     
     async def check_lore_compliance(
         self,
@@ -1451,6 +1645,21 @@ Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
         return min(1.0, base_significance)
     
     async def _generate_mythology_text(self, conflict_id: int) -> str:
+        """Hot-path stub that queues mythology reinterpretation generation."""
+
+        from logic.conflict_system.conflict_canon_hotpath import (
+            queue_mythology_generation,
+        )
+
+        queue_mythology_generation(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+        )
+
+        return "Mythology generation pending"
+
+    async def _generate_mythology_text_background(self, conflict_id: int) -> str:
         """Internal: generate mythological interpretation for a conflict."""
         async with get_db_connection_context() as conn:
             conflict = await conn.fetchrow("""
@@ -1462,10 +1671,10 @@ Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
                   AND tags ? $3
                 ORDER BY significance DESC
             """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
-        
+
         if not canonical_events:
             return "This conflict has not yet become part of the canonical lore."
-        
+
         prompt = f"""
 Generate the mythological interpretation of this conflict:
 
@@ -1477,6 +1686,42 @@ Write 2-3 paragraphs of authentic folklore.
 """
         response = await Runner.run(self.cultural_interpreter, prompt)
         return extract_runner_response(response)
+
+    async def get_mythological_reinterpretation(
+        self,
+        conflict_id: int,
+    ) -> Dict[str, Any]:
+        """Return mythology text if cached; otherwise queue background generation."""
+
+        from logic.conflict_system.conflict_canon_hotpath import (
+            get_cached_canon_record,
+            queue_mythology_generation,
+        )
+
+        mythology_cache_key = cache_key("canon", "mythology", conflict_id)
+        cached_myth = get_json(mythology_cache_key)
+        if isinstance(cached_myth, dict) and cached_myth.get('text'):
+            return {'mythology': cached_myth['text'], 'pending': False}
+        if isinstance(cached_myth, str) and cached_myth:
+            return {'mythology': cached_myth, 'pending': False}
+
+        cached = await get_cached_canon_record(conflict_id)
+        if cached and cached.get('canon_text'):
+            return {
+                'mythology': cached.get('canon_text'),
+                'pending': False,
+            }
+
+        queue_mythology_generation(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+        )
+
+        return {
+            'mythology': 'Mythology generation pending',
+            'pending': True,
+        }
 
 
 # ===============================================================================
