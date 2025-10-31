@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from db.connection import get_db_connection_context
 
@@ -25,8 +25,65 @@ def _compute_context_hash(scene_context: Dict[str, Any]) -> str:
     """Compute a stable hash for scene context for deduplication."""
     stable_keys = ["scene_id", "conflict_id", "stakeholder_ids", "phase"]
     stable_context = {k: scene_context.get(k) for k in stable_keys if k in scene_context}
-    serialized = json.dumps(stable_context, sort_keys=True)
+    serialized = json.dumps(stable_context, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+
+def compute_decision_context_hash(
+    stakeholder_id: int,
+    conflict_state: Dict[str, Any],
+    available_options: Optional[List[str]] = None,
+) -> str:
+    """Compute a stable hash representing a decision context for caching."""
+
+    payload = {
+        "stakeholder_id": stakeholder_id,
+        "conflict_state": conflict_state or {},
+        "available_options": available_options or [],
+    }
+    serialized = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+
+async def fetch_planned_item(
+    stakeholder_id: int,
+    kind: str,
+    *,
+    context_hash: Optional[str] = None,
+    priority_threshold: Optional[int] = None,
+) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """Fetch the latest planned item for a stakeholder and kind."""
+
+    clauses = [
+        "SELECT id, payload FROM planned_stakeholder_actions",
+        "WHERE stakeholder_id = $1",
+        "AND kind = $2",
+        "AND status = 'ready'",
+    ]
+    params: List[Any] = [stakeholder_id, kind]
+
+    if context_hash:
+        clauses.append("AND context_hash = $%d" % (len(params) + 1))
+        params.append(context_hash)
+
+    if priority_threshold is not None:
+        clauses.append("AND priority >= $%d" % (len(params) + 1))
+        params.append(priority_threshold)
+
+    clauses.append("ORDER BY available_at ASC, priority DESC LIMIT 1")
+    query = "\n".join(clauses)
+
+    async with get_db_connection_context() as conn:
+        row = await conn.fetchrow(query, *params)
+
+    if not row:
+        return None
+
+    payload = row["payload"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+
+    return row["id"], payload
 
 
 async def fetch_ready_actions_for_scene(
@@ -177,38 +234,69 @@ def should_dispatch_action_generation(
     return random.random() < 0.1
 
 
-def dispatch_action_generation(stakeholder: Any, scene_context: Dict[str, Any]) -> None:
+def dispatch_action_generation(
+    stakeholder: Any,
+    scene_context: Dict[str, Any],
+    *,
+    conflict_state: Optional[Dict[str, Any]] = None,
+    available_options: Optional[List[str]] = None,
+    context_hash: Optional[str] = None,
+) -> Optional[str]:
     """Dispatch background task to generate stakeholder action (non-blocking).
 
     Args:
         stakeholder: Stakeholder object
         scene_context: Scene context
+        conflict_state: Optional conflict state snapshot for the decision
+        available_options: Optional list of options presented to the stakeholder
+        context_hash: Optional precomputed hash for deduplication
     """
     try:
         from nyx.tasks.background.stakeholder_tasks import generate_stakeholder_action
 
-        context_hash = _compute_context_hash(scene_context)
+        context_hash = context_hash or _compute_context_hash(scene_context)
         payload = {
             "stakeholder_id": stakeholder.stakeholder_id,
+            "stakeholder_snapshot": {
+                "name": getattr(stakeholder, "name", "Unknown"),
+                "personality_traits": getattr(stakeholder, "personality_traits", []),
+                "role": getattr(getattr(stakeholder, "current_role", None), "value", None),
+                "decision_style": getattr(getattr(stakeholder, "decision_style", None), "value", None),
+                "stress_level": getattr(stakeholder, "stress_level", 0.5),
+                "commitment_level": getattr(stakeholder, "commitment_level", 0.5),
+            },
             "scene_context": scene_context,
             "context_hash": context_hash,
             "priority": 7 if getattr(stakeholder, "stress_level", 0.5) > 0.7 else 5,
+            "conflict_state": conflict_state or {},
+            "available_options": available_options,
         }
-        generate_stakeholder_action.delay(payload)
-        logger.debug(f"Dispatched action generation for stakeholder {stakeholder.stakeholder_id}")
+        result = generate_stakeholder_action.delay(payload)
+        logger.debug(
+            "Dispatched action generation for stakeholder %s (task_id=%s)",
+            stakeholder.stakeholder_id,
+            result.id,
+        )
+        return result.id
     except Exception as e:
         logger.warning(f"Failed to dispatch action generation: {e}")
+        return None
 
 
 def dispatch_reaction_generation(
-    stakeholder: Any, event_data: Dict[str, Any], event_id: str
-) -> None:
+    stakeholder: Any,
+    event_data: Dict[str, Any],
+    event_id: str,
+    *,
+    triggering_action: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Dispatch background task to generate stakeholder reaction (non-blocking).
 
     Args:
         stakeholder: Stakeholder object
         event_data: Event data (player choice, etc.)
         event_id: Unique event identifier
+        triggering_action: Optional action metadata triggering the reaction
     """
     try:
         from nyx.tasks.background.stakeholder_tasks import generate_stakeholder_reaction
@@ -218,11 +306,62 @@ def dispatch_reaction_generation(
             "event_data": event_data,
             "event_id": event_id,
             "priority": 8,  # Reactions are higher priority
+            "stakeholder_snapshot": {
+                "name": getattr(stakeholder, "name", "Unknown"),
+                "personality_traits": getattr(stakeholder, "personality_traits", []),
+                "role": getattr(getattr(stakeholder, "current_role", None), "value", None),
+                "decision_style": getattr(getattr(stakeholder, "decision_style", None), "value", None),
+                "stress_level": getattr(stakeholder, "stress_level", 0.5),
+            },
+            "triggering_action": triggering_action or {},
+            "scene_context": event_data.get("scene_context", {}),
         }
-        generate_stakeholder_reaction.delay(payload)
-        logger.debug(f"Dispatched reaction generation for stakeholder {stakeholder.stakeholder_id}")
+        result = generate_stakeholder_reaction.delay(payload)
+        logger.debug(
+            "Dispatched reaction generation for stakeholder %s (task_id=%s)",
+            stakeholder.stakeholder_id,
+            result.id,
+        )
+        return result.id
     except Exception as e:
         logger.warning(f"Failed to dispatch reaction generation: {e}")
+        return None
+
+
+def dispatch_stakeholder_profile_enrichment(payload: Dict[str, Any]) -> Optional[str]:
+    """Dispatch background stakeholder profile enrichment."""
+
+    try:
+        from nyx.tasks.background.stakeholder_tasks import create_stakeholder_profile
+
+        result = create_stakeholder_profile.delay(payload)
+        logger.debug(
+            "Dispatched stakeholder profile enrichment for stakeholder %s (task_id=%s)",
+            payload.get("stakeholder_id"),
+            result.id,
+        )
+        return result.id
+    except Exception as exc:
+        logger.warning("Failed to dispatch stakeholder profile enrichment: %s", exc)
+        return None
+
+
+def dispatch_role_adaptation(payload: Dict[str, Any]) -> Optional[str]:
+    """Dispatch background role adaptation evaluation."""
+
+    try:
+        from nyx.tasks.background.stakeholder_tasks import evaluate_stakeholder_role
+
+        result = evaluate_stakeholder_role.delay(payload)
+        logger.debug(
+            "Dispatched role adaptation for stakeholder %s (task_id=%s)",
+            payload.get("stakeholder_id"),
+            result.id,
+        )
+        return result.id
+    except Exception as exc:
+        logger.warning("Failed to dispatch role adaptation: %s", exc)
+        return None
 
 
 async def cleanup_expired_actions(age_hours: int = 24) -> int:
