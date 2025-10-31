@@ -183,7 +183,10 @@ class SliceOfLifeConflictSubsystem:
     async def health_check(self) -> Dict[str, Any]:
         """Check health of subsystem"""
         try:
-            tensions = await self.detector.detect_brewing_tensions()
+            # HOT PATH - use cached data for health check
+            from logic.conflict_system.slice_of_life_hotpath import get_brewing_tensions_cached
+            tensions = get_brewing_tensions_cached(self.user_id, self.conversation_id)
+
             return {
                 'healthy': True,
                 'active_tensions': len(tensions),
@@ -208,7 +211,10 @@ class SliceOfLifeConflictSubsystem:
     
     async def get_state(self) -> Dict[str, Any]:
         """Get current state"""
-        tensions = await self.detector.detect_brewing_tensions()
+        # HOT PATH - use cached data for state
+        from logic.conflict_system.slice_of_life_hotpath import get_brewing_tensions_cached
+        tensions = get_brewing_tensions_cached(self.user_id, self.conversation_id)
+
         return {
             'emerging_tensions': len(tensions),
             'tension_types': [t.get('type', 'unknown') for t in tensions],
@@ -219,19 +225,30 @@ class SliceOfLifeConflictSubsystem:
     async def get_scene_bundle(self, scope) -> Dict[str, Any]:
         """
         Cheap bundle: surface subtle ambient effects and opportunities.
+        Uses cached data from hotpath (no blocking LLM calls).
         """
         try:
-            tensions = await self.detector.detect_brewing_tensions()
+            # HOT PATH - get cached tensions, no LLM calls
+            from logic.conflict_system.slice_of_life_hotpath import get_brewing_tensions_cached
+            tensions = get_brewing_tensions_cached(self.user_id, self.conversation_id)
+
             ambient = []
             for t in tensions[:3]:
-                label = str(getattr(t.get('intensity'), 'value', t.get('intensity', 'tension')))
+                # Handle both dict and enum intensity values
+                intensity = t.get('intensity')
+                if isinstance(intensity, dict):
+                    label = str(intensity.get('value', 'tension'))
+                else:
+                    label = str(getattr(intensity, 'value', str(intensity or 'tension')))
                 ambient.append(f"slicing_{label}")
+
             opportunities = []
             for t in tensions[:2]:
                 opportunities.append({
                     'type': 'slice_opportunity',
                     'description': str(t.get('description', 'subtle pattern')),
                 })
+
             return {
                 'ambient_effects': ambient,
                 'opportunities': opportunities,
@@ -248,9 +265,11 @@ class SliceOfLifeConflictSubsystem:
         SubsystemType, EventType, SystemEvent, SubsystemResponse = _orch()
         payload = event.payload or {}
         scene_context = payload.get('scene_context') or payload
-        
-        # Detect emerging tensions (DB + LLM)
-        tensions = await self.detector.detect_brewing_tensions()
+
+        # Get cached emerging tensions (HOT PATH - no LLM calls!)
+        # The hotpath helper will queue background tasks on cache miss
+        from logic.conflict_system.slice_of_life_hotpath import get_brewing_tensions_cached
+        tensions = get_brewing_tensions_cached(self.user_id, self.conversation_id)
         
         activity = scene_context.get('activity', scene_context.get('scene_type', 'daily_routine'))
         present_npcs = scene_context.get('present_npcs') or scene_context.get('npcs') or []
@@ -447,14 +466,14 @@ class EmergentConflictDetector:
         return await self._analyze_patterns_with_llm(memory_patterns, relationships)
     
     async def _analyze_patterns_with_llm(
-        self, 
-        memories: List, 
+        self,
+        memories: List,
         relationships: List
     ) -> List[Dict]:
         """Use LLM to detect emerging tensions from patterns"""
         memory_summary = self._summarize_memories(memories[:20])
         relationship_summary = self._summarize_relationships(relationships)
-        
+
         prompt = f"""
 Analyze recent patterns for emerging slice-of-life conflicts:
 
@@ -472,7 +491,15 @@ Return a JSON array (1-3 items). Each item:
   "evidence": ["..."]
 }}
 """
-        response = await Runner.run(self.pattern_analyzer, prompt)
+        # Add 15-second timeout to prevent blocking the event loop
+        try:
+            response = await asyncio.wait_for(
+                Runner.run(self.pattern_analyzer, prompt),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Pattern analysis LLM call timed out after 15s")
+            return []
         try:
             parsed = extract_runner_response(response)
             tensions = json.loads(parsed)
@@ -575,7 +602,21 @@ Return JSON:
   "npc_reactions": ["npc 1 line", "npc 2 line"]
 }}
 """
-        response = await Runner.run(self.conflict_agent, prompt)
+        # Add 15-second timeout to prevent blocking the event loop
+        try:
+            response = await asyncio.wait_for(
+                Runner.run(self.conflict_agent, prompt),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Conflict manifestation LLM call timed out after 15s for conflict {conflict_id}")
+            return DailyConflictEvent(
+                activity_type=activity_type,
+                conflict_manifestation="The underlying tension affects the interaction",
+                choice_presented=False,
+                accumulation_impact=0.1,
+                npc_reactions={}
+            )
         try:
             parsed = extract_runner_response(response)
             result = json.loads(parsed)
@@ -656,7 +697,15 @@ Return JSON:
   "new_patterns": []
 }}
 """
-        response = await Runner.run(self.resolution_agent, prompt)
+        # Add 15-second timeout to prevent blocking the event loop
+        try:
+            response = await asyncio.wait_for(
+                Runner.run(self.resolution_agent, prompt),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Resolution analysis LLM call timed out after 15s for conflict {conflict_id}")
+            return None
         try:
             parsed = extract_runner_response(response)
             result = json.loads(parsed)
@@ -702,7 +751,21 @@ class ConflictDailyIntegration:
         return self._integration_agent
     
     async def get_conflicts_for_time_of_day(self, time_of_day: str) -> List[Dict]:
-        """Get conflicts appropriate for current time"""
+        """Get conflicts appropriate for current time.
+
+        Uses cached results from hotpath when possible to avoid LLM calls.
+        Falls back to direct DB + LLM check if cache miss.
+        """
+        # Try cache first (HOT PATH)
+        from logic.conflict_system.slice_of_life_hotpath import get_daily_conflicts_cached
+        cached_conflicts = get_daily_conflicts_cached(self.user_id, self.conversation_id, time_of_day)
+
+        if cached_conflicts:
+            # Cache hit - return immediately
+            return cached_conflicts
+
+        # Cache miss - do the slow path (DB + LLM)
+        # This will only happen until the background task completes
         async with get_db_connection_context() as conn:
             conflicts = await conn.fetch("""
                 SELECT c.*, COALESCE(array_agg(s.npc_id) FILTER (WHERE s.npc_id IS NOT NULL), '{}') AS stakeholder_npcs
@@ -715,7 +778,7 @@ class ConflictDailyIntegration:
                   AND c.is_active = true
                 GROUP BY c.id
             """, self.user_id, self.conversation_id)
-        
+
         appropriate = []
         for c in conflicts:
             if await self._is_appropriate_for_time(dict(c), time_of_day):
@@ -732,7 +795,15 @@ Intensity: {conflict.get('intensity', 'tension')}
 
 Answer just yes or no.
 """
-        response = await Runner.run(self.integration_agent, prompt)
+        # Add 15-second timeout to prevent blocking the event loop
+        try:
+            response = await asyncio.wait_for(
+                Runner.run(self.integration_agent, prompt),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Time appropriateness check timed out after 15s")
+            return False
         try:
             text = extract_runner_response(response).strip().lower()
             return 'yes' in text and 'no' not in text[:5]
