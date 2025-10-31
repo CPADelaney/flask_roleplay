@@ -9,12 +9,14 @@ import logging
 import json
 import re
 import random
+import hashlib
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired, Iterable
 from enum import Enum
 from dataclasses import dataclass, is_dataclass, asdict
 from datetime import datetime
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from celery import current_app
 
 # Import get_db_connection_context with proper error handling
 try:
@@ -25,6 +27,21 @@ except ImportError:
         raise NotImplementedError("Database connection not available")
 
 logger = logging.getLogger(__name__)
+
+# Cache stage column mapping for conflict template cache entries
+_CACHE_STAGE_COLUMNS = {
+    'variation': ('variation', 'variation_status'),
+    'adaptation': ('adaptation', 'adaptation_status'),
+    'unique': ('unique_payload', 'unique_status'),
+    'hooks': ('hooks', 'hooks_status'),
+}
+
+_CACHE_STAGE_TASKS = {
+    'variation': 'nyx.tasks.background.conflict_template_tasks.generate_variation',
+    'adaptation': 'nyx.tasks.background.conflict_template_tasks.adapt_variation',
+    'unique': 'nyx.tasks.background.conflict_template_tasks.add_unique_elements',
+    'hooks': 'nyx.tasks.background.conflict_template_tasks.generate_hooks',
+}
 
 # ===============================================================================
 # HELPER FUNCTION FOR RUNNER RESPONSE EXTRACTION
@@ -529,9 +546,309 @@ class DynamicConflictTemplateSubsystem:
         
         # Reference to synthesizer
         self.synthesizer = None
-        
+
         # Template cache
         self._template_cache = {}
+        self._template_key_cache: Dict[str, int] = {}
+
+    # ------------------------------------------------------------------
+    # Template + cache helpers
+    # ------------------------------------------------------------------
+
+    def _compute_template_key(self, category: TemplateCategory, base_concept: str) -> str:
+        raw = f"{self.user_id}:{self.conversation_id}:{category.value}:{base_concept}".encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    async def _get_template_by_key(self, template_key: str) -> Optional[Dict[str, Any]]:
+        cached_id = self._template_key_cache.get(template_key)
+        if cached_id:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT * FROM conflict_templates
+                     WHERE template_id = $1
+                    """,
+                    cached_id,
+                )
+            return dict(row) if row else None
+
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM conflict_templates
+                 WHERE user_id = $1 AND conversation_id = $2
+                   AND metadata ->> 'template_key' = $3
+                """,
+                self.user_id,
+                self.conversation_id,
+                template_key,
+            )
+
+        if row:
+            self._template_key_cache[template_key] = int(row['template_id'])
+            return dict(row)
+        return None
+
+    def _coerce_template_record(
+        self,
+        record: Dict[str, Any],
+        category: Optional[TemplateCategory] = None,
+    ) -> ConflictTemplate:
+        template_category = category or TemplateCategory(record['category'])
+        return ConflictTemplate(
+            template_id=int(record['template_id']),
+            category=template_category,
+            name=record['name'],
+            base_structure=json.loads(record['base_structure']) if isinstance(record['base_structure'], str) else record['base_structure'],
+            variable_elements=json.loads(record['variable_elements']) if isinstance(record['variable_elements'], str) else record['variable_elements'],
+            contextual_modifiers=json.loads(record['contextual_modifiers']) if isinstance(record['contextual_modifiers'], str) else record['contextual_modifiers'],
+            complexity_range=(
+                float(record.get('complexity_min', 0.2)),
+                float(record.get('complexity_max', 0.9)),
+            ),
+        )
+
+    async def _set_template_metadata_status(
+        self,
+        template_id: int,
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        async with get_db_connection_context() as conn:
+            metadata = await conn.fetchval(
+                """
+                SELECT metadata FROM conflict_templates
+                 WHERE template_id = $1
+                """,
+                template_id,
+            )
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            payload = dict(metadata or {})
+            payload['status'] = status
+            if error is None:
+                payload.pop('last_error', None)
+            else:
+                payload['last_error'] = error
+
+            await conn.execute(
+                """
+                UPDATE conflict_templates
+                   SET metadata = $2::jsonb,
+                       updated_at = NOW()
+                 WHERE template_id = $1
+                """,
+                template_id,
+                json.dumps(payload),
+            )
+
+    async def _queue_template_creation(
+        self,
+        template_id: int,
+        category: TemplateCategory,
+        base_concept: str,
+        template_key: str,
+    ) -> None:
+        await self._set_template_metadata_status(template_id, 'queued')
+        payload = {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'template_id': template_id,
+            'category': category.value,
+            'base_concept': base_concept,
+            'template_key': template_key,
+        }
+        try:
+            current_app.send_task(
+                'nyx.tasks.background.conflict_template_tasks.create_template_for_category',
+                args=[payload],
+                queue='background',
+            )
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.exception("Failed to enqueue template creation", exc_info=exc)
+
+    def _compute_context_hash(self, context: Dict[str, Any]) -> str:
+        try:
+            normalized = json.dumps(context or {}, sort_keys=True, default=str)
+        except TypeError:
+            normalized = json.dumps({}, sort_keys=True)
+        raw = f"{self.user_id}:{self.conversation_id}:{normalized}".encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    async def _ensure_template_cache_table(self) -> None:
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conflict_template_cache (
+                    cache_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    template_id INTEGER NOT NULL REFERENCES conflict_templates(template_id) ON DELETE CASCADE,
+                    context_hash TEXT NOT NULL,
+                    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    variation JSONB,
+                    variation_status TEXT NOT NULL DEFAULT 'pending',
+                    adaptation JSONB,
+                    adaptation_status TEXT NOT NULL DEFAULT 'pending',
+                    unique_payload JSONB,
+                    unique_status TEXT NOT NULL DEFAULT 'pending',
+                    hooks JSONB,
+                    hooks_status TEXT NOT NULL DEFAULT 'pending',
+                    last_error TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (template_id, context_hash)
+                );
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conflict_template_cache_lookup
+                    ON conflict_template_cache(user_id, conversation_id, template_id, context_hash);
+                """
+            )
+
+    async def _get_cache_entry(self, template_id: int, context_hash: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_template_cache_table()
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM conflict_template_cache
+                 WHERE user_id = $1 AND conversation_id = $2
+                   AND template_id = $3 AND context_hash = $4
+                """,
+                self.user_id,
+                self.conversation_id,
+                template_id,
+                context_hash,
+            )
+        return dict(row) if row else None
+
+    async def _create_cache_entry(
+        self,
+        template_id: int,
+        context_hash: str,
+        context: Dict[str, Any],
+        *,
+        variation: Optional[Dict[str, Any]] = None,
+        adaptation: Optional[Dict[str, Any]] = None,
+        unique: Optional[Dict[str, Any]] = None,
+        hooks: Optional[List[str]] = None,
+    ) -> None:
+        await self._ensure_template_cache_table()
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                INSERT INTO conflict_template_cache (
+                    user_id, conversation_id, template_id, context_hash, context,
+                    variation, variation_status,
+                    adaptation, adaptation_status,
+                    unique_payload, unique_status,
+                    hooks, hooks_status
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5::jsonb,
+                    $6::jsonb, $7,
+                    $8::jsonb, $9,
+                    $10::jsonb, $11,
+                    $12::jsonb, $13
+                )
+                ON CONFLICT (template_id, context_hash) DO NOTHING
+                """,
+                self.user_id,
+                self.conversation_id,
+                template_id,
+                context_hash,
+                json.dumps(context or {}, default=str),
+                json.dumps(variation, default=str) if variation is not None else None,
+                'fallback' if variation is not None else 'pending',
+                json.dumps(adaptation, default=str) if adaptation is not None else None,
+                'fallback' if adaptation is not None else 'pending',
+                json.dumps(unique, default=str) if unique is not None else None,
+                'fallback' if unique is not None else 'pending',
+                json.dumps(hooks, default=str) if hooks is not None else None,
+                'fallback' if hooks is not None else 'pending',
+            )
+
+    async def _update_cache_stage(
+        self,
+        template_id: int,
+        context_hash: str,
+        stage: str,
+        data: Any,
+        *,
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        _, status_column = _CACHE_STAGE_COLUMNS[stage]
+        await self._ensure_template_cache_table()
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                f"""
+                UPDATE conflict_template_cache
+                   SET {column} = $3::jsonb,
+                       {status_column} = $4,
+                       last_error = $5,
+                       updated_at = NOW()
+                 WHERE user_id = $1 AND conversation_id = $2
+                   AND template_id = $6 AND context_hash = $7
+                """,
+                self.user_id,
+                self.conversation_id,
+                json.dumps(data, default=str) if data is not None else None,
+                status,
+                error,
+                template_id,
+                context_hash,
+            )
+
+    async def _mark_stage_pending(
+        self,
+        template_id: int,
+        context_hash: str,
+        stage: str,
+    ) -> bool:
+        column, status_column = _CACHE_STAGE_COLUMNS[stage]
+        await self._ensure_template_cache_table()
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                f"""
+                UPDATE conflict_template_cache
+                   SET {status_column} = 'pending',
+                       updated_at = NOW()
+                 WHERE user_id = $1 AND conversation_id = $2
+                   AND template_id = $3 AND context_hash = $4
+                   AND {status_column} NOT IN ('pending', 'running')
+                RETURNING cache_id
+                """,
+                self.user_id,
+                self.conversation_id,
+                template_id,
+                context_hash,
+            )
+        return bool(row)
+
+    async def _queue_stage_task(
+        self,
+        stage: str,
+        template_id: int,
+        context_hash: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        if stage not in _CACHE_STAGE_TASKS:
+            return
+        should_queue = await self._mark_stage_pending(template_id, context_hash, stage)
+        if not should_queue:
+            return
+        task_name = _CACHE_STAGE_TASKS[stage]
+        try:
+            current_app.send_task(task_name, args=[payload], queue='background')
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.exception("Failed to enqueue %s task", stage, exc_info=exc)
+        self._template_key_cache: Dict[str, int] = {}
     
     @property
     def subsystem_type(self):
@@ -916,117 +1233,74 @@ class DynamicConflictTemplateSubsystem:
         base_concept: str
     ) -> ConflictTemplate:
         """Create a new reusable conflict template"""
-        
-        prompt = f"""
-        Create a flexible conflict template:
-        
-        Category: {category.value}
-        Base Concept: {base_concept}
-        
-        Design a template that can generate hundreds of unique conflicts.
-        
-        Return ONLY valid JSON (no other text):
-        {{
-            "name": "Template name",
-            "base_structure": {{
-                "core_tension": "Fundamental conflict",
-                "stakeholder_roles": ["role types needed"],
-                "progression_phases": ["typical phases"],
-                "resolution_conditions": ["ways it can end"]
-            }},
-            "variable_elements": [
-                "List of 10+ elements that can change between instances"
-            ],
-            "contextual_modifiers": {{
-                "personality_axes": ["relevant personality traits"],
-                "environmental_factors": ["location/setting influences"],
-                "cultural_variables": ["social/cultural elements"],
-                "power_modifiers": ["hierarchy/authority factors"]
-            }},
-            "generation_rules": {{
-                "required_elements": ["must-have components"],
-                "optional_elements": ["can-have components"],
-                "exclusions": ["incompatible elements"]
-            }},
-            "complexity_range": {{
-                "minimum": 0.2,
-                "maximum": 0.9
-            }}
-        }}
-        """
-        
-        try:
-            # Run the agent with better error handling
-            logger.debug(f"Creating template for category: {category.value}")
-            response = await Runner.run(self.template_creator, prompt)
-            response_text = extract_runner_response(response)
-            
-            if not response_text:
-                logger.error("Empty response from template creator")
-                # Provide a fallback template
-                response_text = self._get_fallback_template(category, base_concept)
-            
-            # Clean the response text (remove any markdown or code blocks)
-            response_text = response_text.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-            
-            # Parse JSON with better error handling
-            try:
-                data = json.loads(response_text)
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error: {e}")
-                logger.debug(f"Response text: {response_text[:500]}...")
-                # Use fallback template
-                data = json.loads(self._get_fallback_template(category, base_concept))
-            
-            # Validate required fields
-            if not all(key in data for key in ['name', 'base_structure', 'variable_elements', 'contextual_modifiers', 'complexity_range']):
-                logger.warning("Missing required fields in template data, using defaults")
-                data = self._ensure_template_fields(data, category, base_concept)
-            
-            # Store template in database
-            async with get_db_connection_context() as conn:
-                template_id = await conn.fetchval("""
-                    INSERT INTO conflict_templates
-                    (user_id, conversation_id, category, name, base_structure, 
-                     variable_elements, contextual_modifiers, complexity_min, complexity_max)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    RETURNING template_id
-                """, self.user_id, self.conversation_id, category.value, data['name'],
-                json.dumps(data['base_structure']),
-                json.dumps(data['variable_elements']),
-                json.dumps(data['contextual_modifiers']),
-                data['complexity_range'].get('minimum', 0.2),
-                data['complexity_range'].get('maximum', 0.9))
-            
-            template = ConflictTemplate(
-                template_id=template_id,
-                category=category,
-                name=data['name'],
-                base_structure=data['base_structure'],
-                variable_elements=data['variable_elements'],
-                contextual_modifiers=data['contextual_modifiers'],
-                complexity_range=(
-                    data['complexity_range'].get('minimum', 0.2),
-                    data['complexity_range'].get('maximum', 0.9)
+
+        template_key = self._compute_template_key(category, base_concept)
+        existing = await self._get_template_by_key(template_key)
+        if existing:
+            metadata = existing.get('metadata') or {}
+            status = metadata.get('status', 'ready')
+            template = self._coerce_template_record(existing, category)
+            self._template_cache[template.template_id] = template
+            self._template_key_cache[template_key] = template.template_id
+            if status != 'ready':
+                await self._queue_template_creation(
+                    template.template_id,
+                    category,
+                    base_concept,
+                    template_key,
                 )
-            )
-            
-            # Cache template
-            self._template_cache[template_id] = template
-            logger.info(f"Successfully created template: {template.name}")
-            
             return template
-            
-        except Exception as e:
-            logger.error(f"Error creating template: {e}", exc_info=True)
-            raise
+
+        fallback = json.loads(self._get_fallback_template(category, base_concept))
+        metadata = {
+            'status': 'pending',
+            'base_concept': base_concept,
+            'template_key': template_key,
+        }
+
+        async with get_db_connection_context() as conn:
+            template_id = await conn.fetchval(
+                """
+                INSERT INTO conflict_templates
+                    (user_id, conversation_id, category, name, base_structure,
+                     variable_elements, contextual_modifiers, complexity_min, complexity_max, metadata)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb)
+                RETURNING template_id
+                """,
+                self.user_id,
+                self.conversation_id,
+                category.value,
+                fallback['name'],
+                json.dumps(fallback['base_structure']),
+                json.dumps(fallback['variable_elements']),
+                json.dumps(fallback['contextual_modifiers']),
+                fallback['complexity_range'].get('minimum', 0.2),
+                fallback['complexity_range'].get('maximum', 0.9),
+                json.dumps(metadata),
+            )
+
+        template = ConflictTemplate(
+            template_id=int(template_id),
+            category=category,
+            name=fallback['name'],
+            base_structure=fallback['base_structure'],
+            variable_elements=fallback['variable_elements'],
+            contextual_modifiers=fallback['contextual_modifiers'],
+            complexity_range=(
+                fallback['complexity_range'].get('minimum', 0.2),
+                fallback['complexity_range'].get('maximum', 0.9),
+            ),
+        )
+        self._template_cache[template.template_id] = template
+        self._template_key_cache[template_key] = template.template_id
+
+        await self._queue_template_creation(
+            template.template_id,
+            category,
+            base_concept,
+            template_key,
+        )
+        return template
     
     def _get_fallback_template(self, category: TemplateCategory, base_concept: str) -> str:
         """Provide a fallback template when LLM fails"""
@@ -1129,53 +1403,46 @@ class DynamicConflictTemplateSubsystem:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Generate a variation from template with better error handling"""
-        
-        prompt = f"""
-        Generate a unique variation from this template:
-        
-        Template: {template.name}
-        Base Structure: {json.dumps(template.base_structure)}
-        Variable Elements: {json.dumps(template.variable_elements)}
-        Context: {json.dumps(context)}
-        
-        Create a variation that uses the base structure and varies 3-5 variable elements.
-        
-        Return ONLY valid JSON:
-        {{
-            "seed": "Unique identifier for this variation",
-            "core_tension": "Specific tension for this instance",
-            "stakeholder_configuration": {{
-                "roles": ["specific roles"],
-                "relationships": ["specific relationships"]
-            }},
-            "chosen_variables": {{
-                "variable_name": "specific value"
-            }},
-            "progression_path": ["specific phases"],
-            "resolution_options": ["specific endings"],
-            "twist_potential": "Unexpected element"
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.variation_generator, prompt)
-            response_text = extract_runner_response(response)
-            
-            # Clean and parse response
-            response_text = response_text.strip()
-            if response_text.startswith("```"):
-                response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
-            
-            if not response_text:
-                # Return a default variation
-                return self._get_default_variation(template)
-            
-            return json.loads(response_text)
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Error generating variation: {e}")
-            return self._get_default_variation(template)
+
+        context_hash = self._compute_context_hash(context)
+        cache = await self._get_cache_entry(template.template_id, context_hash)
+
+        if cache and cache.get('variation') and cache.get('variation_status') == 'ready':
+            variation = cache['variation']
+        else:
+            variation = self._get_default_variation(template)
+            variation['template_id'] = template.template_id
+            if not cache:
+                await self._create_cache_entry(
+                    template.template_id,
+                    context_hash,
+                    context,
+                    variation=variation,
+                )
+            elif not cache.get('variation'):
+                await self._update_cache_stage(
+                    template.template_id,
+                    context_hash,
+                    'variation',
+                    variation,
+                    status='fallback',
+                )
+
+            await self._queue_stage_task(
+                'variation',
+                template.template_id,
+                context_hash,
+                {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'template_id': template.template_id,
+                    'context_hash': context_hash,
+                    'context': context,
+                },
+            )
+
+        variation.setdefault('template_id', template.template_id)
+        return variation
     
     def _get_default_variation(self, template: ConflictTemplate) -> Dict[str, Any]:
         """Provide a default variation when generation fails"""
@@ -1200,52 +1467,56 @@ class DynamicConflictTemplateSubsystem:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Adapt variation to specific context with error handling"""
-        
-        prompt = f"""
-        Adapt this conflict variation to the specific context:
-        
-        Variation: {json.dumps(variation)}
-        Current Location: {context.get('location', 'unknown')}
-        Present NPCs: {json.dumps(context.get('npcs', []))}
-        Time of Day: {context.get('time', 'unknown')}
-        Recent Events: {json.dumps(context.get('recent_events', []))}
-        
-        Return ONLY valid JSON:
-        {{
-            "location_integration": "How location shapes conflict",
-            "npc_motivations": {{}},
-            "temporal_factors": "How timing affects it",
-            "continuity_connections": ["links to recent events"],
-            "environmental_obstacles": ["location-specific challenges"],
-            "atmospheric_elements": ["mood and tone elements"]
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.context_adapter, prompt)
-            response_text = extract_runner_response(response)
-            
-            # Clean and parse
-            response_text = response_text.strip()
-            if response_text.startswith("```"):
-                response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
-            
-            if not response_text:
-                adaptation = self._get_default_adaptation(context)
-            else:
-                adaptation = json.loads(response_text)
-            
-            adapted = variation.copy()
-            adapted['context_adaptation'] = adaptation
-            return adapted
-            
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Error adapting to context: {e}")
+
+        template_id = variation.get('template_id')
+        if not template_id:
+            logger.debug("Variation missing template_id; using fallback adaptation")
             adapted = variation.copy()
             adapted['context_adaptation'] = self._get_default_adaptation(context)
             return adapted
+
+        context_hash = self._compute_context_hash(context)
+        cache = await self._get_cache_entry(template_id, context_hash)
+
+        if cache and cache.get('adaptation') and cache.get('adaptation_status') == 'ready':
+            adaptation = cache['adaptation']
+        else:
+            adaptation = self._get_default_adaptation(context)
+            if not cache:
+                await self._create_cache_entry(template_id, context_hash, context)
+                await self._update_cache_stage(
+                    template_id,
+                    context_hash,
+                    'adaptation',
+                    adaptation,
+                    status='fallback',
+                )
+            elif not cache.get('adaptation'):
+                await self._update_cache_stage(
+                    template_id,
+                    context_hash,
+                    'adaptation',
+                    adaptation,
+                    status='fallback',
+                )
+
+            await self._queue_stage_task(
+                'adaptation',
+                template_id,
+                context_hash,
+                {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'template_id': template_id,
+                    'context_hash': context_hash,
+                    'context': context,
+                },
+            )
+
+        adapted = variation.copy()
+        adapted['context_adaptation'] = adaptation
+        adapted['template_id'] = template_id
+        return adapted
     
     def _get_default_adaptation(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Provide default adaptation when generation fails"""
@@ -1264,57 +1535,62 @@ class DynamicConflictTemplateSubsystem:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Add unique memorable elements with error handling"""
-        
-        prompt = f"""
-        Add unique elements to make this conflict memorable:
-        
-        Conflict: {json.dumps(adapted)}
-        Player History: {json.dumps(context.get('player_history', []))}
-        
-        Return ONLY valid JSON:
-        {{
-            "unique_elements": [
-                "List of 3-5 unique elements"
-            ],
-            "memorable_quote": "Something an NPC might say",
-            "signature_moment": "A scene players will remember",
-            "sensory_detail": "Something visceral",
-            "conversation_piece": "What players will discuss later"
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.uniqueness_engine, prompt)
-            response_text = extract_runner_response(response)
-            
-            # Clean and parse
-            response_text = response_text.strip()
-            if response_text.startswith("```"):
-                response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
-            
-            if not response_text:
-                unique_data = self._get_default_unique_elements()
-            else:
-                unique_data = json.loads(response_text)
-            
-            adapted['unique_elements'] = unique_data.get('unique_elements', [])
-            adapted['signature_content'] = unique_data
-            adapted['customization'] = {
-                'base_variation': adapted.get('seed', 'unknown'),
-                'context_layer': adapted.get('context_adaptation', {}),
-                'unique_layer': unique_data
-            }
-            
-            return adapted
-            
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Error adding unique elements: {e}")
+
+        template_id = adapted.get('template_id')
+        if not template_id:
             unique_data = self._get_default_unique_elements()
             adapted['unique_elements'] = unique_data['unique_elements']
             adapted['signature_content'] = unique_data
+            adapted.setdefault('customization', {})['unique_layer'] = unique_data
             return adapted
+
+        context_hash = self._compute_context_hash(context)
+        cache = await self._get_cache_entry(template_id, context_hash)
+
+        if cache and cache.get('unique_payload') and cache.get('unique_status') == 'ready':
+            unique_data = cache['unique_payload']
+        else:
+            unique_data = self._get_default_unique_elements()
+            if not cache:
+                await self._create_cache_entry(template_id, context_hash, context)
+                await self._update_cache_stage(
+                    template_id,
+                    context_hash,
+                    'unique',
+                    unique_data,
+                    status='fallback',
+                )
+            elif not cache.get('unique_payload'):
+                await self._update_cache_stage(
+                    template_id,
+                    context_hash,
+                    'unique',
+                    unique_data,
+                    status='fallback',
+                )
+
+            await self._queue_stage_task(
+                'unique',
+                template_id,
+                context_hash,
+                {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'template_id': template_id,
+                    'context_hash': context_hash,
+                    'context': context,
+                },
+            )
+
+        adapted['unique_elements'] = list(unique_data.get('unique_elements', []))
+        adapted['signature_content'] = unique_data
+        adapted['customization'] = {
+            'base_variation': adapted.get('seed', 'unknown'),
+            'context_layer': adapted.get('context_adaptation', {}),
+            'unique_layer': unique_data,
+        }
+
+        return adapted
     
     def _get_default_unique_elements(self) -> Dict[str, Any]:
         """Provide default unique elements when generation fails"""
@@ -1336,44 +1612,50 @@ class DynamicConflictTemplateSubsystem:
         context: Dict[str, Any]
     ) -> List[str]:
         """Generate compelling narrative hooks with error handling"""
-        
-        prompt = f"""
-        Generate narrative hooks for this conflict:
-        
-        Core Tension: {conflict_data.get('core_tension', '')}
-        Unique Elements: {json.dumps(conflict_data.get('unique_elements', []))}
-        Signature Moment: {conflict_data.get('signature_content', {}).get('signature_moment', '')}
-        
-        Create 3-5 hooks that grab attention and create investment.
-        
-        Return ONLY valid JSON:
-        {{
-            "hooks": [
-                "List of compelling one-sentence hooks"
-            ]
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.hook_generator, prompt)
-            response_text = extract_runner_response(response)
-            
-            # Clean and parse
-            response_text = response_text.strip()
-            if response_text.startswith("```"):
-                response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
-            
-            if not response_text:
-                return self._get_default_hooks(conflict_data)
-            
-            data = json.loads(response_text)
-            return data.get('hooks', self._get_default_hooks(conflict_data))
-            
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Error generating hooks: {e}")
+
+        template_id = conflict_data.get('template_id')
+        if not template_id:
             return self._get_default_hooks(conflict_data)
+
+        context_hash = self._compute_context_hash(context)
+        cache = await self._get_cache_entry(template_id, context_hash)
+
+        if cache and cache.get('hooks') and cache.get('hooks_status') == 'ready':
+            hooks = cache['hooks']
+        else:
+            hooks = self._get_default_hooks(conflict_data)
+            if not cache:
+                await self._create_cache_entry(template_id, context_hash, context)
+                await self._update_cache_stage(
+                    template_id,
+                    context_hash,
+                    'hooks',
+                    hooks,
+                    status='fallback',
+                )
+            elif not cache.get('hooks'):
+                await self._update_cache_stage(
+                    template_id,
+                    context_hash,
+                    'hooks',
+                    hooks,
+                    status='fallback',
+                )
+
+            await self._queue_stage_task(
+                'hooks',
+                template_id,
+                context_hash,
+                {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'template_id': template_id,
+                    'context_hash': context_hash,
+                    'context': context,
+                },
+            )
+
+        return list(hooks)
     
     def _get_default_hooks(self, conflict_data: Dict[str, Any]) -> List[str]:
         """Provide default hooks when generation fails"""

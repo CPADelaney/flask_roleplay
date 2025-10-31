@@ -22,6 +22,11 @@ BEAT_SCHEDULE: Dict[str, Dict[str, Any]] = {
         "schedule": crontab(hour="*/4"),
         "args": ({"turn_id": "beat", "scene_id": None, "region_id": None, "payload": {"periodic": True}},),
     },
+    "nyx-conflict-template-warmup": {
+        "task": "nyx.tasks.background.conflict_template_tasks.warm_template_cache",
+        "schedule": crontab(minute="*/15"),
+        "args": (25,),
+    },
 }
 
 __all__ = ["BEAT_SCHEDULE"]
