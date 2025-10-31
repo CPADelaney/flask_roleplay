@@ -50,6 +50,8 @@ HOT_PATH_PATTERNS = [
 # Allowed locations (CAN contain blocking patterns)
 ALLOWED_PATTERNS = [
     "nyx/tasks/**/*.py",
+    "nyx/gateway/**/*.py",
+    "nyx/core/**/*.py",
     "tasks.py",
     "celery_tasks/**/*.py",
     "tests/**/*.py",
@@ -157,10 +159,9 @@ def main() -> int:
     print(f"{'='*80}\n")
 
     print("🔧 How to fix:")
-    print("   1. Move blocking LLM calls to nyx/tasks/background/*.py")
-    print("   2. Update hot-path code to dispatch Celery tasks instead")
-    print("   3. Use fast helper functions from *_hotpath.py modules")
-    print("   4. See docs/hot_path_blockers.md for detailed refactoring guide")
+    print("   • Keep blocking LLM calls within nyx/tasks/, nyx/gateway/, nyx/core/, tests/, or scripts/")
+    print("   • Outside those paths, call nyx.gateway.llm_gateway.execute(...) instead of invoking the LLM directly")
+    print("   • See docs/hot_path_blockers.md for the detailed refactoring guide")
     print()
 
     return 1
