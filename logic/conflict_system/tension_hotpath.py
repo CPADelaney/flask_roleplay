@@ -16,7 +16,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from infra.cache import redis_client, cache_key, get_json, set_json, redis_lock
+from infra.cache import cache_key, get_json
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
@@ -30,44 +30,44 @@ def _compute_scene_hash(scene_context: Dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
-def get_tension_bundle(scene_hash: str) -> Dict[str, Any]:
+def compute_scene_hash(scene_context: Dict[str, Any]) -> str:
+    """Public helper for computing a scene hash."""
+    return _compute_scene_hash(scene_context)
+
+
+def get_tension_bundle(
+    user_id: int,
+    conversation_id: int,
+    scene_hash: str,
+) -> Dict[str, Any]:
     """Get cached tension bundle for a scene (hot path).
 
-    Returns cached tension level, manifestations, and atmosphere.
-    If cache miss, triggers background generation and returns fallback.
-
     Args:
+        user_id: User identifier
+        conversation_id: Conversation identifier
         scene_hash: Scene hash identifier
 
     Returns:
         Tension bundle dict with level, manifestations, atmosphere
     """
-    key = cache_key("tension_bundle", scene_hash)
+    key = cache_key("tension_bundle", user_id, conversation_id, scene_hash)
     cached = get_json(key)
 
     if cached:
-        logger.debug(f"Cache hit for tension bundle: {scene_hash}")
+        logger.debug("Cache hit for tension bundle: %s/%s/%s", user_id, conversation_id, scene_hash)
         return cached
 
-    # Cache miss - trigger background generation with lock to prevent stampede
-    lock_key = cache_key("tension_bundle", scene_hash, "lock")
-    try:
-        with redis_lock(lock_key, ttl=15, blocking=False):
-            from nyx.tasks.background.tension_tasks import update_tension_bundle_cache
+    logger.debug(
+        "Cache miss for tension bundle: user=%s conversation=%s scene=%s", user_id, conversation_id, scene_hash
+    )
 
-            update_tension_bundle_cache.delay({"scene_hash": scene_hash})
-            logger.debug(f"Queued tension bundle generation for scene {scene_hash}")
-    except RuntimeError:
-        # Lock already held, another request is generating
-        logger.debug(f"Tension bundle generation already in progress: {scene_hash}")
-
-    # Return fallback while generation is in progress
+    # Return fallback while background generation runs
     return {
         "tension_level": "baseline",
         "tension_score": 0.3,
         "manifestations": [],
         "atmosphere": "calm",
-        "status": "generating"
+        "status": "generating",
     }
 
 
@@ -129,51 +129,79 @@ def tension_level_from_score(score: float) -> str:
 
 
 def queue_manifestation_generation(
+    user_id: int,
+    conversation_id: int,
     scene_context: Dict[str, Any],
-    tension_level: str
-) -> None:
+    current_tensions: Dict[str, float],
+    dominant_type: str,
+    dominant_level: float,
+) -> str:
     """Queue background task to generate tension manifestations.
 
     Args:
+        user_id: User identifier
+        conversation_id: Conversation identifier
         scene_context: Scene context
-        tension_level: Current tension level
+        current_tensions: Mapping of tension type to level
+        dominant_type: Dominant tension type (string value)
+        dominant_level: Dominant tension level
     """
     try:
         from nyx.tasks.background.tension_tasks import generate_tension_manifestations
 
+        scene_hash = compute_scene_hash(scene_context)
         payload = {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "scene_hash": scene_hash,
             "scene_context": scene_context,
-            "tension_level": tension_level,
+            "current_tensions": current_tensions,
+            "dominant_type": dominant_type,
+            "dominant_level": dominant_level,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
         generate_tension_manifestations.delay(payload)
-        logger.debug(f"Queued manifestation generation: level={tension_level}")
+        logger.debug(
+            "Queued manifestation generation: user=%s conversation=%s scene=%s",
+            user_id,
+            conversation_id,
+            scene_hash,
+        )
     except Exception as e:
         logger.warning(f"Failed to queue manifestation generation: {e}")
 
+    return scene_hash
+
 
 def queue_escalation_narration(
-    conflict_id: int,
-    escalation_event: Dict[str, Any]
+    user_id: int,
+    conversation_id: int,
+    escalation_event: Dict[str, Any],
 ) -> None:
     """Queue background task to narrate escalation.
 
     Args:
-        conflict_id: Conflict ID
+        user_id: User identifier
+        conversation_id: Conversation identifier
         escalation_event: Escalation event data
     """
     try:
         from nyx.tasks.background.tension_tasks import narrate_escalation
 
         payload = {
-            "conflict_id": conflict_id,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
             "escalation_event": escalation_event,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
         narrate_escalation.delay(payload)
-        logger.debug(f"Queued escalation narration for conflict {conflict_id}")
+        logger.debug(
+            "Queued escalation narration for user=%s conversation=%s",
+            user_id,
+            conversation_id,
+        )
     except Exception as e:
         logger.warning(f"Failed to queue escalation narration: {e}")
 
