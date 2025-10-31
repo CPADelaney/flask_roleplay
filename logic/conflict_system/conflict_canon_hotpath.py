@@ -58,8 +58,11 @@ def lore_compliance_fast(
 
 
 def queue_canonization(
+    user_id: int,
+    conversation_id: int,
     conflict_id: int,
-    resolution: Dict[str, Any]
+    resolution: Dict[str, Any],
+    snapshot_id: Optional[int] = None,
 ) -> None:
     """Queue background task to canonize conflict resolution.
 
@@ -71,9 +74,12 @@ def queue_canonization(
         from nyx.tasks.background.canon_tasks import canonize_conflict
 
         payload = {
+            "user_id": int(user_id),
+            "conversation_id": int(conversation_id),
             "conflict_id": conflict_id,
             "resolution": resolution,
             "timestamp": datetime.utcnow().isoformat(),
+            "snapshot_id": snapshot_id,
         }
 
         canonize_conflict.delay(payload)
@@ -83,8 +89,11 @@ def queue_canonization(
 
 
 def queue_canon_reference_generation(
-    conflict_id: int,
-    context: Dict[str, Any]
+    user_id: int,
+    conversation_id: int,
+    cache_id: int,
+    event_id: int,
+    context: Any
 ) -> None:
     """Queue background task to generate canon references.
 
@@ -96,15 +105,81 @@ def queue_canon_reference_generation(
         from nyx.tasks.background.canon_tasks import generate_canon_references
 
         payload = {
-            "conflict_id": conflict_id,
+            "user_id": int(user_id),
+            "conversation_id": int(conversation_id),
+            "cache_id": int(cache_id),
+            "event_id": int(event_id),
             "context": context,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
         generate_canon_references.delay(payload)
-        logger.debug(f"Queued canon reference generation for conflict {conflict_id}")
+        logger.debug(
+            "Queued canon reference generation for conflict %s (cache_id=%s)",
+            conflict_id,
+            cache_id,
+        )
     except Exception as e:
         logger.warning(f"Failed to queue canon reference generation: {e}")
+
+
+def queue_compliance_suggestions(
+    user_id: int,
+    conversation_id: int,
+    cache_id: int,
+    conflict_type: str,
+    conflict_context: Dict[str, Any],
+    matching_event_ids: Optional[List[int]] = None,
+) -> None:
+    """Queue background task to build lore compliance suggestions."""
+
+    try:
+        from nyx.tasks.background.canon_tasks import generate_lore_suggestions
+
+        payload = {
+            "user_id": int(user_id),
+            "conversation_id": int(conversation_id),
+            "cache_id": int(cache_id),
+            "conflict_type": conflict_type,
+            "conflict_context": conflict_context or {},
+            "matching_event_ids": [int(e) for e in (matching_event_ids or [])],
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        generate_lore_suggestions.delay(payload)
+        logger.debug(
+            "Queued lore compliance suggestions for cache %s (conflict_type=%s)",
+            cache_id,
+            conflict_type,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to queue lore compliance suggestions: {e}")
+
+
+def queue_mythology_generation(
+    user_id: int,
+    conversation_id: int,
+    conflict_id: int,
+) -> None:
+    """Queue background task to generate mythological reinterpretation."""
+
+    try:
+        from nyx.tasks.background.canon_tasks import generate_mythology_reinterpretation
+
+        payload = {
+            "user_id": int(user_id),
+            "conversation_id": int(conversation_id),
+            "conflict_id": int(conflict_id),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        generate_mythology_reinterpretation.delay(payload)
+        logger.debug(
+            "Queued mythology reinterpretation generation for conflict %s",
+            conflict_id,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to queue mythology reinterpretation: {e}")
 
 
 async def get_cached_canon_record(conflict_id: int) -> Optional[Dict[str, Any]]:

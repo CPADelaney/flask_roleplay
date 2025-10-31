@@ -16,9 +16,7 @@ from dataclasses import dataclass, field
 
 import asyncpg
 
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-
-from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from agents import Agent, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
 from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
@@ -27,6 +25,18 @@ from logic.conflict_system.background_processor import (
     ConflictContentLimits,
     get_high_intensity_threshold,
     resolve_intensity_value,
+)
+from logic.conflict_system.background_grand_conflicts_hotpath import (
+    fetch_conflict_event,
+    fetch_conflict_news,
+    fetch_conflict_opportunities,
+    fetch_conflict_ripples,
+    fetch_generated_conflict,
+    queue_conflict_advance,
+    queue_conflict_generation,
+    queue_conflict_news,
+    queue_conflict_opportunity_check,
+    queue_conflict_ripples,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,7 +171,58 @@ class BackgroundConflictOrchestrator:
         self._evolution_agent = None
         self.processor = get_conflict_scheduler().get_processor(user_id, conversation_id)
         self.limits = ConflictContentLimits()
-    
+
+    def _payload_to_conflict(self, payload: Dict[str, Any]) -> BackgroundConflict:
+        """Convert cached payload into a BackgroundConflict instance."""
+        conflict_type_raw = payload.get("conflict_type", GrandConflictType.POLITICAL_SUCCESSION.value)
+        try:
+            conflict_type = GrandConflictType(conflict_type_raw)
+        except ValueError:
+            try:
+                conflict_type = GrandConflictType[conflict_type_raw.upper()]
+            except KeyError:
+                conflict_type = GrandConflictType.POLITICAL_SUCCESSION
+
+        intensity_raw = payload.get("intensity", BackgroundIntensity.DISTANT_RUMOR.value)
+        try:
+            intensity = BackgroundIntensity[intensity_raw.upper()]
+        except KeyError:
+            try:
+                intensity = BackgroundIntensity(intensity_raw)
+            except ValueError:
+                intensity = BackgroundIntensity.DISTANT_RUMOR
+
+        return BackgroundConflict(
+            conflict_id=int(payload.get("conflict_id", 0)),
+            conflict_type=conflict_type,
+            name=payload.get("name", "Background Conflict"),
+            description=payload.get("description", ""),
+            intensity=intensity,
+            progress=float(payload.get("progress", 0.0)),
+            factions=list(payload.get("factions", [])),
+            current_state=payload.get("current_state", ""),
+            recent_developments=list(payload.get("recent_developments", [])),
+            impact_on_daily_life=list(payload.get("impact_on_daily_life", [])),
+            player_awareness_level=float(payload.get("player_awareness_level", 0.1)),
+            last_news_generation=payload.get("last_news_generation"),
+            news_count=int(payload.get("news_count", 0)),
+        )
+
+    def _payload_to_event(self, payload: Dict[str, Any]) -> WorldEvent:
+        """Convert cached payload into a WorldEvent instance."""
+        return WorldEvent(
+            conflict_id=int(payload.get("conflict_id", 0)),
+            event_type=payload.get("event_type", "development"),
+            description=payload.get("description", ""),
+            faction_impacts=payload.get("faction_impacts", {}),
+            creates_opportunity=bool(payload.get("creates_opportunity", False)),
+            opportunity_window=(
+                int(payload.get("opportunity_window"))
+                if payload.get("opportunity_window") is not None
+                else None
+            ),
+        )
+
     @property
     def conflict_generator(self) -> Agent:
         """Lazy load conflict generator agent"""
@@ -217,260 +278,43 @@ class BackgroundConflictOrchestrator:
                 SELECT COUNT(*) FROM backgroundconflicts
                 WHERE user_id = $1 AND conversation_id = $2 AND status = 'active'
                 """,
-                self.user_id, self.conversation_id
+                self.user_id,
+                self.conversation_id,
             )
-            
+
             if count >= 5:  # Max 5 active conflicts
                 logger.info("Max active conflicts reached, skipping generation")
                 return None
-        
-        conflict_type = random.choice(list(GrandConflictType))
-        
-        prompt = f"""
-        Generate a {conflict_type.value} background conflict.
-        
-        Consider:
-        - World setting and established lore
-        - Current game state
-        - Player's position in the world
-        - Other active conflicts
-        
-        Create something that feels:
-        - Important but distant
-        - Complex with multiple sides
-        - Slowly evolving
-        - Atmospheric
-        
-        Return JSON:
-        {{
-            "name": "Conflict name",
-            "description": "2-3 sentence overview",
-            "factions": ["Faction 1", "Faction 2", "Faction 3"],
-            "initial_state": "Current situation",
-            "initial_development": "What just happened to start/escalate this",
-            "daily_life_impacts": [
-                "How it affects common people",
-                "What changes in daily routines",
-                "Ambient signs of the conflict"
-            ],
-            "potential_hooks": ["Optional player involvement 1", "Optional involvement 2"],
-            "initial_intensity": "distant_rumor|occasional_news|regular_topic",
-            "estimated_duration": 10-50 (game days)
-        }}
-        """
-        
-        response = await Runner.run(self.conflict_generator, prompt)
-        data = json.loads(extract_runner_response(response))
 
-        # Convert the string intensity (e.g., "distant_rumor") from the LLM into a float
-        intensity_float = resolve_intensity_value(data.get("initial_intensity"))
-        
-        # Store in database
-        async with get_db_connection_context() as conn:
-            conflict_id = await conn.fetchval(
-                """
-                INSERT INTO backgroundconflicts
-                (user_id, conversation_id, conflict_type, name, description,
-                 factions, current_state, intensity, progress, status,
-                 metadata, news_count)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                RETURNING id
-                """,
-                self.user_id,
-                self.conversation_id,
-                conflict_type.value,
-                data["name"],
-                data["description"],
-                json.dumps(data["factions"]),
-                data["initial_state"],
-                # OLD, INCORRECT LINE: data.get("initial_intensity", "distant_rumor"),
-                intensity_float,  # <-- USE THE CONVERTED FLOAT HERE
-                0.0,  # Initial progress
-                'active',
-                json.dumps({
-                    "potential_hooks": data.get("potential_hooks", []),
-                    "estimated_duration": data.get("estimated_duration", 30),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "daily_life_impacts": data.get("daily_life_impacts", [])
-                }),
-                0  # news_count
-            )
-            
-            # Store initial development
-            await conn.execute(
-                """
-                INSERT INTO backgrounddevelopments
-                (conflict_id, development, game_day)
-                VALUES ($1, $2, $3)
-                """,
-                conflict_id,
-                data["initial_development"],
-                await _get_current_game_day(self.user_id, self.conversation_id)
-            )
-        
-        conflict = BackgroundConflict(
-            conflict_id=conflict_id,
-            conflict_type=conflict_type,
-            name=data["name"],
-            description=data["description"],
-            intensity=BackgroundIntensity[data.get("initial_intensity", "distant_rumor").upper()],
-            progress=0.0,
-            factions=data["factions"],
-            current_state=data["initial_state"],
-            recent_developments=[data["initial_development"]],
-            impact_on_daily_life=data.get("daily_life_impacts", []),
-            player_awareness_level=0.1,
-            news_count=0
-        )
-        
-        # Queue initial news generation if appropriate
-        self.processor._processing_queue.append({
-            'type': 'generate_news',
-            'conflict_id': conflict_id,
-            'priority': ProcessingPriority.NORMAL,
-            'reason': 'initial_news'
-        })
-        
-        return conflict
+        cached = fetch_generated_conflict(self.user_id, self.conversation_id)
+        if cached:
+            return self._payload_to_conflict(cached)
+
+        queue_conflict_generation(self.user_id, self.conversation_id)
+
+        return None
     
     async def advance_background_conflict(self, conflict: BackgroundConflict) -> Optional[WorldEvent]:
         """Advance a background conflict's state"""
+        cached_event = fetch_conflict_event(conflict.conflict_id)
+        if cached_event:
+            if cached_event.get("news_worthy"):
+                queue_conflict_news(
+                    self.user_id,
+                    self.conversation_id,
+                    conflict,
+                    metadata={"reason": "significant_event"},
+                )
+            return self._payload_to_event(cached_event)
+
         # Check if we should actually advance (not every time)
         should_advance = random.random() < 0.3  # 30% chance
         if not should_advance:
             return None
-            
-        prompt = f"""
-        Advance this background conflict:
-        
-        Conflict: {conflict.name}
-        Type: {conflict.conflict_type.value}
-        Current State: {conflict.current_state}
-        Progress: {conflict.progress}%
-        Intensity: {conflict.intensity.value}
-        Factions: {json.dumps(conflict.factions)}
-        Recent: {conflict.recent_developments[-1] if conflict.recent_developments else 'Beginning'}
-        
-        Generate the next development:
-        - Natural progression from current state
-        - Reflects faction dynamics
-        - Appropriate to intensity level
-        - Moves story forward
-        
-        Return JSON:
-        {{
-            "event_type": "battle|negotiation|escalation|development|revelation",
-            "description": "What happened (2-3 sentences)",
-            "new_state": "Updated conflict state",
-            "progress_change": -10 to +10,
-            "intensity_change": "increase|maintain|decrease",
-            "faction_impacts": {{"Faction": impact_score}},
-            "creates_opportunity": true/false,
-            "opportunity_description": "Optional: what player could do",
-            "ripple_effects": ["Effect 1", "Effect 2"],
-            "news_worthy": true/false
-        }}
-        """
-        
-        response = await Runner.run(self.evolution_agent, prompt)
-        data = json.loads(extract_runner_response(response))
-        
-        # Update conflict in database
-        new_intensity = self._calculate_new_intensity(
-            conflict.intensity,
-            data.get("intensity_change", "maintain")
-        )
-        
-        new_progress = max(0, min(100, conflict.progress + data.get("progress_change", 0)))
-        
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """
-                UPDATE backgroundconflicts
-                SET current_state = $1,
-                    progress = $2,
-                    intensity = $3,
-                    updated_at = CURRENT_TIMESTAMP,
-                    last_significant_change = CASE 
-                        WHEN $4 THEN $5
-                        ELSE last_significant_change
-                    END
-                WHERE id = $6
-                """,
-                data.get("new_state", conflict.current_state),
-                new_progress,
-                new_intensity,
-                data.get("news_worthy", False),
-                json.dumps({
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'magnitude': abs(data.get("progress_change", 0)) / 10.0,
-                    'description': data.get("description", "")
-                }),
-                conflict.conflict_id
-            )
-            
-            # Store development
-            await conn.execute(
-                """
-                INSERT INTO backgrounddevelopments
-                (conflict_id, development, game_day)
-                VALUES ($1, $2, $3)
-                """,
-                conflict.conflict_id,
-                data["description"],
-                await _get_current_game_day(self.user_id, self.conversation_id)
-            )
-            
-            # Handle opportunity creation
-            if data.get("creates_opportunity"):
-                await conn.execute(
-                    """
-                    INSERT INTO conflictopportunities
-                    (conflict_id, description, expires_on, status,
-                     user_id, conversation_id)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    """,
-                    conflict.conflict_id,
-                    data.get("opportunity_description", "An opportunity arises"),
-                    (await _get_current_game_day(self.user_id, self.conversation_id)) + 7,
-                    'available',
-                    self.user_id,
-                    self.conversation_id
-                )
-        
-        # Queue news generation if newsworthy and allowed
-        if data.get("news_worthy"):
-            should_gen, reason = await self.processor.should_generate_news(conflict.conflict_id)
-            if should_gen:
-                self.processor._processing_queue.append({
-                    'type': 'generate_news',
-                    'conflict_id': conflict.conflict_id,
-                    'priority': ProcessingPriority.HIGH,
-                    'reason': 'significant_event',
-                    'event_data': data
-                })
-        
-        return WorldEvent(
-            conflict_id=conflict.conflict_id,
-            event_type=data.get("event_type", "development"),
-            description=data["description"],
-            faction_impacts=data.get("faction_impacts", {}),
-            creates_opportunity=data.get("creates_opportunity", False),
-            opportunity_window=7 if data.get("creates_opportunity") else None
-        )
+
+        queue_conflict_advance(self.user_id, self.conversation_id, conflict)
+        return None
     
-    def _calculate_new_intensity(self, current: BackgroundIntensity, change: str) -> str:
-        """Calculate new intensity level"""
-        intensities = list(BackgroundIntensity)
-        current_idx = intensities.index(current)
-        
-        if change == "increase" and current_idx < len(intensities) - 1:
-            return intensities[current_idx + 1].value
-        elif change == "decrease" and current_idx > 0:
-            return intensities[current_idx - 1].value
-        return current.value
-
-
 # ===============================================================================
 # BACKGROUND NEWS GENERATOR
 # ===============================================================================
@@ -510,82 +354,30 @@ class BackgroundNewsGenerator:
         news_type: str = "random",
     ) -> Optional[Dict[str, Any]]:
         """Generate dynamic news about a conflict - respecting limits"""
-        
+
         # Check if we should generate news
         should_gen, reason = await self.processor.should_generate_news(conflict.conflict_id)
         if not should_gen:
             logger.info(f"Skipping news generation for conflict {conflict.conflict_id}: {reason}")
+            cached = fetch_conflict_news(conflict.conflict_id)
+            if cached:
+                return cached
             return None
-        
-        if news_type == "random":
-            news_type = random.choice(["official", "independent", "tabloid", "rumor"])
-        
-        prompt = f"""
-        Generate {news_type} news about this conflict:
-        
-        Conflict: {conflict.name}
-        Current State: {conflict.current_state}
-        Recent Development: {conflict.recent_developments[-1] if conflict.recent_developments else 'Initial stages'}
-        Factions: {json.dumps(conflict.factions)}
-        
-        Create news that:
-        - Matches {news_type} style perfectly
-        - Feels authentic to source
-        - Includes appropriate bias
-        - Creates atmosphere
-        - Could influence opinions
-        
-        Return JSON:
-        {{
-            "headline": "Attention-grabbing headline",
-            "source": "News source name",
-            "content": "2-3 paragraph article/rumor",
-            "reliability": 0.0 to 1.0,
-            "bias": "faction or perspective bias",
-            "spin": "how truth is distorted",
-            "public_reaction": "How people might react",
-            "conversation_starter": "How NPCs might discuss this",
-            "hidden_truth": "What's really happening"
-        }}
-        """
-        
-        response = await Runner.run(self.news_generator, prompt)
-        news_data = json.loads(extract_runner_response(response))
-        
-        current_day = await _get_current_game_day(self.user_id, self.conversation_id)
-        
-        # Store in DB
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """
-                INSERT INTO backgroundnews
-                (user_id, conversation_id, conflict_id, headline,
-                 source, content, reliability, game_day)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """,
-                self.user_id,
-                self.conversation_id,
-                conflict.conflict_id,
-                news_data["headline"],
-                news_data["source"],
-                news_data["content"],
-                news_data["reliability"],
-                current_day
-            )
-            
-            # Update conflict news tracking
-            await conn.execute(
-                """
-                UPDATE backgroundconflicts
-                SET news_count = news_count + 1,
-                    last_news_generation = $1
-                WHERE id = $2
-                """,
-                current_day,
-                conflict.conflict_id
-            )
-        
-        return news_data
+
+        cached = fetch_conflict_news(conflict.conflict_id)
+        if cached:
+            return cached
+
+        news_payload_type = None if news_type == "random" else news_type
+        queue_conflict_news(
+            self.user_id,
+            self.conversation_id,
+            conflict,
+            news_type=news_payload_type,
+            metadata={"reason": reason},
+        )
+
+        return None
 
 
 # ===============================================================================
@@ -649,59 +441,26 @@ class BackgroundConflictRipples:
         active_conflicts: List[BackgroundConflict]
     ) -> Dict[str, Any]:
         """Generate today's ripple effects - limited to avoid spam"""
-        
+
         # Only generate ripples occasionally, not every turn
         if random.random() > 0.3:  # 30% chance
+            cached = fetch_conflict_ripples(self.user_id, self.conversation_id)
+            if cached:
+                return {"ripples": cached, "opportunities": []}
             return {"ripples": {}, "opportunities": []}
-        
+
         if not active_conflicts:
             return {"ripples": {}, "opportunities": []}
-        
+
         # Pick most intense conflict for ripples
         most_intense = max(active_conflicts, key=lambda c: INTENSITY_TO_FLOAT[c.intensity])
-        
-        prompt = f"""
-        Generate subtle ripple effects from this conflict:
-        
-        Conflict: {most_intense.name}
-        Intensity: {most_intense.intensity.value}
-        Current State: {most_intense.current_state}
-        
-        Create effects that:
-        - Match the intensity level
-        - Feel atmospheric not intrusive
-        - Could be noticed or ignored
-        - Add texture to the world
-        
-        Return JSON:
-        {{
-            "ambient_mood": ["Mood descriptor 1", "Mood descriptor 2"],
-            "npc_behaviors": ["Behavioral change 1", "Behavioral change 2"],
-            "resource_changes": {{"Resource": "change description"}},
-            "overheard_snippets": ["Snippet 1", "Snippet 2"],
-            "environmental_details": ["Detail 1", "Detail 2"]
-        }}
-        """
-        
-        response = await Runner.run(self.ripple_generator, prompt)
-        ripple_data = json.loads(extract_runner_response(response))
-        
-        # Store significant ripples for later use
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """
-                INSERT INTO conflictripples
-                (conflict_id, ripple_data, game_day, user_id, conversation_id)
-                VALUES ($1, $2, $3, $4, $5)
-                """,
-                most_intense.conflict_id,
-                json.dumps(ripple_data),
-                await _get_current_game_day(self.user_id, self.conversation_id),
-                self.user_id,
-                self.conversation_id
-            )
-        
-        return {"ripples": ripple_data, "opportunities": []}
+        cached = fetch_conflict_ripples(self.user_id, self.conversation_id)
+        if cached:
+            return {"ripples": cached, "opportunities": []}
+
+        queue_conflict_ripples(self.user_id, self.conversation_id, most_intense)
+
+        return {"ripples": {}, "opportunities": []}
     
     async def check_for_opportunities(
         self,
@@ -709,55 +468,23 @@ class BackgroundConflictRipples:
         player_skills: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """Check if any conflicts create opportunities - rarely"""
-        
+
+        cached = fetch_conflict_opportunities(self.user_id, self.conversation_id)
+        if cached:
+            return cached
+
         # Very low chance of opportunities to avoid spam
         if random.random() > 0.1:  # 10% chance
             return []
-        
-        opportunities = []
-        
-        for conflict in active_conflicts:
-            # Only high-intensity conflicts create opportunities
-            if conflict.intensity not in [BackgroundIntensity.AMBIENT_TENSION, 
-                                         BackgroundIntensity.VISIBLE_EFFECTS]:
-                continue
-            
-            # Check if player has relevant skills
-            if self._player_could_engage(player_skills, conflict):
-                prompt = f"""
-                Create an optional opportunity from this conflict:
-                
-                Conflict: {conflict.name}
-                State: {conflict.current_state}
-                Player Skills: {json.dumps(player_skills)}
-                
-                Generate opportunity that:
-                - Is completely optional
-                - Has multiple approaches
-                - Offers meaningful choice
-                - Could be ignored without penalty
-                
-                Return JSON:
-                {{
-                    "title": "Opportunity title",
-                    "description": "What's available",
-                    "approaches": ["Approach 1", "Approach 2"],
-                    "potential_rewards": ["Reward 1", "Reward 2"],
-                    "potential_risks": ["Risk 1", "Risk 2"],
-                    "time_sensitive": true/false,
-                    "skill_requirements": {{"Skill": level}}
-                }}
-                """
-                
-                response = await Runner.run(self.opportunity_creator, prompt)
-                opp_data = json.loads(extract_runner_response(response))
-                opp_data['conflict_id'] = conflict.conflict_id
-                opportunities.append(opp_data)
-                
-                # Only one opportunity per check
-                break
-        
-        return opportunities
+
+        queue_conflict_opportunity_check(
+            self.user_id,
+            self.conversation_id,
+            active_conflicts,
+            player_skills=player_skills,
+        )
+
+        return []
     
     def _player_could_engage(self, player_skills: Dict, conflict: BackgroundConflict) -> bool:
         """Check if player has skills to engage with conflict"""

@@ -7,14 +7,14 @@ Integrated with ConflictSynthesizer as the central orchestrator
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Set, TypedDict
+from typing import Dict, List, Any, Optional, Set, TypedDict, Sequence, Mapping
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-from agents import Agent, function_tool, RunContextWrapper, Runner
+from agents import Agent, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
+from logic.conflict_system import conflict_victory_hotpath
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class VictoryCondition:
     progress: float
     is_achieved: bool
     achievement_impact: Dict[str, float]
+    task_metadata: Dict[str, Any]
 
 
 class AchievementDTO(TypedDict, total=False):
@@ -507,6 +508,47 @@ class ConflictVictorySubsystem:
             conflict['conflict_type'],
             stakeholder_data
         )
+
+    def _rows_to_conditions(
+        self,
+        rows: Sequence[Mapping[str, Any]]
+    ) -> List[VictoryCondition]:
+        conditions: List[VictoryCondition] = []
+        for row in rows:
+            data = dict(row)
+            requirements = data.get('requirements') or {}
+            if isinstance(requirements, str):
+                try:
+                    requirements = json.loads(requirements)
+                except json.JSONDecodeError:
+                    requirements = {}
+            metadata = conflict_victory_hotpath.get_condition_metadata(data)
+            raw_vtype = self._victory_type_value(data.get('victory_type'))
+            vtype = raw_vtype.lower()
+            try:
+                enum_vtype = VictoryType(vtype)
+            except Exception:
+                enum_vtype = VictoryType.NARRATIVE
+            conditions.append(VictoryCondition(
+                condition_id=int(data.get('condition_id') or 0),
+                conflict_id=int(data.get('conflict_id') or 0),
+                stakeholder_id=int(data.get('stakeholder_id') or 0),
+                victory_type=enum_vtype,
+                description=str(data.get('description') or ''),
+                requirements=requirements,
+                progress=float(data.get('progress') or 0.0),
+                is_achieved=bool(data.get('is_achieved')), 
+                achievement_impact=dict(data.get('achievement_impact') or {}),
+                task_metadata=metadata,
+            ))
+        return conditions
+
+    def _victory_type_value(self, raw: Any) -> str:
+        if isinstance(raw, VictoryType):
+            return raw.value
+        if isinstance(raw, str):
+            return raw
+        return str(raw or VictoryType.NARRATIVE.value)
     
     async def generate_victory_conditions(
         self,
@@ -514,68 +556,104 @@ class ConflictVictorySubsystem:
         conflict_type: str,
         stakeholders: List[Dict[str, Any]]
     ) -> List[VictoryCondition]:
-        """Generate dynamic victory conditions for each stakeholder"""
+        return await self._generate_victory_conditions(conflict_id, conflict_type, stakeholders)
+
+    async def _generate_victory_conditions(
+        self,
+        conflict_id: int,
+        conflict_type: str,
+        stakeholders: List[Dict[str, Any]]
+    ) -> List[VictoryCondition]:
+        """Generate dynamic victory conditions for each stakeholder."""
         conditions: List[VictoryCondition] = []
-        
+
         for stakeholder in stakeholders:
-            prompt = f"""
-Generate victory conditions for this stakeholder:
-
-Conflict Type: {conflict_type}
-Stakeholder ID: {stakeholder.get('id')}
-Role: {stakeholder.get('role', 'participant')}
-Involvement: {stakeholder.get('involvement', 'primary')}
-
-Return JSON:
-{{
-  "conditions": [
-    {{
-      "victory_type": "dominance|submission|compromise|pyrrhic|tactical|moral|escape|transformation|stalemate|narrative",
-      "description": "What this victory looks like",
-      "requirements": {{"specific": {{}}, "narrative": {{}}}},
-      "impact": {{"relationship": 0.0, "power": 0.0, "satisfaction": 0.0}}
-    }}
-  ]
-}}
-"""
-            response = await Runner.run(self.victory_generator, prompt)
-            try:
-                data = json.loads(extract_runner_response(response))
-            except Exception:
-                data = {"conditions": []}
-            
+            stakeholder_id = int(stakeholder.get('id') or 0)
             async with get_db_connection_context() as conn:
-                for cond in data.get('conditions', []):
-                    vtype = str(cond.get('victory_type', 'narrative') or 'narrative').lower()
-                    desc = str(cond.get('description', ''))
-                    reqs = cond.get('requirements') or {}
-                    impact = cond.get('impact') or {}
-                    
-                    condition_id = await conn.fetchval("""
+                existing_rows = await conn.fetch(
+                    """
+                    SELECT * FROM victory_conditions
+                    WHERE conflict_id = $1 AND stakeholder_id = $2
+                    ORDER BY condition_id
+                    """,
+                    conflict_id,
+                    stakeholder_id,
+                )
+
+            if existing_rows:
+                conditions.extend(self._rows_to_conditions(existing_rows))
+                continue
+
+            fallback_conditions = conflict_victory_hotpath.fallback_victory_conditions(
+                conflict_type,
+                stakeholder,
+            )
+            inserted_ids: List[int] = []
+
+            async with get_db_connection_context() as conn:
+                for fallback in fallback_conditions:
+                    condition_id = await conn.fetchval(
+                        """
                         INSERT INTO victory_conditions
-                            (user_id, conversation_id, conflict_id, stakeholder_id, 
-                             victory_type, description, requirements, progress, is_achieved, created_at, updated_at)
+                            (user_id, conversation_id, conflict_id, stakeholder_id,
+                             victory_type, description, requirements, progress, is_achieved,
+                             created_at, updated_at)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, 0.0, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         RETURNING condition_id
-                    """, self.user_id, self.conversation_id, conflict_id,
-                       int(stakeholder.get('id') or 0), vtype, desc, json.dumps(reqs))
-                    
-                    try:
-                        enum_vtype = VictoryType(vtype)
-                    except Exception:
-                        enum_vtype = VictoryType.NARRATIVE
-                    
-                    conditions.append(VictoryCondition(
-                        condition_id=int(condition_id or 0),
-                        conflict_id=conflict_id,
-                        stakeholder_id=int(stakeholder.get('id') or 0),
-                        victory_type=enum_vtype,
-                        description=desc,
-                        requirements=reqs,
-                        progress=0.0,
-                        is_achieved=False,
-                        achievement_impact=impact
-                    ))
+                        """,
+                        self.user_id,
+                        self.conversation_id,
+                        conflict_id,
+                        stakeholder_id,
+                        self._victory_type_value(fallback.get('victory_type')),
+                        str(fallback.get('description') or ''),
+                        json.dumps(fallback.get('requirements') or {}),
+                    )
+                    inserted_ids.append(int(condition_id or 0))
+
+            if not inserted_ids:
+                continue
+
+            task_payload = {
+                'condition_ids': inserted_ids,
+                'conflict_id': conflict_id,
+                'conflict_type': conflict_type,
+                'stakeholder': stakeholder,
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+            }
+            task_id = conflict_victory_hotpath.enqueue_task(
+                'nyx.tasks.background.conflict_victory.generate_victory_conditions',
+                task_payload,
+            )
+
+            metadata_updates: List[tuple[int, Dict[str, Any]]] = []
+            for idx, condition_id in enumerate(inserted_ids):
+                fallback_data = fallback_conditions[min(idx, len(fallback_conditions) - 1)]
+                entry = conflict_victory_hotpath.build_entry(
+                    'queued' if task_id else 'fallback',
+                    task_id=task_id,
+                    result=fallback_data,
+                )
+                metadata_updates.append((condition_id, entry))
+
+            if metadata_updates:
+                await conflict_victory_hotpath.write_many_condition_metadata(
+                    metadata_updates,
+                    conflict_victory_hotpath.TaskKey.GENERATOR,
+                )
+
+            async with get_db_connection_context() as conn:
+                new_rows = await conn.fetch(
+                    """
+                    SELECT * FROM victory_conditions
+                    WHERE condition_id = ANY($1::int[])
+                    ORDER BY condition_id
+                    """,
+                    inserted_ids,
+                )
+            conditions.extend(self._rows_to_conditions(new_rows))
+
         return conditions
     
     async def check_victory_conditions(
@@ -591,26 +669,31 @@ Return JSON:
                 SELECT * FROM victory_conditions
                 WHERE conflict_id = $1 AND is_achieved = false
             """, conflict_id)
-            
+
             for condition in conditions:
+                condition_data = dict(condition)
                 try:
-                    requirements = condition['requirements']
+                    requirements = condition_data.get('requirements')
                     if isinstance(requirements, str):
                         requirements = json.loads(requirements or '{}')
                 except Exception:
                     requirements = {}
-                
+
                 progress = self._calculate_progress(requirements, current_state or {})
-                
+
                 # Update progress
                 await conn.execute("""
                     UPDATE victory_conditions
                     SET progress = $1, updated_at = CURRENT_TIMESTAMP
                     WHERE condition_id = $2
-                """, float(progress), int(condition['condition_id']))
-                
+                """, float(progress), int(condition_data.get('condition_id') or 0))
+
                 if progress >= 1.0:
-                    achievement = await self._process_victory_achievement(condition, current_state or {})
+                    metadata = conflict_victory_hotpath.get_condition_metadata(condition_data)
+                    condition_data['requirements'] = requirements
+                    condition_data['task_metadata'] = metadata
+                    condition_data['progress'] = float(progress)
+                    achievement = await self._process_victory_achievement(condition_data, current_state or {})
                     # Enrich with a simple DTO shape
                     achievement['id'] = int(condition['condition_id'])
                     achievement['name'] = f"{str(condition['victory_type']).title()} achieved"
@@ -661,19 +744,15 @@ Return JSON:
         current_state: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Process a victory achievement"""
-        vtype_str = str(condition['victory_type']).lower()
+        vtype_str = self._victory_type_value(condition.get('victory_type')).lower()
         try:
             vtype = VictoryType(vtype_str)
         except Exception:
             vtype = VictoryType.NARRATIVE
-        
-        narration = await self.generate_victory_narration(
-            vtype,
-            condition.get('description', ''),
-            current_state
-        )
-        consequences = await self.calculate_victory_consequences(condition, current_state)
-        
+
+        narration = await self._generate_achievement_summary(condition, current_state)
+        consequences = await self._calculate_victory_consequences(condition, current_state)
+
         return {
             'condition_id': int(condition['condition_id']),
             'stakeholder_id': int(condition['stakeholder_id']),
@@ -683,52 +762,147 @@ Return JSON:
             'timestamp': datetime.now().isoformat()
         }
     
-    async def generate_victory_narration(
+    async def _generate_achievement_summary(
         self,
-        victory_type: VictoryType,
-        description: str,
-        context: Dict[str, Any]
+        condition: Dict[str, Any],
+        current_state: Dict[str, Any]
     ) -> str:
-        """Generate dynamic victory narration"""
-        prompt = f"""
-Narrate this victory achievement:
+        metadata = conflict_victory_hotpath.get_condition_metadata(condition)
+        entry = conflict_victory_hotpath.get_task_entry(
+            metadata,
+            conflict_victory_hotpath.TaskKey.SUMMARY,
+        )
+        ready = conflict_victory_hotpath.resolved_result(entry)
+        if ready is not None:
+            return str(ready)
 
-Victory Type: {victory_type.value}
-Description: {description}
-Context: {json.dumps(context)}
-Write a powerful 2-3 paragraph narration.
-"""
-        response = await Runner.run(self.achievement_narrator, prompt)
-        return extract_runner_response(response)
-    
+        fallback = conflict_victory_hotpath.fallback_result(entry)
+        if fallback is None:
+            fallback = conflict_victory_hotpath.fallback_achievement_summary(
+                condition,
+                current_state,
+            )
+
+        condition_id = int(condition.get('condition_id') or 0)
+        if condition_id > 0:
+            if conflict_victory_hotpath.should_queue_task(entry):
+                payload = {
+                    'condition_id': condition_id,
+                    'victory_type': self._victory_type_value(condition.get('victory_type')),
+                    'description': str(condition.get('description') or ''),
+                    'current_state': current_state,
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                }
+                task_id = conflict_victory_hotpath.enqueue_task(
+                    'nyx.tasks.background.conflict_victory.generate_achievement_summary',
+                    payload,
+                )
+                entry = conflict_victory_hotpath.build_entry(
+                    'queued' if task_id else 'fallback',
+                    task_id=task_id,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_condition_metadata(
+                    condition_id,
+                    conflict_victory_hotpath.TaskKey.SUMMARY,
+                    entry,
+                )
+            elif not entry or entry.get('result') is None:
+                status = entry.get('status', 'fallback') if entry else 'fallback'
+                entry = conflict_victory_hotpath.build_entry(
+                    status,
+                    task_id=entry.get('task_id') if entry else None,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_condition_metadata(
+                    condition_id,
+                    conflict_victory_hotpath.TaskKey.SUMMARY,
+                    entry,
+                )
+
+        return fallback
+
     async def calculate_victory_consequences(
         self,
         condition: Dict[str, Any],
         current_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Calculate consequences of victory"""
-        prompt = f"""
-Calculate consequences of this victory:
+        return await self._calculate_victory_consequences(condition, current_state)
 
-Victory Type: {condition['victory_type']}
-Description: {condition.get('description','')}
-Current State: {json.dumps(current_state)}
+    async def _calculate_victory_consequences(
+        self,
+        condition: Dict[str, Any],
+        current_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        metadata = conflict_victory_hotpath.get_condition_metadata(condition)
+        entry = conflict_victory_hotpath.get_task_entry(
+            metadata,
+            conflict_victory_hotpath.TaskKey.CONSEQUENCES,
+        )
+        ready = conflict_victory_hotpath.resolved_result(entry)
+        if ready is not None:
+            return dict(ready)
 
-Return JSON:
-{{"immediate": {{}}, "long_term": {{}}, "hidden_consequences": []}}
-"""
-        response = await Runner.run(self.consequence_calculator, prompt)
-        try:
-            return json.loads(extract_runner_response(response))
-        except Exception:
-            return {"immediate": {}, "long_term": {}, "hidden_consequences": []}
-    
+        fallback = conflict_victory_hotpath.fallback_result(entry)
+        if fallback is None:
+            fallback = conflict_victory_hotpath.fallback_victory_consequences(
+                condition,
+                current_state,
+            )
+
+        condition_id = int(condition.get('condition_id') or 0)
+        if condition_id > 0:
+            if conflict_victory_hotpath.should_queue_task(entry):
+                payload = {
+                    'condition_id': condition_id,
+                    'victory_type': self._victory_type_value(condition.get('victory_type')),
+                    'description': str(condition.get('description') or ''),
+                    'current_state': current_state,
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                }
+                task_id = conflict_victory_hotpath.enqueue_task(
+                    'nyx.tasks.background.conflict_victory.calculate_victory_consequences',
+                    payload,
+                )
+                entry = conflict_victory_hotpath.build_entry(
+                    'queued' if task_id else 'fallback',
+                    task_id=task_id,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_condition_metadata(
+                    condition_id,
+                    conflict_victory_hotpath.TaskKey.CONSEQUENCES,
+                    entry,
+                )
+            elif not entry or entry.get('result') is None:
+                status = entry.get('status', 'fallback') if entry else 'fallback'
+                entry = conflict_victory_hotpath.build_entry(
+                    status,
+                    task_id=entry.get('task_id') if entry else None,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_condition_metadata(
+                    condition_id,
+                    conflict_victory_hotpath.TaskKey.CONSEQUENCES,
+                    entry,
+                )
+
+        return dict(fallback)
+
     async def generate_conflict_epilogue(
         self,
         conflict_id: int,
         resolution_data: Dict[str, Any]
     ) -> str:
-        """Generate an epilogue for resolved conflict"""
+        return await self._generate_conflict_epilogue(conflict_id, resolution_data)
+
+    async def _generate_conflict_epilogue(
+        self,
+        conflict_id: int,
+        resolution_data: Dict[str, Any]
+    ) -> str:
         async with get_db_connection_context() as conn:
             conflict = await conn.fetchrow("""
                 SELECT id, conflict_name, conflict_type, description FROM Conflicts WHERE id = $1
@@ -737,23 +911,88 @@ Return JSON:
                 SELECT * FROM victory_conditions
                 WHERE conflict_id = $1 AND is_achieved = true
             """, conflict_id)
-        
+
         if not conflict:
             return "The conflict fades into memory."
-        
-        prompt = f"""
-Write an epilogue for this resolved conflict:
 
-Conflict: {conflict['conflict_name']}
-Type: {conflict['conflict_type']}
-Description: {conflict.get('description','')}
-Achievements: {json.dumps([dict(a) for a in achievements])}
-Resolution: {json.dumps(resolution_data)}
+        achievement_dicts = [dict(a) for a in achievements]
+        metadata_entries = [
+            conflict_victory_hotpath.get_task_entry(
+                conflict_victory_hotpath.get_condition_metadata(a_dict),
+                conflict_victory_hotpath.TaskKey.EPILOGUE,
+            )
+            for a_dict in achievement_dicts
+        ]
+        for entry in metadata_entries:
+            ready = conflict_victory_hotpath.resolved_result(entry)
+            if ready is not None:
+                return str(ready)
 
-Write 3-4 paragraphs that feel like the end of a chapter, not the end of the story.
-"""
-        response = await Runner.run(self.epilogue_writer, prompt)
-        return extract_runner_response(response)
+        fallback = None
+        for entry in metadata_entries:
+            cached = conflict_victory_hotpath.fallback_result(entry)
+            if cached:
+                fallback = cached
+                break
+        if fallback is None:
+            fallback = conflict_victory_hotpath.fallback_conflict_epilogue(
+                conflict,
+                achievement_dicts,
+                resolution_data,
+            )
+
+        condition_ids = [
+            int(a_dict.get('condition_id') or 0)
+            for a_dict in achievement_dicts
+            if int(a_dict.get('condition_id') or 0) > 0
+        ]
+
+        if condition_ids:
+            requires_queue = any(
+                conflict_victory_hotpath.should_queue_task(entry)
+                for entry in metadata_entries
+            ) or not metadata_entries
+
+            if requires_queue:
+                payload = {
+                    'condition_ids': condition_ids,
+                    'conflict_id': conflict_id,
+                    'conflict': dict(conflict),
+                    'achievements': achievement_dicts,
+                    'resolution': resolution_data,
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                }
+                task_id = conflict_victory_hotpath.enqueue_task(
+                    'nyx.tasks.background.conflict_victory.generate_conflict_epilogue',
+                    payload,
+                )
+                entry = conflict_victory_hotpath.build_entry(
+                    'queued' if task_id else 'fallback',
+                    task_id=task_id,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_many_condition_metadata(
+                    [(cid, entry) for cid in condition_ids],
+                    conflict_victory_hotpath.TaskKey.EPILOGUE,
+                )
+            else:
+                missing_result = any(
+                    (entry.get('result') is None)
+                    for entry in metadata_entries
+                )
+                if missing_result:
+                    entry = conflict_victory_hotpath.build_entry(
+                        metadata_entries[0].get('status', 'fallback') if metadata_entries else 'fallback',
+                        task_id=metadata_entries[0].get('task_id') if metadata_entries else None,
+                        result=fallback,
+                    )
+                    await conflict_victory_hotpath.write_many_condition_metadata(
+                        [(cid, entry) for cid in condition_ids],
+                        conflict_victory_hotpath.TaskKey.EPILOGUE,
+                    )
+
+        return fallback
     
     async def evaluate_partial_victories(
         self,
@@ -769,31 +1008,75 @@ Write 3-4 paragraphs that feel like the end of a chapter, not the end of the sto
         
         partial_victories: List[Dict[str, Any]] = []
         for condition in conditions:
-            prog = float(condition['progress'] or 0.0)
+            condition_data = dict(condition)
+            prog = float(condition_data.get('progress') or 0.0)
             if 0.3 <= prog < 1.0:
+                condition_data['task_metadata'] = conflict_victory_hotpath.get_condition_metadata(condition_data)
+                condition_data['progress'] = prog
+                victory_label = self._victory_type_value(condition_data.get('victory_type'))
                 partial_victory = {
-                    'stakeholder_id': int(condition['stakeholder_id']),
-                    'victory_type': f"partial_{condition['victory_type']}",
+                    'stakeholder_id': int(condition_data.get('stakeholder_id') or 0),
+                    'victory_type': f"partial_{victory_label}",
                     'progress': prog,
-                    'description': f"Partially achieved: {condition.get('description','')}",
-                    'consolation': await self._generate_consolation(condition)
+                    'description': f"Partially achieved: {condition_data.get('description','')}",
+                    'consolation': await self._generate_consolation(condition_data)
                 }
                 partial_victories.append(partial_victory)
         return partial_victories
     
     async def _generate_consolation(self, condition: Dict[str, Any]) -> str:
-        """Generate consolation for partial victory"""
-        prompt = f"""
-Generate a consolation for this partial victory:
+        metadata = conflict_victory_hotpath.get_condition_metadata(condition)
+        entry = conflict_victory_hotpath.get_task_entry(
+            metadata,
+            conflict_victory_hotpath.TaskKey.CONSOLATION,
+        )
+        ready = conflict_victory_hotpath.resolved_result(entry)
+        if ready is not None:
+            return str(ready)
 
-Victory Type: {condition['victory_type']}
-Progress: {float(condition.get('progress',0.0))*100:.0f}%
-Description: {condition.get('description','')}
+        fallback = conflict_victory_hotpath.fallback_result(entry)
+        if fallback is None:
+            fallback = conflict_victory_hotpath.fallback_consolation(condition)
 
-Write a single encouraging paragraph.
-"""
-        response = await Runner.run(self.achievement_narrator, prompt)
-        return extract_runner_response(response)
+        condition_id = int(condition.get('condition_id') or 0)
+        if condition_id > 0:
+            if conflict_victory_hotpath.should_queue_task(entry):
+                payload = {
+                    'condition_id': condition_id,
+                    'victory_type': self._victory_type_value(condition.get('victory_type')),
+                    'description': str(condition.get('description') or ''),
+                    'progress': float(condition.get('progress') or 0.0),
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                }
+                task_id = conflict_victory_hotpath.enqueue_task(
+                    'nyx.tasks.background.conflict_victory.generate_consolation',
+                    payload,
+                )
+                entry = conflict_victory_hotpath.build_entry(
+                    'queued' if task_id else 'fallback',
+                    task_id=task_id,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_condition_metadata(
+                    condition_id,
+                    conflict_victory_hotpath.TaskKey.CONSOLATION,
+                    entry,
+                )
+            elif not entry or entry.get('result') is None:
+                status = entry.get('status', 'fallback') if entry else 'fallback'
+                entry = conflict_victory_hotpath.build_entry(
+                    status,
+                    task_id=entry.get('task_id') if entry else None,
+                    result=fallback,
+                )
+                await conflict_victory_hotpath.write_condition_metadata(
+                    condition_id,
+                    conflict_victory_hotpath.TaskKey.CONSOLATION,
+                    entry,
+                )
+
+        return fallback
     
     # ========== Helper Methods ==========
     
