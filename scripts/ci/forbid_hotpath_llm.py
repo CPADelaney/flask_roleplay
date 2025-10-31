@@ -94,6 +94,14 @@ def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
             if stripped.startswith("#"):
                 continue
 
+            # Skip function definitions (these are OK - they define the functions used by background tasks)
+            if re.match(r"^\s*(async\s+)?def\s+\w+", line):
+                continue
+
+            # Skip property definitions
+            if re.match(r"^\s*@property", line) or re.match(r"^\s*def\s+\w+\s*\(self\)\s*->\s*Agent:", line):
+                continue
+
             for pattern_re, pattern_name in BLOCKING_PATTERNS:
                 if re.search(pattern_re, line):
                     violations.append((line_num, pattern_name, line.strip()))

@@ -400,36 +400,21 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
 
         side_effects = []
 
+        # Fast numeric reputation updates
         for winner_id in winners:
             await self._adjust_reputation_from_action(winner_id, 'victory')
-        
+
         for loser_id in losers:
             await self._adjust_reputation_from_action(loser_id, 'defeat')
-        
-        # Generate gossip about the resolution
-        all_participants = winners + losers
-        if all_participants:
-            gossip = await self.manager.generate_gossip(
-                {'conflict_resolved': True, 'outcome': resolution},
-                all_participants
-            )
-            
-            if gossip:
-                self._active_gossip[gossip.gossip_id] = gossip
-                
-                side_effects.append(SystemEvent(
-                    event_id=f"resolution_gossip_{gossip.gossip_id}",
-                    event_type=EventType.NPC_REACTION,
-                    source_subsystem=self.subsystem_type,
-                    payload={'gossip': gossip.content},
-                    priority=7
-                ))
-        
+
+        # Gossip generation already queued above via queue_gossip_generation
+        # No need to generate it here - it will be cached for later retrieval
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'social_aftermath_processed': True},
+            data={'social_aftermath_processed': True, 'gossip_queued': True},
             side_effects=side_effects
         )
     
