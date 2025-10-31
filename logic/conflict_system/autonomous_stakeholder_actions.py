@@ -12,14 +12,11 @@ ConflictSubsystem under the Conflict Synthesizer orchestrator.
 import logging
 import json
 import random
-import re
 from typing import Dict, List, Any, Optional, Tuple, Set
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 import weakref
-
-from openai import AsyncOpenAI
 
 from db.connection import get_db_connection_context
 from agents import function_tool, RunContextWrapper  # kept for public API tools
@@ -38,68 +35,6 @@ logger = logging.getLogger(__name__)
 # ===============================================================================
 # OpenAI Responses API Helper
 # ===============================================================================
-
-_client: Optional[AsyncOpenAI] = None
-
-def _get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI()
-    return _client
-
-_json_block_re = re.compile(r"\{[\s\S]*\}|\[[\s\S]*\]")
-
-def _extract_json(text: str) -> str:
-    """
-    Extract the first JSON object/array from a possibly noisy LLM response.
-    """
-    if not text:
-        return "{}"
-    # Direct JSON?
-    text = text.strip()
-    if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
-        return text
-    # Try code fences
-    fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
-    if fence:
-        inner = fence.group(1).strip()
-        if inner:
-            return inner
-    # Fallback: first JSON-ish block
-    m = _json_block_re.search(text)
-    if m:
-        return m.group(0)
-    return "{}"
-
-async def llm_json(prompt: str) -> Dict[str, Any]:
-    """
-    Call OpenAI Responses API and parse JSON output robustly, without temperature/max tokens.
-    """
-    try:
-        client = _get_client()
-        resp = await client.responses.create(
-            model="gpt-5-nano",
-            input=prompt,
-        )
-        # output_text is the convenience field on new SDKs
-        text = getattr(resp, "output_text", None)
-        if not text:
-            # Fallback: stitch from structured output if needed
-            try:
-                parts = []
-                for item in getattr(resp, "output", []) or []:
-                    for c in getattr(item, "content", []) or []:
-                        t = getattr(c, "text", None)
-                        if t:
-                            parts.append(t)
-                text = "\n".join(parts).strip()
-            except Exception:
-                text = ""
-        payload = _extract_json(text)
-        return json.loads(payload)
-    except Exception as e:
-        logger.warning(f"llm_json failed: {e}")
-        return {}
 
 # ===============================================================================
 # STAKEHOLDER STRUCTURES
@@ -150,6 +85,7 @@ class Stakeholder:
     relationships: Dict[int, float]
     stress_level: float
     commitment_level: float
+    pending_task_id: Optional[str] = None
 
 @dataclass
 class StakeholderAction:
@@ -163,6 +99,7 @@ class StakeholderAction:
     success_probability: float
     consequences: Dict[str, Any]
     timestamp: datetime
+    task_id: Optional[str] = None
 
 @dataclass
 class StakeholderReaction:
@@ -174,6 +111,7 @@ class StakeholderReaction:
     description: str
     emotional_response: str
     relationship_impact: Dict[int, float]
+    task_id: Optional[str] = None
 
 @dataclass
 class StakeholderStrategy:
@@ -606,29 +544,32 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         conflict_id: int,
         initial_role: Optional[str] = None
     ) -> Optional[Stakeholder]:
-        """Create a stakeholder with personality-driven characteristics via LLM."""
-        npc_details = await self._get_npc_details(npc_id)
-        
-        prompt = f"""
-Create stakeholder profile as JSON:
-NPC: {npc_details.get('name', 'Unknown')}
-Personality: {npc_details.get('personality_traits', 'Unknown')}
-Conflict Context: Conflict #{conflict_id}
-Suggested Role: {initial_role or 'determine based on personality'}
+        """Create a stakeholder record quickly and defer LLM enrichment to background tasks."""
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
+            dispatch_stakeholder_profile_enrichment,
+        )
 
-Return JSON:
-{{
-  "role": "bystander|instigator|defender|mediator|opportunist|victim|escalator|peacemaker",
-  "decision_style": "reactive|rational|emotional|instinctive|calculating|principled",
-  "goals": ["..."],
-  "resources": {{"influence": 0.0, "wealth": 0.0}},
-  "stress_level": 0.0,
-  "commitment_level": 0.0
-}}
-"""
-        result = await llm_json(prompt)
+        npc_details = await self._get_npc_details(npc_id)
+
+        # Heuristic defaults for hot-path creation
+        role_value = (initial_role or 'bystander').lower()
+        if role_value not in StakeholderRole._value2member_map_:
+            role_value = 'bystander'
+
+        decision_defaults = {
+            'instigator': 'reactive',
+            'defender': 'rational',
+            'mediator': 'principled',
+            'opportunist': 'calculating',
+            'victim': 'emotional',
+            'peacemaker': 'principled',
+            'escalator': 'reactive',
+        }
+        decision_style = decision_defaults.get(role_value, 'reactive')
+        stress_default = 0.45 if role_value in {'instigator', 'escalator'} else 0.3
+        commitment_default = 0.6 if role_value not in {'bystander', 'victim'} else 0.4
+
         try:
-            # Store stakeholder
             async with get_db_connection_context() as conn:
                 stakeholder_id = await conn.fetchval(
                     """
@@ -638,36 +579,54 @@ Return JSON:
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING stakeholder_id
                     """,
-                    self.user_id, self.conversation_id, npc_id, conflict_id,
-                    result.get('role', 'bystander'),
-                    result.get('decision_style', 'reactive'),
-                    float(result.get('stress_level', 0.3) or 0.3),
-                    float(result.get('commitment_level', 0.5) or 0.5)
+                    self.user_id,
+                    self.conversation_id,
+                    npc_id,
+                    conflict_id,
+                    role_value,
+                    decision_style,
+                    stress_default,
+                    commitment_default,
                 )
-            
+
+            traits_raw = npc_details.get('personality_traits', [])
+            traits = json.loads(traits_raw) if isinstance(traits_raw, str) else (traits_raw or [])
+
             stakeholder = Stakeholder(
                 stakeholder_id=stakeholder_id,
                 npc_id=npc_id,
                 name=npc_details.get('name', 'Unknown'),
-                personality_traits=json.loads(npc_details.get('personality_traits', '[]')) if isinstance(npc_details.get('personality_traits'), str) else (npc_details.get('personality_traits') or []),
-                current_role=StakeholderRole[(result.get('role', 'bystander') or 'bystander').upper()],
-                decision_style=DecisionStyle[(result.get('decision_style', 'reactive') or 'reactive').upper()],
-                goals=result.get('goals', []),
-                resources=result.get('resources', {}),
+                personality_traits=traits,
+                current_role=StakeholderRole[role_value.upper()],
+                decision_style=DecisionStyle[decision_style.upper()],
+                goals=[],
+                resources={},
                 relationships={},
-                stress_level=float(result.get('stress_level', 0.3) or 0.3),
-                commitment_level=float(result.get('commitment_level', 0.5) or 0.5)
+                stress_level=stress_default,
+                commitment_level=commitment_default,
             )
-            
-            # Notify orchestrator of new stakeholder (best effort)
+
+            enrichment_task = dispatch_stakeholder_profile_enrichment({
+                'stakeholder_id': stakeholder_id,
+                'npc_id': npc_id,
+                'conflict_id': conflict_id,
+                'initial_role': role_value,
+            })
+            stakeholder.pending_task_id = enrichment_task
+
             if self._synthesizer and self._synthesizer():
                 await self._synthesizer().emit_event(SystemEvent(
                     event_id=f"stakeholder_{stakeholder_id}",
                     event_type=EventType.STAKEHOLDER_ACTION,
                     source_subsystem=self.subsystem_type,
-                    payload={'action_type': 'stakeholder_created', 'stakeholder_id': stakeholder_id, 'role': stakeholder.current_role.value}
+                    payload={
+                        'action_type': 'stakeholder_created',
+                        'stakeholder_id': stakeholder_id,
+                        'role': stakeholder.current_role.value,
+                        'task_id': enrichment_task,
+                    }
                 ))
-            
+
             return stakeholder
         except Exception as e:
             logger.warning(f"Failed to create stakeholder for npc {npc_id}: {e}")
@@ -679,173 +638,240 @@ Return JSON:
         conflict_state: Dict[str, Any],
         available_options: Optional[List[str]] = None
     ) -> Optional[StakeholderAction]:
-        """Make an autonomous decision for a stakeholder via LLM."""
-        prompt = f"""
-Make decision as JSON:
-Character: {stakeholder.name}
-Personality: {stakeholder.personality_traits}
-Role: {stakeholder.current_role.value}
-Decision Style: {stakeholder.decision_style.value}
-Stress Level: {stakeholder.stress_level}
+        """Return cached decision payload or dispatch background generation."""
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
+            compute_decision_context_hash,
+            dispatch_action_generation,
+            fetch_planned_item,
+            mark_action_consumed,
+        )
 
-Conflict State: {json.dumps(conflict_state, indent=2)}
-Available Options: {json.dumps(available_options) if available_options else "default"}
+        context_hash = compute_decision_context_hash(
+            stakeholder.stakeholder_id,
+            conflict_state or {},
+            available_options,
+        )
 
-Return JSON:
-{{
-  "action_type": "observant|aggressive|defensive|diplomatic|manipulative|supportive|evasive|strategic",
-  "description": "What they do",
-  "target": 123,
-  "resources": {{}},
-  "success_probability": 0.0,
-  "consequences": {{}}
-}}
-"""
-        result = await llm_json(prompt)
-        try:
-            async with get_db_connection_context() as conn:
-                action_id = await conn.fetchval(
-                    """
-                    INSERT INTO stakeholder_actions
-                    (user_id, conversation_id, stakeholder_id, action_type,
-                     description, success_probability)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING action_id
-                    """,
-                    self.user_id, self.conversation_id,
-                    stakeholder.stakeholder_id,
-                    (result.get('action_type') or 'observant'),
-                    result.get('description', 'Observes the situation'),
-                    float(result.get('success_probability', 0.5) or 0.5)
-                )
-            return StakeholderAction(
-                action_id=action_id,
+        planned = await fetch_planned_item(
+            stakeholder_id=stakeholder.stakeholder_id,
+            kind='action',
+            context_hash=context_hash,
+        )
+
+        if planned:
+            planned_id, payload = planned
+            await mark_action_consumed(planned_id)
+            action = StakeholderAction(
+                action_id=payload.get('planned_action_id', planned_id),
                 stakeholder_id=stakeholder.stakeholder_id,
-                action_type=ActionType[(result.get('action_type', 'observant') or 'observant').upper()],
-                description=result.get('description', 'Takes action'),
-                target=result.get('target'),
-                resources_used=result.get('resources', {}),
-                success_probability=float(result.get('success_probability', 0.5) or 0.5),
-                consequences=result.get('consequences', {}),
-                timestamp=datetime.now()
+                action_type=ActionType[(payload.get('action_type', 'observant') or 'observant').upper()],
+                description=payload.get('description', 'Takes action'),
+                target=payload.get('target'),
+                resources_used=payload.get('resources', {}),
+                success_probability=float(payload.get('success_probability', 0.5) or 0.5),
+                consequences=payload.get('consequences', {}),
+                timestamp=datetime.now(),
             )
-        except Exception as e:
-            logger.warning(f"Decision generation failed for stakeholder {stakeholder.stakeholder_id}: {e}")
-            # Fallback conservative action
-            return StakeholderAction(
-                action_id=0,
-                stakeholder_id=stakeholder.stakeholder_id,
-                action_type=ActionType.OBSERVANT,
-                description="Observes the situation",
-                target=None,
-                resources_used={},
-                success_probability=0.7,
-                consequences={},
-                timestamp=datetime.now()
-            )
-    
+            return action
+
+        scene_context = {}
+        if isinstance(conflict_state, dict):
+            scene_context = conflict_state.get('scene_context') or {
+                'scene_id': conflict_state.get('scene_id'),
+                'conflict_id': conflict_state.get('conflict_id'),
+                'stakeholder_ids': [stakeholder.stakeholder_id],
+                'phase': conflict_state.get('phase'),
+            }
+
+        task_id = dispatch_action_generation(
+            stakeholder,
+            scene_context or {'stakeholder_ids': [stakeholder.stakeholder_id]},
+            conflict_state=conflict_state,
+            available_options=available_options,
+            context_hash=context_hash,
+        )
+
+        # Heuristic fallback action
+        fallback_type = ActionType.OBSERVANT
+        if stakeholder.current_role in {StakeholderRole.INSTIGATOR, StakeholderRole.ESCALATOR}:
+            fallback_type = ActionType.AGGRESSIVE
+        elif stakeholder.current_role == StakeholderRole.DEFENDER:
+            fallback_type = ActionType.DEFENSIVE
+        elif stakeholder.current_role == StakeholderRole.MEDIATOR:
+            fallback_type = ActionType.DIPLOMATIC
+
+        return StakeholderAction(
+            action_id=0,
+            stakeholder_id=stakeholder.stakeholder_id,
+            action_type=fallback_type,
+            description="Acts using heuristic fallback",
+            target=None,
+            resources_used={},
+            success_probability=0.55,
+            consequences={},
+            timestamp=datetime.now(),
+            task_id=task_id,
+        )
+
     async def generate_reaction(
         self,
         stakeholder: Stakeholder,
         triggering_action: StakeholderAction,
         action_context: Dict[str, Any]
     ) -> StakeholderReaction:
-        """Generate a reaction to another stakeholder's action via LLM."""
-        prompt = f"""
-Generate reaction as JSON:
-Reacting Character: {stakeholder.name}
-Personality: {stakeholder.personality_traits}
-Current Stress: {stakeholder.stress_level}
+        """Return cached reaction or dispatch background generation."""
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
+            dispatch_reaction_generation,
+            fetch_planned_item,
+            mark_action_consumed,
+        )
 
-Triggering Action: {triggering_action.description} ({triggering_action.action_type.value})
+        event_id = action_context.get('event_id') or f"action_{triggering_action.action_id}"
 
-Return JSON:
-{{
-  "reaction_type": "counter|support|ignore|escalate|de-escalate",
-  "description": "What they do",
-  "emotional_response": "neutral|angry|fearful|surprised|relieved",
-  "relationship_impact": 0.0,
-  "stress_impact": 0.0
-}}
-"""
-        result = await llm_json(prompt)
-        try:
-            async with get_db_connection_context() as conn:
-                reaction_id = await conn.fetchval(
-                    """
-                    INSERT INTO stakeholder_reactions
-                    (user_id, conversation_id, stakeholder_id, triggering_action_id,
-                     reaction_type, description, emotional_response)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    RETURNING reaction_id
-                    """,
-                    self.user_id, self.conversation_id,
-                    stakeholder.stakeholder_id, triggering_action.action_id,
-                    result.get('reaction_type', 'observe'),
-                    result.get('description', 'Reacts to the action'),
-                    result.get('emotional_response', 'neutral')
-                )
-            # Update stakeholder stress (clamped)
-            stakeholder.stress_level = max(0.0, min(1.0, stakeholder.stress_level + float(result.get('stress_impact', 0.0) or 0.0)))
+        planned = await fetch_planned_item(
+            stakeholder_id=stakeholder.stakeholder_id,
+            kind='reaction',
+            context_hash=event_id,
+        )
+
+        if planned:
+            planned_id, payload = planned
+            await mark_action_consumed(planned_id)
+            stakeholder.stress_level = max(
+                0.0,
+                min(1.0, stakeholder.stress_level + float(payload.get('stress_impact', 0.0) or 0.0)),
+            )
             return StakeholderReaction(
-                reaction_id=reaction_id,
+                reaction_id=payload.get('planned_action_id', planned_id),
                 stakeholder_id=stakeholder.stakeholder_id,
                 triggering_action_id=triggering_action.action_id,
-                reaction_type=result.get('reaction_type', 'observe'),
-                description=result.get('description', 'Reacts'),
-                emotional_response=result.get('emotional_response', 'neutral'),
-                relationship_impact={triggering_action.stakeholder_id: float(result.get('relationship_impact', 0.0) or 0.0)}
+                reaction_type=payload.get('reaction_type', 'observe'),
+                description=payload.get('description', 'Reacts'),
+                emotional_response=payload.get('emotional_response', 'neutral'),
+                relationship_impact={
+                    triggering_action.stakeholder_id: float(payload.get('relationship_impact', 0.0) or 0.0)
+                },
             )
-        except Exception as e:
-            logger.warning(f"Reaction generation failed for stakeholder {stakeholder.stakeholder_id}: {e}")
-            return StakeholderReaction(
-                reaction_id=0,
-                stakeholder_id=stakeholder.stakeholder_id,
-                triggering_action_id=triggering_action.action_id,
-                reaction_type="observe",
-                description="Notices the action",
-                emotional_response="neutral",
-                relationship_impact={}
-            )
+
+        task_id = dispatch_reaction_generation(
+            stakeholder,
+            action_context,
+            event_id,
+            triggering_action={
+                'description': triggering_action.description,
+                'action_type': triggering_action.action_type.value,
+            },
+        )
+
+        # Heuristic fallback reaction
+        fallback_description = "Keeps emotions in check"
+        reaction_type = "observe"
+        if triggering_action.action_type in {ActionType.AGGRESSIVE, ActionType.MANIPULATIVE}:
+            reaction_type = "counter" if stakeholder.current_role != StakeholderRole.BYSTANDER else "ignore"
+            fallback_description = "Responds cautiously"
+        elif triggering_action.action_type == ActionType.DIPLOMATIC:
+            reaction_type = "support"
+            fallback_description = "Offers support"
+
+        return StakeholderReaction(
+            reaction_id=0,
+            stakeholder_id=stakeholder.stakeholder_id,
+            triggering_action_id=triggering_action.action_id,
+            reaction_type=reaction_type,
+            description=fallback_description,
+            emotional_response="neutral",
+            relationship_impact={triggering_action.stakeholder_id: 0.0},
+            task_id=task_id,
+        )
     
     async def adapt_stakeholder_role(
         self,
         stakeholder: Stakeholder,
         changing_conditions: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Adapt stakeholder role based on changing conditions via LLM."""
-        prompt = f"""
-Evaluate role adaptation as JSON:
-Character: {stakeholder.name}
-Current Role: {stakeholder.current_role.value}
-Stress: {stakeholder.stress_level}
+        """Apply heuristic role adaptation and dispatch background evaluation."""
+        from logic.conflict_system.autonomous_stakeholder_actions_hotpath import (
+            compute_decision_context_hash,
+            dispatch_role_adaptation,
+            fetch_planned_item,
+            mark_action_consumed,
+        )
 
-Changing Conditions: {json.dumps(changing_conditions, indent=2)}
+        context_hash = compute_decision_context_hash(
+            stakeholder.stakeholder_id,
+            changing_conditions or {},
+        )
 
-Return JSON:
-{{
-  "change_role": true/false,
-  "new_role": "bystander|instigator|defender|mediator|opportunist|victim|escalator|peacemaker",
-  "reason": "..."
-}}
-"""
-        result = await llm_json(prompt)
-        try:
-            change = bool(result.get('change_role', False))
-            if change:
-                new_role = (result.get('new_role') or 'bystander').upper()
+        planned = await fetch_planned_item(
+            stakeholder_id=stakeholder.stakeholder_id,
+            kind='role_adaptation',
+            context_hash=context_hash,
+        )
+        if planned:
+            planned_id, payload = planned
+            await mark_action_consumed(planned_id)
+            if payload.get('change_role'):
                 old_role = stakeholder.current_role
-                stakeholder.current_role = StakeholderRole[new_role]
+                stakeholder.current_role = StakeholderRole[payload.get('new_role', old_role.value).upper()]
                 async with get_db_connection_context() as conn:
                     await conn.execute(
                         "UPDATE stakeholders SET role = $1 WHERE stakeholder_id = $2",
-                        stakeholder.current_role.value, stakeholder.stakeholder_id
+                        stakeholder.current_role.value,
+                        stakeholder.stakeholder_id,
                     )
-                return {'role_changed': True, 'old_role': old_role.value, 'new_role': stakeholder.current_role.value, 'reason': result.get('reason', 'Circumstances changed')}
-            return {'role_changed': False}
-        except Exception as e:
-            logger.warning(f"Role adaptation failed for stakeholder {stakeholder.stakeholder_id}: {e}")
-            return {'role_changed': False}
+                return {
+                    'role_changed': True,
+                    'old_role': old_role.value,
+                    'new_role': stakeholder.current_role.value,
+                    'reason': payload.get('reason', 'Background evaluation'),
+                }
+            return {'role_changed': False, 'reason': 'No change recommended'}
+
+        # Heuristic fallback: adjust role based on stress and phase
+        phase = changing_conditions.get('phase') if isinstance(changing_conditions, dict) else None
+        old_role = stakeholder.current_role
+        role_changed = False
+        reason = 'Heuristic decision'
+
+        if stakeholder.stress_level > 0.85 and stakeholder.current_role == StakeholderRole.BYSTANDER:
+            stakeholder.current_role = StakeholderRole.VICTIM
+            role_changed = True
+        elif phase == 'resolution' and stakeholder.current_role == StakeholderRole.ESCALATOR:
+            stakeholder.current_role = StakeholderRole.PEACEMAKER
+            role_changed = True
+        elif phase == 'climax' and stakeholder.current_role == StakeholderRole.BYSTANDER and stakeholder.commitment_level > 0.6:
+            stakeholder.current_role = StakeholderRole.DEFENDER
+            role_changed = True
+        else:
+            reason = 'No heuristic change'
+
+        if role_changed:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    "UPDATE stakeholders SET role = $1 WHERE stakeholder_id = $2",
+                    stakeholder.current_role.value,
+                    stakeholder.stakeholder_id,
+                )
+
+        task_id = dispatch_role_adaptation({
+            'stakeholder_id': stakeholder.stakeholder_id,
+            'stakeholder_snapshot': {
+                'name': stakeholder.name,
+                'role': stakeholder.current_role.value,
+                'stress_level': stakeholder.stress_level,
+            },
+            'changing_conditions': changing_conditions,
+            'context_hash': context_hash,
+        })
+        stakeholder.pending_task_id = task_id or stakeholder.pending_task_id
+
+        return {
+            'role_changed': role_changed,
+            'old_role': old_role.value if role_changed else old_role.value,
+            'new_role': stakeholder.current_role.value,
+            'reason': reason,
+            'task_id': task_id,
+        }
 
     # ========== Helper Methods ==========
     
