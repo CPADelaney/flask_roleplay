@@ -10,11 +10,7 @@ This guide documents the refactoring of `autonomous_stakeholder_actions.py` to s
 
 #### `_on_conflict_updated` (Line 371)
 
-**Before:**
-```python
-for s in acting_stakeholders:
-    action = await self.make_autonomous_decision(s, payload)  # BLOCKING LLM!
-```
+**Before:** Legacy handlers awaited the removed `make_autonomous_decision()` coroutine, blocking on the LLM before responding.
 
 **After:**
 ```python
@@ -30,10 +26,7 @@ for s in acting_stakeholders:
 
 #### `_on_player_choice` (Line 423)
 
-**Before:**
-```python
-reaction = await self.generate_reaction(s, triggering_action, payload)  # BLOCKING LLM!
-```
+**Before:** The handler awaited the old `generate_reaction()` coroutine, which performed the LLM call inline.
 
 **After:**
 ```python
@@ -44,12 +37,8 @@ dispatch_reaction_generation(s, payload, event.event_id)  # NON-BLOCKING!
 
 #### `_on_state_sync` (Line 474)
 
-**Before:**
-```python
-for s in self._active_stakeholders.values():
-    if s.npc_id in npcs_present and self._should_take_autonomous_action(s, scene_context):
-        action = await self.make_autonomous_decision(s, scene_context)  # BLOCKING LLM!
-```
+**Before:** `_on_state_sync` iterated stakeholders and awaited `make_autonomous_decision()` for each actor, resulting in multiple
+blocking LLM calls on the hot path.
 
 **After:**
 ```python
@@ -78,41 +67,15 @@ for s in self._active_stakeholders.values():
             dispatch_action_generation(s, scene_context)
 ```
 
-### 2. make_autonomous_decision Refactoring
+### 2. Decision & Reaction Dispatch
 
-The original `make_autonomous_decision` method stays for background worker use.
-Add a new hot-path wrapper:
+The legacy `make_autonomous_decision()` and `generate_reaction()` coroutines have been removed from the subsystem. Hot-path code
+should rely on the `autonomous_stakeholder_actions_hotpath` helpers to fetch cached work and dispatch Celery tasks:
 
-```python
-async def make_autonomous_decision_hotpath(
-    self,
-    stakeholder: Stakeholder,
-    context: Dict[str, Any]
-) -> Optional[StakeholderAction]:
-    """Hot path version: fetch precomputed action or return None."""
-    from logic.conflict_system.autonomous_stakeholder_actions_hotpath import fetch_ready_actions_for_scene
-
-    scene_context = {"stakeholder_ids": [stakeholder.stakeholder_id], **context}
-    actions = await fetch_ready_actions_for_scene(scene_context, limit=1)
-
-    if actions:
-        action_data = actions[0]
-        # Convert to StakeholderAction object
-        payload = action_data["payload"]
-        return StakeholderAction(
-            action_id=action_data["action_id"],
-            stakeholder_id=stakeholder.stakeholder_id,
-            action_type=ActionType[payload.get("action_type", "OBSERVANT").upper()],
-            description=payload.get("description", "Takes action"),
-            target=payload.get("target"),
-            resources_used=payload.get("resources", {}),
-            success_probability=payload.get("success_probability", 0.5),
-            consequences=payload.get("consequences", {}),
-            timestamp=datetime.now()
-        )
-
-    return None  # No precomputed action available
-```
+- `fetch_ready_actions_for_scene()` / `fetch_planned_item()` for cached payloads
+- `dispatch_action_generation()` for autonomous decisions
+- `dispatch_reaction_generation()` for reactions
+- `dispatch_role_adaptation()` for role changes
 
 ### 3. Test Coverage
 
@@ -147,7 +110,7 @@ async def test_dispatch_non_blocking():
 - [ ] Refactor `_on_conflict_updated` to dispatch instead of blocking
 - [ ] Refactor `_on_player_choice` to dispatch reactions
 - [ ] Refactor `_on_state_sync` to use ready actions + behavior hints
-- [ ] Add `make_autonomous_decision_hotpath` wrapper
+- [x] Remove legacy `make_autonomous_decision`/`generate_reaction` implementations from the subsystem
 - [ ] Update tests
 - [ ] Add CI guard to prevent re-introduction of blocking calls
 - [ ] Document performance improvements (latency reduction)
