@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-CI Guard: Forbid blocking LLM calls in hot-path code.
+CI Guard: Forbid direct Runner.run invocations outside Nyx gateway/core/tests code.
 
-This script scans hot-path modules (event handlers, game loop, synchronous APIs)
-for blocking LLM patterns like Runner.run(), llm_json(), make_autonomous_decision(),
-etc. It fails the build if such patterns are found outside allowed locations
-(tasks/, scripts/, migrations/, tests/).
+The LLM hot-path policy now requires **all** synchronous entrypoints to invoke the
+central `nyx.gateway.llm_gateway.execute(...)` wrapper instead of touching the
+Runner directly. This script scans every Python file in the repository and fails
+the build when it finds a call to `Runner.run` in any path that is not part of the
+Nyx gateway, Nyx core, or tests packages. The goal is to prevent accidental direct
+Runner usage in request handlers, orchestrators, or background tasks that should
+route through the gateway.
 
 Usage:
     python scripts/ci/forbid_hotpath_llm.py
@@ -20,85 +23,43 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple, Set
+from typing import List, Tuple
 
-# Blocking patterns to detect (regex patterns)
-BLOCKING_PATTERNS = [
-    (r"\bRunner\.run\s*\(", "Runner.run()"),
-    (r"\bllm_json\s*\(", "llm_json()"),
-    (r"\bmake_autonomous_decision\s*\(", "make_autonomous_decision()"),
-    (r"\bgenerate_reaction\s*\(", "generate_reaction()"),
-    (r"\btransition_narrator\s*\(", "transition_narrator()"),
-    (r"\bgenerate_gossip\s*\(", "generate_gossip()"),
-    (r"\bcalculate_reputation\s*\(", "calculate_reputation()"),
-    (r"\bbeat_narrator\s*\(", "beat_narrator()"),
-    (r"\bbuild_canon_record\s*\(", "build_canon_record()"),
-    (r"\bgenerate_canon_dialogue\s*\(", "generate_canon_dialogue()"),
-]
+# Regex pattern to detect direct Runner usage
+RUNNER_PATTERN = (r"\bRunner\.run\s*\(", "Runner.run call")
 
-# Hot-path modules (must NOT contain blocking patterns)
-HOT_PATH_PATTERNS = [
-    "logic/conflict_system/*.py",
-    "logic/roleplay_engine.py",
-    "logic/event_system.py",
-    "logic/fully_integrated_npc_system.py",
-    "logic/dynamic_relationships.py",
-    "routes/**/*.py",
-    "main.py",
-]
-
-# Allowed locations (CAN contain blocking patterns)
-ALLOWED_PATTERNS = [
-    "nyx/tasks/**/*.py",
-    "nyx/gateway/**/*.py",
-    "nyx/core/**/*.py",
-    "tasks.py",
-    "celery_tasks/**/*.py",
-    "tests/**/*.py",
-    "scripts/**/*.py",
-    "db/migrations/**/*.py",
-    "*_hotpath.py",  # Our new hotpath helper modules are allowed (they import but don't call)
-]
+# Allowed path prefixes (relative to repo root) where Runner.run() is legitimate
+ALLOWED_PREFIXES = (
+    Path("nyx/gateway"),
+    Path("nyx/core"),
+    Path("tests"),
+)
 
 
-def match_patterns(file_path: Path, patterns: List[str]) -> bool:
-    """Check if file path matches any of the glob patterns."""
-    for pattern in patterns:
-        if file_path.match(pattern):
-            return True
-    return False
-
-
-def is_hot_path_file(file_path: Path) -> bool:
-    """Check if this is a hot-path file that should not have blocking calls."""
-    if not match_patterns(file_path, HOT_PATH_PATTERNS):
-        return False
-    # Exclude if it matches allowed patterns
-    if match_patterns(file_path, ALLOWED_PATTERNS):
-        return False
-    return True
+def is_allowed_path(rel_path: Path) -> bool:
+    """Return True if the file is inside an allowed prefix."""
+    return any(rel_path.parts[:len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES)
 
 
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
-    """Scan a file for blocking patterns.
+    """Scan a file for forbidden Runner.run() usages.
 
     Returns:
         List of (line_number, pattern_name, line_content) tuples
     """
-    violations = []
+    violations: List[Tuple[int, str, str]] = []
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         for line_num, line in enumerate(lines, start=1):
-            # Skip comments
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
 
-            for pattern_re, pattern_name in BLOCKING_PATTERNS:
-                if re.search(pattern_re, line):
-                    violations.append((line_num, pattern_name, line.strip()))
+            pattern_re, pattern_name = RUNNER_PATTERN
+            if re.search(pattern_re, line):
+                violations.append((line_num, pattern_name, line.strip()))
 
     except Exception as e:
         print(f"⚠️  Error reading {file_path}: {e}", file=sys.stderr)
@@ -109,9 +70,8 @@ def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
 def main() -> int:
     """Main entry point."""
     repo_root = Path.cwd()
-    print(f"🔍 Scanning hot-path modules for blocking LLM calls in {repo_root}")
-    print(f"   Hot-path patterns: {HOT_PATH_PATTERNS}")
-    print(f"   Allowed patterns: {ALLOWED_PATTERNS}")
+    print(f"🔍 Scanning repository for direct Runner.run calls in {repo_root}")
+    print(f"   Allowed prefixes: {[str(prefix) for prefix in ALLOWED_PREFIXES]}")
     print()
 
     all_violations = {}
@@ -126,8 +86,7 @@ def main() -> int:
 
         rel_path = py_file.relative_to(repo_root)
 
-        # Check if this is a hot-path file
-        if not is_hot_path_file(rel_path):
+        if is_allowed_path(rel_path):
             continue
 
         file_count += 1
@@ -138,13 +97,13 @@ def main() -> int:
 
     # Report results
     if not all_violations:
-        print(f"✅ SUCCESS: No blocking LLM calls found in {file_count} hot-path files")
+        print(f"✅ SUCCESS: No forbidden Runner.run calls found in {file_count} scanned files")
         print()
-        print("All hot-path code is clean! 🎉")
+        print("All non-gateway/core/tests code is clean! 🎉")
         return 0
 
     # Print violations
-    print(f"❌ FAILURE: Found blocking LLM calls in {len(all_violations)} hot-path files:\n")
+    print(f"❌ FAILURE: Found direct Runner.run calls in {len(all_violations)} files outside the gateway/core/tests allowlist:\n")
 
     for file_path, violations in sorted(all_violations.items()):
         print(f"📁 {file_path}")
@@ -159,9 +118,8 @@ def main() -> int:
     print(f"{'='*80}\n")
 
     print("🔧 How to fix:")
-    print("   • Keep blocking LLM calls within nyx/tasks/, nyx/gateway/, nyx/core/, tests/, or scripts/")
-    print("   • Outside those paths, call nyx.gateway.llm_gateway.execute(...) instead of invoking the LLM directly")
-    print("   • See docs/hot_path_blockers.md for the detailed refactoring guide")
+    print("   • Move the call into nyx/gateway/ or nyx/core/, or expose it via a gateway helper for callers")
+    print("   • Otherwise replace direct Runner usage with nyx.gateway.llm_gateway.execute(...)")
     print()
 
     return 1
