@@ -14,6 +14,7 @@ import logging
 import random
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from enum import Enum
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -107,6 +108,13 @@ class LLMResult:
 
 
 _runner: type | None = None
+
+
+class LLMOperation(str, Enum):
+    """Enumerate high-level operations routed through the LLM gateway."""
+
+    ORCHESTRATION = "orchestration"
+    DEFER_RESPONSE = "defer_response"
 
 
 def _lazy_import_runner() -> type:

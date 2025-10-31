@@ -21,6 +21,7 @@ from nyx.nyx_agent.feasibility import (
     assess_action_feasibility_fast
 )
 
+from nyx.gateway.llm_gateway import execute, LLMRequest, LLMOperation
 from .config import Config
 
 if TYPE_CHECKING:
@@ -533,12 +534,24 @@ async def process_user_input(
             safe_settings = ModelSettings(strict_tools=False)
             run_config = RunConfig(model_settings=safe_settings)
 
+            request = LLMRequest(
+                prompt=enhanced_input,
+                agent=nyx_main_agent,
+                context=runner_context,
+                runner_kwargs={"run_config": run_config},
+                metadata={
+                    "trace_id": trace_id,
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stream": False,
+                    "tags": ["nyx", "orchestrator", "main"],
+                },
+            )
             result = await asyncio.wait_for(
-                Runner.run(nyx_main_agent, enhanced_input, context=runner_context, run_config=run_config),
+                execute(request),
                 timeout=time_left()
             )
 
-            resp_stream = extract_runner_response(result)
+            resp_stream = extract_runner_response(result.raw)
 
         # ---- STEP 6: Post-run enforcement (updates/image hooks + punishment) ---
         async with _log_step("post_run_enforcement", trace_id):
