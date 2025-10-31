@@ -312,7 +312,6 @@ class ConflictCanonSubsystem(ConflictSubsystem):
                 resolved_conflict_id,
                 resolution_data,
             )
-            await self._mark_snapshot_status(snapshot_id, 'completed', result=result)
         except Exception as exc:
             logger.exception("Canon snapshot processing failed", exc_info=exc)
             await self._mark_snapshot_status(
@@ -323,6 +322,20 @@ class ConflictCanonSubsystem(ConflictSubsystem):
             )
             raise
 
+        if result.get('pending'):
+            await self._mark_snapshot_status(snapshot_id, 'pending', result=result)
+            from logic.conflict_system.conflict_canon_hotpath import queue_canonization
+
+            queue_canonization(
+                self.user_id,
+                self.conversation_id,
+                resolved_conflict_id,
+                resolution_data,
+                snapshot_id=snapshot_id,
+            )
+        else:
+            await self._mark_snapshot_status(snapshot_id, 'completed', result=result)
+
     async def _perform_canon_evaluation(
         self,
         conflict_id: int,
@@ -330,6 +343,41 @@ class ConflictCanonSubsystem(ConflictSubsystem):
     ) -> Dict[str, Any]:
         """Hot-path canon evaluation: return cached result or queue background work."""
 
+        from logic.conflict_system.conflict_canon_hotpath import (
+            get_cached_canon_record,
+        )
+
+        cached = await get_cached_canon_record(conflict_id)
+        if cached:
+            return {
+                'became_canonical': True,
+                'reason': 'Cached canon record available',
+                'significance': float(cached.get('significance_score') or 0.0),
+                'tags': cached.get('tags', []),
+                'canonical_event_id': int(cached.get('canon_id', 0) or 0),
+                'legacy': cached.get('legacy'),
+                'name': cached.get('canon_text'),
+                'creates_precedent': cached.get('creates_precedent'),
+                'pending': False,
+            }
+
+        return {
+            'became_canonical': False,
+            'reason': 'Canon evaluation queued',
+            'significance': float(resolution_data.get('significance_score', 0.0) or 0.0),
+            'tags': resolution_data.get('tags', []),
+            'canonical_event_id': 0,
+            'legacy': None,
+            'name': None,
+            'creates_precedent': None,
+            'pending': True,
+        }
+
+    async def _perform_canon_evaluation_background(
+        self,
+        conflict_id: int,
+        resolution_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
         from logic.conflict_system.conflict_canon_hotpath import (
             get_cached_canon_record,
             queue_canonization,
@@ -366,81 +414,6 @@ class ConflictCanonSubsystem(ConflictSubsystem):
             'name': None,
             'creates_precedent': None,
             'pending': True,
-        }
-
-    async def _perform_canon_evaluation_background(
-        self,
-        conflict_id: int,
-        resolution_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        async with get_db_connection_context() as conn:
-            conflict = await conn.fetchrow(
-                """
-                SELECT *, id as conflict_id FROM Conflicts WHERE id = $1
-                """,
-                conflict_id,
-            )
-            if not conflict:
-                return {
-                    'became_canonical': False,
-                    'reason': 'Conflict not found',
-                    'significance': 0.0,
-                    'tags': [],
-                    'canonical_event_id': 0,
-                }
-            stakeholders = await conn.fetch(
-                """
-                SELECT * FROM ConflictStakeholders WHERE conflict_id = $1
-                """,
-                conflict_id,
-            )
-
-        prompt = f"""
-Evaluate if this conflict resolution should become canonical:
-
-Conflict: {conflict['conflict_name']}
-Type: {conflict['conflict_type']}
-Resolution: {json.dumps(resolution_data)}
-Stakeholders: {len(stakeholders)}
-
-Return JSON:
-{{
-  "should_be_canonical": true/false,
-  "reason": "Why this matters (or doesn't)",
-  "event_type": "historical_precedent|cultural_shift|relationship_milestone|power_restructuring|social_evolution|legendary_moment|tradition_born|taboo_broken",
-  "significance": 0.0
-}}
-"""
-        response = await Runner.run(self.lore_integrator, prompt)
-        data = json.loads(extract_runner_response(response))
-        should = bool(data.get('should_be_canonical', False))
-        reason = data.get('reason', '')
-        significance = float(data.get('significance', 0.0) or 0.0)
-
-        if not should:
-            return {
-                'became_canonical': False,
-                'reason': reason,
-                'significance': significance,
-                'tags': [],
-                'canonical_event_id': 0,
-            }
-
-        event_type_str = data.get('event_type', CanonEventType.LEGENDARY_MOMENT.value)
-        event_type = CanonEventType(event_type_str)
-        event, tags = await self._create_canonical_event_background(
-            conflict_id, conflict, resolution_data, event_type, significance
-        )
-
-        return {
-            'became_canonical': True,
-            'reason': reason,
-            'significance': significance,
-            'tags': tags,
-            'canonical_event_id': int(event.event_id),
-            'legacy': event.legacy,
-            'name': event.name,
-            'creates_precedent': event.creates_precedent,
         }
 
     async def _ensure_compliance_cache_table(self) -> None:
@@ -698,55 +671,16 @@ Return JSON:
         event_id: int,
         context: str,
     ) -> None:
-        try:
-            async with get_db_connection_context() as conn:
-                event = await conn.fetchrow(
-                    """
-                    SELECT * FROM CanonicalEvents
-                    WHERE user_id = $1 AND conversation_id = $2
-                      AND id = $3
-                    """,
-                    self.user_id,
-                    self.conversation_id,
-                    event_id,
-                )
+        existing = await self._get_reference_cache(event_id, context)
+        if existing and (existing.get('status') or '').lower() == 'ready':
+            return
 
-                if not event:
-                    details = await conn.fetchrow(
-                        """
-                        SELECT * FROM conflict_canon_details WHERE id = $1
-                        """,
-                        event_id,
-                    )
-                    if not details:
-                        await self.update_reference_cache(cache_id, [], status='failed')
-                        return
-                    event_dict = {
-                        'event_text': (details.get('metadata') or {}).get('name', 'Unknown Event'),
-                        'tags': ['conflict', details.get('event_type', '')],
-                        'significance': 5,
-                    }
-                else:
-                    event_dict = dict(event)
+        cache_identifier = cache_id
+        if cache_identifier <= 0:
+            cache_identifier = await self._create_reference_cache_entry(event_id, context)
 
-            prompt = f"""
-Generate NPC references to this canonical event:
-
-Event: {event_dict.get('event_text','')}
-Tags: {event_dict.get('tags', [])}
-Significance: {event_dict.get('significance', 5)}
-Context: {context}
-
-Return JSON:
-{{ "references": [{{"text": "..."}}] }}
-"""
-            response = await Runner.run(self.reference_generator, prompt)
-            data = json.loads(extract_runner_response(response))
-            refs = [ref.get('text', '') for ref in data.get('references', [])]
-            await self.update_reference_cache(cache_id, refs, status='ready')
-        except Exception as exc:
-            logger.exception("Failed to build reference cache", exc_info=exc)
-            await self.update_reference_cache(cache_id, [], status='failed')
+        await self.update_reference_cache(cache_identifier, [], status='pending')
+        await self._queue_reference_generation(cache_identifier, event_id, context)
 
     async def build_compliance_suggestions(
         self,
@@ -1209,95 +1143,63 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
         event_type: CanonEventType,
         significance: float
     ) -> Tuple[CanonicalEvent, List[str]]:
-        """Create a new canonical event using the core canon system (returns event, tags)."""
-        prompt = f"""
-Create a canonical description for this event:
+        from logic.conflict_system.conflict_canon_hotpath import (
+            get_cached_canon_record,
+            queue_canonization,
+        )
 
-Conflict: {conflict['conflict_name']}
-Resolution: {json.dumps(resolution_data)}
-Event Type: {event_type.value}
-Significance: {significance:.2f}
-
-Return JSON:
-{{
-  "canonical_name": "How history will remember this",
-  "canonical_description": "2-3 sentence historical record",
-  "cultural_impact": {{
-    "immediate": "How society reacts",
-    "long_term": "Cultural changes over time",
-    "traditions_affected": ["existing traditions impacted"],
-    "new_traditions": ["potential new traditions"]
-  }},
-  "creates_precedent": true/false,
-  "precedent_description": "What precedent if any"
-}}
-"""
-        response = await Runner.run(self.cultural_interpreter, prompt)
-        data = json.loads(extract_runner_response(response))
-        
-        legacy = await self._generate_legacy_background(conflict, resolution_data, data)
-        
-        tags = [
-            'conflict',
-            'resolution',
-            event_type.value,
-            conflict['conflict_type'],
-            f"conflict_id_{conflict_id}",
-            'precedent' if data.get('creates_precedent') else 'event'
-        ]
-        
+        cached = await get_cached_canon_record(conflict_id)
         async with get_db_connection_context() as conn:
-            await log_canonical_event(
-                self.ctx, conn,
-                f"{data['canonical_name']}: {data['canonical_description']}",
-                tags=tags,
-                significance=int(max(1, min(10, round(significance * 10))))  # clamp to 1-10
+            details = await conn.fetchrow(
+                """
+                SELECT * FROM conflict_canon_details
+                 WHERE user_id = $1 AND conversation_id = $2
+                   AND conflict_id = $3
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                self.user_id,
+                self.conversation_id,
+                conflict_id,
             )
-            # Store detailed record for cross-linking
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS conflict_canon_details (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    conflict_id INTEGER,
-                    event_type TEXT,
-                    cultural_impact JSONB,
-                    creates_precedent BOOLEAN,
-                    legacy TEXT,
-                    metadata JSONB,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            event_id = await conn.fetchval("""
-                INSERT INTO conflict_canon_details
-                (user_id, conversation_id, conflict_id, event_type, cultural_impact, 
-                 creates_precedent, legacy, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING id
-            """, self.user_id, self.conversation_id, conflict_id, event_type.value, 
-            json.dumps(data.get('cultural_impact', {})), bool(data.get('creates_precedent', False)), 
-            legacy, json.dumps({'name': data.get('canonical_name', '')}))
-        
-        canonical_event = CanonicalEvent(
-            event_id=event_id,
+
+        if cached and details:
+            metadata = details.get('metadata') or {}
+            canonical_event = CanonicalEvent(
+                event_id=int(details.get('id') or cached.get('canon_id') or 0),
+                conflict_id=conflict_id,
+                event_type=CanonEventType(details.get('event_type', event_type.value)),
+                name=str(metadata.get('name') or cached.get('canon_text') or 'Canonical Event'),
+                description=str(cached.get('canon_text') or ''),
+                significance=float(cached.get('significance_score') or significance),
+                cultural_impact=details.get('cultural_impact') or cached.get('cultural_impact') or {},
+                referenced_by=[],
+                creates_precedent=bool(details.get('creates_precedent') or cached.get('creates_precedent')), 
+                legacy=details.get('legacy') or cached.get('legacy') or '',
+            )
+            tags = cached.get('tags', [])
+            return canonical_event, tags
+
+        queue_canonization(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+            resolution_data,
+        )
+
+        placeholder_event = CanonicalEvent(
+            event_id=0,
             conflict_id=conflict_id,
             event_type=event_type,
-            name=data.get('canonical_name', ''),
-            description=data.get('canonical_description', ''),
+            name='Canonization pending',
+            description='Canonization pending',
             significance=significance,
-            cultural_impact=data.get('cultural_impact', {}),
+            cultural_impact={},
             referenced_by=[],
-            creates_precedent=bool(data.get('creates_precedent', False)),
-            legacy=legacy
+            creates_precedent=False,
+            legacy='',
         )
-
-        await self._persist_canon_summary(
-            conflict_id,
-            canonical_event,
-            tags,
-        )
-
-        return canonical_event, tags
+        return placeholder_event, []
 
     async def _generate_legacy(
         self,
@@ -1324,16 +1226,25 @@ Return JSON:
         resolution: Dict[str, Any],
         cultural_data: Dict[str, Any]
     ) -> str:
-        """Generate the lasting legacy of a canonical event."""
-        prompt = f"""
-Write the lasting legacy of this canonical event:
+        from logic.conflict_system.conflict_canon_hotpath import (
+            get_cached_canon_record,
+            queue_canonization,
+        )
 
-Event: {cultural_data.get('canonical_name','')}
-Description: {cultural_data.get('canonical_description','')}
-Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
-"""
-        response = await Runner.run(self.legacy_writer, prompt)
-        return extract_runner_response(response)
+        conflict_id = int(conflict.get('conflict_id') or conflict.get('id') or 0)
+        cached = await get_cached_canon_record(conflict_id)
+        if cached and cached.get('legacy'):
+            return str(cached['legacy'])
+
+        if conflict_id > 0:
+            queue_canonization(
+                self.user_id,
+                self.conversation_id,
+                conflict_id,
+                resolution,
+            )
+
+        return 'Legacy generation pending'
 
     async def _persist_canon_summary(
         self,
@@ -1660,32 +1571,29 @@ Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
         return "Mythology generation pending"
 
     async def _generate_mythology_text_background(self, conflict_id: int) -> str:
-        """Internal: generate mythological interpretation for a conflict."""
-        async with get_db_connection_context() as conn:
-            conflict = await conn.fetchrow("""
-                SELECT *, id as conflict_id FROM Conflicts WHERE id = $1
-            """, conflict_id)
-            canonical_events = await conn.fetch("""
-                SELECT event_text, significance FROM CanonicalEvents
-                WHERE user_id = $1 AND conversation_id = $2
-                  AND tags ? $3
-                ORDER BY significance DESC
-            """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
+        from logic.conflict_system.conflict_canon_hotpath import (
+            get_cached_canon_record,
+            queue_mythology_generation,
+        )
 
-        if not canonical_events:
-            return "This conflict has not yet become part of the canonical lore."
+        mythology_cache_key = cache_key("canon", "mythology", conflict_id)
+        cached_myth = get_json(mythology_cache_key)
+        if isinstance(cached_myth, dict) and cached_myth.get('text'):
+            return str(cached_myth['text'])
+        if isinstance(cached_myth, str) and cached_myth:
+            return cached_myth
 
-        prompt = f"""
-Generate the mythological interpretation of this conflict:
+        cached_canon = await get_cached_canon_record(conflict_id)
+        if cached_canon and cached_canon.get('canon_text'):
+            return str(cached_canon['canon_text'])
 
-Conflict: {conflict['conflict_name'] if conflict else f'Conflict {conflict_id}'}
-Type: {conflict['conflict_type'] if conflict else 'Unknown'}
-Canonical Events: {json.dumps([dict(e) for e in canonical_events])}
+        queue_mythology_generation(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+        )
 
-Write 2-3 paragraphs of authentic folklore.
-"""
-        response = await Runner.run(self.cultural_interpreter, prompt)
-        return extract_runner_response(response)
+        return 'Mythology generation pending'
 
     async def get_mythological_reinterpretation(
         self,
