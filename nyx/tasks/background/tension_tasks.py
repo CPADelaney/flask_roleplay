@@ -1,76 +1,235 @@
-"""Background tasks for tension system (manifestations, escalations).
+"""Background tasks for the tension subsystem.
 
-These tasks generate tension-related content in the background:
-- Tension manifestations (environmental cues, NPC behaviors)
-- Escalation narration
-- Tension bundle updates
-
-The hot path reads from cache; on miss, it dispatches these tasks.
+These tasks perform the slow LLM work needed for tension manifestations and
+escalation narration. The hot-path logic queues these tasks and serves cached
+results immediately, allowing latency-sensitive flows to remain responsive.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 from typing import Any, Dict
 
 from celery import shared_task
 
+from agents import Agent, Runner
 from infra.cache import cache_key, set_json
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from nyx.tasks.utils import with_retry, run_coro
 from nyx.utils.idempotency import idempotent
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_BUNDLE_TTL = 1800
+DEFAULT_ESCALATION_TTL = 3600
+
 
 def _idempotency_key_tension_bundle(payload: Dict[str, Any]) -> str:
     """Generate idempotency key for tension bundle generation."""
-    scene_hash = payload.get("scene_hash", "")
-    return f"tension_bundle:{scene_hash}"
+
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+    scene_hash = payload.get("scene_hash") or (payload.get("scene_context") or {}).get("scene_hash", "")
+    return f"tension_bundle:{user_id}:{conversation_id}:{scene_hash}"
 
 
 def _idempotency_key_manifestation(payload: Dict[str, Any]) -> str:
     """Generate idempotency key for manifestation generation."""
-    scene_hash = payload.get("scene_context", {}).get("scene_hash", "")
-    tension_level = payload.get("tension_level", "")
-    return f"tension_manifestation:{scene_hash}:{tension_level}"
+
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+    scene_hash = payload.get("scene_hash") or (payload.get("scene_context") or {}).get("scene_hash", "")
+    dominant_type = payload.get("dominant_type", "")
+    return f"tension_manifestation:{user_id}:{conversation_id}:{scene_hash}:{dominant_type}"
 
 
 def _idempotency_key_escalation(payload: Dict[str, Any]) -> str:
     """Generate idempotency key for escalation narration."""
-    conflict_id = payload.get("conflict_id")
-    event_type = payload.get("escalation_event", {}).get("type", "")
-    return f"tension_escalation:{conflict_id}:{event_type}"
+
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+    breaking_tension = (payload.get("escalation_event") or {}).get("breaking_tension", "")
+    return f"tension_escalation:{user_id}:{conversation_id}:{breaking_tension}"
 
 
-async def _generate_manifestations_async(
-    scene_context: Dict[str, Any], tension_level: str
-) -> list[str]:
-    """Generate tension manifestations (slow LLM call)."""
-    from logic.conflict_system.tension import manifestation_generator
+def _fallback_manifestation(dominant_type: str, dominant_level: float) -> Dict[str, Any]:
+    """Provide a deterministic manifestation when LLM generation fails."""
 
-    # This is the blocking LLM call
-    manifestations = manifestation_generator(scene_context, tension_level)
-    return manifestations
+    readable_type = dominant_type.replace("_", " ")
+    return {
+        "tension_type": dominant_type,
+        "level": float(round(dominant_level, 3)),
+        "physical_cues": [f"Subtle {readable_type} tension lingers in the air."],
+        "dialogue_modifications": ["Speech becomes measured and cautious."],
+        "environmental_changes": ["The atmosphere grows noticeably taut."],
+        "player_sensations": ["A prickle of unease settles in."],
+    }
 
 
-async def _narrate_escalation_async(
-    conflict_id: int, escalation_event: Dict[str, Any]
+async def _generate_manifestation_slow(
+    scene_context: Dict[str, Any],
+    current_tensions: Dict[str, float],
+    dominant_type: str,
+    dominant_level: float,
+) -> Dict[str, Any]:
+    """Run the LLM to produce rich tension manifestations."""
+
+    agent = Agent(
+        name="Tension Manifestation Generator",
+        instructions="""
+        Generate specific, sensory manifestations of tension in scenes.
+        Focus on:
+        - Physical cues that players can observe
+        - Dialogue modifications that reflect tension
+        - Environmental changes that enhance atmosphere
+        - Player sensations that create immersion
+
+        Make manifestations subtle and realistic.
+        Return valid JSON.
+        """,
+        model="gpt-5-nano",
+    )
+
+    prompt = (
+        "Generate tension manifestations for this scene.\n\n"
+        f"Dominant tension: {dominant_type} (level {dominant_level:.2f}).\n"
+        f"Scene context: {json.dumps(scene_context, indent=2, default=str)}\n\n"
+        "Current tensions (0-1 scale):\n"
+        f"{json.dumps(current_tensions, indent=2, default=str)}\n\n"
+        "Respond with JSON in the shape:\n"
+        "{\n"
+        "  \"physical_cues\": [..],\n"
+        "  \"dialogue_modifications\": [..],\n"
+        "  \"environmental_changes\": [..],\n"
+        "  \"player_sensations\": [..]\n"
+        "}\n"
+    )
+
+    try:
+        run_result = await Runner.run(agent, prompt)
+        raw = extract_runner_response(run_result) or "{}"
+        parsed = json.loads(raw)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception("Failed to generate tension manifestation via LLM: %s", exc)
+        parsed = {}
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    manifestation = {
+        "tension_type": dominant_type,
+        "level": float(round(dominant_level, 3)),
+        "physical_cues": list(parsed.get("physical_cues", [])),
+        "dialogue_modifications": list(parsed.get("dialogue_modifications", [])),
+        "environmental_changes": list(parsed.get("environmental_changes", [])),
+        "player_sensations": list(parsed.get("player_sensations", [])),
+    }
+
+    generated_lists = [
+        manifestation["physical_cues"],
+        manifestation["dialogue_modifications"],
+        manifestation["environmental_changes"],
+        manifestation["player_sensations"],
+    ]
+
+    if not any(generated_lists):
+        return _fallback_manifestation(dominant_type, dominant_level)
+
+    # Fill missing list fields with fallbacks
+    for key, fallback in (
+        ("physical_cues", ["Tension permeates body language."]),
+        ("dialogue_modifications", ["Voices tighten and words come slowly."]),
+        ("environmental_changes", ["The surroundings feel charged and brittle."]),
+        ("player_sensations", ["A knot of anticipation forms in the gut."]),
+    ):
+        if not manifestation.get(key):
+            manifestation[key] = fallback
+
+    return manifestation
+
+
+async def _generate_escalation_narrative(escalation_event: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the LLM to narrate an escalation event."""
+
+    agent = Agent(
+        name="Tension Escalation Narrator",
+        instructions="Narrate how tensions build, peak, and release in dramatic moments.",
+        model="gpt-5-nano",
+    )
+
+    prompt = (
+        "A tension breaking point has been reached.\n"
+        f"Event details: {json.dumps(escalation_event, indent=2, default=str)}\n\n"
+        "Return JSON with keys:\n"
+        "{\n"
+        "  \"trigger\": str,\n"
+        "  \"consequences\": [str, ...],\n"
+        "  \"player_choices\": [str, ...]\n"
+        "}\n"
+    )
+
+    try:
+        run_result = await Runner.run(agent, prompt)
+        raw = extract_runner_response(run_result) or "{}"
+        parsed = json.loads(raw)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception("Failed to generate escalation narration via LLM: %s", exc)
+        parsed = {}
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    return {
+        "trigger": parsed.get(
+            "trigger",
+            f"The {escalation_event.get('breaking_tension', 'emotional')} tension snaps, forcing action.",
+        ),
+        "consequences": list(
+            parsed.get(
+                "consequences",
+                [
+                    "Relationships shift immediately.",
+                    "Hidden motives surface in the aftermath.",
+                ],
+            )
+        ),
+        "player_choices": list(
+            parsed.get(
+                "player_choices",
+                [
+                    "Confront the core of the conflict.",
+                    "Attempt to defuse the situation diplomatically.",
+                    "Withdraw to reassess your options.",
+                ],
+            )
+        ),
+    }
+
+
+def _cache_tension_bundle(
+    user_id: int,
+    conversation_id: int,
+    scene_hash: str,
+    bundle: Dict[str, Any],
+    ttl: int,
 ) -> str:
-    """Generate escalation narration (slow LLM call)."""
-    from logic.conflict_system.tension import escalation_narrator
-
-    # This is the blocking LLM call
-    narration = escalation_narrator(conflict_id, escalation_event)
-    return narration
+    key = cache_key("tension_bundle", user_id, conversation_id, scene_hash)
+    set_json(key, bundle, ex=ttl)
+    return key
 
 
-async def _compute_tension_bundle_async(scene_hash: str) -> Dict[str, Any]:
-    """Compute complete tension bundle for a scene (may involve LLM)."""
-    from logic.conflict_system.tension import compute_tension_bundle
-
-    # This may involve LLM or heavy computation
-    bundle = compute_tension_bundle(scene_hash)
-    return bundle
+def _cache_escalation_narrative(
+    user_id: int,
+    conversation_id: int,
+    breaking_tension: str,
+    payload: Dict[str, Any],
+    ttl: int,
+) -> str:
+    key = cache_key("tension_escalation", user_id, conversation_id, breaking_tension)
+    set_json(key, payload, ex=ttl)
+    return key
 
 
 @shared_task(
@@ -82,43 +241,9 @@ async def _compute_tension_bundle_async(scene_hash: str) -> Dict[str, Any]:
 @with_retry
 @idempotent(key_fn=_idempotency_key_tension_bundle)
 def update_tension_bundle_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Update tension bundle cache for a scene.
+    """Compatibility shim that delegates to manifestation generation."""
 
-    This task is dispatched when the hot path detects a cache miss for the
-    tension bundle. It computes tension level, manifestations, and atmosphere
-    and caches the result in Redis.
-
-    Args:
-        payload: Dict with keys:
-            - scene_hash: str
-            - ttl: int (optional, cache TTL in seconds, default 1800)
-
-    Returns:
-        Dict with status and cache key
-    """
-    scene_hash = payload.get("scene_hash", "")
-    ttl = payload.get("ttl", 1800)
-
-    if not scene_hash:
-        raise ValueError("scene_hash is required")
-
-    logger.info(f"Updating tension bundle cache for scene {scene_hash}")
-
-    # Compute the bundle (may involve LLM)
-    bundle = run_coro(_compute_tension_bundle_async(scene_hash))
-
-    # Cache the result
-    key = cache_key("tension_bundle", scene_hash)
-    set_json(key, bundle, ex=ttl)
-
-    logger.info(f"Cached tension bundle at {key}")
-
-    return {
-        "status": "updated",
-        "scene_hash": scene_hash,
-        "cache_key": key,
-        "tension_level": bundle.get("tension_level", "baseline"),
-    }
+    return generate_tension_manifestations(payload)
 
 
 @shared_task(
@@ -130,44 +255,56 @@ def update_tension_bundle_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]
 @with_retry
 @idempotent(key_fn=_idempotency_key_manifestation)
 def generate_tension_manifestations(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate tension manifestations for a scene (slow LLM call).
+    """Generate tension manifestations for a scene (slow LLM call)."""
 
-    This task generates environmental cues and NPC behaviors that reflect
-    the current tension level.
-
-    Args:
-        payload: Dict with keys:
-            - scene_context: dict
-            - tension_level: str
-            - ttl: int (optional, cache TTL in seconds, default 1800)
-
-    Returns:
-        Dict with status and cache key
-    """
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+    scene_hash = payload.get("scene_hash") or (payload.get("scene_context") or {}).get("scene_hash")
     scene_context = payload.get("scene_context", {})
-    tension_level = payload.get("tension_level", "baseline")
-    ttl = payload.get("ttl", 1800)
+    current_tensions = payload.get("current_tensions") or {}
+    dominant_type = (payload.get("dominant_type") or "emotional").lower()
+    dominant_level = float(payload.get("dominant_level") or 0.0)
+    ttl = int(payload.get("ttl", DEFAULT_BUNDLE_TTL))
 
-    scene_hash = scene_context.get("scene_hash", "")
-    if not scene_hash:
-        raise ValueError("scene_context.scene_hash is required")
+    if user_id is None or conversation_id is None or not scene_hash:
+        raise ValueError("user_id, conversation_id, and scene_hash are required")
 
-    logger.info(f"Generating tension manifestations for scene {scene_hash} (level={tension_level})")
+    logger.info(
+        "Generating tension manifestations for user=%s conversation=%s scene=%s",
+        user_id,
+        conversation_id,
+        scene_hash,
+    )
 
-    # Run the slow LLM call
-    manifestations = run_coro(_generate_manifestations_async(scene_context, tension_level))
+    manifestation = run_coro(
+        _generate_manifestation_slow(scene_context, current_tensions, dominant_type, dominant_level)
+    )
 
-    # Cache the result
-    key = cache_key("manifestations", scene_hash)
-    set_json(key, manifestations, ex=ttl)
+    bundle = {
+        "manifestation": manifestation,
+        "current_tensions": current_tensions,
+        "dominant_type": dominant_type,
+        "dominant_level": float(round(dominant_level, 3)),
+        "status": "completed",
+        "generated_at": datetime.utcnow().isoformat(),
+    }
 
-    logger.info(f"Cached {len(manifestations)} manifestations at {key}")
+    cache_key_name = _cache_tension_bundle(user_id, conversation_id, scene_hash, bundle, ttl)
+
+    logger.info(
+        "Cached tension bundle for user=%s conversation=%s scene=%s at %s",
+        user_id,
+        conversation_id,
+        scene_hash,
+        cache_key_name,
+    )
 
     return {
         "status": "generated",
         "scene_hash": scene_hash,
-        "cache_key": key,
-        "manifestation_count": len(manifestations),
+        "cache_key": cache_key_name,
+        "dominant_type": dominant_type,
+        "manifestation_level": manifestation.get("level", dominant_level),
     }
 
 
@@ -180,42 +317,54 @@ def generate_tension_manifestations(self, payload: Dict[str, Any]) -> Dict[str, 
 @with_retry
 @idempotent(key_fn=_idempotency_key_escalation)
 def narrate_escalation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate escalation narration (slow LLM call).
+    """Generate escalation narration (slow LLM call)."""
 
-    This task narrates a tension escalation event for a conflict.
+    user_id = payload.get("user_id")
+    conversation_id = payload.get("conversation_id")
+    escalation_event = payload.get("escalation_event") or {}
+    breaking_tension = escalation_event.get("breaking_tension") or "emotional"
+    ttl = int(payload.get("ttl", DEFAULT_ESCALATION_TTL))
 
-    Args:
-        payload: Dict with keys:
-            - conflict_id: int
-            - escalation_event: dict
-            - ttl: int (optional, cache TTL in seconds, default 3600)
+    if user_id is None or conversation_id is None:
+        raise ValueError("user_id and conversation_id are required")
 
-    Returns:
-        Dict with status and cache key
-    """
-    conflict_id = payload.get("conflict_id")
-    escalation_event = payload.get("escalation_event", {})
-    ttl = payload.get("ttl", 3600)
+    logger.info(
+        "Generating escalation narration for user=%s conversation=%s tension=%s",
+        user_id,
+        conversation_id,
+        breaking_tension,
+    )
 
-    if not conflict_id:
-        raise ValueError("conflict_id is required")
+    narrative = run_coro(_generate_escalation_narrative(escalation_event))
 
-    logger.info(f"Generating escalation narration for conflict {conflict_id}")
+    payload_to_cache = {
+        "trigger": narrative.get("trigger"),
+        "consequences": narrative.get("consequences", []),
+        "player_choices": narrative.get("player_choices", []),
+        "event": escalation_event,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
 
-    # Run the slow LLM call
-    narration = run_coro(_narrate_escalation_async(conflict_id, escalation_event))
+    cache_key_name = _cache_escalation_narrative(
+        user_id,
+        conversation_id,
+        breaking_tension,
+        payload_to_cache,
+        ttl,
+    )
 
-    # Cache the result
-    key = cache_key("conflict", conflict_id, "escalation_narrative")
-    set_json(key, {"text": narration, "event": escalation_event}, ex=ttl)
-
-    logger.info(f"Cached escalation narration at {key}")
+    logger.info(
+        "Cached escalation narration for user=%s conversation=%s tension=%s at %s",
+        user_id,
+        conversation_id,
+        breaking_tension,
+        cache_key_name,
+    )
 
     return {
         "status": "narrated",
-        "conflict_id": conflict_id,
-        "cache_key": key,
-        "narration_length": len(narration),
+        "cache_key": cache_key_name,
+        "breaking_tension": breaking_tension,
     }
 
 

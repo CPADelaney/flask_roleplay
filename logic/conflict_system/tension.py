@@ -13,41 +13,21 @@ REFACTORED FOR PERFORMANCE:
 
 import logging
 import json
-import asyncio
 import os
 import hashlib
-import dataclasses
-import redis.asyncio as redis # POLISH: Use the async version of the redis client
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 import weakref
 
-from agents import Agent, Runner, function_tool, RunContextWrapper
+from agents import Agent, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-from celery_config import celery_app
+from infra.cache import cache_key, get_json
 
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-_redis_client: Optional[redis.Redis] = None
-
-async def get_redis_client() -> redis.Redis:
-    """Lazy-loads and returns a singleton async Redis client instance."""
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    return _redis_client
-
-CACHE_KEY_TEMPLATE = "tension_bundle:{user_id}:{conv_id}:{scene_hash}"
-CACHE_TTL_SECONDS = 300  # 5 minutes
-
-GENERATION_LOCK_KEY_TEMPLATE = "lock:tension_gen:{user_id}:{conv_id}:{scene_hash}"
-GENERATION_LOCK_TIMEOUT_SECONDS = 120  # 2 minutes
-
 # Lazy orchestrator types (avoid circular import)
 def _orch():
     from logic.conflict_system.conflict_synthesizer import (
@@ -259,16 +239,32 @@ class TensionSubsystem:
         scene_hash = self._hash_scene_context(scene_context)
 
         # HOT PATH: Use hotpath helper for cache-first retrieval
-        from logic.conflict_system.tension_hotpath import get_tension_bundle
+        from logic.conflict_system.tension_hotpath import (
+            get_tension_bundle,
+            queue_manifestation_generation,
+        )
 
-        tension_bundle = get_tension_bundle(scene_hash)
+        dominant_type, dominant_level = self._get_dominant_tension()
+        current_tensions = {t.value: v for t, v in self._current_tensions.items()}
+
+        # Ensure a background refresh is queued
+        queue_manifestation_generation(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            scene_context=scene_context,
+            current_tensions=current_tensions,
+            dominant_type=dominant_type.value if dominant_type else TensionType.EMOTIONAL.value,
+            dominant_level=float(dominant_level),
+        )
+
+        tension_bundle = get_tension_bundle(self.user_id, self.conversation_id, scene_hash)
 
         # If still generating, augment with current numeric state
         if tension_bundle.get('status') == 'generating':
-            dominant_type, dominant_level = self._get_dominant_tension()
-            tension_bundle['current_tensions'] = {t.value: v for t, v in self._current_tensions.items()}
+            tension_bundle['current_tensions'] = current_tensions
             tension_bundle['dominant_type'] = dominant_type.value if dominant_type else None
-            tension_bundle['dominant_level'] = dominant_level
+            tension_bundle['dominant_level'] = float(dominant_level)
+            tension_bundle['scene_hash'] = scene_hash
 
         return SubsystemResponse(
             subsystem=self.subsystem_type,
@@ -282,103 +278,24 @@ class TensionSubsystem:
     
     async def perform_bundle_generation_and_cache(self, scene_context: Dict[str, Any]):
         """
-        The core logic for the background worker. Generates the full tension bundle
-        with LLM calls and caches it in Redis.
-        """
-        scene_hash = self._hash_scene_context(scene_context)
-        logger.info(f"Starting background tension bundle generation for scene: {scene_hash}")
-        
-        redis_client = await get_redis_client()
-        
-        lock_key = GENERATION_LOCK_KEY_TEMPLATE.format(
-            user_id=self.user_id, conv_id=self.conversation_id, scene_hash=scene_hash
-        )
+        Schedule background generation for the given scene context.
 
-        try:
-            # 1. Generate the expensive manifestation content (LLM call)
-            manifestation = await self._generate_tension_manifestation_llm(scene_context)
-            
-            # 2. Check for breaking points (potential LLM call)
-            breaking_point = await self.check_tension_breaking_point()
-            
-            # <<< FIX IS HERE: Convert the manifestation to a dict and ensure the enum is a string. >>>
-            manifestation_dict = dataclasses.asdict(manifestation)
-            if 'tension_type' in manifestation_dict and isinstance(manifestation_dict['tension_type'], Enum):
-                manifestation_dict['tension_type'] = manifestation_dict['tension_type'].value
-            
-            # 3. Assemble the complete bundle
-            bundle = {
-                'manifestation': manifestation_dict, # Use the corrected dictionary
-                'breaking_point': breaking_point,
-                'current_tensions': {t.value: v for t, v in self._current_tensions.items()},
-                'status': 'completed',
-                'generated_at': datetime.now().isoformat()
-            }
-            
-            # 4. Cache the result in Redis
-            cache_key = CACHE_KEY_TEMPLATE.format(
-                user_id=self.user_id,
-                conv_id=self.conversation_id,
-                scene_hash=scene_hash
-            )
-            
-            # Now this will work because the bundle is fully JSON serializable
-            await redis_client.set(cache_key, json.dumps(bundle), ex=CACHE_TTL_SECONDS)
-            logger.info(f"Successfully cached tension bundle for scene: {scene_hash}")
-            
-        except Exception as e:
-            logger.error(f"Failed to generate tension bundle: {e}", exc_info=True)
-        finally:
-            try:
-                await redis_client.delete(lock_key)
-            except Exception as lock_e:
-                logger.error(f"Failed to release tension generation lock: {lock_e}")
-
-
-    
-    async def _generate_tension_manifestation_llm(self, scene_context: Dict[str, Any]) -> TensionManifestation:
+        Legacy callers expect this coroutine to exist; it now delegates to the
+        hot-path dispatcher so work is performed by Celery workers.
         """
-        The actual slow, LLM-powered manifestation generation.
-        This is called only in background workers, never in the main request path.
-        """
+        from logic.conflict_system.tension_hotpath import queue_manifestation_generation
+
         dominant_type, dominant_level = self._get_dominant_tension()
-        
-        if dominant_level < 0.1:
-            return self._create_no_tension_manifestation()
-        
-        prompt = f"""
-        Generate tension manifestations for this scene:
+        current_tensions = {t.value: v for t, v in self._current_tensions.items()}
 
-        Dominant Tension: {dominant_type.value} ({dominant_level:.2f})
-        Scene Context: {json.dumps(scene_context, indent=2, default=str)}
-        
-        All current tensions:
-        {json.dumps({t.value: v for t, v in self._current_tensions.items()}, indent=2)}
-
-        Return JSON with arrays:
-        {{
-            "physical_cues": ["visible body language", "facial expressions", "posture changes"],
-            "dialogue_modifications": ["tone changes", "word choices", "pauses"],
-            "environmental_changes": ["atmosphere shifts", "ambient details", "setting cues"],
-            "player_sensations": ["what the player character feels", "visceral sensations"]
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.manifestation_generator, prompt)
-            result = json.loads(extract_runner_response(response) or '{}')
-            
-            return TensionManifestation(
-                tension_type=dominant_type,
-                level=float(dominant_level),
-                physical_cues=list(result.get('physical_cues', [])),
-                dialogue_modifications=list(result.get('dialogue_modifications', [])),
-                environmental_changes=list(result.get('environmental_changes', [])),
-                player_sensations=list(result.get('player_sensations', []))
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate manifestation via LLM: {e}")
-            return self._create_fallback_manifestation(dominant_type, float(dominant_level))
+        queue_manifestation_generation(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            scene_context=scene_context,
+            current_tensions=current_tensions,
+            dominant_type=dominant_type.value if dominant_type else TensionType.EMOTIONAL.value,
+            dominant_level=float(dominant_level),
+        )
     
     # ===== Fast, Numerical Event Handlers =====
     
@@ -751,37 +668,53 @@ class TensionSubsystem:
         breaking = {t: l for t, l in self._current_tensions.items() if l >= TensionLevel.BREAKING.value}
         if not breaking:
             return None
-        
+
         breaking_type = max(breaking.items(), key=lambda x: x[1])[0]
-        
-        prompt = f"""
-        A tension has reached a breaking point:
+        severity = float(breaking.get(breaking_type, 1.0))
+        escalation_event = {
+            'breaking_tension': breaking_type.value,
+            'severity': severity,
+            'timestamp': datetime.utcnow().isoformat(),
+        }
 
-        Breaking Tension: {breaking_type.value}
-        Level: {breaking[breaking_type]:.2f}
+        from logic.conflict_system.tension_hotpath import queue_escalation_narration
 
-        Describe the trigger event and its immediate consequences in a dramatic way.
-        Provide 2-3 tough choices for the player.
+        queue_escalation_narration(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            escalation_event=escalation_event,
+        )
 
-        Return JSON:
-        {{ "trigger": "...", "consequences": ["...", "..."], "choices": ["...", "..."] }}
-        """
-        try:
-            response = await Runner.run(self.escalation_narrator, prompt)
-            result = json.loads(extract_runner_response(response) or '{}')
+        cache_key_name = cache_key(
+            'tension_escalation',
+            self.user_id,
+            self.conversation_id,
+            breaking_type.value,
+        )
+        cached = get_json(cache_key_name, default={}) or {}
+
+        if isinstance(cached, dict) and cached.get('trigger'):
             return {
                 'breaking_tension': breaking_type.value,
-                'trigger': result.get('trigger', 'The tension snaps'),
-                'consequences': result.get('consequences', ['Things cannot continue as they were.']),
-                'player_choices': result.get('choices', ['React.', 'Freeze.'])
+                'trigger': cached.get('trigger', ''),
+                'consequences': cached.get('consequences', ['The situation shifts dramatically.']),
+                'player_choices': cached.get('player_choices', ['Confront', 'Withdraw', 'Seek help']),
             }
-        except Exception as e:
-            logger.error(f"Failed to generate breaking point via LLM: {e}")
-            return {
-                'breaking_tension': breaking_type.value,
-                'trigger': 'The tension reaches a breaking point',
-                'consequences': ['Things cannot continue as they were']
-            }
+
+        # Deterministic fallback while narration is being generated asynchronously
+        return {
+            'breaking_tension': breaking_type.value,
+            'trigger': f'The {breaking_type.value} tension erupts, forcing an immediate decision.',
+            'consequences': [
+                'Relationships will realign.',
+                'Unresolved issues surface in the open.',
+            ],
+            'player_choices': [
+                'Confront the source head-on.',
+                'Attempt a tenuous compromise.',
+                'Step away and regroup.',
+            ],
+        }
 
     # POLISH: Add the explicit health_check method for interface consistency
     async def health_check(self) -> Dict[str, Any]:
