@@ -97,6 +97,20 @@ _COLLECTOR_DEFINITIONS: Dict[str, Tuple[Type[CollectorType], Tuple[Any, ...], Di
         ("cache_size_bytes", "Current cache size in bytes", ["cache_type"]),
         {},
     ),
+    "CONFLICT_ROUTER_DECISIONS": (
+        Counter,
+        (
+            "conflict_router_decisions_total",
+            "Conflict subsystem routing decisions by source",
+            ["source"],
+        ),
+        {},
+    ),
+    "CONFLICT_ROUTER_TIMEOUTS": (
+        Counter,
+        (
+            "conflict_router_timeouts_total",
+            "Number of orchestrator routing timeouts",
     "MODE_RECOMMENDATION_SOURCE": (
         Counter,
         (
