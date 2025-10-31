@@ -69,3 +69,25 @@ def test_guard_fails_when_disallowed_path_uses_runner(guard_repo: Path, monkeypa
     assert exit_code == 1
     assert "routes/bad.py" in out
     assert "Runner.run" in out
+
+
+def test_guard_ignores_docstring_references(guard_repo: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
+    docstring_file = guard_repo / "routes/docstring_reference.py"
+    _write(
+        docstring_file,
+        """\
+        '''This docstring mentions Runner.run but should not count as a violation.'''
+
+        def reference():
+            '''Docstring again referencing Runner.run without invoking it.'''
+            return True
+        """,
+    )
+
+    monkeypatch.chdir(guard_repo)
+    exit_code = forbid_hotpath_llm.main()
+    out, err = capfd.readouterr()
+
+    assert exit_code == 0
+    assert "docstring_reference.py" not in out
+    assert "Runner.run" not in err

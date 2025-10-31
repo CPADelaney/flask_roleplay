@@ -19,14 +19,15 @@ Exit codes:
     2: Script error
 """
 
+import io
 import os
-import re
 import sys
+import tokenize
 from pathlib import Path
 from typing import List, Tuple
 
-# Regex pattern to detect direct Runner usage
-RUNNER_PATTERN = (r"\bRunner\.run\s*\(", "Runner.run call")
+# Description used when reporting Runner.run violations
+RUNNER_PATTERN_NAME = "Runner.run call"
 
 # Allowed path prefixes (relative to repo root) where Runner.run() is legitimate
 ALLOWED_PREFIXES = (
@@ -44,25 +45,53 @@ def is_allowed_path(rel_path: Path) -> bool:
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
     """Scan a file for forbidden Runner.run() usages.
 
+    The scanner tokenizes the file so that string literals and comments are
+    ignored. Only actual code tokens (NAME/OP) are considered when detecting the
+    `Runner.run(` call pattern.
+
     Returns:
         List of (line_number, pattern_name, line_content) tuples
     """
     violations: List[Tuple[int, str, str]] = []
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        for line_num, line in enumerate(lines, start=1):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-
-            pattern_re, pattern_name = RUNNER_PATTERN
-            if re.search(pattern_re, line):
-                violations.append((line_num, pattern_name, line.strip()))
-
+        source = file_path.read_text(encoding="utf-8")
     except Exception as e:
         print(f"⚠️  Error reading {file_path}: {e}", file=sys.stderr)
+        return violations
+
+    tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    lines = source.splitlines()
+
+    pattern_name = RUNNER_PATTERN_NAME
+
+    index = 0
+    while index < len(tokens):
+        tok = tokens[index]
+        if tok.type == tokenize.NAME and tok.string == "Runner":
+            # Look ahead for `.run` followed by an opening parenthesis, ignoring
+            # non-code tokens (newlines/indent/dedent) between pieces.
+            lookahead = index + 1
+            if lookahead < len(tokens) and tokens[lookahead].type == tokenize.OP and tokens[lookahead].string == ".":
+                lookahead += 1
+                if lookahead < len(tokens) and tokens[lookahead].type == tokenize.NAME and tokens[lookahead].string == "run":
+                    # Find the next meaningful token after `run`.
+                    lookahead += 1
+                    while lookahead < len(tokens) and tokens[lookahead].type in {
+                        tokenize.NL,
+                        tokenize.NEWLINE,
+                        tokenize.INDENT,
+                        tokenize.DEDENT,
+                        tokenize.COMMENT,
+                    }:
+                        lookahead += 1
+                    if lookahead < len(tokens) and tokens[lookahead].type == tokenize.OP and tokens[lookahead].string == "(":
+                        line_num = tok.start[0]
+                        # Provide the full line for context in the violation report.
+                        line_content = lines[line_num - 1].strip() if 0 <= line_num - 1 < len(lines) else ""
+                        violations.append((line_num, pattern_name, line_content))
+                        index = lookahead  # Skip ahead to avoid duplicate reports on same call
+                        continue
+        index += 1
 
     return violations
 
