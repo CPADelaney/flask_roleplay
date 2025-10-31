@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List
 
 from celery import shared_task
 
+from nyx.tasks.background.conflict_integration_helpers import (
+    run_activity_integration,
+    run_contextual_conflict_generation,
+    run_scene_tension_analysis,
+)
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
 
@@ -46,7 +52,11 @@ async def _analyze_scene_tension_async(payload: Dict[str, Any]) -> Dict[str, Any
     scope_key = payload.get("scope_key", "")
     scene_context = payload.get("scene_context") or {}
 
-    summary = await subsystem._analyze_scene_tension(scene_context)
+    context = await subsystem._build_scene_tension_context(scene_context)
+    summary = await run_scene_tension_analysis(
+        subsystem.tension_analyzer,
+        context,
+    )
     if scope_key:
         await subsystem._persist_tension_summary(scope_key, summary)
     return {"scope_key": scope_key, "summary": summary}
@@ -62,9 +72,19 @@ async def _generate_contextual_conflict_async(payload: Dict[str, Any]) -> Dict[s
     )
     context_key = payload.get("context_key", "")
     tension_data = payload.get("tension_data") or {}
-    npcs: List[int] = payload.get("npcs") or []
+    raw_npcs: List[int] = payload.get("npcs") or []
+    normalized_npcs: List[int] = []
+    for npc in raw_npcs:
+        try:
+            normalized_npcs.append(int(npc))
+        except (TypeError, ValueError):
+            continue
 
-    conflict = await subsystem._generate_contextual_conflict(tension_data, npcs)
+    conflict = await run_contextual_conflict_generation(
+        subsystem.conflict_generator,
+        tension_data,
+        normalized_npcs,
+    )
     if context_key:
         await subsystem._persist_contextual_conflict(context_key, conflict)
     return {"context_key": context_key, "conflict": conflict}
@@ -82,9 +102,22 @@ async def _integrate_activity_async(payload: Dict[str, Any]) -> Dict[str, Any]:
     activity = payload.get("activity", "")
     conflicts = payload.get("conflicts") or []
 
-    integration = await subsystem._integrate_conflicts_with_activity(
-        activity, conflicts
-    )
+    if not conflicts:
+        integration = {
+            "conflicts_active": False,
+            "manifestations": [],
+            "environmental_cues": [],
+            "npc_behaviors": {},
+            "choices": [],
+            "source": "llm",
+            "cached_at": datetime.utcnow().isoformat(),
+        }
+    else:
+        integration = await run_activity_integration(
+            subsystem.integration_narrator,
+            activity,
+            conflicts,
+        )
     if integration_key:
         await subsystem._persist_activity_integration(integration_key, integration)
     return {"integration_key": integration_key, "integration": integration}

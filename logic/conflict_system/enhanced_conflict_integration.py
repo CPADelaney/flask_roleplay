@@ -13,12 +13,22 @@ import hashlib
 from collections import OrderedDict
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from datetime import datetime, timedelta
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 
-from agents import Agent, ModelSettings, function_tool, RunContextWrapper, Runner
+from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
-from monitoring.metrics import record_cache_operation
+try:
+    from monitoring.metrics import record_cache_operation
+except Exception:  # pragma: no cover - optional in tests
+    async def record_cache_operation(*_args, **_kwargs):
+        return None
+
 from utils.cache_manager import CacheManager
+
+from nyx.tasks.background.conflict_integration_helpers import (
+    run_activity_integration,
+    run_contextual_conflict_generation,
+    run_scene_tension_analysis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1006,7 +1016,7 @@ class EnhancedIntegrationSubsystem:
     
     # ========== Analysis Methods ==========
     
-    async def _analyze_scene_tension(
+    async def _build_scene_tension_context(
         self, scene_context: Dict[str, Any]
     ) -> Dict[str, Any]:
         npcs = scene_context.get('present_npcs', [])
@@ -1016,7 +1026,7 @@ class EnhancedIntegrationSubsystem:
         relationship_data = await self._gather_relationship_data(npcs)
         npc_data = await self._gather_npc_progression_data(npcs)
 
-        context = {
+        return {
             'location': location,
             'activity': activity,
             'npcs_present': len(npcs),
@@ -1024,52 +1034,11 @@ class EnhancedIntegrationSubsystem:
             'npc_states': self._summarize_for_llm(npc_data)
         }
 
-        prompt = f"""
-        Analyze this scene for emerging tensions:
-
-        Context:
-        {json.dumps(context, indent=2)}
-
-        Identify:
-        1. Tension sources (relationship/cultural/personal)
-        2. Conflict potential (0.0-1.0)
-        3. Suggested conflict type
-        4. How it might manifest
-
-        Return JSON:
-        {{
-            "tensions": [
-                {{
-                    "source": "tension source",
-                    "level": 0.0 to 1.0,
-                    "description": "specific tension"
-                }}
-            ],
-            "should_generate_conflict": true/false,
-            "suggested_type": "conflict type",
-            "manifestation": ["how it shows up"],
-            "context": {{additional context}}
-        }}
-        """
-
-        response = await Runner.run(self.tension_analyzer, prompt)
-
-        try:
-            result = json.loads(extract_runner_response(response))
-        except json.JSONDecodeError:
-            result = {
-                'tensions': [],
-                'should_generate_conflict': False
-            }
-
-        if isinstance(result, dict):
-            result.setdefault('tensions', [])
-            result.setdefault('manifestation', [])
-            result['context'] = context
-            result.setdefault('suggested_type', 'slice_of_life')
-            result['cached_at'] = datetime.utcnow().isoformat()
-            result.setdefault('source', 'llm')
-        return result
+    async def _analyze_scene_tension(
+        self, scene_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        context = await self._build_scene_tension_context(scene_context)
+        return await run_scene_tension_analysis(self.tension_analyzer, context)
 
     async def analyze_scene_tensions(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
         if not scene_context:
@@ -1141,49 +1110,11 @@ class EnhancedIntegrationSubsystem:
         tension_data: Dict[str, Any],
         npcs: List[int]
     ) -> Dict[str, Any]:
-        prompt = f"""
-        Generate a conflict from these tensions:
-
-        Tensions: {json.dumps(tension_data, indent=2)}
-        NPCs Involved: {npcs}
-
-        Create:
-        1. Conflict name
-        2. Description (2-3 sentences)
-        3. Initial intensity
-        4. Stakes for player
-        5. How it starts
-
-        Return JSON:
-        {{
-            "name": "conflict name",
-            "description": "detailed description",
-            "intensity": "subtle/tension/friction",
-            "stakes": "what player risks/gains",
-            "opening": "how it begins"
-        }}
-        """
-
-        response = await Runner.run(self.conflict_generator, prompt)
-
-        try:
-            result = json.loads(extract_runner_response(response))
-        except json.JSONDecodeError:
-            result = {
-                'name': "Emerging Tension",
-                'description': "A subtle conflict begins",
-                'intensity': 'tension',
-                'stakes': "Personal dynamics",
-                'opening': "Tension fills the air"
-            }
-
-        if isinstance(result, dict):
-            result.setdefault('intensity', 'tension')
-            result.setdefault('stakes', 'Maintaining daily harmony')
-            result.setdefault('opening', 'Tension fills the air')
-            result['cached_at'] = datetime.utcnow().isoformat()
-            result.setdefault('source', 'llm')
-        return result
+        return await run_contextual_conflict_generation(
+            self.conflict_generator,
+            tension_data,
+            npcs,
+        )
 
     async def generate_contextual_conflict(
         self,
@@ -1255,37 +1186,17 @@ class EnhancedIntegrationSubsystem:
         active_conflicts: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         if not active_conflicts:
-            return {'conflicts_active': False, 'cached_at': datetime.utcnow().isoformat(), 'source': 'llm'}
+            return {
+                'conflicts_active': False,
+                'cached_at': datetime.utcnow().isoformat(),
+                'source': 'llm'
+            }
 
-        prompt = f"""
-        Integrate these conflicts into the activity:
-
-        Activity: {activity}
-        Conflicts: {json.dumps(active_conflicts[:3], indent=2)}
-
-        Return JSON:
-        {{
-          "manifestations": ["specific details"],
-          "environmental_cues": ["atmosphere changes"],
-          "npc_behaviors": {{"npc_id": "behavior"}},
-          "choices": [{{"text": "choice text","subtext": "hidden meaning"}}]
-        }}
-        """
-        response = await Runner.run(self.integration_narrator, prompt)
-        try:
-            result = json.loads(extract_runner_response(response))
-        except Exception:
-            result = {'manifestations': ["Tension colors the interaction"]}
-
-        if isinstance(result, dict):
-            result.setdefault('manifestations', ["Tension colors the interaction"])
-            result.setdefault('environmental_cues', [])
-            result.setdefault('npc_behaviors', {})
-            result.setdefault('choices', [])
-            result['conflicts_active'] = True
-            result['cached_at'] = datetime.utcnow().isoformat()
-            result.setdefault('source', 'llm')
-        return result
+        return await run_activity_integration(
+            self.integration_narrator,
+            activity,
+            active_conflicts,
+        )
 
     async def integrate_conflicts_with_activity(
         self,

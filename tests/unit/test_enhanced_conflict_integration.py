@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import typing
 import typing_extensions
+import types
 
 import pytest
 
@@ -13,6 +14,22 @@ if str(ROOT) not in sys.path:  # pragma: no cover - test environment shim
 
 if sys.version_info < (3, 12):  # pragma: no cover - compatibility shim
     typing.TypedDict = typing_extensions.TypedDict  # type: ignore[attr-defined]
+
+try:  # pragma: no cover - optional metrics stub for broken dependency
+    import monitoring.metrics  # type: ignore
+except Exception:  # pragma: no cover - fallback stub for tests
+    metrics_stub = types.ModuleType("monitoring.metrics")
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    metrics_stub.record_cache_operation = _noop  # type: ignore[attr-defined]
+    monitoring_pkg = sys.modules.get("monitoring")
+    if monitoring_pkg is None:
+        monitoring_pkg = types.ModuleType("monitoring")
+        sys.modules["monitoring"] = monitoring_pkg
+    setattr(monitoring_pkg, "metrics", metrics_stub)
+    sys.modules["monitoring.metrics"] = metrics_stub
 
 from logic.conflict_system.enhanced_conflict_integration import (  # noqa: E402
     EnhancedIntegrationSubsystem,
