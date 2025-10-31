@@ -76,6 +76,9 @@ BACKGROUND_ONLY_METHODS = [
     "_create_stakeholders_for_npcs",
     "generate_manifestations",
     "narrate_escalation",
+    "_generate_tension_manifestation_llm",
+    "check_tension_breaking_point",
+    "perform_bundle_generation_and_cache",
 ]
 
 
