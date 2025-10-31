@@ -4,10 +4,13 @@ Slice-of-life conflict system with LLM-generated dynamic content.
 Refactored to work as a ConflictSubsystem with the synthesizer (circular-safe).
 """
 
+import asyncio
 import logging
 import json
 import random
+import time
 import weakref
+from collections import OrderedDict
 from typing import Dict, List, Any, Optional, Set
 from dataclasses import dataclass
 from enum import Enum
@@ -107,12 +110,36 @@ class SliceOfLifeConflictSubsystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.synthesizer = None  # weakref set in initialize
-        
+
         # Components
         self.detector = EmergentConflictDetector(user_id, conversation_id)
         self.manager = SliceOfLifeConflictManager(user_id, conversation_id)
         self.resolver = PatternBasedResolution(user_id, conversation_id)
         self.daily_integration = ConflictDailyIntegration(user_id, conversation_id)
+
+        # Scene bundle caching & refresh controls
+        self._known_scene_contexts: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._scene_memory_limit = 32
+        self._scene_bundle_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._bundle_ttl = 180.0  # seconds
+
+        self._tension_snapshot: List[Dict[str, Any]] = []
+        self._tension_snapshot_ts: float = 0.0
+        self._snapshot_ttl = 300.0
+        self._pending_tension_task: Optional[asyncio.Task] = None
+        self._tension_refresh_lock = asyncio.Lock()
+
+        # Resolution caching (player choice handlers)
+        self._resolution_cache: Dict[int, Dict[str, Any]] = {}
+        self._resolution_cache_ts: Dict[int, float] = {}
+        self._resolution_ttl = 1800.0
+        self._pending_resolution_tasks: Dict[int, asyncio.Task] = {}
+
+        # Manifestation caching (conflict embedding)
+        self._manifestation_cache: Dict[str, Dict[str, Any]] = {}
+        self._manifestation_cache_ts: Dict[str, float] = {}
+        self._manifestation_ttl = 900.0
+        self._pending_manifestation_tasks: Dict[str, asyncio.Task] = {}
     
     # ========== Subsystem Interface ==========
     
@@ -150,7 +177,7 @@ class SliceOfLifeConflictSubsystem:
         """Initialize with synthesizer reference"""
         self.synthesizer = weakref.ref(synthesizer)
         return True
-    
+
     async def handle_event(self, event):
         """Handle events from synthesizer"""
         _, EventType, _, SubsystemResponse = _orch()
@@ -221,25 +248,41 @@ class SliceOfLifeConflictSubsystem:
         Cheap bundle: surface subtle ambient effects and opportunities.
         """
         try:
-            tensions = await self.detector.detect_brewing_tensions()
-            ambient = []
-            for t in tensions[:3]:
-                label = str(getattr(t.get('intensity'), 'value', t.get('intensity', 'tension')))
-                ambient.append(f"slicing_{label}")
-            opportunities = []
-            for t in tensions[:2]:
-                opportunities.append({
-                    'type': 'slice_opportunity',
-                    'description': str(t.get('description', 'subtle pattern')),
-                })
-            return {
-                'ambient_effects': ambient,
-                'opportunities': opportunities,
-                'last_changed_at': datetime.now().timestamp(),
+            scene_context = {
+                'location': getattr(scope, "location_id", None) or getattr(scope, "location", None),
+                'scene_type': getattr(scope, "scene_type", None) or getattr(scope, "activity", None),
+                'activity': getattr(scope, "activity", None) or getattr(scope, "current_activity", None),
+                'present_npcs': list(getattr(scope, "npc_ids", []) or []),
             }
+            normalized = self._normalize_scene_context(scene_context)
+            scope_key = self._scope_key_from_context(normalized)
+            now = time.time()
+
+            if scope_key:
+                self._remember_scene_context(scope_key, normalized)
+                cached_bundle = self._get_cached_bundle(scope_key, now)
+                if cached_bundle is not None:
+                    return cached_bundle
+
+            tensions = list(self._tension_snapshot)
+            source = 'snapshot' if tensions else 'pending'
+            if not tensions or self._is_snapshot_stale(now):
+                self._schedule_tension_refresh(reason="scene_bundle_request")
+                if not tensions:
+                    source = 'pending'
+
+            bundle = self._build_scene_bundle(tensions, source=source, timestamp=now)
+            if scope_key:
+                self._set_scene_bundle_cache(scope_key, bundle, now)
+            return bundle
         except Exception as e:
             logger.debug(f"slice_of_life get_scene_bundle failed: {e}")
-            return {}
+            return {
+                'ambient_effects': [],
+                'opportunities': [],
+                'summary_source': 'error',
+                'last_changed_at': time.time(),
+            }
     
     # ========== Event Handlers ==========
     
@@ -248,16 +291,29 @@ class SliceOfLifeConflictSubsystem:
         SubsystemType, EventType, SystemEvent, SubsystemResponse = _orch()
         payload = event.payload or {}
         scene_context = payload.get('scene_context') or payload
-        
-        # Detect emerging tensions (DB + LLM)
-        tensions = await self.detector.detect_brewing_tensions()
-        
+
+        normalized = self._normalize_scene_context(scene_context)
+        scope_key = self._scope_key_from_context(normalized)
+        now = time.time()
+        if scope_key:
+            self._remember_scene_context(scope_key, normalized)
+
+        tensions = list(self._tension_snapshot)
+        cache_state = 'fresh'
+        if not tensions:
+            cache_state = 'empty'
+        elif self._is_snapshot_stale(now):
+            cache_state = 'stale'
+
+        if not tensions or cache_state == 'stale':
+            self._schedule_tension_refresh(reason="state_sync")
+
         activity = scene_context.get('activity', scene_context.get('scene_type', 'daily_routine'))
         present_npcs = scene_context.get('present_npcs') or scene_context.get('npcs') or []
-        
+
         manifestations: List[str] = []
         side_effects = []
-        
+
         # Opportunistically propose a new slice conflict if one looks strong
         for tension in tensions[:1]:
             try:
@@ -283,7 +339,18 @@ class SliceOfLifeConflictSubsystem:
                     ))
             except Exception:
                 continue
-        
+
+        for tension in tensions[:3]:
+            try:
+                label = str(getattr(tension.get('intensity'), 'value', tension.get('intensity', 'tension')))
+                manifestations.append(f"slicing_{label.lower()}")
+            except Exception:
+                continue
+
+        bundle = self._build_scene_bundle(tensions, source='cached' if cache_state == 'fresh' else cache_state, timestamp=now)
+        if scope_key:
+            self._set_scene_bundle_cache(scope_key, bundle, now)
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -291,17 +358,18 @@ class SliceOfLifeConflictSubsystem:
             data={
                 'tensions_detected': len(tensions),
                 'manifestations': manifestations,
-                'slice_of_life_active': bool(manifestations)
+                'slice_of_life_active': bool(manifestations),
+                'tension_cache_state': cache_state
             },
             side_effects=side_effects
         )
-    
+
     async def _handle_player_choice(self, event):
         """Handle player choices"""
         _, EventType, SystemEvent, SubsystemResponse = _orch()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
-        
+
         if not conflict_id:
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
@@ -310,10 +378,10 @@ class SliceOfLifeConflictSubsystem:
                 data={'no_conflict': True},
                 side_effects=[]
             )
-        
-        # Check for pattern-based resolution
-        resolution = await self.resolver.check_resolution_by_pattern(int(conflict_id))
-        
+
+        # Check cached pattern-based resolution (refresh asynchronously if stale)
+        resolution = self._get_or_schedule_resolution(int(conflict_id), reason="player_choice")
+
         side_effects = []
         if resolution:
             side_effects.append(SystemEvent(
@@ -335,7 +403,7 @@ class SliceOfLifeConflictSubsystem:
             data={'choice_processed': True, 'resolution': resolution},
             side_effects=side_effects
         )
-    
+
     async def _handle_phase_transition(self, event):
         """Handle phase transitions"""
         _, _, _, SubsystemResponse = _orch()
@@ -351,13 +419,13 @@ class SliceOfLifeConflictSubsystem:
             data=data,
             side_effects=[]
         )
-    
+
     async def _handle_conflict_creation(self, event):
         """Handle new conflict creation (post-create embedding if applicable)"""
         _, _, _, SubsystemResponse = _orch()
         payload = event.payload or {}
         conflict_type = str(payload.get('conflict_type', ''))
-        
+
         is_slice_of_life = conflict_type in [t.value for t in SliceOfLifeConflictType]
         if not is_slice_of_life:
             return SubsystemResponse(
@@ -367,27 +435,26 @@ class SliceOfLifeConflictSubsystem:
                 data={'not_slice_of_life': True},
                 side_effects=[]
             )
-        
+
         context = payload.get('context', {}) or {}
         conflict_id = payload.get('conflict_id')  # May be absent during initial create event
         if conflict_id:
-            event_result = await self.manager.embed_conflict_in_activity(
-                int(conflict_id),
-                context.get('activity', 'conversation'),
-                list(context.get('npcs', []) or [])
-            )
+            activity = context.get('activity', 'conversation')
+            npcs = list(context.get('npcs', []) or [])
+            manifestation = self._get_or_schedule_manifestation(int(conflict_id), activity, npcs)
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=True,
                 data={
                     'conflict_type': 'slice_of_life',
-                    'initial_manifestation': event_result.conflict_manifestation,
-                    'daily_integration': True
+                    'initial_manifestation': manifestation.get('conflict_manifestation') if manifestation else None,
+                    'daily_integration': bool(manifestation),
+                    'manifestation_pending': manifestation is None
                 },
                 side_effects=[]
             )
-        
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -395,6 +462,213 @@ class SliceOfLifeConflictSubsystem:
             data={'pending_conflict_embedding': True},
             side_effects=[]
         )
+
+    # ----- Scene bundle & cache helpers -----
+
+    def _normalize_scene_context(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
+        context = scene_context or {}
+        npcs = context.get('present_npcs') or context.get('npcs') or []
+        if isinstance(npcs, set):
+            npcs = list(npcs)
+        normalized_npcs: List[str] = []
+        for npc in npcs:
+            if npc is None:
+                continue
+            try:
+                normalized_npcs.append(str(int(npc)))
+            except (TypeError, ValueError):
+                normalized_npcs.append(str(npc))
+        normalized_npcs = sorted(set(normalized_npcs))
+
+        return {
+            'location': context.get('location') or context.get('location_id') or 'unknown',
+            'scene_type': context.get('scene_type') or context.get('activity') or 'unknown',
+            'activity': context.get('activity') or context.get('scene_type') or 'unknown',
+            'present_npcs': normalized_npcs,
+        }
+
+    def _scope_key_from_context(self, scene_context: Dict[str, Any]) -> str:
+        if not scene_context:
+            return ''
+        location = str(scene_context.get('location') or 'unknown')
+        scene_type = str(scene_context.get('scene_type') or 'unknown')
+        npcs = ','.join(scene_context.get('present_npcs', []))
+        return f"{location}|{scene_type}|{npcs}"
+
+    def _remember_scene_context(self, scope_key: str, scene_context: Dict[str, Any]) -> None:
+        if not scope_key:
+            return
+        self._known_scene_contexts[scope_key] = scene_context
+        self._known_scene_contexts.move_to_end(scope_key)
+        while len(self._known_scene_contexts) > self._scene_memory_limit:
+            self._known_scene_contexts.popitem(last=False)
+
+    def _get_cached_bundle(self, scope_key: str, now: float) -> Optional[Dict[str, Any]]:
+        if not scope_key:
+            return None
+        cached = self._scene_bundle_cache.get(scope_key)
+        if not cached:
+            return None
+        if now - cached['cached_at'] > self._bundle_ttl:
+            return None
+        return dict(cached['bundle'])
+
+    def _set_scene_bundle_cache(self, scope_key: str, bundle: Dict[str, Any], timestamp: float) -> None:
+        if not scope_key:
+            return
+        self._scene_bundle_cache[scope_key] = {
+            'bundle': dict(bundle),
+            'cached_at': timestamp,
+        }
+        self._scene_bundle_cache.move_to_end(scope_key)
+        while len(self._scene_bundle_cache) > self._scene_memory_limit:
+            self._scene_bundle_cache.popitem(last=False)
+
+    def _is_snapshot_stale(self, now: Optional[float] = None) -> bool:
+        if not self._tension_snapshot_ts:
+            return True
+        current = now or time.time()
+        return (current - self._tension_snapshot_ts) > self._snapshot_ttl
+
+    def _build_scene_bundle(self, tensions: List[Dict[str, Any]], *, source: str, timestamp: float) -> Dict[str, Any]:
+        ambient: List[str] = []
+        opportunities: List[Dict[str, Any]] = []
+
+        for tension in tensions[:3]:
+            try:
+                label = str(getattr(tension.get('intensity'), 'value', tension.get('intensity', 'tension')))
+                ambient.append(f"slicing_{label.lower()}")
+            except Exception:
+                continue
+
+        for tension in tensions[:2]:
+            try:
+                opportunities.append({
+                    'type': 'slice_opportunity',
+                    'description': str(tension.get('description', 'subtle pattern')),
+                })
+            except Exception:
+                continue
+
+        return {
+            'ambient_effects': ambient,
+            'opportunities': opportunities,
+            'summary_source': source,
+            'tension_count': len(tensions),
+            'last_changed_at': timestamp,
+        }
+
+    def _schedule_tension_refresh(self, *, reason: str) -> None:
+        if self._pending_tension_task and not self._pending_tension_task.done():
+            return
+
+        async def _runner() -> None:
+            try:
+                async with self._tension_refresh_lock:
+                    tensions = await self.detector.detect_brewing_tensions()
+                    timestamp = time.time()
+                    self._tension_snapshot = tensions
+                    self._tension_snapshot_ts = timestamp
+                    for key in list(self._known_scene_contexts.keys()):
+                        bundle = self._build_scene_bundle(tensions, source='refreshed', timestamp=timestamp)
+                        self._set_scene_bundle_cache(key, bundle, timestamp)
+                    logger.debug("Refreshed slice-of-life tensions via %s", reason)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Failed to refresh slice-of-life tensions (%s): %s", reason, exc)
+
+        self._pending_tension_task = asyncio.create_task(_runner())
+        self._pending_tension_task.add_done_callback(lambda _: setattr(self, '_pending_tension_task', None))
+
+    # ----- Resolution caching helpers -----
+
+    def _resolution_cache_expired(self, conflict_id: int, now: Optional[float] = None) -> bool:
+        timestamp = self._resolution_cache_ts.get(conflict_id)
+        if not timestamp:
+            return True
+        current = now or time.time()
+        return (current - timestamp) > self._resolution_ttl
+
+    def _get_or_schedule_resolution(self, conflict_id: int, *, reason: str) -> Optional[Dict[str, Any]]:
+        now = time.time()
+        cached = self._resolution_cache.get(conflict_id)
+        expired = self._resolution_cache_expired(conflict_id, now)
+        if cached and not expired:
+            return dict(cached)
+
+        self._schedule_resolution_refresh(conflict_id, reason=reason)
+
+        if cached:
+            return dict(cached)
+        return None
+
+    def _schedule_resolution_refresh(self, conflict_id: int, *, reason: str) -> None:
+        task = self._pending_resolution_tasks.get(conflict_id)
+        if task and not task.done():
+            return
+
+        async def _runner() -> None:
+            try:
+                result = await self.resolver.check_resolution_by_pattern(conflict_id)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Failed to refresh slice-of-life resolution for %s via %s: %s", conflict_id, reason, exc)
+                result = None
+
+            if result:
+                self._resolution_cache[conflict_id] = dict(result)
+                self._resolution_cache_ts[conflict_id] = time.time()
+
+        task = asyncio.create_task(_runner())
+        self._pending_resolution_tasks[conflict_id] = task
+        task.add_done_callback(lambda _: self._pending_resolution_tasks.pop(conflict_id, None))
+
+    # ----- Manifestation caching helpers -----
+
+    def _manifestation_cache_key(self, conflict_id: int, activity: str, npcs: List[int]) -> str:
+        normalized_npcs = ','.join(str(n) for n in sorted(npcs))
+        return f"{conflict_id}|{activity}|{normalized_npcs}"
+
+    def _get_or_schedule_manifestation(self, conflict_id: int, activity: str, npcs: List[int]) -> Optional[Dict[str, Any]]:
+        key = self._manifestation_cache_key(conflict_id, activity, npcs)
+        now = time.time()
+        cached = self._manifestation_cache.get(key)
+        timestamp = self._manifestation_cache_ts.get(key, 0.0)
+        if cached and (now - timestamp) <= self._manifestation_ttl:
+            return dict(cached)
+
+        self._schedule_manifestation_refresh(conflict_id, activity, npcs)
+        if cached:
+            return dict(cached)
+        return None
+
+    def _schedule_manifestation_refresh(self, conflict_id: int, activity: str, npcs: List[int]) -> None:
+        key = self._manifestation_cache_key(conflict_id, activity, npcs)
+        task = self._pending_manifestation_tasks.get(key)
+        if task and not task.done():
+            return
+
+        async def _runner() -> None:
+            try:
+                event_result = await self.manager.embed_conflict_in_activity(conflict_id, activity, npcs)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Failed to refresh slice-of-life manifestation for %s: %s", conflict_id, exc)
+                return
+
+            if not event_result:
+                return
+
+            manifest_dict = {
+                'activity_type': event_result.activity_type,
+                'conflict_manifestation': event_result.conflict_manifestation,
+                'choice_presented': event_result.choice_presented,
+                'accumulation_impact': event_result.accumulation_impact,
+                'npc_reactions': dict(event_result.npc_reactions),
+            }
+            self._manifestation_cache[key] = manifest_dict
+            self._manifestation_cache_ts[key] = time.time()
+
+        task = asyncio.create_task(_runner())
+        self._pending_manifestation_tasks[key] = task
+        task.add_done_callback(lambda _: self._pending_manifestation_tasks.pop(key, None))
 
 
 # ===============================================================================
