@@ -423,28 +423,59 @@ class EmergentConflictDetector:
         return self._pattern_analyzer
     
     async def detect_brewing_tensions(self) -> List[Dict[str, Any]]:
-        """Analyze recent interactions for emerging conflicts with LLM"""
+        """Analyze recent interactions for emerging conflicts using cache-first helper."""
+        from logic.conflict_system.slice_of_life_conflicts_hotpath import (
+            get_detected_tensions,
+        )
+
+        return await get_detected_tensions(self.user_id, self.conversation_id)
+
+    async def _detect_tensions(self) -> List[Dict[str, Any]]:
+        """Slow-path implementation that gathers context and calls the LLM."""
         async with get_db_connection_context() as conn:
-            memory_patterns = await conn.fetch("""
+            memory_patterns = await conn.fetch(
+                """
                 SELECT entity_id, entity_type, memory_text, emotional_valence, tags
                 FROM enhanced_memories
                 WHERE user_id = $1 AND conversation_id = $2
                   AND created_at > NOW() - INTERVAL '3 days'
                 ORDER BY created_at DESC
                 LIMIT 100
-            """, self.user_id, self.conversation_id)
-            
-            relationships = await conn.fetch("""
+                """,
+                self.user_id,
+                self.conversation_id,
+            )
+
+            relationships = await conn.fetch(
+                """
                 SELECT entity1_id, entity2_id, dimension, current_value, recent_delta
                 FROM relationship_dimensions
                 WHERE user_id = $1 AND conversation_id = $2
                   AND dimension IN ('dominance', 'control', 'dependency', 'resistance')
-            """, self.user_id, self.conversation_id)
-        
+                """,
+                self.user_id,
+                self.conversation_id,
+            )
+
         if not memory_patterns and not relationships:
             return []
-        
-        return await self._analyze_patterns_with_llm(memory_patterns, relationships)
+
+        tensions = await self._analyze_patterns_with_llm(memory_patterns, relationships)
+
+        sanitized: List[Dict[str, Any]] = []
+        for tension in tensions:
+            sanitized.append(
+                {
+                    "type": getattr(tension.get("type"), "value", tension.get("type", "subtle_rivalry")),
+                    "intensity": getattr(
+                        tension.get("intensity"), "value", tension.get("intensity", "tension")
+                    ),
+                    "description": tension.get("description", "A subtle tension emerges"),
+                    "evidence": list(tension.get("evidence", [])),
+                    "tension_level": float(tension.get("tension_level", 0.5)),
+                }
+            )
+        return sanitized
     
     async def _analyze_patterns_with_llm(
         self, 
@@ -543,22 +574,47 @@ class SliceOfLifeConflictManager:
         activity_type: str,
         participating_npcs: List[int]
     ) -> DailyConflictEvent:
-        """Generate how a conflict manifests in a daily activity"""
+        """Cache-first helper that returns a daily conflict event."""
+        from logic.conflict_system.slice_of_life_conflicts_hotpath import (
+            get_activity_manifestation,
+        )
+
+        return await get_activity_manifestation(
+            self.user_id,
+            self.conversation_id,
+            conflict_id,
+            activity_type,
+            participating_npcs,
+        )
+
+    async def _embed_conflict_in_activity(
+        self,
+        conflict_id: int,
+        activity_type: str,
+        participating_npcs: List[int],
+    ) -> DailyConflictEvent:
+        """Slow-path LLM call for embedding a conflict in an activity."""
         async with get_db_connection_context() as conn:
-            conflict = await conn.fetchrow("""
-                SELECT * FROM Conflicts WHERE id = $1
-            """, int(conflict_id))
-            
+            conflict = await conn.fetchrow(
+                """SELECT * FROM Conflicts WHERE id = $1""",
+                int(conflict_id),
+            )
+
             npc_details = []
             for npc_id in participating_npcs[:3]:
-                npc = await conn.fetchrow("""
-                    SELECT name, personality_traits FROM NPCs WHERE id = $1
-                """, int(npc_id))
+                npc = await conn.fetchrow(
+                    """SELECT name, personality_traits FROM NPCs WHERE id = $1""",
+                    int(npc_id),
+                )
                 if npc:
-                    name = npc['name']
-                    traits = npc.get('personality_traits', 'unknown') if isinstance(npc, dict) else npc['personality_traits']
+                    name = npc["name"]
+                    traits = (
+                        npc.get("personality_traits", "unknown")
+                        if isinstance(npc, dict)
+                        else npc["personality_traits"]
+                    )
                     npc_details.append(f"{name} ({traits})")
-        
+
         prompt = f"""
 Generate how this conflict manifests during {activity_type}:
 
@@ -580,15 +636,17 @@ Return JSON:
             parsed = extract_runner_response(response)
             result = json.loads(parsed)
             npc_reactions: Dict[int, str] = {}
-            if isinstance(result.get('npc_reactions'), list):
-                for i, npc_id in enumerate(participating_npcs[:len(result['npc_reactions'])]):
-                    npc_reactions[int(npc_id)] = str(result['npc_reactions'][i])
+            if isinstance(result.get("npc_reactions"), list):
+                for i, npc_id in enumerate(participating_npcs[: len(result["npc_reactions"])]):
+                    npc_reactions[int(npc_id)] = str(result["npc_reactions"][i])
             return DailyConflictEvent(
                 activity_type=activity_type,
-                conflict_manifestation=str(result.get('manifestation', 'A subtle tension colors the moment')),
-                choice_presented=bool(result.get('choice_presented', False)),
-                accumulation_impact=float(result.get('impact', 0.1)),
-                npc_reactions=npc_reactions
+                conflict_manifestation=str(
+                    result.get("manifestation", "A subtle tension colors the moment")
+                ),
+                choice_presented=bool(result.get("choice_presented", False)),
+                accumulation_impact=float(result.get("impact", 0.1)),
+                npc_reactions=npc_reactions,
             )
         except Exception as e:
             logger.warning(f"Failed to parse conflict manifestation: {e}")
@@ -597,7 +655,7 @@ Return JSON:
                 conflict_manifestation="The underlying tension affects the interaction",
                 choice_presented=False,
                 accumulation_impact=0.1,
-                npc_reactions={}
+                npc_reactions={},
             )
 
 
@@ -623,23 +681,41 @@ class PatternBasedResolution:
         return self._resolution_agent
     
     async def check_resolution_by_pattern(self, conflict_id: int) -> Optional[Dict[str, Any]]:
-        """Check if conflict should resolve based on patterns"""
+        """Cache-first helper that returns pattern-based resolution if available."""
+        from logic.conflict_system.slice_of_life_conflicts_hotpath import (
+            get_resolution_recommendation,
+        )
+
+        return await get_resolution_recommendation(
+            self.user_id, self.conversation_id, conflict_id
+        )
+
+    async def _evaluate_resolution(self, conflict_id: int) -> Optional[Dict[str, Any]]:
+        """Slow-path LLM evaluation for conflict resolution."""
         async with get_db_connection_context() as conn:
-            conflict = await conn.fetchrow("""
-                SELECT * FROM Conflicts WHERE id = $1
-            """, int(conflict_id))
-            memories = await conn.fetch("""
+            conflict = await conn.fetchrow(
+                """SELECT * FROM Conflicts WHERE id = $1""",
+                int(conflict_id),
+            )
+            memories = await conn.fetch(
+                """
                 SELECT memory_text, emotional_valence, created_at
                 FROM enhanced_memories
                 WHERE user_id = $1 AND conversation_id = $2
                   AND tags @> ARRAY[$3::text]
                 ORDER BY created_at DESC
                 LIMIT 20
-            """, self.user_id, self.conversation_id, f"conflict_{int(conflict_id)}")
-        
-        if not memories or (conflict and int(conflict.get('progress', conflict.get('progress', 0))) < 50):
+                """,
+                self.user_id,
+                self.conversation_id,
+                f"conflict_{int(conflict_id)}",
+            )
+
+        if not memories or (
+            conflict and int(conflict.get("progress", conflict.get("progress", 0))) < 50
+        ):
             return None
-        
+
         prompt = f"""
 Analyze if this conflict should naturally resolve:
 
@@ -660,16 +736,16 @@ Return JSON:
         try:
             parsed = extract_runner_response(response)
             result = json.loads(parsed)
-            if bool(result.get('should_resolve', False)):
-                try:
-                    rtype = ResolutionApproach[str(result.get('type', 'time_erosion')).upper()]
-                except Exception:
-                    rtype = ResolutionApproach.TIME_EROSION
+            if bool(result.get("should_resolve", False)):
+                resolution_type = str(result.get("type", "time_erosion"))
+                description = str(
+                    result.get("description", "The conflict fades into routine")
+                )
                 return {
-                    'resolution_type': rtype,
-                    'description': str(result.get('description', 'The conflict fades into routine')),
-                    'new_patterns': list(result.get('new_patterns', [])),
-                    'final_state': 'resolved'
+                    "resolution_type": resolution_type,
+                    "description": description,
+                    "new_patterns": list(result.get("new_patterns", [])),
+                    "final_state": "resolved",
                 }
         except Exception as e:
             logger.warning(f"Failed to parse resolution: {e}")
@@ -723,7 +799,19 @@ class ConflictDailyIntegration:
         return appropriate
     
     async def _is_appropriate_for_time(self, conflict: Dict, time_of_day: str) -> bool:
-        """Determine if conflict fits the time of day"""
+        """Cache-first helper for time-of-day suitability."""
+        from logic.conflict_system.slice_of_life_conflicts_hotpath import (
+            is_conflict_appropriate_for_time,
+        )
+
+        return await is_conflict_appropriate_for_time(
+            self.user_id, self.conversation_id, conflict, time_of_day
+        )
+
+    async def _evaluate_time_appropriateness(
+        self, conflict: Dict, time_of_day: str
+    ) -> bool:
+        """Slow-path LLM classification for time-of-day suitability."""
         prompt = f"""
 Is this conflict appropriate for {time_of_day}?
 
@@ -735,6 +823,6 @@ Answer just yes or no.
         response = await Runner.run(self.integration_agent, prompt)
         try:
             text = extract_runner_response(response).strip().lower()
-            return 'yes' in text and 'no' not in text[:5]
+            return "yes" in text and "no" not in text[:5]
         except Exception:
             return False
