@@ -182,7 +182,7 @@ def _default_json_encoder(obj):
     raise TypeError(f"{type(obj).__name__} is not JSON serializable")
 
 def extract_runner_response(result: Any) -> str:
-    """Best-effort extraction of model output from Runner.run result."""
+    """Best-effort extraction of model output from nyx.gateway.llm_gateway.execute(...) result."""
     try:
         for attr in ("final_output", "output_text", "text"):
             v = getattr(result, attr, None)

@@ -139,7 +139,7 @@ JsonScalar = Union[str, int, float, bool, None]
 JsonValue = Union[JsonScalar, List[JsonScalar]]
 
 def extract_runner_response(result: Any) -> str:
-    """Best-effort extraction of model output from Runner.run result."""
+    """Best-effort extraction of model output from nyx.gateway.llm_gateway.execute(...) result."""
     try:
         for attr in ("final_output", "output_text", "text"):
             v = getattr(result, attr, None)

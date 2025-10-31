@@ -83,7 +83,7 @@ class MemoryAgentWrapper:
         return out
 
     async def _run(self, input_msg: Dict[str, Any], *, trace_meta: dict[str, Any] | None = None):
-        """Thin wrapper around Runner.run that sets trace metadata."""
+        """Thin wrapper around nyx.gateway.llm_gateway.execute(...) that sets trace metadata."""
         return await Runner.run(
             self.agent,
             [input_msg],
