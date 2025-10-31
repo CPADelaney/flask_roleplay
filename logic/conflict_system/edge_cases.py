@@ -15,6 +15,7 @@ import logging
 import json
 import random
 import asyncio
+import hashlib
 import os
 import redis.asyncio as redis
 from typing import Dict, List, Any, Optional, Set, TypedDict
@@ -24,14 +25,19 @@ from datetime import datetime
 
 from celery_config import celery_app
 
-from agents import Agent, Runner, function_tool, RunContextWrapper
+from agents import Agent, function_tool, RunContextWrapper
+from nyx.tasks.background.conflict_edge_tasks import (
+    RECOVERY_LOCK_TTL,
+    dispatch_recovery_generation,
+    recovery_cache_key,
+    recovery_lock_key,
+)
 from db.connection import get_db_connection_context
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis_client: Optional[redis.Redis] = None
-_extract_runner_response_fn = None
 
 async def get_redis_client() -> redis.Redis:
     """Lazy-loads and returns a singleton async Redis client instance."""
@@ -290,19 +296,25 @@ class ConflictEdgeCaseSubsystem:
             )
         
         # 1. Generate recovery options on-demand if not provided
-        options = case_data.get('recovery_options')
+        cached_options = await self._load_recovery_options(case_type, case_data, ensure_queue=False)
+
+        options = cached_options or case_data.get('recovery_options')
         if not options:
-            logger.info(f"Generating recovery options on-demand for {case_type.value}")
-            options = await self._generate_recovery_options_for_case(case_type, case_data)
-            if not options:
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=False,
-                    data={'success': False, 'action': 'failed_to_generate_options'},
-                    side_effects=[]
-                )
-        
+            logger.info(f"Queueing recovery generation for {case_type.value}")
+            await self._load_recovery_options(case_type, case_data, ensure_queue=True)
+            options = self._fallback_recovery_options(case_type, case_data)
+        elif cached_options is None or not cached_options:
+            await self._load_recovery_options(case_type, case_data, ensure_queue=True)
+
+        if not options:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'success': False, 'action': 'failed_to_generate_options'},
+                side_effects=[]
+            )
+
         # 2. Execute the selected recovery option
         option_index = int(payload.get('option_index', 0))
         if option_index >= len(options):
@@ -662,219 +674,314 @@ class ConflictEdgeCaseSubsystem:
     # ========== On-Demand Recovery Generation ==========
     
     async def _generate_recovery_options_for_case(
-        self, 
-        case_type: EdgeCaseType, 
+        self,
+        case_type: EdgeCaseType,
         case_data: Dict
     ) -> List[Dict]:
-        """Generates recovery options using an LLM for a specific case."""
-        conflict_context = case_data.get('detection_context', {})
-        
-        if case_type == EdgeCaseType.ORPHANED_CONFLICT:
-            conflict = conflict_context.get('conflict', {})
-            return await self._generate_orphan_recovery(conflict)
-        
-        elif case_type == EdgeCaseType.STALE_CONFLICT:
-            conflict = conflict_context.get('conflict', {})
-            return await self._generate_stale_recovery(conflict)
-        
-        elif case_type == EdgeCaseType.INFINITE_LOOP:
-            conflicts = case_data.get('affected_conflicts', [])
-            return await self._generate_loop_recovery(conflicts)
-        
-        elif case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
-            count = conflict_context.get('active_count', 10)
-            return await self._generate_overload_recovery(count)
-        
-        elif case_type == EdgeCaseType.CONTRADICTION:
-            conflicts_dict = conflict_context.get('conflicts', {})
-            return await self._generate_contradiction_recovery(conflicts_dict)
-        
+        """Fetch recovery options via cache-first background task flow."""
+
+        options = await self._load_recovery_options(case_type, case_data, ensure_queue=True)
+        if options:
+            return options
+
+        return self._fallback_recovery_options(case_type, case_data)
+
+    async def _load_recovery_options(
+        self,
+        case_type: EdgeCaseType,
+        case_data: Dict,
+        *,
+        ensure_queue: bool,
+    ) -> List[Dict]:
+        """Load cached recovery options and optionally queue background generation."""
+
+        cache_key, lock_key, task_payload = self._build_recovery_task_payload(case_type, case_data)
+        if cache_key:
+            cached_payload = await self._fetch_cached_recovery(cache_key)
+            if cached_payload:
+                options = cached_payload.get('options', [])
+                if isinstance(options, list) and options:
+                    return options
+
+        if ensure_queue and cache_key and task_payload:
+            await self._ensure_recovery_task(case_type, cache_key, lock_key, task_payload)
+
         return []
-    
-    async def _generate_orphan_recovery(self, conflict: Dict) -> List[Dict]:
-        """Generates recovery options for an orphaned conflict via LLM."""
-        if not conflict:
-            return []
-        
-        prompt = f"""
-        Generate recovery options for orphaned conflict:
-        
-        Conflict: {conflict.get('conflict_name', 'Unknown')}
-        Description: {conflict.get('description', '')}
-        
-        Create 3 recovery options:
-        1. Graceful closure
-        2. NPC assignment
-        3. Player-centric pivot
-        
-        Return JSON:
-        {{
-            "options": [
-                {{
-                    "strategy": "close/assign/pivot",
-                    "description": "How to recover",
-                    "narrative": "Story explanation",
-                    "implementation": ["steps to take"],
-                    "risk": "low/medium/high"
-                }}
-            ]
-        }}
-        """
-        
+
+    async def _fetch_cached_recovery(self, cache_key: str) -> Optional[Dict[str, Any]]:
         try:
-            response = await Runner.run(self.recovery_strategist, prompt)
-            data = json.loads(_extract_runner_response(response))
-            return data.get('options', [])
-        except Exception as e:
-            logger.error(f"Failed to generate orphan recovery options: {e}")
-            return []
-    
-    async def _generate_stale_recovery(self, conflict: Dict) -> List[Dict]:
-        """Generate recovery for stale conflict"""
-        if not conflict:
-            return []
-        
-        prompt = f"""
-        Generate recovery for stale conflict:
-        
-        Conflict: {conflict.get('conflict_name', 'Unknown')}
-        Phase: {conflict.get('phase', 'unknown')}
-        Progress: {conflict.get('progress', 0)}%
-        
-        Create options to:
-        - Revitalize with new development
-        - Gracefully conclude
-        - Transform into something new
-        
-        Return JSON:
-        {{
-            "options": [
-                {{
-                    "strategy": "revitalize/conclude/transform",
-                    "description": "Recovery approach",
-                    "narrative_event": "What happens in story",
-                    "player_hook": "How to re-engage player",
-                    "expected_outcome": "What this achieves"
-                }}
-            ]
-        }}
-        """
-        
+            redis_client = await get_redis_client()
+            cached = await redis_client.get(cache_key)
+            if not cached:
+                return None
+            data = json.loads(cached)
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:
+            logger.error("Failed to fetch cached recovery options: %s", exc)
+        return None
+
+    async def _ensure_recovery_task(
+        self,
+        case_type: EdgeCaseType,
+        cache_key: str,
+        lock_key: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        payload = dict(payload)
+        payload['cache_key'] = cache_key
+        payload['lock_key'] = lock_key
+
         try:
-            response = await Runner.run(self.recovery_strategist, prompt)
-            data = json.loads(_extract_runner_response(response))
-            return data.get('options', [])
-        except Exception as e:
-            logger.error(f"Failed to generate stale recovery options: {e}")
-            return []
-    
-    async def _generate_loop_recovery(self, conflicts: List[int]) -> List[Dict]:
-        """Generate recovery for infinite loop"""
-        prompt = f"""
-        Generate recovery for infinite conflict loop:
-        
-        Conflicts involved: {conflicts}
-        
-        Create solutions that:
-        - Break the cycle
-        - Preserve both conflicts if possible
-        - Maintain narrative sense
-        
-        Return JSON:
-        {{
-            "options": [
-                {{
-                    "strategy": "break/merge/prioritize",
-                    "description": "How to break loop",
-                    "preserved_conflicts": [conflict_ids],
-                    "narrative_bridge": "Story explanation",
-                    "prevention": "How to prevent recurrence"
-                }}
-            ]
-        }}
-        """
-        
+            redis_client = await get_redis_client()
+            acquired = await redis_client.set(lock_key, 'queued', ex=RECOVERY_LOCK_TTL, nx=True)
+        except Exception as exc:
+            logger.error("Failed to set recovery lock for %s: %s", case_type.value, exc)
+            dispatch_recovery_generation(case_type.value, payload)
+            return
+
+        if acquired:
+            dispatch_recovery_generation(case_type.value, payload)
+
+    def _build_recovery_task_payload(
+        self,
+        case_type: EdgeCaseType,
+        case_data: Dict,
+    ) -> tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        case_ref = self._case_reference(case_data)
+        if not case_ref:
+            return None, None, None
+
+        cache_key = recovery_cache_key(
+            self.user_id,
+            self.conversation_id,
+            case_type.value,
+            case_ref,
+        )
+        lock_key = recovery_lock_key(
+            self.user_id,
+            self.conversation_id,
+            case_type.value,
+            case_ref,
+        )
+
+        detection_context = case_data.get('detection_context', {})
+        payload: Dict[str, Any] = {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'case_id': case_data.get('case_id'),
+            'case_ref': case_ref,
+        }
+
+        if case_type == EdgeCaseType.ORPHANED_CONFLICT:
+            conflict = detection_context.get('conflict') or {}
+            if not conflict:
+                return cache_key, lock_key, None
+            payload['conflict'] = conflict
+        elif case_type == EdgeCaseType.STALE_CONFLICT:
+            conflict = detection_context.get('conflict') or {}
+            if not conflict:
+                return cache_key, lock_key, None
+            payload['conflict'] = conflict
+        elif case_type == EdgeCaseType.INFINITE_LOOP:
+            payload['conflicts'] = case_data.get('affected_conflicts', [])
+        elif case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
+            payload['active_count'] = detection_context.get('active_count', len(case_data.get('affected_conflicts', [])))
+        elif case_type == EdgeCaseType.CONTRADICTION:
+            contradiction = detection_context.get('conflicts') or {}
+            if not contradiction:
+                return cache_key, lock_key, None
+            payload['contradiction'] = contradiction
+        else:
+            return cache_key, lock_key, None
+
+        return cache_key, lock_key, payload
+
+    def _case_reference(self, case_data: Dict) -> str:
+        case_id = case_data.get('case_id')
+        if case_id:
+            return str(case_id)
+
+        fingerprint_source = {
+            'context': case_data.get('detection_context', {}),
+            'conflicts': case_data.get('affected_conflicts', []),
+            'type': case_data.get('case_type'),
+        }
         try:
-            response = await Runner.run(self.recovery_strategist, prompt)
-            data = json.loads(_extract_runner_response(response))
-            return data.get('options', [])
-        except Exception as e:
-            logger.error(f"Failed to generate loop recovery options: {e}")
-            return []
-    
-    async def _generate_overload_recovery(self, count: int) -> List[Dict]:
-        """Generate recovery for complexity overload"""
-        prompt = f"""
-        Generate recovery for conflict overload:
-        
-        Active conflicts: {count}
-        
-        Create strategies to:
-        - Reduce complexity gracefully
-        - Merge related conflicts
-        - Prioritize important conflicts
-        - Create breathing room
-        
-        Return JSON:
-        {{
-            "options": [
-                {{
-                    "strategy": "consolidate/prioritize/pause/resolve",
-                    "target_count": ideal number of conflicts,
-                    "selection_criteria": "How to choose which conflicts",
-                    "narrative_framing": "Story explanation",
-                    "player_communication": "How to explain to player"
-                }}
-            ]
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.graceful_degrader, prompt)
-            data = json.loads(_extract_runner_response(response))
-            return data.get('options', [])
-        except Exception as e:
-            logger.error(f"Failed to generate overload recovery options: {e}")
-            return []
-    
-    async def _generate_contradiction_recovery(self, contradiction: Dict) -> List[Dict]:
-        """Generate recovery for contradictory states"""
-        prompt = f"""
-        Generate recovery for contradictory NPC positions:
-        
-        Conflict 1: {contradiction.get('name1', 'Unknown')}
-        Conflict 2: {contradiction.get('name2', 'Unknown')}
-        
-        NPC has contradictory roles in these conflicts.
-        
-        Create solutions that:
-        - Explain the contradiction
-        - Resolve the inconsistency
-        - Maintain character integrity
-        
-        Return JSON:
-        {{
-            "options": [
-                {{
-                    "strategy": "explain/choose/split",
-                    "narrative_explanation": "How to explain in story",
-                    "character_development": "How this develops NPC",
-                    "conflict_impact": {{
-                        "conflict1": "impact on first conflict",
-                        "conflict2": "impact on second conflict"
-                    }}
-                }}
-            ]
-        }}
-        """
-        
-        try:
-            response = await Runner.run(self.narrative_healer, prompt)
-            data = json.loads(_extract_runner_response(response))
-            return data.get('options', [])
-        except Exception as e:
-            logger.error(f"Failed to generate contradiction recovery options: {e}")
-            return []
+            serialized = json.dumps(fingerprint_source, sort_keys=True, default=str)
+        except Exception:
+            serialized = repr(fingerprint_source)
+        digest = hashlib.sha1(serialized.encode('utf-8')).hexdigest()
+        return digest
+
+    def _fallback_recovery_options(self, case_type: EdgeCaseType, case_data: Dict) -> List[Dict]:
+        detection_context = case_data.get('detection_context', {})
+
+        if case_type == EdgeCaseType.ORPHANED_CONFLICT:
+            conflict = detection_context.get('conflict', {})
+            return self._fallback_orphan_recovery(conflict)
+        if case_type == EdgeCaseType.STALE_CONFLICT:
+            conflict = detection_context.get('conflict', {})
+            return self._fallback_stale_recovery(conflict)
+        if case_type == EdgeCaseType.INFINITE_LOOP:
+            conflicts = case_data.get('affected_conflicts', [])
+            return self._fallback_loop_recovery(conflicts)
+        if case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
+            count = detection_context.get('active_count', 0)
+            return self._fallback_overload_recovery(count)
+        if case_type == EdgeCaseType.CONTRADICTION:
+            contradiction = detection_context.get('conflicts', {})
+            return self._fallback_contradiction_recovery(contradiction)
+        return []
+
+    def _fallback_orphan_recovery(self, conflict: Dict[str, Any]) -> List[Dict[str, Any]]:
+        name = conflict.get('conflict_name', 'the conflict')
+        description = conflict.get('description', 'this unresolved situation')
+        return [
+            {
+                'strategy': 'close',
+                'description': f"Resolve {name} quietly with a recap of outstanding threads.",
+                'narrative': f"NPCs acknowledge that {description} has naturally concluded.",
+                'implementation': [
+                    'Notify conflict stakeholders of closure',
+                    'Log a resolution summary in conflict history',
+                ],
+                'risk': 'low',
+            },
+            {
+                'strategy': 'assign',
+                'description': 'Introduce an aligned NPC to steward the conflict forward.',
+                'narrative': 'A motivated ally steps in to take ownership and move things forward.',
+                'implementation': [
+                    'Select an NPC with relevant motivation',
+                    'Create a handoff note for the new steward',
+                    'Schedule a follow-up beat to confirm direction',
+                ],
+                'risk': 'medium',
+            },
+            {
+                'strategy': 'pivot',
+                'description': 'Reframe the conflict around the player to re-engage them.',
+                'narrative': 'Consequences spill toward the player, inviting a response.',
+                'implementation': [
+                    'Draft a short scene where fallout reaches the player',
+                    'Clarify what changes if the player leans in',
+                ],
+                'risk': 'medium',
+            },
+        ]
+
+    def _fallback_stale_recovery(self, conflict: Dict[str, Any]) -> List[Dict[str, Any]]:
+        name = conflict.get('conflict_name', 'the conflict')
+        phase = conflict.get('phase', 'current phase')
+        return [
+            {
+                'strategy': 'revitalize',
+                'description': f'Introduce a twist that escalates {name} beyond the {phase}.',
+                'narrative_event': 'A surprising revelation complicates existing stakes.',
+                'player_hook': 'Offer the player a chance to exploit or contain the twist.',
+                'expected_outcome': 'Conflict gains immediate urgency and direction.',
+            },
+            {
+                'strategy': 'conclude',
+                'description': f'Wrap {name} with a reflective epilogue that explains the slowdown.',
+                'narrative_event': 'NPCs acknowledge lessons learned and the situation settles.',
+                'player_hook': 'Invite the player to sign off or celebrate the resolution.',
+                'expected_outcome': 'Conflict leaves the stage gracefully with continuity intact.',
+            },
+            {
+                'strategy': 'transform',
+                'description': f'Reshape {name} into a related but fresher objective.',
+                'narrative_event': 'A new antagonist or goal emerges from the stalemate.',
+                'player_hook': 'Present a new choice that reframes prior progress.',
+                'expected_outcome': 'Conflict energy shifts into a new storyline without reset.',
+            },
+        ]
+
+    def _fallback_loop_recovery(self, conflicts: List[int]) -> List[Dict[str, Any]]:
+        conflict_list = ', '.join(str(c) for c in conflicts) or 'related conflicts'
+        return [
+            {
+                'strategy': 'break',
+                'description': 'Sever the automatic triggers and let the conflicts cool down.',
+                'preserved_conflicts': conflicts,
+                'narrative_bridge': 'Facilitators call a truce while the loop is audited.',
+                'prevention': 'Add guardrails to prevent recursive triggers.',
+            },
+            {
+                'strategy': 'merge',
+                'description': f'Fuse {conflict_list} into a single escalation track.',
+                'preserved_conflicts': conflicts[:1],
+                'narrative_bridge': 'Participants recognize the overlap and align efforts.',
+                'prevention': 'Track merged state to avoid re-splitting inadvertently.',
+            },
+            {
+                'strategy': 'prioritize',
+                'description': 'Designate a lead conflict and freeze the dependent one.',
+                'preserved_conflicts': conflicts[:1],
+                'narrative_bridge': 'One faction pauses until the main dispute resolves.',
+                'prevention': 'Add queueing rules for any future mutual triggers.',
+            },
+        ]
+
+    def _fallback_overload_recovery(self, count: int) -> List[Dict[str, Any]]:
+        target = max(5, count - 3)
+        return [
+            {
+                'strategy': 'consolidate',
+                'target_count': target,
+                'selection_criteria': 'Group conflicts with overlapping NPCs and stakes.',
+                'narrative_framing': 'Leaders broker alliances to resolve redundant disputes.',
+                'player_communication': 'Explain the consolidation as a negotiated ceasefire.',
+            },
+            {
+                'strategy': 'prioritize',
+                'target_count': max(3, target - 1),
+                'selection_criteria': 'Keep conflicts tied directly to current player arcs.',
+                'narrative_framing': 'Command issues urgent orders focusing on critical fronts.',
+                'player_communication': 'Share a ranked list of conflicts requesting input.',
+            },
+            {
+                'strategy': 'pause',
+                'target_count': max(2, target - 2),
+                'selection_criteria': 'Temporarily shelve conflicts with low momentum.',
+                'narrative_framing': 'Civic authorities enforce a cooling-off period.',
+                'player_communication': 'Explain the pause as time to breathe and regroup.',
+            },
+        ]
+
+    def _fallback_contradiction_recovery(self, contradiction: Dict[str, Any]) -> List[Dict[str, Any]]:
+        name1 = contradiction.get('name1', 'Conflict A')
+        name2 = contradiction.get('name2', 'Conflict B')
+        return [
+            {
+                'strategy': 'explain',
+                'narrative_explanation': f'Reveal that the NPC acted under misinformation between {name1} and {name2}.',
+                'character_development': 'Shows humility as the NPC admits the error.',
+                'conflict_impact': {
+                    'conflict1': 'Adjust stakes after clarification.',
+                    'conflict2': 'Realign expectations with the corrected context.',
+                },
+            },
+            {
+                'strategy': 'choose',
+                'narrative_explanation': 'NPC makes a decisive commitment to one side.',
+                'character_development': 'Highlights loyalty or ambition driving the decision.',
+                'conflict_impact': {
+                    'conflict1': 'Becomes the primary focus with full support.',
+                    'conflict2': 'Transitions to an opposition plot hook.',
+                },
+            },
+            {
+                'strategy': 'split',
+                'narrative_explanation': 'NPC delegates one responsibility to a trusted ally.',
+                'character_development': 'Expands the social web by introducing mentorship ties.',
+                'conflict_impact': {
+                    'conflict1': 'Gains a new supporting NPC to keep continuity.',
+                    'conflict2': 'Retains the original NPC for key scenes.',
+                },
+            },
+        ]
     
     # ========== Recovery Execution Methods ==========
     
@@ -1424,13 +1531,3 @@ async def auto_recover_conflicts(
     }
 
 
-def _extract_runner_response(response: Any) -> Any:
-    global _extract_runner_response_fn
-    if _extract_runner_response_fn is None:
-        from logic.conflict_system.dynamic_conflict_template import (
-            extract_runner_response as _impl,
-        )
-
-        _extract_runner_response_fn = _impl
-
-    return _extract_runner_response_fn(response)
