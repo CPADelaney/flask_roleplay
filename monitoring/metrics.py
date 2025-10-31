@@ -97,6 +97,24 @@ _COLLECTOR_DEFINITIONS: Dict[str, Tuple[Type[CollectorType], Tuple[Any, ...], Di
         ("cache_size_bytes", "Current cache size in bytes", ["cache_type"]),
         {},
     ),
+    "CONFLICT_TEMPLATE_WARMUPS": (
+        Counter,
+        (
+            "conflict_template_warmups_total",
+            "Total number of conflict template warmup executions",
+            ["stage", "result"],
+        ),
+        {},
+    ),
+    "CONFLICT_TEMPLATE_CACHE_PENDING": (
+        Gauge,
+        (
+            "conflict_template_cache_pending",
+            "Pending conflict template cache entries",
+            ["stage"],
+        ),
+        {},
+    ),
 }
 
 
