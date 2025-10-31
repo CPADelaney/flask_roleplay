@@ -10,12 +10,28 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Set
 
 from infra.cache import cache_key, get_json, redis_lock, set_json
 from monitoring.metrics import metrics
+from nyx.common.outbox import DuplicateEventError, append_event, get_session_factory
+from sqlalchemy.orm import sessionmaker
 
 logger = logging.getLogger(__name__)
 
 # Cache bookkeeping
 _CACHE_TYPE = "conflict_subsystem_routing"
 _DEFAULT_CACHE_TTL = 300
+
+_OUTBOX_SESSION_FACTORY: Optional[sessionmaker] = None
+
+
+def _get_outbox_session_factory() -> Optional[sessionmaker]:
+    global _OUTBOX_SESSION_FACTORY
+    if _OUTBOX_SESSION_FACTORY is not None:
+        return _OUTBOX_SESSION_FACTORY
+    try:
+        _OUTBOX_SESSION_FACTORY = get_session_factory()
+    except Exception:  # pragma: no cover - configuration issues
+        logger.exception("Failed to initialise outbox session factory for conflict routing")
+        return None
+    return _OUTBOX_SESSION_FACTORY
 
 
 def _stringify(value: Any) -> Any:
@@ -84,24 +100,34 @@ def _queue_background_route(
     scene_hash: str,
     cache_ttl: int,
 ) -> None:
-    try:
-        from nyx.tasks.background.conflict_tasks import route_subsystems
-    except Exception:  # pragma: no cover - defensive import guard
-        logger.exception("Failed to import route_subsystems task for conflict routing")
-        return
-
     lock_name = cache_key("conflict", user_id, conversation_id, "scene_route_lock", scene_hash)
     try:
         with redis_lock(lock_name, ttl=15):
-            route_subsystems.delay(
-                {
-                    "user_id": user_id,
-                    "conversation_id": conversation_id,
-                    "scene_context": scene_context,
-                    "scene_hash": scene_hash,
-                    "ttl": cache_ttl,
-                }
-            )
+            session_factory = _get_outbox_session_factory()
+            if session_factory is None:
+                return
+            session = session_factory()
+            payload = {
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "scene_context": scene_context,
+                "scene_hash": scene_hash,
+                "ttl": cache_ttl,
+            }
+            try:
+                with session.begin():
+                    append_event(
+                        session,
+                        topic="ConflictRouteRequested",
+                        payload=payload,
+                        dedupe_key=scene_hash,
+                    )
+            except DuplicateEventError:
+                logger.debug("Route event already enqueued for scene hash %s", scene_hash)
+            except Exception:  # pragma: no cover - database availability issues
+                logger.exception("Failed to persist conflict route outbox event")
+            finally:
+                session.close()
     except RuntimeError:
         # Another worker already queued this scene routing job.
         logger.debug("Route task already queued for scene hash %s", scene_hash)
