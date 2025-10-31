@@ -14,6 +14,12 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 from db.connection import get_db_connection_context
+from logic.conflict_system.background_grand_conflicts_hotpath import (
+    fetch_conflict_news,
+    fetch_generated_conflict,
+    queue_conflict_generation,
+    queue_conflict_news,
+)
 from logic.time_cycle import get_current_game_day
 
 logger = logging.getLogger(__name__)
@@ -277,7 +283,10 @@ class BackgroundConflictProcessor:
         for item in items_to_process:
             try:
                 if item['type'] == 'generate_news':
-                    result = await self._generate_single_news_item(item['conflict_id'])
+                    result = await self._generate_single_news_item(
+                        item['conflict_id'],
+                        reason=item.get('reason'),
+                    )
                     processed.append({
                         'type': 'news',
                         'conflict_id': item['conflict_id'],
@@ -296,10 +305,6 @@ class BackgroundConflictProcessor:
                     })
                     
                 elif item['type'] == 'generate_initial_conflicts':
-                    # Generate initial background conflicts
-                    from logic.conflict_system.background_grand_conflicts import BackgroundConflictOrchestrator
-                    orchestrator = BackgroundConflictOrchestrator(self.user_id, self.conversation_id)
-                    
                     conflicts_generated = 0
                     async with get_db_connection_context() as conn:
                         count = await conn.fetchval(
@@ -307,20 +312,31 @@ class BackgroundConflictProcessor:
                             SELECT COUNT(*) FROM BackgroundConflicts
                             WHERE user_id = $1 AND conversation_id = $2 AND status = 'active'
                             """,
-                            self.user_id, self.conversation_id
+                            self.user_id,
+                            self.conversation_id,
                         )
-                        
-                    # Generate 2-3 initial conflicts
-                    while count < 2 and conflicts_generated < 3:
-                        conflict = await orchestrator.generate_background_conflict()
-                        if conflict:
-                            conflicts_generated += 1
-                            count += 1
-                    
+
+                    while True:
+                        cached = fetch_generated_conflict(self.user_id, self.conversation_id)
+                        if not cached:
+                            break
+                        conflicts_generated += 1
+                        count += 1
+
+                    missing = max(0, 2 - (count or 0))
+                    queued = 0
+                    for _ in range(min(3, missing)):
+                        if queue_conflict_generation(
+                            self.user_id,
+                            self.conversation_id,
+                            metadata={'reason': 'initial_seed'},
+                        ):
+                            queued += 1
+
                     processed.append({
                         'type': 'initial_conflicts',
                         'generated': conflicts_generated,
-                        'result': {'success': conflicts_generated > 0}
+                        'result': {'queued': queued},
                     })
                     
             except Exception as e:
@@ -458,48 +474,102 @@ class BackgroundConflictProcessor:
                 
             return len(expiring)
     
-    async def _generate_single_news_item(self, conflict_id: int) -> Dict[str, Any]:
-        """Generate a single news item for a conflict (called from background)"""
-        from logic.conflict_system.background_grand_conflicts import (
-            BackgroundNewsGenerator, 
+    async def _generate_single_news_item(
+        self,
+        conflict_id: int,
+        *,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue news generation for a conflict and return cached results if available."""
+        cached = fetch_conflict_news(conflict_id)
+        if cached:
+            return {"generated": True, "conflict_id": conflict_id, "news": cached}
+
+        from logic.conflict_system.background_grand_conflicts import (  # noqa: WPS433
             BackgroundConflict,
+            BackgroundIntensity,
             GrandConflictType,
-            BackgroundIntensity
         )
-        
-        generator = BackgroundNewsGenerator(self.user_id, self.conversation_id)
-        
+
         async with get_db_connection_context() as conn:
             conflict_data = await conn.fetchrow(
                 """
                 SELECT * FROM BackgroundConflicts
                 WHERE id = $1
                 """,
-                conflict_id
+                conflict_id,
             )
-            
-        if conflict_data:
-            # Convert to conflict object
-            conflict = BackgroundConflict(
-                conflict_id=conflict_data['id'],
-                conflict_type=GrandConflictType[conflict_data['conflict_type'].upper()],
-                name=conflict_data['name'],
-                description=conflict_data['description'],
-                intensity=BackgroundIntensity[conflict_data['intensity'].upper()],
-                progress=conflict_data['progress'],
-                factions=json.loads(conflict_data['factions']),
-                current_state=conflict_data['current_state'],
-                recent_developments=json.loads(conflict_data.get('recent_developments', '[]')),
-                impact_on_daily_life=json.loads(conflict_data.get('impacts', '[]')),
-                player_awareness_level=conflict_data.get('awareness', 0.1),
-                news_count=conflict_data.get('news_count', 0)
+            developments = await conn.fetch(
+                """
+                SELECT development
+                FROM BackgroundDevelopments
+                WHERE conflict_id = $1
+                ORDER BY game_day DESC, id DESC
+                LIMIT 3
+                """,
+                conflict_id,
             )
-            
-            # Generate news
-            news = await generator.generate_news_item(conflict)
-            return {"generated": True, "conflict_id": conflict_id, "news": news}
-            
-        return {"generated": False, "conflict_id": conflict_id}
+
+        if not conflict_data:
+            return {"generated": False, "conflict_id": conflict_id, "reason": "not_found"}
+
+        metadata = json.loads(conflict_data.get("metadata") or "{}")
+        intensity_raw = conflict_data.get("intensity")
+
+        intensity_enum = BackgroundIntensity.DISTANT_RUMOR
+        if isinstance(intensity_raw, str):
+            try:
+                intensity_enum = BackgroundIntensity[intensity_raw.upper()]
+            except KeyError:
+                try:
+                    intensity_enum = BackgroundIntensity(intensity_raw)
+                except ValueError:
+                    intensity_enum = BackgroundIntensity.DISTANT_RUMOR
+        elif isinstance(intensity_raw, (int, float)):
+            value = float(intensity_raw)
+            if value <= 0.2:
+                intensity_enum = BackgroundIntensity.DISTANT_RUMOR
+            elif value <= 0.4:
+                intensity_enum = BackgroundIntensity.OCCASIONAL_NEWS
+            elif value <= 0.6:
+                intensity_enum = BackgroundIntensity.REGULAR_TOPIC
+            elif value <= 0.8:
+                intensity_enum = BackgroundIntensity.AMBIENT_TENSION
+            else:
+                intensity_enum = BackgroundIntensity.VISIBLE_EFFECTS
+
+        recent_developments = [row["development"] for row in developments] if developments else []
+
+        try:
+            conflict_type = GrandConflictType[conflict_data["conflict_type"].upper()]
+        except (KeyError, AttributeError):
+            conflict_type = GrandConflictType.POLITICAL_SUCCESSION
+
+        conflict = BackgroundConflict(
+            conflict_id=conflict_data["id"],
+            conflict_type=conflict_type,
+            name=conflict_data["name"],
+            description=conflict_data["description"],
+            intensity=intensity_enum,
+            progress=float(conflict_data.get("progress", 0.0)),
+            factions=json.loads(conflict_data.get("factions", "[]")),
+            current_state=conflict_data.get("current_state", ""),
+            recent_developments=recent_developments,
+            impact_on_daily_life=metadata.get("daily_life_impacts", []),
+            player_awareness_level=float(conflict_data.get("awareness", 0.1)),
+            last_news_generation=conflict_data.get("last_news_generation"),
+            news_count=conflict_data.get("news_count", 0),
+        )
+
+        metadata_payload = {"reason": reason} if reason else None
+        queue_conflict_news(
+            self.user_id,
+            self.conversation_id,
+            conflict,
+            metadata=metadata_payload,
+        )
+
+        return {"generated": False, "conflict_id": conflict_id, "status": "queued"}
     
     async def _get_ambient_effect(self, conflict_id: int) -> Optional[str]:
         """Get ambient effect description for a conflict"""
