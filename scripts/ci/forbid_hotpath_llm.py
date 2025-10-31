@@ -61,19 +61,30 @@ ALLOWED_PATTERNS = [
 # Background-only methods (called ONLY from background tasks, not from event handlers)
 # These methods are allowed to contain LLM calls even though they're in hot-path files
 BACKGROUND_ONLY_METHODS = [
+    # Stakeholder methods (called from nyx/tasks/background/stakeholder_tasks.py)
     "create_stakeholder",
     "make_autonomous_decision",
     "generate_reaction",
     "adapt_stakeholder_role",
+    "_create_stakeholders_for_npcs",
+
+    # Conflict flow methods (called from nyx/tasks/background/flow_tasks.py or tasks.py)
     "initialize_conflict_flow",
     "update_conflict_flow",
     "generate_dramatic_beat",
     "narrate_phase_transition",
     "_handle_phase_transition",
+
+    # Canon methods (called from tasks.py background workers)
     "evaluate_for_canon",
     "check_lore_compliance",
     "generate_canon_references",
-    "_create_stakeholders_for_npcs",
+    "_perform_canon_evaluation",
+    "process_canonization_snapshot",
+    "build_reference_cache",
+    "build_compliance_suggestions",
+
+    # Tension methods (called from perform_bundle_generation_and_cache)
     "generate_manifestations",
     "narrate_escalation",
     "_generate_tension_manifestation_llm",
