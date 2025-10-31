@@ -97,6 +97,15 @@ _COLLECTOR_DEFINITIONS: Dict[str, Tuple[Type[CollectorType], Tuple[Any, ...], Di
         ("cache_size_bytes", "Current cache size in bytes", ["cache_type"]),
         {},
     ),
+    "MODE_RECOMMENDATION_SOURCE": (
+        Counter,
+        (
+            "mode_recommendation_source_total",
+            "Count of mode recommendation selections by source",
+            ["source"],
+        ),
+        {},
+    ),
 }
 
 
