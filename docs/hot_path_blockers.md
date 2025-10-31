@@ -129,129 +129,63 @@ async def adapt_stakeholder_role(
 
 ### 🔴 CRITICAL: /home/user/flask_roleplay/logic/conflict_system/social_circle.py
 
-**Event Handlers (Synchronous - HIGH PRIORITY):**
+**Event Handlers (Updated - Hot Path Clean):**
 
-#### ❌ `_handle_state_sync()` - Line 229
+#### ✅ `_handle_state_sync()` - Line 229
 ```python
 async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
-    # Check for gossip opportunities
-    if present_npcs and len(present_npcs) >= 2:
-        if random.random() < 0.3:  # 30% chance of gossip
-            gossip = await self.manager.generate_gossip(  # LINE 239 - BLOCKS
-                {'scene': scene_context.get('activity', 'unknown')},
-                present_npcs[:2]
-            )
+    if present_npcs and len(present_npcs) >= 2 and random.random() < 0.3:
+        schedule_gossip_generation(
+            scene_context,
+            present_npcs[:2],
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+        )
 
-    # Update reputation based on recent actions
     for npc_id in present_npcs:
         if npc_id not in self._reputation_cache:
-            reputation = await self.manager.calculate_reputation(npc_id)  # LINE 263 - BLOCKS
+            reputation = await get_cached_reputation_scores(npc_id)
+            self._reputation_cache[npc_id] = reputation
 ```
-- **Context:** Synchronizes social state during scene updates
-- **Blocks on:** `generate_gossip()` (line 629) and `calculate_reputation()` (line 758)
-- **Impact:** Scene sync blocked on gossip and reputation calculations
-- **Refactor Priority:** 🔴 CRITICAL
+- **Status:** ✅ Non-blocking. Hot path only schedules background work and reads caches.
 
-**Refactoring Tasks:**
-- [ ] Move gossip generation to background
-- [ ] Move reputation calculation to background
-- [ ] Return cached/stale values immediately
-- [ ] Update values asynchronously
-
----
-
-#### ❌ `_handle_conflict_created()` - Line 368
+#### ✅ `_handle_conflict_created()` - Line 368
 ```python
 async def _handle_conflict_created(self, event: SystemEvent) -> SubsystemResponse:
-    # Generate gossip about the new conflict
     if participants:
-        gossip = await self.manager.generate_gossip(  # LINE 375 - BLOCKS
-            {'conflict_start': True},
-            participants
+        schedule_gossip_generation(
+            scene_context,
+            participants,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
         )
 ```
-- **Context:** Generates initial gossip when conflict starts
-- **Blocks on:** `generate_gossip()` (line 629)
-- **Impact:** Conflict creation delayed by gossip generation
-- **Refactor Priority:** 🟡 HIGH
+- **Status:** ✅ Gossip generation dispatched to Celery; handler returns immediately.
 
-**Refactoring Tasks:**
-- [ ] Defer gossip generation to background
-- [ ] Create conflict immediately
-- [ ] Add gossip asynchronously
-- [ ] Notify when gossip available
-
----
-
-#### ❌ `_handle_conflict_resolved()` - Line 397
+#### ✅ `_handle_conflict_resolved()` - Line 397
 ```python
 async def _handle_conflict_resolved(self, event: SystemEvent) -> SubsystemResponse:
-    # Generate gossip about the resolution
-    all_participants = winners + losers
     if all_participants:
-        gossip = await self.manager.generate_gossip(  # LINE 417 - BLOCKS
-            {'conflict_resolved': True, 'outcome': resolution},
-            all_participants
+        schedule_gossip_generation(
+            scene_context,
+            all_participants,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
         )
+        initial_gossip_cache = await get_cached_gossip_items(
+            scene_context['scene_hash'],
+            limit=3,
+        )
+        # ... schedule follow-up polling for richer data
 ```
-- **Context:** Generates resolution gossip
-- **Blocks on:** `generate_gossip()` (line 629)
-- **Impact:** Resolution processing delayed
-- **Refactor Priority:** 🟡 HIGH
-
-**Refactoring Tasks:**
-- [ ] Move gossip to background
-- [ ] Show resolution immediately
-- [ ] Add gossip flavor text later
-- [ ] Queue for batch processing
+- **Status:** ✅ Handler now queues work and consumes cached payloads.
 
 ---
 
-**Core Blocking Functions:**
+**Core Blocking Functions (Resolved):**
 
-#### ❌ `generate_gossip()` - Line 602
-```python
-async def generate_gossip(
-    self,
-    context: Dict[str, Any],
-    target_npcs: Optional[List[int]] = None
-) -> GossipItem:
-    # ... build prompt
-    response = await self.gossip_generator.run(prompt)  # LINE 629 - BLOCKS
-```
-- **Called from:** Lines 239, 375, 417
-- **Latency:** 500ms-2s per gossip generation
-- **Impact:** Social dynamics generation blocks scenes
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Create gossip_generation_task in Celery
-- [ ] Pre-generate common gossip templates
-- [ ] Return placeholder, fill in later
-- [ ] Batch multiple gossip requests
-
----
-
-#### ❌ `calculate_reputation()` - Line 726
-```python
-async def calculate_reputation(
-    self,
-    target_id: int,
-    social_circle: Optional[SocialCircle] = None
-) -> Dict[ReputationType, float]:
-    # ... gather factors
-    response = await self.social_analyzer.run(prompt)  # LINE 758 - BLOCKS
-```
-- **Called from:** Line 263 in state sync
-- **Latency:** 500ms-2s per reputation calc
-- **Impact:** Scene updates wait for reputation
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Cache reputation with TTL
-- [ ] Calculate in background
-- [ ] Use rule-based approximation initially
-- [ ] Refine with LLM asynchronously
+- `SocialCircleManager.generate_gossip` ➜ removed; hot path now uses `schedule_gossip_generation()` + cache lookups.
+- `SocialCircleManager.calculate_reputation` ➜ removed; handlers call `get_cached_reputation_scores()` and schedule slow paths.
 
 ---
 

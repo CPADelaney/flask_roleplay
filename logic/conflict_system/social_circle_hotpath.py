@@ -2,7 +2,7 @@
 
 This module provides fast, cache-first functions for social dynamics:
 - Retrieve cached gossip and reputation from Redis
-- Queue generation tasks for new social content
+- Schedule generation tasks for new social content
 - Fast reputation updates (numeric only)
 
 The slow LLM calls have been moved to nyx/tasks/background/social_tasks.py.
@@ -125,7 +125,7 @@ def queue_reputation_narration(
         logger.warning(f"Failed to queue reputation narration: {e}")
 
 
-def queue_gossip_generation(
+def schedule_gossip_generation(
     scene_context: Dict[str, Any],
     target_npcs: Optional[List[int]] = None,
     *,
@@ -165,12 +165,12 @@ def queue_gossip_generation(
 
         generate_gossip.delay(payload)
         logger.debug(
-            "Queued gossip generation for scene %s (targets=%s)",
+            "Scheduled gossip generation for scene %s (targets=%s)",
             scene_hash,
             target_npcs or [],
         )
     except Exception as e:
-        logger.warning(f"Failed to queue gossip generation: {e}")
+        logger.warning(f"Failed to schedule gossip generation: {e}")
 
 
 def queue_alliance_formation(
@@ -201,7 +201,7 @@ def queue_alliance_formation(
         logger.warning(f"Failed to queue alliance formation: {e}")
 
 
-async def get_cached_gossip(scene_hash: str, limit: int = 5) -> List[Dict[str, Any]]:
+async def get_cached_gossip_items(scene_hash: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Get cached gossip items for a scene (hot path).
 
     Args:
@@ -220,7 +220,7 @@ async def get_cached_gossip(scene_hash: str, limit: int = 5) -> List[Dict[str, A
     return []
 
 
-def queue_reputation_calculation(
+def schedule_reputation_calculation(
     user_id: int,
     conversation_id: int,
     target_id: int,
@@ -261,15 +261,15 @@ def queue_reputation_calculation(
 
         calculate_reputation.delay(payload)
         logger.debug(
-            "Queued reputation calculation for npc=%s (scene_hash=%s)",
+            "Scheduled reputation calculation for npc=%s (scene_hash=%s)",
             target_id,
             payload_context.get("scene_hash"),
         )
     except Exception as exc:
-        logger.warning("Failed to queue reputation calculation: %s", exc)
+        logger.warning("Failed to schedule reputation calculation: %s", exc)
 
 
-async def get_cached_reputation(npc_id: int) -> Dict[str, float]:
+async def get_cached_reputation_scores(npc_id: int) -> Dict[str, float]:
     """Get cached reputation scores for NPC (hot path).
 
     Args:

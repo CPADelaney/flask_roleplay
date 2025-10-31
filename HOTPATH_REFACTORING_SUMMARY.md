@@ -58,8 +58,11 @@ Each subsystem now has a `*_hotpath.py` module with fast helper functions:
 - `get_scene_bundle()` - Cache-first social bundle retrieval
 - `apply_reputation_change()` - Fast numeric reputation updates
 - `queue_reputation_narration()` - Dispatch narration to background
-- `queue_gossip_generation()` - Dispatch gossip generation
+- `schedule_gossip_generation()` - Dispatch gossip generation
 - `queue_alliance_formation()` - Dispatch alliance formation
+- `get_cached_gossip_items()` - Retrieve cached gossip payloads
+- `schedule_reputation_calculation()` - Dispatch reputation analysis
+- `get_cached_reputation_scores()` - Retrieve cached reputation values
 
 #### `logic/conflict_system/conflict_canon_hotpath.py` (NEW)
 - `lore_compliance_fast()` - Fast rule-based compliance check
