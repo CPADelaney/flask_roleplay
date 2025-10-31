@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional, Tuple
 
 from celery import shared_task
 
-from agents import Runner
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
 from logic.conflict_system.conflict_synthesizer_hotpath import (
     compute_scene_hash,
@@ -25,6 +24,7 @@ from nyx.nyx_agent.context import (
     persist_canonical_snapshot,
 )
 from nyx.utils.idempotency import idempotent
+from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
 
 logger = logging.getLogger(__name__)
 
@@ -114,10 +114,19 @@ def _build_scene_router_prompt(scene_context: Dict[str, Any]) -> str:
 
 
 async def _run_orchestrator(synthesizer, prompt: str):
-    return await asyncio.wait_for(
-        Runner.run(synthesizer._orchestrator, prompt),
+    request = LLMRequest(
+        prompt=prompt,
+        agent=synthesizer._orchestrator,
+        metadata={
+            "operation": LLMOperation.ORCHESTRATION.value,
+            "stage": "conflict_route",
+        },
+    )
+    result = await asyncio.wait_for(
+        execute(request),
         timeout=LLM_ROUTE_TIMEOUT,
     )
+    return result.raw
 
 
 @shared_task(name="nyx.tasks.background.conflict_tasks.route_subsystems", acks_late=True)

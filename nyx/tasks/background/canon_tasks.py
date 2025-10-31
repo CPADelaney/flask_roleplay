@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Tuple
 
 from celery import shared_task
 
-from agents import Runner
 from db.connection import get_db_connection_context
 from infra.cache import cache_key, set_json
 from logic.conflict_system.conflict_canon import (
@@ -21,6 +20,7 @@ from logic.conflict_system.dynamic_conflict_template import extract_runner_respo
 from lore.core.canon import log_canonical_event
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
+from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,16 @@ Return JSON:
   "significance": 0.0
 }}
 """
-    response = await Runner.run(subsystem.lore_integrator, prompt)
+    request = LLMRequest(
+        prompt=prompt,
+        agent=subsystem.lore_integrator,
+        metadata={
+            "operation": LLMOperation.ORCHESTRATION.value,
+            "stage": "canon_evaluation",
+        },
+    )
+    result = await execute(request)
+    response = result.raw
     data = json.loads(extract_runner_response(response))
     should = bool(data.get("should_be_canonical", False))
     reason = data.get("reason", "")
@@ -171,7 +180,16 @@ Return JSON:
   "precedent_description": "What precedent if any"
 }}
 """
-    response = await Runner.run(subsystem.cultural_interpreter, prompt)
+    request = LLMRequest(
+        prompt=prompt,
+        agent=subsystem.cultural_interpreter,
+        metadata={
+            "operation": LLMOperation.ORCHESTRATION.value,
+            "stage": "canon_event",
+        },
+    )
+    result = await execute(request)
+    response = result.raw
     event_payload = json.loads(extract_runner_response(response))
 
     legacy = await _generate_legacy_pipeline(subsystem, conflict, resolution, event_payload)
@@ -258,7 +276,16 @@ Event: {cultural_data.get('canonical_name','')}
 Description: {cultural_data.get('canonical_description','')}
 Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
 """
-    response = await Runner.run(subsystem.legacy_writer, prompt)
+    request = LLMRequest(
+        prompt=prompt,
+        agent=subsystem.legacy_writer,
+        metadata={
+            "operation": LLMOperation.ORCHESTRATION.value,
+            "stage": "canon_legacy",
+        },
+    )
+    result = await execute(request)
+    response = result.raw
     return extract_runner_response(response)
 
 
@@ -310,7 +337,16 @@ Context: {context}
 Return JSON:
 {{ "references": [{{"text": "..."}}] }}
 """
-        response = await Runner.run(subsystem.reference_generator, prompt)
+        request = LLMRequest(
+            prompt=prompt,
+            agent=subsystem.reference_generator,
+            metadata={
+                "operation": LLMOperation.ORCHESTRATION.value,
+                "stage": "canon_references",
+            },
+        )
+        result = await execute(request)
+        response = result.raw
         data = json.loads(extract_runner_response(response))
         refs = [ref.get("text", "") for ref in data.get("references", [])]
         await subsystem.update_reference_cache(cache_id, refs, status="ready")
@@ -354,7 +390,16 @@ Canonical Events: {json.dumps([dict(e) for e in canonical_events])}
 
 Write 2-3 paragraphs of authentic folklore.
 """
-    response = await Runner.run(subsystem.cultural_interpreter, prompt)
+    request = LLMRequest(
+        prompt=prompt,
+        agent=subsystem.cultural_interpreter,
+        metadata={
+            "operation": LLMOperation.ORCHESTRATION.value,
+            "stage": "canon_mythology",
+        },
+    )
+    result = await execute(request)
+    response = result.raw
     return extract_runner_response(response)
 
 
@@ -496,7 +541,16 @@ Matching Canonical Events: {json.dumps([dict(row) for row in related_events])}
 
 Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
 """
-        response = await Runner.run(subsystem.precedent_analyzer, prompt)
+        request = LLMRequest(
+            prompt=prompt,
+            agent=subsystem.precedent_analyzer,
+            metadata={
+                "operation": LLMOperation.ORCHESTRATION.value,
+                "stage": "canon_compliance",
+            },
+        )
+        result = await execute(request)
+        response = result.raw
         data = json.loads(extract_runner_response(response))
         suggestions = [str(s) for s in (data.get("suggestions") or [])]
         await subsystem.update_compliance_suggestions(

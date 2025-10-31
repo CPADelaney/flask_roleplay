@@ -56,6 +56,7 @@ from nyx.core.side_effects import (
     WorldDelta,
     group_side_effects,
 )
+from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
 
 try:
     import openai
@@ -82,10 +83,9 @@ except Exception:  # pragma: no cover
 
 # Fallback agent runtime (loaded lazily; optional in some environments)
 try:
-    from agents import Runner, RunConfig, ModelSettings, RunContextWrapper
+    from agents import RunConfig, ModelSettings, RunContextWrapper
     from .nyx_agent.agents import nyx_main_agent, nyx_defer_agent, DEFAULT_MODEL_SETTINGS
 except Exception:  # pragma: no cover
-    Runner = None
     RunConfig = None
     ModelSettings = None
     RunContextWrapper = None
@@ -394,7 +394,7 @@ class NyxAgentSDK:
     ) -> Optional[str]:
         """Ask Nyx to craft a defer narrative; return None if the call fails."""
 
-        if Runner is None or nyx_defer_agent is None:
+        if nyx_defer_agent is None:
             return None
 
         prompt = build_defer_prompt(context)
@@ -410,14 +410,17 @@ class NyxAgentSDK:
                 effective_timeout = 10.0
         try:
             with _agents_trace("Nyx SDK - Defer Narrative"):
-                result = await asyncio.wait_for(
-                    Runner.run(
-                        nyx_defer_agent,
-                        prompt,
-                        max_turns=2,
-                    ),
+                request = LLMRequest(
+                    prompt=prompt,
+                    agent=nyx_defer_agent,
+                    metadata={"operation": LLMOperation.ORCHESTRATION.value},
+                    runner_kwargs={"max_turns": 2},
+                )
+                result_wrapper = await asyncio.wait_for(
+                    execute(request),
                     timeout=max(0.25, effective_timeout),
                 )
+                result = result_wrapper.raw
         except asyncio.TimeoutError:
             logger.debug(
                 f"[SDK-{trace_id}] Nyx defer narrative generation timed out",
@@ -953,7 +956,7 @@ class NyxAgentSDK:
         We avoid importing the class-based assembler; instead we safely coalesce
         the runner history into a single narrative.
         """
-        if not (Runner and RunConfig and RunContextWrapper and nyx_main_agent):
+        if not (RunConfig and RunContextWrapper and nyx_main_agent):
             logger.error("[SDK-%s] Fallback runtime unavailable", trace_id)
             raise RuntimeError("Fallback agent runtime is unavailable in this environment.")
 
@@ -1105,15 +1108,24 @@ class NyxAgentSDK:
 
         try:
             with _agents_trace("Nyx SDK - Fallback Run"):
-                result = await asyncio.wait_for(
-                    Runner.run(
-                        nyx_main_agent,
-                        enhanced_input,
-                        context=runner_context,
-                        run_config=run_config,
-                    ),
+                runner_kwargs = {
+                    "context": runner_context,
+                    "run_config": run_config,
+                }
+                request = LLMRequest(
+                    prompt=enhanced_input,
+                    agent=nyx_main_agent,
+                    metadata={
+                        "operation": LLMOperation.ORCHESTRATION.value,
+                        "path": "sdk_fallback",
+                    },
+                    runner_kwargs=runner_kwargs,
+                )
+                result_wrapper = await asyncio.wait_for(
+                    execute(request),
                     timeout=max(0.5, _left() - safety_margin)
                 )
+                result = result_wrapper.raw
         except Exception:
             logger.exception("[SDK-%s] Fallback Runner invocation failed", trace_id)
             raise

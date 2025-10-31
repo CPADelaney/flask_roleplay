@@ -9,7 +9,7 @@ import uuid
 from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING
 from contextlib import asynccontextmanager
 
-from agents import Agent, Runner, RunConfig, RunContextWrapper, ModelSettings
+from agents import Agent, RunConfig, RunContextWrapper, ModelSettings
 from db.connection import get_db_connection_context
 
 # Import enhanced feasibility functions
@@ -21,7 +21,7 @@ from nyx.nyx_agent.feasibility import (
     assess_action_feasibility_fast
 )
 
-from nyx.gateway.llm_gateway import execute, LLMRequest, LLMOperation
+from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
 from .config import Config
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ async def _generate_defer_taunt(
 ) -> Optional[str]:
     """Ask Nyx to craft a defer response; fall back to None on failure."""
 
-    if Runner is None or nyx_defer_agent is None:
+    if nyx_defer_agent is None:
         return None
 
     prompt = build_defer_prompt(context)
@@ -111,14 +111,17 @@ async def _generate_defer_taunt(
                 remaining = max(0.25, dl - _t.monotonic())
         except Exception:
             remaining = None
-        result = await asyncio.wait_for(
-            Runner.run(
-                nyx_defer_agent,
-                prompt,
-                **run_kwargs,
-            ),
+        request = LLMRequest(
+            prompt=prompt,
+            agent=nyx_defer_agent,
+            metadata={"operation": LLMOperation.ORCHESTRATION.value},
+            runner_kwargs=run_kwargs or None,
+        )
+        result_wrapper = await asyncio.wait_for(
+            execute(request),
             timeout=remaining if remaining is not None else get_defer_run_timeout_seconds(),
         )
+        result = result_wrapper.raw
     except asyncio.TimeoutError:
         logger.debug(
             f"[{trace_id}] Nyx defer taunt generation timed out",
@@ -255,18 +258,22 @@ async def run_agent_safely(
     """Run agent with automatic fallback on strict schema errors"""
     try:
         # First attempt with the agent as-is
-        result = await Runner.run(
-            agent,
-            input_data,
-            context=context,
-            run_config=run_config
+        base_runner_kwargs = {"context": context}
+        if run_config is not None:
+            base_runner_kwargs["run_config"] = run_config
+        request = LLMRequest(
+            prompt=input_data,
+            agent=agent,
+            metadata={"operation": LLMOperation.ORCHESTRATION.value},
+            runner_kwargs=base_runner_kwargs,
         )
-        return result
+        result_wrapper = await execute(request)
+        return result_wrapper.raw
     except Exception as e:
         error_msg = str(e).lower()
         if "additionalproperties" in error_msg or "strict schema" in error_msg:
             logger.warning(f"Strict schema error, attempting without structured output: {e}")
-            
+
             # Create a simple text-only agent
             fallback_agent = Agent(
                 name=f"{getattr(agent, 'name', 'Agent')} (Fallback)",
@@ -275,15 +282,22 @@ async def run_agent_safely(
                 model_settings=DEFAULT_MODEL_SETTINGS,
             )
 
-            
+
             try:
-                result = await Runner.run(
-                    fallback_agent,
-                    input_data,
-                    context=context,
-                    run_config=run_config
+                fallback_runner_kwargs = {"context": context}
+                if run_config is not None:
+                    fallback_runner_kwargs["run_config"] = run_config
+                fallback_request = LLMRequest(
+                    prompt=input_data,
+                    agent=fallback_agent,
+                    metadata={
+                        "operation": LLMOperation.ORCHESTRATION.value,
+                        "fallback": True,
+                    },
+                    runner_kwargs=fallback_runner_kwargs,
                 )
-                return result
+                fallback_result = await execute(fallback_request)
+                return fallback_result.raw
             except Exception as e2:
                 logger.error(f"Fallback agent also failed: {e2}")
                 if fallback_response is not None:

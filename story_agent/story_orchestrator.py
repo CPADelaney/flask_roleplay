@@ -24,6 +24,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
+from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
+
 logger = logging.getLogger(__name__)
 
 
@@ -970,11 +972,16 @@ class StoryOrchestrator:
         try:
             # Correct pattern: DailyTaskGenerator is already an Agent instance
             from story_agent.daily_task_generator import DailyTaskGenerator
-            from agents import Runner
-            result = await Runner.run(
-                DailyTaskGenerator,
-                "Generate a contextual daily task for the current world and relationships"
+            request = LLMRequest(
+                prompt="Generate a contextual daily task for the current world and relationships",
+                agent=DailyTaskGenerator,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "daily_task",
+                },
             )
+            result_wrapper = await execute(request)
+            result = result_wrapper.raw
             packet.daily_task = _safe_dump(getattr(result, "final_output", None) or getattr(result, "data", None) or result)
         except Exception as e:
             logger.warning(f"daily task generation failed: {e}")
@@ -982,7 +989,6 @@ class StoryOrchestrator:
     async def _attach_creative_task(self, packet: StoryPacket):
         try:
             from story_agent.creative_task_agent import femdom_task_agent
-            from agents import Runner
             npc_id = None
             ws = self._world_state
             if ws is not None:
@@ -999,7 +1005,17 @@ class StoryOrchestrator:
             msg = "Build a contextual creative femdom task."
             if npc_id:
                 msg = f"Build a contextual creative femdom task centered on NPC {npc_id}."
-            res = await Runner.run(femdom_task_agent, messages=[{"role": "user", "content": msg}])
+            request = LLMRequest(
+                prompt=msg,
+                agent=femdom_task_agent,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "creative_task",
+                },
+                runner_kwargs={"messages": [{"role": "user", "content": msg}]},
+            )
+            res_wrapper = await execute(request)
+            res = res_wrapper.raw
             packet.creative_task = _safe_dump(getattr(res, "data", None) or getattr(res, "final_output", None) or res)
         except Exception as e:
             logger.info(f"creative task generation skipped/failed: {e}")
