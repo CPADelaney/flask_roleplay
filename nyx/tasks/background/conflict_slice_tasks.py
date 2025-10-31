@@ -16,6 +16,7 @@ from logic.conflict_system.slice_of_life_conflicts import (
     PatternBasedResolution,
     SliceOfLifeConflictManager,
 )
+from nyx.tasks.background import conflict_llm_helpers as conflict_llm
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
 
@@ -220,7 +221,18 @@ def refresh_tension_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     detector = EmergentConflictDetector(int(user_id), int(conversation_id))
     try:
-        tensions = run_coro(detector._detect_tensions())
+        memories, relationships = run_coro(detector.collect_tension_inputs())
+        try:
+            tensions = run_coro(
+                conflict_llm.analyze_patterns_async(memories, relationships)
+            )
+        except Exception:
+            logger.exception(
+                "Slice-of-life tension LLM analysis failed; falling back to heuristics"
+            )
+            tensions = run_coro(
+                detector._analyze_patterns_with_llm(memories, relationships)
+            )
         run_coro(_upsert_tension(user_id, conversation_id, "ready", tensions, None))
         return {
             "status": "ready",
@@ -262,14 +274,33 @@ def generate_conflict_activity(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         int(payload.get("user_id")), int(payload.get("conversation_id"))
     )
 
+    npc_ids = list(payload.get("participating_npcs", []))
+
     try:
-        event = run_coro(
-            manager._embed_conflict_in_activity(
-                int(conflict_id),
-                payload.get("activity_type", "daily_routine"),
-                list(payload.get("participating_npcs", [])),
-            )
+        context_conflict, npc_descriptors = run_coro(
+            manager.collect_activity_context(int(conflict_id), npc_ids)
         )
+        try:
+            event = run_coro(
+                conflict_llm.generate_manifestation_async(
+                    context_conflict or {},
+                    payload.get("activity_type", "daily_routine"),
+                    npc_descriptors,
+                    npc_ids,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Slice-of-life manifestation LLM generation failed; using heuristic fallback"
+            )
+            event = run_coro(
+                manager._generate_conflict_manifestation(
+                    context_conflict,
+                    payload.get("activity_type", "daily_routine"),
+                    npc_ids,
+                    npc_descriptors,
+                )
+            )
         serialized = asdict(event)
         run_coro(
             _upsert_activity(conflict_id, activity_hash, "ready", serialized, None)
@@ -311,7 +342,21 @@ def evaluate_conflict_resolution(self, payload: Dict[str, Any]) -> Dict[str, Any
     )
 
     try:
-        result = run_coro(resolver._evaluate_resolution(int(conflict_id)))
+        conflict_context, memories = run_coro(
+            resolver.collect_resolution_inputs(int(conflict_id))
+        )
+        result: Optional[Dict[str, Any]] = None
+        if conflict_context and memories:
+            try:
+                result = run_coro(
+                    conflict_llm.evaluate_resolution_async(conflict_context, memories)
+                )
+            except Exception:
+                logger.exception(
+                    "Slice-of-life resolution LLM evaluation failed; using heuristic fallback"
+                )
+        if not result:
+            result = run_coro(resolver._evaluate_resolution(int(conflict_id)))
         run_coro(_upsert_resolution(conflict_id, "ready", result, None))
         return {
             "status": "ready",
@@ -361,9 +406,23 @@ def evaluate_time_appropriateness(self, payload: Dict[str, Any]) -> Dict[str, An
         conflict_data = run_coro(_load_conflict(int(conflict_id)))
         if not conflict_data:
             conflict_data = payload.get("conflict_snapshot") or {}
-        result = run_coro(
-            integration._evaluate_time_appropriateness(conflict_data or {}, time_of_day)
-        )
+        try:
+            result = run_coro(
+                conflict_llm.evaluate_time_appropriateness_async(
+                    conflict_data or payload.get("conflict_snapshot") or {},
+                    time_of_day,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Slice-of-life time-appropriateness LLM check failed; using heuristic fallback"
+            )
+            result = run_coro(
+                integration._evaluate_time_appropriateness(
+                    conflict_data or payload.get("conflict_snapshot") or {},
+                    time_of_day,
+                )
+            )
         run_coro(_upsert_time(conflict_id, time_of_day, "ready", bool(result), None))
         return {
             "status": "ready",
