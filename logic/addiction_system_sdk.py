@@ -30,10 +30,9 @@ from typing import Dict, List, Any, Optional, Union, Iterable, Set, Tuple
 
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, 
-    ModelSettings, 
-    Runner, 
-    function_tool, 
+    Agent,
+    ModelSettings,
+    function_tool,
     RunContextWrapper,
     GuardrailFunctionOutput,
     InputGuardrail,
@@ -51,6 +50,9 @@ from lore.core.lore_system import LoreSystem
 
 # Nyx governance integration
 # Moved imports to function level to avoid circular imports
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
+
 from nyx.nyx_governance import (
     AgentType,
     DirectiveType,
@@ -868,18 +870,24 @@ async def _generate_addiction_effects_impl(
                                 f"- Personality: {', '.join(traits[:3]) if traits else 'Unknown'}\n\n"
                                 "Write an intense, immersive scene that shows how this addiction is affecting the player."
                             )
-                            result = await Runner.run(
-                                special_event_agent, prompt, context=ctx.context
+                            result = await llm_gateway.execute(
+                                LLMRequest(
+                                    agent=special_event_agent,
+                                    prompt=prompt,
+                                    context=ctx.context,
+                                )
                             )
                             # Safer result extraction
-                            special_event = None
-                            if hasattr(result, "final_output"):
-                                special_event = result.final_output
-                            elif hasattr(result, "output_text"):
-                                special_event = result.output_text
-                            else:
-                                special_event = str(result)
-                            
+                            special_event = result.text or None
+                            if not special_event and result.raw is not None:
+                                raw = result.raw
+                                if hasattr(raw, "final_output"):
+                                    special_event = raw.final_output
+                                elif hasattr(raw, "output_text"):
+                                    special_event = raw.output_text
+                                else:
+                                    special_event = str(raw)
+                    
                             if special_event:
                                 effects.append(special_event)
                     except Exception as e:
@@ -980,8 +988,17 @@ async def addiction_content_safety(ctx, agent, input_data):
         output_type=AddictionSafety,
         model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
     )
-    result = await Runner.run(content_moderator, input_data, context=ctx.context)
-    final_output = result.final_output_as(AddictionSafety)
+    result = await llm_gateway.execute(
+        LLMRequest(
+            agent=content_moderator,
+            prompt=input_data,
+            context=ctx.context,
+        )
+    )
+    raw_result = result.raw
+    if raw_result is None:
+        raise ValueError("Content moderator returned no result")
+    final_output = raw_result.final_output_as(AddictionSafety)
     return GuardrailFunctionOutput(
         output_info=final_output,
         tripwire_triggered=not final_output.is_appropriate,
@@ -1116,12 +1133,20 @@ async def generate_thematic_messages_via_agent(
     })
 
     try:
-        run_task = Runner.run(agent, json.dumps(payload), context=run_ctx.context)
+        request = LLMRequest(
+            agent=agent,
+            prompt=json.dumps(payload),
+            context=run_ctx.context,
+        )
+        run_task = llm_gateway.execute(request)
         if timeout is not None:
             resp = await asyncio.wait_for(run_task, timeout=timeout)
         else:
             resp = await run_task
-        bundle = resp.final_output_as(ThematicMessagesBundle)
+        raw_resp = resp.raw
+        if raw_resp is None:
+            raise ValueError("Thematic message agent returned no result")
+        bundle = raw_resp.final_output_as(ThematicMessagesBundle)
 
         out: Dict[str, Dict[str, str]] = {}
         entries = bundle.addictions or []
