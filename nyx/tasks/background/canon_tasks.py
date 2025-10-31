@@ -464,6 +464,56 @@ def generate_canon_references(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def _generate_compliance_suggestions(
+    subsystem: ConflictCanonSubsystem,
+    cache_id: int,
+    conflict_type: str,
+    conflict_context: Dict[str, Any],
+    matching_event_ids: List[int],
+) -> None:
+    try:
+        related_events: List[Any] = []
+        if matching_event_ids:
+            async with get_db_connection_context() as conn:
+                related_events = await conn.fetch(
+                    """
+                    SELECT id, event_text, tags, significance
+                      FROM CanonicalEvents
+                     WHERE user_id = $1 AND conversation_id = $2
+                       AND id = ANY($3::int[])
+                    """,
+                    subsystem.user_id,
+                    subsystem.conversation_id,
+                    matching_event_ids,
+                )
+
+        prompt = f"""
+Assess lore guidance for the following conflict.
+
+Conflict Type: {conflict_type}
+Context: {json.dumps(conflict_context)}
+Matching Canonical Events: {json.dumps([dict(row) for row in related_events])}
+
+Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
+"""
+        response = await Runner.run(subsystem.precedent_analyzer, prompt)
+        data = json.loads(extract_runner_response(response))
+        suggestions = [str(s) for s in (data.get("suggestions") or [])]
+        await subsystem.update_compliance_suggestions(
+            cache_id,
+            suggestions,
+            status="ready",
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to build compliance suggestions", exc_info=exc)
+        await subsystem.update_compliance_suggestions(
+            cache_id,
+            [],
+            status="failed",
+            error=str(exc),
+        )
+
+
 async def _suggestions_background(
     user_id: int,
     conversation_id: int,
@@ -473,7 +523,8 @@ async def _suggestions_background(
     matching_event_ids: List[int],
 ) -> None:
     subsystem = ConflictCanonSubsystem(user_id, conversation_id)
-    await subsystem.build_compliance_suggestions_background(
+    await _generate_compliance_suggestions(
+        subsystem,
         cache_id,
         conflict_type,
         conflict_context,

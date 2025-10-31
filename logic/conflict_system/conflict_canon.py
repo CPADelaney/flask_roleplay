@@ -13,8 +13,7 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-from agents import Agent, function_tool, RunContextWrapper, Runner
+from agents import Agent, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
 from infra.cache import cache_key, get_json, set_json
 
@@ -704,51 +703,6 @@ class ConflictCanonSubsystem(ConflictSubsystem):
             matching_event_ids,
         )
 
-    async def build_compliance_suggestions_background(
-        self,
-        cache_id: int,
-        conflict_type: str,
-        conflict_context: Dict[str, Any],
-        matching_event_ids: List[int],
-    ) -> None:
-        try:
-            async with get_db_connection_context() as conn:
-                related_events = []
-                if matching_event_ids:
-                    related_events = await conn.fetch(
-                        """
-                        SELECT id, event_text, tags, significance
-                          FROM CanonicalEvents
-                         WHERE user_id = $1 AND conversation_id = $2
-                           AND id = ANY($3::int[])
-                        """,
-                        self.user_id,
-                        self.conversation_id,
-                        matching_event_ids,
-                    )
-
-            prompt = f"""
-Assess lore guidance for the following conflict.
-
-Conflict Type: {conflict_type}
-Context: {json.dumps(conflict_context)}
-Matching Canonical Events: {json.dumps([dict(row) for row in related_events])}
-
-Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
-"""
-            response = await Runner.run(self.precedent_analyzer, prompt)
-            data = json.loads(extract_runner_response(response))
-            suggestions = [str(s) for s in (data.get('suggestions') or [])]
-            await self.update_compliance_suggestions(cache_id, suggestions, status='ready')
-        except Exception as exc:
-            logger.exception("Failed to build compliance suggestions", exc_info=exc)
-            await self.update_compliance_suggestions(
-                cache_id,
-                [],
-                status='failed',
-                error=str(exc),
-            )
-    
     async def handle_event(self, event) -> SubsystemResponse:
         try:
             if event.event_type == EventType.CONFLICT_RESOLVED:
