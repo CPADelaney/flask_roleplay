@@ -9,6 +9,7 @@ import json
 import asyncio
 import random
 import time
+import hashlib
 from collections import OrderedDict
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from datetime import datetime, timedelta
@@ -96,13 +97,29 @@ class EnhancedIntegrationSubsystem:
             max_size=64,
             ttl=3600
         )
+        self._contextual_conflict_cache = CacheManager(
+            name=f"enhanced_conflict_contextual_{user_id}_{conversation_id}",
+            max_size=64,
+            ttl=3600
+        )
+        self._activity_integration_cache = CacheManager(
+            name=f"enhanced_conflict_activity_{user_id}_{conversation_id}",
+            max_size=64,
+            ttl=3600
+        )
         self._known_scene_contexts: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._scope_memory_limit = 32
         self._pending_refresh_tasks: Set[asyncio.Task] = set()
         self._refresh_lock = asyncio.Lock()
         self._table_lock = asyncio.Lock()
         self._tension_table_ready = False
+        self._contextual_table_ready = False
+        self._activity_table_ready = False
         self._refresh_batch_size = 12
+        self._dispatch_lock = asyncio.Lock()
+        self._inflight_tension_requests: Set[str] = set()
+        self._inflight_conflict_requests: Set[str] = set()
+        self._inflight_activity_requests: Set[str] = set()
 
     @property
     def subsystem_type(self):
@@ -452,7 +469,27 @@ class EnhancedIntegrationSubsystem:
             return {}
         cached = await self._tension_cache.get(scope_key)
         if cached:
+            async with self._dispatch_lock:
+                self._inflight_tension_requests.discard(scope_key)
             return cached
+
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                get_cached_tension_result,
+            )
+
+            redis_cached = get_cached_tension_result(
+                self.user_id, self.conversation_id, scope_key
+            )
+            if redis_cached:
+                if mutate_cache:
+                    await self._tension_cache.set(scope_key, redis_cached, ttl=3600)
+                async with self._dispatch_lock:
+                    self._inflight_tension_requests.discard(scope_key)
+                return redis_cached
+        except Exception:
+            # Redis cache is best effort; fall back silently
+            pass
 
         async with get_db_connection_context() as conn:
             await self._ensure_tension_summary_table(conn)
@@ -478,6 +515,18 @@ class EnhancedIntegrationSubsystem:
                 summary.setdefault('cached_at', row['last_updated'].isoformat())
             if mutate_cache:
                 await self._tension_cache.set(scope_key, summary, ttl=3600)
+            try:
+                from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                    cache_tension_result,
+                )
+
+                cache_tension_result(
+                    self.user_id, self.conversation_id, scope_key, summary
+                )
+            except Exception:
+                pass
+            async with self._dispatch_lock:
+                self._inflight_tension_requests.discard(scope_key)
             return summary
 
     async def _persist_tension_summary(self, scope_key: str, summary: Dict[str, Any]) -> None:
@@ -504,6 +553,16 @@ class EnhancedIntegrationSubsystem:
                 json.dumps(summary),
                 datetime.utcnow()
             )
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                cache_tension_result,
+            )
+
+            cache_tension_result(
+                self.user_id, self.conversation_id, scope_key, summary
+            )
+        except Exception:
+            pass
 
     async def _ensure_tension_summary_table(self, conn) -> None:
         if self._tension_table_ready:
@@ -524,6 +583,293 @@ class EnhancedIntegrationSubsystem:
                 """
             )
             self._tension_table_ready = True
+
+    @staticmethod
+    def _stable_hash(payload: Any) -> str:
+        try:
+            dumped = json.dumps(payload, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            dumped = json.dumps(str(payload), sort_keys=True)
+        return hashlib.sha1(dumped.encode("utf-8")).hexdigest()
+
+    def _contextual_conflict_key(
+        self, tension_data: Dict[str, Any], npcs: List[int]
+    ) -> str:
+        normalized_npcs: Set[str] = set()
+        for npc in npcs:
+            if npc is None:
+                continue
+            if isinstance(npc, (int, float)):
+                normalized_npcs.add(str(int(npc)))
+            else:
+                normalized_npcs.add(str(npc))
+        normalized = {
+            'tensions': tension_data.get('tensions', []),
+            'should_generate_conflict': bool(tension_data.get('should_generate_conflict')),
+            'npcs': sorted(normalized_npcs)
+        }
+        return self._stable_hash(normalized)
+
+    async def _get_cached_contextual_conflict(self, context_key: str) -> Dict[str, Any]:
+        if not context_key:
+            return {}
+        cached = await self._contextual_conflict_cache.get(context_key)
+        if cached:
+            async with self._dispatch_lock:
+                self._inflight_conflict_requests.discard(context_key)
+            return cached
+
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                get_cached_contextual_conflict,
+            )
+
+            redis_cached = get_cached_contextual_conflict(
+                self.user_id, self.conversation_id, context_key
+            )
+            if redis_cached:
+                await self._contextual_conflict_cache.set(context_key, redis_cached, ttl=3600)
+                async with self._dispatch_lock:
+                    self._inflight_conflict_requests.discard(context_key)
+                return redis_cached
+        except Exception:
+            pass
+
+        async with get_db_connection_context() as conn:
+            await self._ensure_contextual_conflict_table(conn)
+            row = await conn.fetchrow(
+                """
+                SELECT result, last_updated
+                FROM conflict_contextual_conflicts
+                WHERE user_id = $1 AND conversation_id = $2 AND context_key = $3
+                """,
+                self.user_id,
+                self.conversation_id,
+                context_key
+            )
+            if not row:
+                return {}
+            result = row['result'] or {}
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    result = {}
+            if isinstance(result, dict) and row.get('last_updated'):
+                result.setdefault('cached_at', row['last_updated'].isoformat())
+            await self._contextual_conflict_cache.set(context_key, result, ttl=3600)
+            try:
+                from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                    cache_contextual_conflict,
+                )
+
+                cache_contextual_conflict(
+                    self.user_id, self.conversation_id, context_key, result
+                )
+            except Exception:
+                pass
+            async with self._dispatch_lock:
+                self._inflight_conflict_requests.discard(context_key)
+            return result
+
+    async def _persist_contextual_conflict(
+        self, context_key: str, result: Dict[str, Any]
+    ) -> None:
+        async with get_db_connection_context() as conn:
+            await self._ensure_contextual_conflict_table(conn)
+            await conn.execute(
+                """
+                INSERT INTO conflict_contextual_conflicts (
+                    user_id,
+                    conversation_id,
+                    context_key,
+                    result,
+                    last_updated
+                )
+                VALUES ($1, $2, $3, $4::jsonb, $5)
+                ON CONFLICT (user_id, conversation_id, context_key)
+                DO UPDATE SET
+                    result = EXCLUDED.result,
+                    last_updated = EXCLUDED.last_updated
+                """,
+                self.user_id,
+                self.conversation_id,
+                context_key,
+                json.dumps(result),
+                datetime.utcnow()
+            )
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                cache_contextual_conflict,
+            )
+
+            cache_contextual_conflict(
+                self.user_id, self.conversation_id, context_key, result
+            )
+        except Exception:
+            pass
+
+    async def _ensure_contextual_conflict_table(self, conn) -> None:
+        if self._contextual_table_ready:
+            return
+        async with self._table_lock:
+            if self._contextual_table_ready:
+                return
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conflict_contextual_conflicts (
+                    user_id BIGINT NOT NULL,
+                    conversation_id BIGINT NOT NULL,
+                    context_key TEXT NOT NULL,
+                    result JSONB NOT NULL,
+                    last_updated TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (user_id, conversation_id, context_key)
+                )
+                """
+            )
+            self._contextual_table_ready = True
+
+    def _activity_integration_key(
+        self, activity: str, active_conflicts: List[Dict[str, Any]]
+    ) -> str:
+        normalized_conflicts = []
+        for conflict in active_conflicts[:5]:
+            normalized_conflicts.append({
+                'conflict_id': conflict.get('conflict_id') or conflict.get('id'),
+                'intensity': conflict.get('intensity'),
+                'phase': conflict.get('phase') or conflict.get('current_phase'),
+                'name': conflict.get('conflict_name') or conflict.get('name')
+            })
+        payload = {
+            'activity': activity,
+            'conflicts': normalized_conflicts,
+        }
+        return self._stable_hash(payload)
+
+    async def _get_cached_activity_integration(
+        self, integration_key: str
+    ) -> Dict[str, Any]:
+        if not integration_key:
+            return {}
+        cached = await self._activity_integration_cache.get(integration_key)
+        if cached:
+            async with self._dispatch_lock:
+                self._inflight_activity_requests.discard(integration_key)
+            return cached
+
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                get_cached_activity_integration,
+            )
+
+            redis_cached = get_cached_activity_integration(
+                self.user_id, self.conversation_id, integration_key
+            )
+            if redis_cached:
+                await self._activity_integration_cache.set(
+                    integration_key, redis_cached, ttl=3600
+                )
+                async with self._dispatch_lock:
+                    self._inflight_activity_requests.discard(integration_key)
+                return redis_cached
+        except Exception:
+            pass
+
+        async with get_db_connection_context() as conn:
+            await self._ensure_activity_integration_table(conn)
+            row = await conn.fetchrow(
+                """
+                SELECT result, last_updated
+                FROM conflict_activity_integrations
+                WHERE user_id = $1 AND conversation_id = $2 AND integration_key = $3
+                """,
+                self.user_id,
+                self.conversation_id,
+                integration_key
+            )
+            if not row:
+                return {}
+            result = row['result'] or {}
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    result = {}
+            if isinstance(result, dict) and row.get('last_updated'):
+                result.setdefault('cached_at', row['last_updated'].isoformat())
+            await self._activity_integration_cache.set(
+                integration_key, result, ttl=3600
+            )
+            try:
+                from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                    cache_activity_integration,
+                )
+
+                cache_activity_integration(
+                    self.user_id, self.conversation_id, integration_key, result
+                )
+            except Exception:
+                pass
+            async with self._dispatch_lock:
+                self._inflight_activity_requests.discard(integration_key)
+            return result
+
+    async def _persist_activity_integration(
+        self, integration_key: str, result: Dict[str, Any]
+    ) -> None:
+        async with get_db_connection_context() as conn:
+            await self._ensure_activity_integration_table(conn)
+            await conn.execute(
+                """
+                INSERT INTO conflict_activity_integrations (
+                    user_id,
+                    conversation_id,
+                    integration_key,
+                    result,
+                    last_updated
+                )
+                VALUES ($1, $2, $3, $4::jsonb, $5)
+                ON CONFLICT (user_id, conversation_id, integration_key)
+                DO UPDATE SET
+                    result = EXCLUDED.result,
+                    last_updated = EXCLUDED.last_updated
+                """,
+                self.user_id,
+                self.conversation_id,
+                integration_key,
+                json.dumps(result),
+                datetime.utcnow()
+            )
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                cache_activity_integration,
+            )
+
+            cache_activity_integration(
+                self.user_id, self.conversation_id, integration_key, result
+            )
+        except Exception:
+            pass
+
+    async def _ensure_activity_integration_table(self, conn) -> None:
+        if self._activity_table_ready:
+            return
+        async with self._table_lock:
+            if self._activity_table_ready:
+                return
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conflict_activity_integrations (
+                    user_id BIGINT NOT NULL,
+                    conversation_id BIGINT NOT NULL,
+                    integration_key TEXT NOT NULL,
+                    result JSONB NOT NULL,
+                    last_updated TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (user_id, conversation_id, integration_key)
+                )
+                """
+            )
+            self._activity_table_ready = True
 
     async def _handle_day_transition_event(self, payload: Dict[str, Any]) -> None:
         contexts: Dict[str, Dict[str, Any]] = {}
@@ -660,18 +1006,16 @@ class EnhancedIntegrationSubsystem:
     
     # ========== Analysis Methods ==========
     
-    async def analyze_scene_tensions(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze a scene for tensions using LLM"""
-        
-        # Gather context from various sources
+    async def _analyze_scene_tension(
+        self, scene_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         npcs = scene_context.get('present_npcs', [])
         location = scene_context.get('location', 'unknown')
         activity = scene_context.get('activity', 'unknown')
-        
-        # Get additional context if available
+
         relationship_data = await self._gather_relationship_data(npcs)
         npc_data = await self._gather_npc_progression_data(npcs)
-        
+
         context = {
             'location': location,
             'activity': activity,
@@ -679,19 +1023,19 @@ class EnhancedIntegrationSubsystem:
             'relationships': self._summarize_for_llm(relationship_data),
             'npc_states': self._summarize_for_llm(npc_data)
         }
-        
+
         prompt = f"""
         Analyze this scene for emerging tensions:
-        
+
         Context:
         {json.dumps(context, indent=2)}
-        
+
         Identify:
         1. Tension sources (relationship/cultural/personal)
         2. Conflict potential (0.0-1.0)
         3. Suggested conflict type
         4. How it might manifest
-        
+
         Return JSON:
         {{
             "tensions": [
@@ -707,37 +1051,109 @@ class EnhancedIntegrationSubsystem:
             "context": {{additional context}}
         }}
         """
-        
+
         response = await Runner.run(self.tension_analyzer, prompt)
-        
+
         try:
-            return json.loads(extract_runner_response(response))
+            result = json.loads(extract_runner_response(response))
         except json.JSONDecodeError:
-            return {
+            result = {
                 'tensions': [],
                 'should_generate_conflict': False
             }
+
+        if isinstance(result, dict):
+            result.setdefault('tensions', [])
+            result.setdefault('manifestation', [])
+            result['context'] = context
+            result.setdefault('suggested_type', 'slice_of_life')
+            result['cached_at'] = datetime.utcnow().isoformat()
+            result.setdefault('source', 'llm')
+        return result
+
+    async def analyze_scene_tensions(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
+        if not scene_context:
+            return {
+                'tensions': [],
+                'should_generate_conflict': False,
+                'manifestation': [],
+                'context': {},
+                'source': 'default',
+                'cached_at': datetime.utcnow().isoformat()
+            }
+
+        normalized = self._normalize_scene_context(scene_context)
+        scope_key = self._scope_key_from_context(normalized)
+        if scope_key:
+            self._remember_scope(scope_key, normalized)
+
+        cached = await self._get_cached_tension_summary(scope_key)
+        if cached:
+            return cached
+
+        should_queue = False
+        if scope_key:
+            async with self._dispatch_lock:
+                if scope_key not in self._inflight_tension_requests:
+                    self._inflight_tension_requests.add(scope_key)
+                    should_queue = True
+        if should_queue:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                queue_scene_tension_analysis,
+            )
+
+            queue_scene_tension_analysis(
+                self.user_id,
+                self.conversation_id,
+                scope_key,
+                normalized,
+            )
+
+        participant_count = len(normalized.get('present_npcs', []))
+        base_level = min(0.2 + 0.12 * min(participant_count, 3), 0.75)
+        if participant_count == 0:
+            tensions: List[Dict[str, Any]] = []
+            manifest = ["The routine unfolds without notable friction."]
+        else:
+            tensions = [{
+                'source': 'ambient_routine',
+                'level': round(base_level, 2),
+                'description': 'Daily rhythms overlap and subtle expectations collide.'
+            }]
+            manifest = [
+                'Lingering glances reveal quiet friction.',
+                'Small hesitations hint at unspoken pressure.'
+            ][: max(1, min(participant_count, 2))]
+
+        heuristic = {
+            'tensions': tensions,
+            'should_generate_conflict': participant_count >= 3,
+            'suggested_type': 'slice_of_life' if participant_count >= 2 else None,
+            'manifestation': manifest,
+            'context': normalized,
+            'source': 'heuristic',
+            'cached_at': datetime.utcnow().isoformat()
+        }
+        return heuristic
     
-    async def generate_contextual_conflict(
+    async def _generate_contextual_conflict(
         self,
         tension_data: Dict[str, Any],
         npcs: List[int]
     ) -> Dict[str, Any]:
-        """Generate a conflict from analyzed tensions"""
-        
         prompt = f"""
         Generate a conflict from these tensions:
-        
+
         Tensions: {json.dumps(tension_data, indent=2)}
         NPCs Involved: {npcs}
-        
+
         Create:
         1. Conflict name
         2. Description (2-3 sentences)
         3. Initial intensity
         4. Stakes for player
         5. How it starts
-        
+
         Return JSON:
         {{
             "name": "conflict name",
@@ -747,35 +1163,106 @@ class EnhancedIntegrationSubsystem:
             "opening": "how it begins"
         }}
         """
-        
+
         response = await Runner.run(self.conflict_generator, prompt)
-        
+
         try:
-            return json.loads(extract_runner_response(response))
+            result = json.loads(extract_runner_response(response))
         except json.JSONDecodeError:
-            return {
+            result = {
                 'name': "Emerging Tension",
                 'description': "A subtle conflict begins",
                 'intensity': 'tension',
                 'stakes': "Personal dynamics",
                 'opening': "Tension fills the air"
             }
-    
-    async def integrate_conflicts_with_activity(
+
+        if isinstance(result, dict):
+            result.setdefault('intensity', 'tension')
+            result.setdefault('stakes', 'Maintaining daily harmony')
+            result.setdefault('opening', 'Tension fills the air')
+            result['cached_at'] = datetime.utcnow().isoformat()
+            result.setdefault('source', 'llm')
+        return result
+
+    async def generate_contextual_conflict(
+        self,
+        tension_data: Dict[str, Any],
+        npcs: List[int]
+    ) -> Dict[str, Any]:
+        context_key = self._contextual_conflict_key(tension_data or {}, npcs or [])
+        cached = await self._get_cached_contextual_conflict(context_key)
+        if cached:
+            return cached
+
+        should_queue = False
+        if context_key:
+            async with self._dispatch_lock:
+                if context_key not in self._inflight_conflict_requests:
+                    self._inflight_conflict_requests.add(context_key)
+                    should_queue = True
+        if should_queue:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                queue_contextual_conflict_generation,
+            )
+
+            normalized_npcs: List[int] = []
+            for npc in npcs:
+                try:
+                    normalized_npcs.append(int(npc))
+                except (TypeError, ValueError):
+                    continue
+            queue_contextual_conflict_generation(
+                self.user_id,
+                self.conversation_id,
+                context_key,
+                tension_data or {},
+                normalized_npcs,
+            )
+
+        tensions = tension_data.get('tensions') if isinstance(tension_data, dict) else None
+        primary = tensions[0] if tensions else {}
+        level = primary.get('level', 0.35)
+        if isinstance(level, str):
+            try:
+                level = float(level)
+            except ValueError:
+                level = 0.35
+
+        intensity = 'subtle'
+        if level >= 0.75:
+            intensity = 'acute'
+        elif level >= 0.5:
+            intensity = 'tension'
+
+        heuristic = {
+            'name': primary.get('source', 'Routine Friction'),
+            'description': primary.get(
+                'description',
+                'Daily expectations misalign, nudging the group into awkward territory.'
+            ),
+            'intensity': intensity,
+            'stakes': 'Maintaining everyday harmony',
+            'opening': 'A small misunderstanding puts everyone slightly on edge.',
+            'source': 'heuristic',
+            'cached_at': datetime.utcnow().isoformat()
+        }
+        return heuristic
+
+    async def _integrate_conflicts_with_activity(
         self,
         activity: str,
         active_conflicts: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Generate how conflicts integrate into an activity"""
         if not active_conflicts:
-            return {'conflicts_active': False}
-    
+            return {'conflicts_active': False, 'cached_at': datetime.utcnow().isoformat(), 'source': 'llm'}
+
         prompt = f"""
         Integrate these conflicts into the activity:
-    
+
         Activity: {activity}
         Conflicts: {json.dumps(active_conflicts[:3], indent=2)}
-    
+
         Return JSON:
         {{
           "manifestations": ["specific details"],
@@ -787,9 +1274,75 @@ class EnhancedIntegrationSubsystem:
         response = await Runner.run(self.integration_narrator, prompt)
         try:
             result = json.loads(extract_runner_response(response))
-            return {'conflicts_active': True, **result}
         except Exception:
-            return {'conflicts_active': True, 'manifestations': ["Tension colors the interaction"]}
+            result = {'manifestations': ["Tension colors the interaction"]}
+
+        if isinstance(result, dict):
+            result.setdefault('manifestations', ["Tension colors the interaction"])
+            result.setdefault('environmental_cues', [])
+            result.setdefault('npc_behaviors', {})
+            result.setdefault('choices', [])
+            result['conflicts_active'] = True
+            result['cached_at'] = datetime.utcnow().isoformat()
+            result.setdefault('source', 'llm')
+        return result
+
+    async def integrate_conflicts_with_activity(
+        self,
+        activity: str,
+        active_conflicts: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        integration_key = self._activity_integration_key(activity or '', active_conflicts or [])
+        cached = await self._get_cached_activity_integration(integration_key)
+        if cached:
+            return cached
+
+        should_queue = False
+        if integration_key:
+            async with self._dispatch_lock:
+                if integration_key not in self._inflight_activity_requests:
+                    self._inflight_activity_requests.add(integration_key)
+                    should_queue = True
+        if should_queue:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                queue_activity_integration,
+            )
+
+            queue_activity_integration(
+                self.user_id,
+                self.conversation_id,
+                integration_key,
+                activity,
+                active_conflicts[:3],
+            )
+
+        if not active_conflicts:
+            return {
+                'conflicts_active': False,
+                'manifestations': [],
+                'environmental_cues': [],
+                'npc_behaviors': {},
+                'choices': [],
+                'source': 'heuristic',
+                'cached_at': datetime.utcnow().isoformat()
+            }
+
+        manifestation = [
+            f"{activity or 'The routine'} carries a quiet edge as everyone stays polite."
+        ]
+        heuristic = {
+            'conflicts_active': True,
+            'manifestations': manifestation,
+            'environmental_cues': ["Muted voices and careful gestures"],
+            'npc_behaviors': {},
+            'choices': [{
+                'text': 'Lean into the routine',
+                'subtext': 'Keep things steady despite the tension'
+            }],
+            'source': 'heuristic',
+            'cached_at': datetime.utcnow().isoformat()
+        }
+        return heuristic
     
     # ========== Helper Methods ==========
     
