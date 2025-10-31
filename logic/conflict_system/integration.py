@@ -13,8 +13,18 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 
-from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from celery import current_app
+from agents import Agent, function_tool, ModelSettings, RunContextWrapper
 from db.connection import get_db_connection_context
+from logic.conflict_system.mode_recommendation import (
+    MODE_OPTIMIZER_INSTRUCTIONS,
+    MODE_OPTIMIZER_MODEL,
+    MODE_OPTIMIZER_NAME,
+    compute_context_signature,
+    fetch_mode_recommendation,
+    normalize_mode_context,
+)
+from monitoring.metrics import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -169,20 +179,9 @@ class ConflictSystemInterface:
         """Optimize integration mode based on context"""
         if self._mode_optimizer is None:
             self._mode_optimizer = Agent(
-                name="Mode Optimizer",
-                instructions="""
-                Determine optimal integration mode for current context.
-                
-                Consider:
-                - Player engagement patterns
-                - Story progression
-                - System load
-                - Narrative needs
-                - Player preferences
-                
-                Recommend mode changes to enhance experience.
-                """,
-                model="gpt-5-nano",
+                name=MODE_OPTIMIZER_NAME,
+                instructions=MODE_OPTIMIZER_INSTRUCTIONS,
+                model=MODE_OPTIMIZER_MODEL,
             )
         return self._mode_optimizer
     
@@ -494,40 +493,121 @@ class ConflictSystemInterface:
         
         return max(0.0, min(1.0, quality_score))
     
+    def _track_mode_recommendation_source(self, source: str) -> None:
+        """Record telemetry for how mode decisions are made."""
+
+        try:
+            metrics().MODE_RECOMMENDATION_SOURCE.labels(source=source).inc()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "Failed to record mode recommendation source '%s': %s", source, exc
+            )
+
+    def _heuristic_mode_selection(
+        self,
+        context: Dict[str, Any],
+        current_quality: float,
+    ) -> IntegrationMode:
+        """Fallback heuristic for mode selection when no recommendation is cached."""
+
+        context = context or {}
+        try:
+            npc_candidates = context.get('present_npcs') or context.get('npcs') or []
+            npc_count = len(list(npc_candidates))
+        except Exception:  # pragma: no cover - defensive
+            npc_count = 0
+
+        activity = str(context.get('activity', '') or '').lower()
+        events_raw = context.get('recent_events', []) or []
+        events = []
+        for item in events_raw:
+            if isinstance(item, dict):
+                value = item.get('type') or item.get('name') or item
+                events.append(str(value).lower())
+            else:
+                events.append(str(item).lower())
+
+        if current_quality < 0.2:
+            return IntegrationMode.GUIDED
+        if current_quality < 0.4:
+            return IntegrationMode.STORY_FOCUS
+        if npc_count >= 4:
+            return IntegrationMode.SOCIAL_DYNAMICS
+        if any(keyword in activity for keyword in ('quest', 'mission', 'rescue', 'tournament')):
+            return IntegrationMode.PLAYER_CENTRIC
+        if any(keyword in events for keyword in ('festival', 'rumor', 'uprising', 'political')):
+            return IntegrationMode.BACKGROUND_AWARE
+        if any(keyword in events for keyword in ('battle', 'combat', 'skirmish', 'siege')):
+            return IntegrationMode.FULL_IMMERSION
+        if 'council' in activity or 'negotiation' in activity:
+            return IntegrationMode.BACKGROUND_AWARE
+        return self.current_mode or IntegrationMode.EMERGENT
+
+    def _dispatch_mode_recommendation_task(
+        self,
+        signature: str,
+        context: Dict[str, Any],
+        current_quality: float,
+        heuristic_mode: str,
+    ) -> None:
+        """Send the asynchronous task to compute an updated recommendation."""
+
+        try:
+            current_app.send_task(
+                "nyx.tasks.background.integration_tasks.recommend_mode",
+                kwargs={
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id,
+                    "context_signature": signature,
+                    "context": normalize_mode_context(context),
+                    "current_mode": self.current_mode.value,
+                    "current_quality": float(current_quality),
+                    "heuristic_mode": heuristic_mode,
+                },
+                queue="background",
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Failed to enqueue mode recommendation task")
+
     async def _recommend_mode_change(
         self,
         context: Dict[str, Any],
-        current_quality: float
+        current_quality: float,
     ) -> IntegrationMode:
-        """Recommend a mode change based on context"""
-        
-        prompt = f"""
-        Recommend integration mode based on context:
-        
-        Current Mode: {self.current_mode.value}
-        Experience Quality: {current_quality:.1%}
-        Context: {json.dumps(context)}
-        
-        Available modes:
-        - full_immersion: All systems active
-        - story_focus: Prioritize narrative
-        - social_dynamics: Focus on relationships
-        - background_aware: Emphasize world events
-        - player_centric: Maximum player agency
-        - emergent: Natural pattern emergence
-        - guided: Curated experience
-        
-        Which mode would improve the experience?
-        Return just the mode name.
-        """
-        
-        response = await Runner.run(self.mode_optimizer, prompt)
-        
+        """Recommend a mode change based on cached results or heuristics."""
+
+        signature = compute_context_signature(context, self.current_mode.value, current_quality)
+
         try:
-            mode_name = response.output.strip().lower().replace(' ', '_')
-            return IntegrationMode[mode_name.upper()]
-        except (KeyError, AttributeError):
-            return self.current_mode  # Keep current if recommendation fails
+            cached = await fetch_mode_recommendation(
+                self.user_id,
+                self.conversation_id,
+                signature,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Failed to fetch cached mode recommendation")
+            cached = None
+
+        if cached:
+            mode_value = str(cached.get('recommended_mode') or '').strip().lower().replace(' ', '_')
+            try:
+                recommended = IntegrationMode[mode_value.upper()]
+            except KeyError:
+                logger.debug("Cached mode recommendation invalid value=%s", mode_value)
+            else:
+                source = str(cached.get('source') or 'task')
+                self._track_mode_recommendation_source(source)
+                return recommended
+
+        heuristic_mode = self._heuristic_mode_selection(context, current_quality)
+        self._track_mode_recommendation_source('heuristic')
+        self._dispatch_mode_recommendation_task(
+            signature,
+            context,
+            current_quality,
+            heuristic_mode.value,
+        )
+        return heuristic_mode
     
     async def _reduce_complexity(self) -> str:
         """Reduce system complexity"""
