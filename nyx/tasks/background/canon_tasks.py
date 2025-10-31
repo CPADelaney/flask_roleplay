@@ -70,14 +70,14 @@ async def _evaluate_canon_pipeline(
             conflict_id,
         )
         if not conflict:
-        return {
-            "became_canonical": False,
-            "reason": "Conflict not found",
-            "significance": 0.0,
-            "tags": [],
-            "canonical_event_id": 0,
-            "pending": False,
-        }
+            return {
+                "became_canonical": False,
+                "reason": "Conflict not found",
+                "significance": 0.0,
+                "tags": [],
+                "canonical_event_id": 0,
+                "pending": False,
+            }
         stakeholders = await conn.fetch(
             """
             SELECT * FROM ConflictStakeholders WHERE conflict_id = $1
