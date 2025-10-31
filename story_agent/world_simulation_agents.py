@@ -13,8 +13,10 @@ from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, function_tool, trace, ModelSettings
+from agents import Agent, function_tool, trace, ModelSettings
 from agents.exceptions import AgentsException, ModelBehaviorError
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 # Use TYPE_CHECKING to avoid circular imports at runtime
 if TYPE_CHECKING:
@@ -290,6 +292,36 @@ def create_activity_generator():
 
 # ----- Helper Functions -----
 
+
+def _extract_result_payload(result: Any) -> Any:
+    """Best-effort extraction of the structured payload from an LLMResult."""
+
+    if not result:
+        return {}
+
+    raw_result = getattr(result, "raw", None)
+    if raw_result is not None:
+        final_output = getattr(raw_result, "final_output", None)
+        if final_output is not None:
+            return final_output
+
+        if isinstance(raw_result, dict):
+            if "final_output" in raw_result:
+                return raw_result.get("final_output")
+            return raw_result
+
+    text_result = getattr(result, "text", None)
+    if text_result:
+        if isinstance(text_result, (str, bytes)):
+            try:
+                return json.loads(text_result)
+            except (TypeError, ValueError):
+                return text_result
+        return text_result
+
+    return {}
+
+
 async def coordinate_slice_of_life_scene(
     context: SliceOfLifeContext,
     focus_type: str = "routine"
@@ -330,7 +362,17 @@ async def coordinate_slice_of_life_scene(
     Focus on natural daily activities with subtle power dynamics.
     """
     
-    scene_result = await Runner.run(daily_coordinator, scene_prompt, context=context)
+    scene_result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=scene_prompt,
+            agent=daily_coordinator,
+            context=context,
+            metadata={
+                "operation": "coordinate_slice_of_life_scene.scene",
+                "focus_type": focus_type,
+            },
+        )
+    )
     
     # Initialize results
     relationship_result = None
@@ -347,20 +389,37 @@ async def coordinate_slice_of_life_scene(
             Include subtle power dynamics appropriate to relationships.
             """
             
-            relationship_result = await Runner.run(
-                relationship_agent, 
-                relationship_prompt, 
-                context=context
+            relationship_result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=relationship_prompt,
+                    agent=relationship_agent,
+                    context=context,
+                    metadata={
+                        "operation": "coordinate_slice_of_life_scene.relationships",
+                        "focus_type": focus_type,
+                        "active_npc_count": len(active_npcs),
+                    },
+                )
             )
-    
+
     # Add ambient details
     ambient_prompt = "Add atmospheric and sensory details to make the scene immersive."
-    ambient_result = await Runner.run(ambient_agent, ambient_prompt, context=context)
-    
+    ambient_result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=ambient_prompt,
+            agent=ambient_agent,
+            context=context,
+            metadata={
+                "operation": "coordinate_slice_of_life_scene.ambient",
+                "focus_type": focus_type,
+            },
+        )
+    )
+
     return {
-        "scene": scene_result.final_output if scene_result else {},
-        "relationships": relationship_result.final_output if relationship_result else {},
-        "atmosphere": ambient_result.final_output if ambient_result else {}
+        "scene": _extract_result_payload(scene_result),
+        "relationships": _extract_result_payload(relationship_result),
+        "atmosphere": _extract_result_payload(ambient_result)
     }
 
 async def detect_emergent_patterns(
@@ -377,16 +436,27 @@ async def detect_emergent_patterns(
     Identify any emerging narratives or behavioral patterns.
     """
     
-    result = await Runner.run(pattern_agent, prompt, context=context)
-    
-    if result and result.final_output:
+    result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=pattern_agent,
+            context=context,
+            metadata={
+                "operation": "detect_emergent_patterns",
+                "interaction_count": len(context.recent_interactions[-10:]),
+            },
+        )
+    )
+
+    payload = _extract_result_payload(result)
+    if payload:
         try:
-            # Parse patterns from response
-            patterns = json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
-            return patterns if isinstance(patterns, list) else [patterns]
-        except:
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            return payload if isinstance(payload, list) else [payload]
+        except Exception:
             return []
-    
+
     return []
 
 # ----- Agent Initialization -----
