@@ -127,7 +127,11 @@ def queue_reputation_narration(
 
 def queue_gossip_generation(
     scene_context: Dict[str, Any],
-    target_npcs: Optional[List[int]] = None
+    target_npcs: Optional[List[int]] = None,
+    *,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
+    ttl: int = 1800,
 ) -> None:
     """Queue background task to generate gossip.
 
@@ -138,14 +142,33 @@ def queue_gossip_generation(
     try:
         from nyx.tasks.background.social_tasks import generate_gossip
 
+        context_payload = dict(scene_context or {})
+
+        # Ensure we have a stable scene hash for caching
+        scene_hash = context_payload.get("scene_hash") or context_payload.get("hash")
+        if not scene_hash:
+            try:
+                scene_hash = _compute_scene_hash(context_payload)
+            except Exception:
+                serialized = json.dumps(context_payload, sort_keys=True)
+                scene_hash = hashlib.sha256(serialized.encode()).hexdigest()[:16]
+        context_payload["scene_hash"] = scene_hash
+
         payload = {
-            "scene_context": scene_context,
+            "scene_context": context_payload,
             "target_npcs": target_npcs or [],
             "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user_id or context_payload.get("user_id"),
+            "conversation_id": conversation_id or context_payload.get("conversation_id"),
+            "ttl": ttl,
         }
 
         generate_gossip.delay(payload)
-        logger.debug(f"Queued gossip generation for scene")
+        logger.debug(
+            "Queued gossip generation for scene %s (targets=%s)",
+            scene_hash,
+            target_npcs or [],
+        )
     except Exception as e:
         logger.warning(f"Failed to queue gossip generation: {e}")
 
@@ -195,6 +218,55 @@ async def get_cached_gossip(scene_hash: str, limit: int = 5) -> List[Dict[str, A
         return cached[:limit]
 
     return []
+
+
+def queue_reputation_calculation(
+    user_id: int,
+    conversation_id: int,
+    target_id: int,
+    *,
+    scene_context: Optional[Dict[str, Any]] = None,
+    ttl: int = 1800,
+) -> None:
+    """Queue background task to calculate reputation for an NPC.
+
+    Args:
+        user_id: Owning user identifier
+        conversation_id: Conversation identifier
+        target_id: NPC identifier to calculate reputation for
+        scene_context: Optional additional context for hashing/idempotency
+        ttl: Cache TTL for stored reputation values
+    """
+
+    payload_context = dict(scene_context or {})
+
+    if "scene_hash" not in payload_context and payload_context:
+        try:
+            payload_context["scene_hash"] = _compute_scene_hash(payload_context)
+        except Exception:
+            serialized = json.dumps(payload_context, sort_keys=True)
+            payload_context["scene_hash"] = hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+    try:
+        from nyx.tasks.background.social_tasks import calculate_reputation
+
+        payload = {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "target_id": target_id,
+            "scene_context": payload_context,
+            "timestamp": datetime.utcnow().isoformat(),
+            "ttl": ttl,
+        }
+
+        calculate_reputation.delay(payload)
+        logger.debug(
+            "Queued reputation calculation for npc=%s (scene_hash=%s)",
+            target_id,
+            payload_context.get("scene_hash"),
+        )
+    except Exception as exc:
+        logger.warning("Failed to queue reputation calculation: %s", exc)
 
 
 async def get_cached_reputation(npc_id: int) -> Dict[str, float]:

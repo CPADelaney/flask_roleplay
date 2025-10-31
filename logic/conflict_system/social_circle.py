@@ -4,9 +4,12 @@ Social Circle Conflict System with LLM-generated dynamics.
 Refactored to work as a ConflictSubsystem with the synthesizer.
 """
 
-import logging
+import asyncio
+import hashlib
 import json
+import logging
 import random
+import uuid
 import weakref
 from typing import Dict, List, Any, Optional, Set, Tuple
 from enum import Enum
@@ -228,7 +231,9 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
     
     async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
         """Handle scene state synchronization"""
-        scene_context = event.payload
+        scene_context = dict(event.payload or {})
+        scene_context.setdefault('user_id', self.user_id)
+        scene_context.setdefault('conversation_id', self.conversation_id)
         present_npcs = scene_context.get('present_npcs', [])
 
         # HOT PATH: Use cached social data and dispatch background tasks
@@ -239,8 +244,8 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         )
 
         # Compute scene hash for cache lookups
-        import hashlib, json
         scene_hash = hashlib.sha256(json.dumps(scene_context, sort_keys=True).encode()).hexdigest()[:16]
+        scene_context['scene_hash'] = scene_hash
 
         # Get cached social bundle (fast)
         social_bundle = get_scene_bundle(scene_hash)
@@ -250,7 +255,12 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         # If bundle is generating, queue explicit gossip generation for these NPCs
         if present_npcs and len(present_npcs) >= 2 and social_bundle.get('status') == 'generating':
             if random.random() < 0.3:  # 30% chance of gossip
-                queue_gossip_generation(scene_context, present_npcs[:2])
+                queue_gossip_generation(
+                    scene_context,
+                    present_npcs[:2],
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                )
 
         # Get cached reputations (fast)
         for npc_id in present_npcs:
@@ -354,7 +364,24 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         # HOT PATH: Dispatch gossip generation to background
         if participants:
             from logic.conflict_system.social_circle_hotpath import queue_gossip_generation
-            queue_gossip_generation({'conflict_start': True, 'conflict_id': conflict_id}, participants)
+
+            scene_context = {
+                'conflict_start': True,
+                'conflict_id': conflict_id,
+                'participants': participants,
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+            }
+            scene_context['scene_hash'] = hashlib.sha256(
+                json.dumps(scene_context, sort_keys=True).encode()
+            ).hexdigest()[:16]
+
+            queue_gossip_generation(
+                scene_context,
+                participants,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+            )
 
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
@@ -384,47 +411,100 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         conflict_id = event.payload.get('conflict_id')
         resolution = event.payload.get('resolution', {})
 
-        # HOT PATH: Dispatch gossip generation about resolution
-        from logic.conflict_system.social_circle_hotpath import queue_gossip_generation
+        from logic.conflict_system.social_circle_hotpath import (
+            queue_gossip_generation,
+            queue_reputation_calculation,
+            get_cached_gossip,
+            get_cached_reputation,
+        )
 
-        # Resolution affects reputations
-        winners = resolution.get('winners', [])
-        losers = resolution.get('losers', [])
+        winners = resolution.get('winners', []) or []
+        losers = resolution.get('losers', []) or []
+        all_participants = [p for p in winners + losers if p is not None]
 
-        # Queue gossip about resolution
-        if winners or losers:
+        side_effects: List[SystemEvent] = []
+
+        scene_context = {
+            'conflict_resolved': True,
+            'conflict_id': conflict_id,
+            'resolution': resolution,
+            'participants': all_participants,
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+        }
+        scene_context['scene_hash'] = hashlib.sha256(
+            json.dumps(scene_context, sort_keys=True).encode()
+        ).hexdigest()[:16]
+
+        initial_gossip_cache = []
+        if all_participants:
             queue_gossip_generation(
-                {'conflict_resolved': True, 'conflict_id': conflict_id, 'resolution': resolution},
-                winners + losers
+                scene_context,
+                all_participants,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+            )
+            initial_gossip_cache = await get_cached_gossip(
+                scene_context['scene_hash'], limit=3
             )
 
-        side_effects = []
-
+        # Apply fast heuristic reputation adjustments
         for winner_id in winners:
             await self._adjust_reputation_from_action(winner_id, 'victory')
-        
+            queue_reputation_calculation(
+                self.user_id,
+                self.conversation_id,
+                winner_id,
+                scene_context=scene_context,
+            )
+
         for loser_id in losers:
             await self._adjust_reputation_from_action(loser_id, 'defeat')
-        
-        # Generate gossip about the resolution
-        all_participants = winners + losers
-        if all_participants:
-            gossip = await self.manager.generate_gossip(
-                {'conflict_resolved': True, 'outcome': resolution},
-                all_participants
+            queue_reputation_calculation(
+                self.user_id,
+                self.conversation_id,
+                loser_id,
+                scene_context=scene_context,
             )
-            
-            if gossip:
-                self._active_gossip[gossip.gossip_id] = gossip
-                
+
+        if all_participants:
+            gossip_item = self._hydrate_cached_gossip(
+                initial_gossip_cache[0] if initial_gossip_cache else None,
+                all_participants,
+            )
+
+            if gossip_item:
+                if gossip_item.gossip_id:
+                    self._active_gossip[gossip_item.gossip_id] = gossip_item
+
                 side_effects.append(SystemEvent(
-                    event_id=f"resolution_gossip_{gossip.gossip_id}",
+                    event_id=f"resolution_gossip_{gossip_item.gossip_id or 'pending'}",
                     event_type=EventType.NPC_REACTION,
                     source_subsystem=self.subsystem_type,
-                    payload={'gossip': gossip.content},
+                    payload={'gossip': gossip_item.content},
                     priority=7
                 ))
-        
+
+            # Schedule follow-up checks for richer gossip once background tasks finish
+            baseline_ids = {
+                g.get('gossip_id') for g in initial_gossip_cache if g.get('gossip_id')
+            }
+            self._schedule_gossip_followup(
+                scene_context['scene_hash'],
+                all_participants,
+                baseline_ids,
+            )
+
+        # Capture existing cached reputation for follow-up diffing
+        initial_reputation = {}
+        for npc_id in all_participants:
+            cached_rep = await get_cached_reputation(npc_id)
+            if cached_rep:
+                initial_reputation[npc_id] = cached_rep
+
+        if all_participants:
+            self._schedule_reputation_followup(all_participants, initial_reputation)
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -434,7 +514,144 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         )
     
     # ========== Helper Methods ==========
-    
+
+    def _hydrate_cached_gossip(
+        self,
+        cached: Optional[Dict[str, Any]],
+        fallback_participants: List[int],
+    ) -> GossipItem:
+        """Convert cached gossip payload into a GossipItem."""
+
+        if not cached:
+            return self.manager._create_fallback_gossip(fallback_participants)
+
+        gossip_type_value = str(cached.get('gossip_type', 'rumor')).upper()
+        gossip_type = GossipType.RUMOR
+        try:
+            gossip_type = GossipType[gossip_type_value]
+        except KeyError:
+            logger.debug("Unknown gossip type '%s' in cache", gossip_type_value)
+
+        about = cached.get('about') or fallback_participants
+        spreaders = set(cached.get('spreaders', []) or [])
+        believers = set(cached.get('believers', []) or [])
+        deniers = set(cached.get('deniers', []) or [])
+
+        return GossipItem(
+            gossip_id=int(cached.get('gossip_id') or 0),
+            gossip_type=gossip_type,
+            content=str(cached.get('content', 'People are whispering...')),
+            about=about,
+            spreaders=spreaders,
+            believers=believers,
+            deniers=deniers,
+            spread_rate=float(cached.get('spread_rate', 0.3) or 0.3),
+            truthfulness=float(cached.get('truthfulness', 0.5) or 0.5),
+            impact=cached.get('impact', {}),
+        )
+
+    def _schedule_gossip_followup(
+        self,
+        scene_hash: str,
+        participants: List[int],
+        baseline_ids: Set[int],
+    ) -> None:
+        """Poll cache for new gossip and emit follow-up events when available."""
+
+        synthesizer = self.synthesizer() if self.synthesizer else None
+        if not synthesizer:
+            return
+
+        async def _poll_for_gossip() -> None:
+            from logic.conflict_system.social_circle_hotpath import get_cached_gossip
+
+            for attempt in range(4):
+                await asyncio.sleep(min(8, 2 ** attempt))
+                cached_items = await get_cached_gossip(scene_hash, limit=3)
+                new_items = [
+                    item for item in cached_items
+                    if item.get('gossip_id') and item.get('gossip_id') not in baseline_ids
+                ]
+
+                if new_items:
+                    gossip_item = self._hydrate_cached_gossip(new_items[0], participants)
+                    if gossip_item.gossip_id:
+                        self._active_gossip[gossip_item.gossip_id] = gossip_item
+
+                    event = SystemEvent(
+                        event_id=f"gossip_refresh_{scene_hash}",
+                        event_type=EventType.NPC_REACTION,
+                        source_subsystem=self.subsystem_type,
+                        payload={'gossip': gossip_item.content},
+                        priority=6,
+                    )
+
+                    try:
+                        await synthesizer.emit_event(event)
+                    except Exception as exc:  # pragma: no cover - defensive log
+                        logger.warning("Failed to emit gossip follow-up: %s", exc)
+                    break
+
+        asyncio.create_task(_poll_for_gossip())
+
+    def _schedule_reputation_followup(
+        self,
+        npc_ids: List[int],
+        baseline: Dict[int, Dict[str, float]],
+    ) -> None:
+        """Poll cached reputation scores and refresh local cache when updated."""
+
+        synthesizer = self.synthesizer() if self.synthesizer else None
+        if not synthesizer:
+            return
+
+        async def _poll_for_reputation() -> None:
+            from logic.conflict_system.social_circle_hotpath import get_cached_reputation
+
+            for attempt in range(4):
+                await asyncio.sleep(min(8, 2 ** attempt))
+                updates: Dict[int, Dict[str, float]] = {}
+
+                for npc_id in npc_ids:
+                    cached = await get_cached_reputation(npc_id)
+                    if not cached:
+                        continue
+                    if baseline.get(npc_id) != cached:
+                        updates[npc_id] = cached
+
+                if updates:
+                    payload_updates: Dict[int, Dict[str, float]] = {}
+                    for npc_id, rep_values in updates.items():
+                        converted: Dict[ReputationType, float] = {}
+                        for key, value in rep_values.items():
+                            try:
+                                enum_key = ReputationType[key.upper()]
+                            except KeyError:
+                                continue
+                            converted[enum_key] = float(value)
+
+                        if converted:
+                            self._reputation_cache[npc_id] = converted
+                            payload_updates[npc_id] = {
+                                k.value: v for k, v in converted.items()
+                            }
+
+                    if payload_updates:
+                        event = SystemEvent(
+                            event_id=f"reputation_refresh_{uuid.uuid4()}",
+                            event_type=EventType.STATE_SYNC,
+                            source_subsystem=self.subsystem_type,
+                            payload={'updated_reputation': payload_updates},
+                            priority=6,
+                        )
+                        try:
+                            await synthesizer.emit_event(event)
+                        except Exception as exc:  # pragma: no cover - defensive log
+                            logger.warning("Failed to emit reputation follow-up: %s", exc)
+                    break
+
+        asyncio.create_task(_poll_for_reputation())
+
     def _analyze_social_stakes(self, conflict_id: int) -> str:
         """Analyze what's at stake socially in a conflict"""
         # Simple analysis - could be enhanced
@@ -599,42 +816,159 @@ class SocialCircleManager:
         context: Dict[str, Any],
         target_npcs: Optional[List[int]] = None
     ) -> GossipItem:
-        """Generate contextual gossip using LLM"""
-        
-        npc_details = await self._get_npc_social_details(target_npcs or [])
-        
+        """Queue gossip generation and return cached or fallback gossip."""
+
+        from logic.conflict_system.social_circle_hotpath import (
+            get_cached_gossip,
+            queue_gossip_generation,
+        )
+
+        scene_context, scene_hash = self._prepare_scene_context(context, target_npcs)
+
+        queue_gossip_generation(
+            scene_context,
+            target_npcs or [],
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+        )
+
+        cached_items = await get_cached_gossip(scene_hash, limit=1)
+        if cached_items:
+            return self._deserialize_gossip_dict(cached_items[0], target_npcs or [])
+
+        return self._create_fallback_gossip(target_npcs or [])
+
+    async def generate_gossip_background(
+        self,
+        context: Dict[str, Any],
+        target_npcs: Optional[List[int]] = None
+    ) -> Dict[str, Any]:
+        """Run the slow gossip generation flow (for background tasks)."""
+
+        gossip_item = await self._run_gossip_llm(context, target_npcs or [])
+        return self._serialize_gossip_item(gossip_item)
+
+    def _prepare_scene_context(
+        self,
+        context: Dict[str, Any],
+        target_npcs: Optional[List[int]],
+    ) -> Tuple[Dict[str, Any], str]:
+        """Prepare scene context with stable hashing for caching."""
+
+        scene_context = dict(context or {})
+        scene_context.setdefault('user_id', self.user_id)
+        scene_context.setdefault('conversation_id', self.conversation_id)
+
+        if target_npcs and 'participants' not in scene_context:
+            scene_context['participants'] = target_npcs
+
+        scene_hash = scene_context.get('scene_hash') or scene_context.get('hash')
+        if not scene_hash:
+            serializable_context = {
+                key: scene_context[key]
+                for key in sorted(scene_context.keys())
+                if not isinstance(scene_context[key], (set, tuple))
+            }
+            serializable_context.update({
+                key: list(scene_context[key])
+                for key in scene_context
+                if isinstance(scene_context[key], (set, tuple))
+            })
+            serialized = json.dumps(serializable_context, sort_keys=True, default=str)
+            scene_hash = hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+        scene_context['scene_hash'] = scene_hash
+        return scene_context, scene_hash
+
+    def _serialize_gossip_item(self, gossip: GossipItem) -> Dict[str, Any]:
+        """Convert a GossipItem into a JSON-serializable dict."""
+
+        return {
+            'gossip_id': gossip.gossip_id,
+            'gossip_type': gossip.gossip_type.value,
+            'content': gossip.content,
+            'about': gossip.about,
+            'spreaders': list(gossip.spreaders),
+            'believers': list(gossip.believers),
+            'deniers': list(gossip.deniers),
+            'spread_rate': gossip.spread_rate,
+            'truthfulness': gossip.truthfulness,
+            'impact': gossip.impact,
+        }
+
+    def _deserialize_gossip_dict(
+        self,
+        cached: Dict[str, Any],
+        fallback_targets: List[int],
+    ) -> GossipItem:
+        """Rebuild a GossipItem from cached JSON data."""
+
+        gossip_type_value = str(cached.get('gossip_type', 'rumor')).upper()
+        gossip_type = GossipType.RUMOR
+        try:
+            gossip_type = GossipType[gossip_type_value]
+        except KeyError:
+            logger.debug("Unknown cached gossip type '%s'", gossip_type_value)
+
+        return GossipItem(
+            gossip_id=int(cached.get('gossip_id') or 0),
+            gossip_type=gossip_type,
+            content=str(cached.get('content', 'People are whispering...')),
+            about=cached.get('about') or fallback_targets,
+            spreaders=set(cached.get('spreaders', []) or []),
+            believers=set(cached.get('believers', []) or []),
+            deniers=set(cached.get('deniers', []) or []),
+            spread_rate=float(cached.get('spread_rate', 0.5) or 0.5),
+            truthfulness=float(cached.get('truthfulness', 0.5) or 0.5),
+            impact=cached.get('impact', {}),
+        )
+
+    async def _run_gossip_llm(
+        self,
+        context: Dict[str, Any],
+        target_npcs: List[int],
+    ) -> GossipItem:
+        """Run the original gossip generation prompt (slow)."""
+
+        npc_details = await self._get_npc_social_details(target_npcs)
+
         prompt = f"""
         Generate a piece of gossip for this social context:
-        
+
         Setting: Matriarchal society, slice-of-life game
         Context: {json.dumps(context, indent=2)}
         Potential Targets: {npc_details}
-        
+
         Create:
         1. Type (rumor/secret/scandal/praise/warning/speculation)
         2. Content (1-2 sentences, conversational)
         3. Truthfulness (0.0-1.0)
         4. Why it would spread (what makes it juicy)
         5. Potential impact on relationships
-        
+
         Make it feel like real gossip - not too dramatic, but interesting.
         Format as JSON.
         """
-        
+
         response = await self.gossip_generator.run(prompt)
-        
+
         try:
             result = json.loads(response.content)
-            
+
             async with get_db_connection_context() as conn:
-                gossip_id = await conn.fetchval("""
+                gossip_id = await conn.fetchval(
+                    """
                     INSERT INTO social_gossip
                     (user_id, conversation_id, content, truthfulness, created_at)
                     VALUES ($1, $2, $3, $4, NOW())
                     RETURNING gossip_id
-                """, self.user_id, self.conversation_id,
-                result['content'], result.get('truthfulness', 0.5))
-            
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                    result['content'],
+                    result.get('truthfulness', 0.5),
+                )
+
             return GossipItem(
                 gossip_id=gossip_id,
                 gossip_type=GossipType[result.get('type', 'RUMOR').upper()],
@@ -645,12 +979,62 @@ class SocialCircleManager:
                 deniers=set(),
                 spread_rate=result.get('spread_rate', 0.5),
                 truthfulness=result.get('truthfulness', 0.5),
-                impact=result.get('impact', {})
+                impact=result.get('impact', {}),
             )
-            
+
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to generate gossip: {e}")
             return self._create_fallback_gossip(target_npcs)
+
+    async def _run_reputation_llm(
+        self,
+        target_id: int,
+        social_circle: Optional[SocialCircle] = None,
+    ) -> Dict[ReputationType, float]:
+        """Run the reputation analysis prompt (slow)."""
+
+        factors = await self._gather_reputation_factors(target_id)
+
+        prompt = f"""
+        Calculate reputation scores based on these factors:
+
+        Target: {"Player" if target_id == self.user_id else f"NPC {target_id}"}
+        Recent Actions: {factors.get('actions', [])}
+        Gossip About Them: {factors.get('gossip', [])}
+        Social Role: {factors.get('role', social_circle.name if social_circle else 'unknown')}
+        Relationships: {factors.get('relationships', {})}
+
+        Score each reputation type (0.0-1.0):
+        - trustworthy
+        - submissive
+        - rebellious
+        - mysterious
+        - influential
+        - scandalous
+        - nurturing
+        - dangerous
+
+        Consider how actions and gossip shape perception.
+        Format as JSON with explanations.
+        """
+
+        response = await self.social_analyzer.run(prompt)
+
+        try:
+            result = json.loads(response.content)
+
+            reputation: Dict[ReputationType, float] = {}
+            for rep_type in ReputationType:
+                if rep_type.value in result:
+                    reputation[rep_type] = float(result[rep_type.value])
+                else:
+                    reputation[rep_type] = 0.3
+
+            return reputation
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to calculate reputation: {e}")
+            return {rep_type: 0.3 for rep_type in ReputationType}
     
     async def spread_gossip(
         self,
@@ -723,51 +1107,46 @@ class SocialCircleManager:
         target_id: int,
         social_circle: Optional[SocialCircle] = None
     ) -> Dict[ReputationType, float]:
-        """Calculate reputation using LLM analysis"""
-        
-        factors = await self._gather_reputation_factors(target_id)
-        
-        prompt = f"""
-        Calculate reputation scores based on these factors:
-        
-        Target: {"Player" if target_id == self.user_id else f"NPC {target_id}"}
-        Recent Actions: {factors.get('actions', [])}
-        Gossip About Them: {factors.get('gossip', [])}
-        Social Role: {factors.get('role', 'unknown')}
-        Relationships: {factors.get('relationships', {})}
-        
-        Score each reputation type (0.0-1.0):
-        - trustworthy
-        - submissive
-        - rebellious
-        - mysterious
-        - influential
-        - scandalous
-        - nurturing
-        - dangerous
-        
-        Consider how actions and gossip shape perception.
-        Format as JSON with explanations.
-        """
-        
-        response = await self.social_analyzer.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            reputation = {}
-            for rep_type in ReputationType:
-                if rep_type.value in result:
-                    reputation[rep_type] = float(result[rep_type.value])
-                else:
-                    reputation[rep_type] = 0.3
-            
-            await self._store_reputation(target_id, reputation)
-            return reputation
-            
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to calculate reputation: {e}")
-            return {rep_type: 0.3 for rep_type in ReputationType}
+        """Queue reputation calculation and return cached or neutral values."""
+
+        from logic.conflict_system.social_circle_hotpath import (
+            get_cached_reputation,
+            queue_reputation_calculation,
+        )
+
+        queue_reputation_calculation(
+            self.user_id,
+            self.conversation_id,
+            target_id,
+            scene_context={'target_id': target_id, 'social_circle': social_circle.name if social_circle else None},
+        )
+
+        cached = await get_cached_reputation(target_id)
+        if cached:
+            reputation: Dict[ReputationType, float] = {}
+            for key, value in cached.items():
+                try:
+                    rep_key = ReputationType[key.upper()]
+                except KeyError:
+                    continue
+                reputation[rep_key] = float(value)
+
+            if reputation:
+                self._reputation_cache[target_id] = reputation
+                return reputation
+
+        return {rep_type: 0.3 for rep_type in ReputationType}
+
+    async def calculate_reputation_background(
+        self,
+        target_id: int,
+        social_circle: Optional[SocialCircle] = None
+    ) -> Dict[str, float]:
+        """Run the slow reputation calculation (for background tasks)."""
+
+        reputation = await self._run_reputation_llm(target_id, social_circle)
+        await self._store_reputation(target_id, reputation)
+        return {rep.value: score for rep, score in reputation.items()}
     
     async def narrate_reputation_change(
         self,
