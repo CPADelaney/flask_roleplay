@@ -105,13 +105,8 @@ Each subsystem now has a `*_hotpath.py` module with fast helper functions:
 #### `logic/conflict_system/autonomous_stakeholder_actions.py`
 
 **Before (Blocking)**:
-```python
-async def _on_conflict_updated(self, event):
-    for s in acting_stakeholders:
-        action = await self.make_autonomous_decision(s, payload)  # BLOCKING LLM!
-        if action:
-            actions.append(action)
-```
+Legacy handlers awaited `make_autonomous_decision()` directly, forcing the hot path to block on the LLM call before any
+player-facing response could be returned.
 
 **After (Non-Blocking)**:
 ```python
@@ -217,8 +212,8 @@ The CI guard script (`scripts/ci/forbid_hotpath_llm.py`) enforces the hot-path /
 ### Forbidden Patterns in Hot Path
 - `Runner.run()`
 - `llm_json()`
-- `make_autonomous_decision()` (in event handlers)
-- `generate_reaction()` (in event handlers)
+- `make_autonomous_decision()` (legacy synchronous coroutine; still forbidden if reintroduced)
+- `generate_reaction()` (legacy synchronous coroutine; still forbidden if reintroduced)
 - `transition_narrator()` (blocking calls)
 - Other blocking LLM functions
 

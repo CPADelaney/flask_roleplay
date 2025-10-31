@@ -25,8 +25,8 @@ This report identifies **37 blocking LLM call sites** in hot-path code across th
 - `agent.run()` - Direct agent execution
 
 ### 2. Blocking Higher-Level Functions
-- `make_autonomous_decision()` - NPC decision making
-- `generate_reaction()` - NPC reaction generation
+- `make_autonomous_decision()` (legacy; removed in favor of hot-path dispatch helpers)
+- `generate_reaction()` (legacy; removed in favor of hot-path dispatch helpers)
 - `generate_gossip()` - Social dynamics generation
 - `calculate_reputation()` - Reputation calculation
 - `generate_dramatic_beat()` - Flow beat generation
@@ -39,84 +39,29 @@ This report identifies **37 blocking LLM call sites** in hot-path code across th
 
 **Event Handlers (Synchronous - HIGH PRIORITY):**
 
-#### ❌ `_on_conflict_updated()` - Line 371
-```python
-async def _on_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
-    # ...
-    for s in acting_stakeholders:
-        action = await self.make_autonomous_decision(s, payload)  # LINE 380 - BLOCKS
-```
-- **Context:** Processes conflict updates in real-time
-- **Blocks on:** `make_autonomous_decision()` which calls `llm_json()` (line 706)
-- **Impact:** Player-facing conflict updates delayed by 500ms-2s per stakeholder
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Move `make_autonomous_decision()` to background task
-- [ ] Return immediate acknowledgment to player
-- [ ] Queue decision for async processing
-- [ ] Emit results via event when complete
+#### ✅ `_on_conflict_updated()` - Line 371 (Resolved)
+- **Context:** Previously awaited `make_autonomous_decision()` inline.
+- **Status:** Now uses `should_dispatch_action_generation` and `dispatch_action_generation` from the hot-path module so the
+  handler returns immediately.
 
 ---
 
-#### ❌ `_on_player_choice()` - Line 423
-```python
-async def _on_player_choice(self, event: SystemEvent) -> SubsystemResponse:
-    # ...
-    for s in self._active_stakeholders.values():
-        if self._should_react_to_choice(s, choice_type, target_npc):
-            reaction = await self.generate_reaction(s, triggering_action, payload)  # LINE 442 - BLOCKS
-```
-- **Context:** Reacts to player choices in real-time
-- **Blocks on:** `generate_reaction()` which calls `llm_json()` (line 773)
-- **Impact:** Player choice feedback delayed by 500ms-2s per reacting stakeholder
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Move `generate_reaction()` to background task
-- [ ] Acknowledge player choice immediately
-- [ ] Process reactions asynchronously
-- [ ] Update UI when reactions complete
+#### ✅ `_on_player_choice()` - Line 423 (Resolved)
+- **Context:** Previously blocked on `generate_reaction()` for each reacting stakeholder.
+- **Status:** Uses `dispatch_reaction_generation` so reactions are queued on the background worker while the handler returns.
 
 ---
 
-#### ❌ `_on_state_sync()` - Line 474
-```python
-async def _on_state_sync(self, event: SystemEvent) -> SubsystemResponse:
-    # ...
-    for s in self._active_stakeholders.values():
-        if s.npc_id in npcs_present and self._should_take_autonomous_action(s, scene_context):
-            action = await self.make_autonomous_decision(s, scene_context)  # LINE 501 - BLOCKS
-```
-- **Context:** Synchronizes scene state (called frequently)
-- **Blocks on:** `make_autonomous_decision()` which calls `llm_json()` (line 706)
-- **Impact:** Scene rendering blocked on autonomous NPC actions
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Make state sync return immediately
-- [ ] Defer autonomous actions to background
-- [ ] Apply actions in next state sync cycle
-- [ ] Add action queue management
+#### ✅ `_on_state_sync()` - Line 474 (Resolved)
+- **Context:** Previously triggered multiple synchronous decision generations.
+- **Status:** Combines `fetch_ready_actions_for_scene`, `determine_scene_behavior`, and `dispatch_action_generation` to keep the
+  handler non-blocking.
 
 ---
 
-#### ❌ `_on_stakeholder_action()` - Line 529
-```python
-async def _on_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
-    # ...
-    action = await self.make_autonomous_decision(s, conflict_state, options)  # LINE 579 - BLOCKS
-```
-- **Context:** Handles stakeholder action requests
-- **Blocks on:** `make_autonomous_decision()` which calls `llm_json()` (line 706)
-- **Impact:** Stakeholder actions require LLM completion
-- **Refactor Priority:** 🟡 HIGH
-
-**Refactoring Tasks:**
-- [ ] Return action request acknowledgment immediately
-- [ ] Process decision in background
-- [ ] Notify when action determined
-- [ ] Cache common decisions
+#### ✅ `_on_stakeholder_action()` - Line 529 (Resolved)
+- **Context:** Historically waited for `make_autonomous_decision()` to finish before responding.
+- **Status:** Uses the hot-path helpers to enqueue action generation and immediately acknowledge the request.
 
 ---
 
@@ -134,7 +79,7 @@ async def llm_json(prompt: str) -> Dict[str, Any]:
         )
         # ... parse response
 ```
-- **Called by:** `create_stakeholder()` (line 631), `make_autonomous_decision()` (line 706), `generate_reaction()` (line 773), `adapt_stakeholder_role()` (line 834)
+- **Legacy call sites:** `create_stakeholder()` (line 631), `make_autonomous_decision()` (removed), `generate_reaction()` (removed), `adapt_stakeholder_role()` (line 834)
 - **Latency:** 500ms-2s per call
 - **Impact:** All stakeholder operations block on LLM
 - **Refactor Priority:** 🔴 CRITICAL
@@ -147,51 +92,15 @@ async def llm_json(prompt: str) -> Dict[str, Any]:
 
 ---
 
-#### ❌ `make_autonomous_decision()` - Line 678
-```python
-async def make_autonomous_decision(
-    self,
-    stakeholder: Stakeholder,
-    conflict_state: Dict[str, Any],
-    available_options: Optional[List[str]] = None
-) -> Optional[StakeholderAction]:
-    # ... build prompt
-    result = await llm_json(prompt)  # LINE 706 - BLOCKS
-```
-- **Called from:** Lines 380, 501, 579
-- **Latency:** 500ms-2s per decision
-- **Impact:** Core stakeholder behavior generation
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Offload to Celery task
-- [ ] Add decision caching by context hash
-- [ ] Pre-generate common decisions
-- [ ] Return default action immediately, refine async
+#### ✅ `make_autonomous_decision()` (Removed)
+- **Status:** Deleted from the subsystem. Decision generation now happens exclusively through
+  `dispatch_action_generation()` and background tasks writing to `planned_stakeholder_actions`.
 
 ---
 
-#### ❌ `generate_reaction()` - Line 749
-```python
-async def generate_reaction(
-    self,
-    stakeholder: Stakeholder,
-    triggering_action: StakeholderAction,
-    action_context: Dict[str, Any]
-) -> StakeholderReaction:
-    # ... build prompt
-    result = await llm_json(prompt)  # LINE 773 - BLOCKS
-```
-- **Called from:** Line 442
-- **Latency:** 500ms-2s per reaction
-- **Impact:** Player feedback delayed
-- **Refactor Priority:** 🔴 CRITICAL
-
-**Refactoring Tasks:**
-- [ ] Offload to background task
-- [ ] Generate reactions asynchronously
-- [ ] Show "..." thinking indicator
-- [ ] Stream reactions as they complete
+#### ✅ `generate_reaction()` (Removed)
+- **Status:** Deleted from the subsystem. Reaction handling now relies on `dispatch_reaction_generation()` and the background
+  Celery task `generate_stakeholder_reaction`.
 
 ---
 
@@ -633,12 +542,12 @@ async def _handle_phase_transition(
 **Target:** Remove all blocking calls from event handlers that affect player-facing operations
 
 1. **autonomous_stakeholder_actions.py**
-   - Create Celery tasks:
-     - `make_autonomous_decision_task()`
-     - `generate_reaction_task()`
-     - `adapt_stakeholder_role_task()`
-   - Update event handlers to queue tasks, return immediately
-   - Add result callback mechanism
+   - Route slow-path work through existing Celery tasks:
+     - `generate_stakeholder_action`
+     - `generate_stakeholder_reaction`
+     - `evaluate_stakeholder_role`
+   - Keep event handlers limited to dispatch helpers and cached reads
+   - Surface results via planned action records / follow-up events
 
 2. **social_circle.py**
    - Create Celery tasks:

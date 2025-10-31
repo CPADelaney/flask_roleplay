@@ -140,7 +140,7 @@ User sees "NPC prepares to respond..."
     │ (background)
     ▼
 ┌──────────────────────────────────────┐
-│ SLOW PATH: generate_reaction()       │
+│ SLOW PATH: generate_stakeholder_reaction │
 │ - Call LLM for reaction               │  1-3s
 │ - Store in planned_actions            │
 └──────────────────────────────────────┘
