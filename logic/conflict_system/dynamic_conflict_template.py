@@ -231,7 +231,7 @@ def _remove_trailing_commas_safe(s: str) -> str:
 
 def extract_runner_response(run_result: Any) -> str:
     """
-    Normalize Runner.run(...) results into a clean payload.
+    Normalize agent execution results into a clean payload.
     """
     if run_result is None:
         return "{}"
