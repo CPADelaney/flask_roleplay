@@ -5,15 +5,13 @@ Refactored to work as a ConflictSubsystem with the synthesizer.
 """
 from __future__ import annotations
 import logging
-import json
-import random
 import weakref
 from typing import Dict, List, Any, Optional, Set
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from agents import Agent, function_tool, RunContextWrapper, Runner
+from agents import Agent
 from db.connection import get_db_connection_context
 from typing import TYPE_CHECKING
 
@@ -33,8 +31,6 @@ def _orch_types():
     )
     return SubsystemType, EventType, SystemEvent, SubsystemResponse
     
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
@@ -341,9 +337,29 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
         flow = await self._initialize_conflict_flow_fast(conflict_id, conflict_type, context)
         self._flow_states[conflict_id] = flow
 
-        # Queue background LLM-based flow initialization
-        from logic.conflict_system.conflict_flow_hotpath import queue_phase_narration
-        queue_phase_narration(conflict_id, None, flow.current_phase.value, context)
+        from logic.conflict_system.conflict_flow_hotpath import (
+            queue_flow_initialization,
+            queue_phase_narration,
+        )
+
+        queue_flow_initialization(
+            conflict_id,
+            self.user_id,
+            self.conversation_id,
+            conflict_type,
+            context,
+        )
+
+        queue_phase_narration(
+            conflict_id,
+            None,
+            flow.current_phase.value,
+            context,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            intensity=flow.intensity,
+            momentum=flow.momentum,
+        )
 
         return SubsystemResponse(
             subsystem=self.subsystem_type,
@@ -375,9 +391,29 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             )
             self._flow_states[conflict_id] = flow
 
-            # Queue background LLM work
-            from logic.conflict_system.conflict_flow_hotpath import queue_phase_narration
-            queue_phase_narration(conflict_id, None, flow.current_phase.value, pending.get('context', {}))
+            from logic.conflict_system.conflict_flow_hotpath import (
+                queue_flow_initialization,
+                queue_phase_narration,
+            )
+
+            queue_flow_initialization(
+                conflict_id,
+                self.user_id,
+                self.conversation_id,
+                pending.get('conflict_type', 'unknown'),
+                pending.get('context', {}) or {}
+            )
+
+            queue_phase_narration(
+                conflict_id,
+                None,
+                flow.current_phase.value,
+                pending.get('context', {}),
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                intensity=flow.intensity,
+                momentum=flow.momentum,
+            )
 
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
@@ -427,61 +463,44 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
             )
         self._flow_states[conflict_id] = flow
 
-        # HOT PATH: Fast numeric updates only
-        from logic.conflict_system.conflict_flow_hotpath import apply_event_math, should_trigger_beat
+        from logic.conflict_system.conflict_flow_hotpath import should_trigger_beat, get_cached_transition_text
 
-        old_intensity = flow.intensity
-        apply_event_math(flow, payload)
+        result = await self.update_conflict_flow(flow, payload)
 
-        # Check if phase transition needed (fast rule-based)
+        transition = result.get('transition')
         side_effects: List[SystemEvent] = []
-        transition_occurred = False
 
-        if flow.phase_progress >= 1.0:
-            # Fast phase transition logic
-            from_phase = flow.current_phase
-            to_phase = await self._determine_next_phase(flow, payload)
-            flow.current_phase = to_phase
-            flow.phase_progress = 0.0
-            transition_occurred = True
-
-            # Queue background narration
-            from logic.conflict_system.conflict_flow_hotpath import queue_phase_narration
-            queue_phase_narration(conflict_id, from_phase.value, to_phase.value, payload)
-
+        if transition:
+            narrative = transition.narrative or get_cached_transition_text(conflict_id) or 'Transition narration queued for background generation'
             side_effects.append(SystemEvent(
                 event_id=f"transition_{conflict_id}_{datetime.now().timestamp()}",
                 event_type=EventType.PHASE_TRANSITION,
                 source_subsystem=self.subsystem_type,
                 payload={
                     'conflict_id': conflict_id,
-                    'from_phase': from_phase.value,
-                    'to_phase': to_phase.value,
-                    'narrative': 'Transition narration queued for background generation'
+                    'from_phase': transition.from_phase.value,
+                    'to_phase': transition.to_phase.value,
+                    'narrative': narrative,
                 },
                 priority=4
             ))
 
-        # Check for dramatic beats (fast rule-based)
+        beat: Optional[DramaticBeat] = None
         beat_type = should_trigger_beat(flow)
         if beat_type:
-            from logic.conflict_system.conflict_flow_hotpath import queue_beat_description
-            beat_meta = {'type': beat_type, 'id': f"{conflict_id}_{datetime.now().timestamp()}"}
-            queue_beat_description(conflict_id, beat_type, beat_meta)
-
-        await self._save_flow_state(flow)
+            beat = await self.generate_dramatic_beat(flow, {**payload, 'beat_type': beat_type})
 
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
             data={
-                'intensity_change': flow.intensity - old_intensity,
-                'new_momentum': flow.momentum,
-                'phase_progress': flow.phase_progress,
-                'transition_occurred': transition_occurred,
-                'beat_queued': beat_type is not None,
-                'message': 'Flow updated fast, narration queued'
+                'intensity_change': result.get('intensity_change'),
+                'new_momentum': result.get('new_momentum'),
+                'phase_progress': result.get('phase_progress'),
+                'transition_occurred': transition is not None,
+                'beat_generated': beat is not None,
+                'narrative_impact': result.get('narrative_impact'),
             },
             side_effects=side_effects
         )
@@ -675,58 +694,57 @@ class ConflictFlowSubsystem(ConflictSubsystemBase):
         conflict_type: str,
         initial_context: Dict[str, Any]
     ) -> ConflictFlow:
-        """Initialize flow for a new conflict"""
-        prompt = f"""
-Initialize conflict flow:
+        """Initialize flow for a new conflict via cached results."""
+        from logic.conflict_system.conflict_flow_hotpath import (
+            get_cached_flow_bootstrap,
+            queue_flow_initialization,
+        )
 
-Conflict Type: {conflict_type}
-Context: {json.dumps(initial_context, indent=2)}
+        queue_flow_initialization(
+            conflict_id,
+            self.user_id,
+            self.conversation_id,
+            conflict_type,
+            initial_context,
+        )
 
-Return JSON:
-{{
-  "phase": "seeds|emerging|rising",
-  "pacing": "slow_burn|rapid_escalation|waves|steady|erratic",
-  "intensity": 0.0,
-  "momentum": 0.0,
-  "conditions": ["..."]
-}}
-"""
-        response = await Runner.run(self.pacing_director, prompt)
-        try:
-            result = json.loads(extract_runner_response(response))
-        except Exception:
-            result = {}
-        
-        phase = (result.get('phase') or 'emerging').upper()
-        pacing = (result.get('pacing') or 'steady').upper()
-        intensity = float(result.get('intensity', 0.3) or 0.3)
-        momentum = float(result.get('momentum', 0.2) or 0.2)
-        conditions = result.get('conditions', []) or []
-        
-        # Persist
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO conflict_flows
-                    (user_id, conversation_id, conflict_id, current_phase, pacing_style, intensity, momentum, phase_progress)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 0.0)
-                ON CONFLICT (conflict_id) DO UPDATE
-                SET current_phase = EXCLUDED.current_phase,
-                    pacing_style = EXCLUDED.pacing_style,
-                    intensity = EXCLUDED.intensity,
-                    momentum = EXCLUDED.momentum
-            """, self.user_id, self.conversation_id, conflict_id,
-               phase.lower(), pacing.lower(), intensity, momentum)
-        
-        return ConflictFlow(
-            conflict_id=conflict_id,
-            current_phase=ConflictPhase[phase],
-            pacing_style=PacingStyle[pacing],
-            intensity=max(0.0, min(1.0, intensity)),
-            momentum=max(-1.0, min(1.0, momentum)),
-            phase_progress=0.0,
-            transitions_history=[],
-            dramatic_beats=[],
-            next_transition_conditions=conditions
+        cached = get_cached_flow_bootstrap(conflict_id)
+        if cached:
+            phase = ConflictPhase[(cached.get('phase') or 'emerging').upper()]
+            pacing = PacingStyle[(cached.get('pacing') or 'steady').upper()]
+            intensity = max(0.0, min(1.0, float(cached.get('intensity', 0.3) or 0.3)))
+            momentum = max(-1.0, min(1.0, float(cached.get('momentum', 0.2) or 0.2)))
+            conditions = cached.get('conditions', []) or []
+
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO conflict_flows
+                        (user_id, conversation_id, conflict_id, current_phase, pacing_style, intensity, momentum, phase_progress)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 0.0)
+                    ON CONFLICT (conflict_id) DO UPDATE
+                    SET current_phase = EXCLUDED.current_phase,
+                        pacing_style = EXCLUDED.pacing_style,
+                        intensity = EXCLUDED.intensity,
+                        momentum = EXCLUDED.momentum
+                """, self.user_id, self.conversation_id, conflict_id,
+                   phase.value, pacing.value, intensity, momentum)
+
+            return ConflictFlow(
+                conflict_id=conflict_id,
+                current_phase=phase,
+                pacing_style=pacing,
+                intensity=intensity,
+                momentum=momentum,
+                phase_progress=0.0,
+                transitions_history=[],
+                dramatic_beats=[],
+                next_transition_conditions=conditions,
+            )
+
+        return await self._initialize_conflict_flow_fast(
+            conflict_id,
+            conflict_type,
+            initial_context,
         )
     
     async def update_conflict_flow(
@@ -734,50 +752,77 @@ Return JSON:
         flow: ConflictFlow,
         event: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update flow based on event data."""
-        prompt = f"""
-Update conflict flow:
+        """Update flow based on event data using cached analysis when available."""
+        from logic.conflict_system.conflict_flow_hotpath import (
+            get_cached_event_analysis,
+            queue_flow_event_analysis,
+        )
 
-Current State:
-- Phase: {flow.current_phase.value}
-- Intensity: {flow.intensity}
-- Momentum: {flow.momentum}
-- Progress: {flow.phase_progress}
+        def _clamp(value: float, low: float, high: float) -> float:
+            return max(low, min(high, value))
 
-Event: {json.dumps(event, indent=2)}
+        baseline_state = {
+            'phase': flow.current_phase.value,
+            'intensity': float(flow.intensity),
+            'momentum': float(flow.momentum),
+            'phase_progress': float(flow.phase_progress),
+        }
 
-Return JSON:
-{{
-  "intensity": 0.0,
-  "momentum": 0.0,
-  "progress_change": 0.0,
-  "should_transition": true/false,
-  "narrative_impact": "..."
-}}
-"""
-        response = await Runner.run(self.flow_analyzer, prompt)
-        try:
-            result = json.loads(extract_runner_response(response))
-        except Exception:
-            result = {}
-        
+        event_id = event.get('event_id') or event.get('id')
+
+        queue_flow_event_analysis(
+            flow.conflict_id,
+            self.user_id,
+            self.conversation_id,
+            event,
+            baseline_state,
+        )
+
+        analysis = get_cached_event_analysis(flow.conflict_id, event_id) or {}
+
         old_intensity = flow.intensity
-        flow.intensity = max(0.0, min(1.0, float(result.get('intensity', flow.intensity) or flow.intensity)))
-        flow.momentum = max(-1.0, min(1.0, float(result.get('momentum', flow.momentum) or flow.momentum)))
-        flow.phase_progress = max(0.0, flow.phase_progress + float(result.get('progress_change', 0.1) or 0.1))
-        
+        intensity_target = analysis.get('intensity')
+        if intensity_target is not None:
+            flow.intensity = _clamp(float(intensity_target), 0.0, 1.0)
+        else:
+            flow.intensity = _clamp(
+                flow.intensity + float(event.get('intensity_delta', 0.0) or 0.0),
+                0.0,
+                1.0,
+            )
+
+        momentum_target = analysis.get('momentum')
+        if momentum_target is not None:
+            flow.momentum = _clamp(float(momentum_target), -1.0, 1.0)
+        else:
+            flow.momentum = _clamp(
+                flow.momentum + float(event.get('momentum_delta', 0.0) or 0.0),
+                -1.0,
+                1.0,
+            )
+
+        progress_delta = analysis.get('progress_change')
+        if progress_delta is None:
+            progress_delta = float(event.get('progress_delta', 0.1) or 0.1)
+        flow.phase_progress = _clamp(
+            flow.phase_progress + float(progress_delta),
+            0.0,
+            1.0,
+        )
+
         transition = None
-        if bool(result.get('should_transition')) or flow.phase_progress >= 1.0:
+        if bool(analysis.get('should_transition')) or flow.phase_progress >= 1.0:
             transition = await self._handle_phase_transition(flow, event)
-        
+
         await self._save_flow_state(flow)
-        
+
         return {
             'intensity_change': flow.intensity - old_intensity,
             'new_momentum': flow.momentum,
             'phase_progress': flow.phase_progress,
             'transition': transition,
-            'narrative_impact': result.get('narrative_impact', 'The conflict evolves')
+            'analysis': analysis,
+            'narrative_impact': analysis.get('narrative_impact', 'The conflict evolves'),
         }
     
     async def generate_dramatic_beat(
@@ -785,43 +830,65 @@ Return JSON:
         flow: ConflictFlow,
         context: Dict[str, Any]
     ) -> Optional[DramaticBeat]:
-        """Generate a dramatic beat for the conflict"""
-        prompt = f"""
-Generate dramatic beat:
+        """Generate a dramatic beat for the conflict using cached payloads."""
+        from logic.conflict_system.conflict_flow_hotpath import (
+            get_cached_beat_payload,
+            queue_beat_description,
+            queue_dramatic_beat_generation,
+        )
 
-Current Phase: {flow.current_phase.value}
-Intensity: {flow.intensity}
-Momentum: {flow.momentum}
-Context: {json.dumps(context, indent=2)}
+        beat_id = context.get('beat_id') or f"{flow.conflict_id}_{int(datetime.now().timestamp() * 1000)}"
+        flow_state = {
+            'phase': flow.current_phase.value,
+            'intensity': float(flow.intensity),
+            'momentum': float(flow.momentum),
+        }
 
-Return JSON:
-{{
-  "type": "revelation|betrayal|escalation|reconciliation|twist|moment",
-  "description": "...",
-  "impact": 0.0,
-  "characters": [1,2,3]
-}}
-"""
-        response = await Runner.run(self.beat_generator, prompt)
-        try:
-            result = json.loads(extract_runner_response(response))
-        except Exception:
-            result = {}
-        
+        queue_dramatic_beat_generation(
+            flow.conflict_id,
+            self.user_id,
+            self.conversation_id,
+            beat_id,
+            flow_state,
+            context,
+        )
+
+        cached = get_cached_beat_payload(flow.conflict_id, beat_id) or {}
+        beat_meta = cached.get('beat_meta', {}) or {}
+
+        beat_type = beat_meta.get('type') or context.get('beat_type') or 'moment'
+        description = cached.get('text') or 'A significant moment occurs'
+        impact = float(cached.get('impact', 0.2) or 0.2)
+        characters = beat_meta.get('characters', []) or []
+
+        if not cached:
+            fallback = self._create_fallback_beat()
+            beat_type = context.get('beat_type') or fallback.beat_type
+            description = fallback.description
+            impact = fallback.impact_on_flow
+            characters = fallback.characters_involved
+
         beat = DramaticBeat(
-            beat_type=result.get('type', 'moment'),
-            description=result.get('description', 'A significant moment occurs'),
-            impact_on_flow=float(result.get('impact', 0.2) or 0.2),
-            characters_involved=result.get('characters', []) or [],
+            beat_type=beat_type,
+            description=description,
+            impact_on_flow=impact,
+            characters_involved=characters,
             timestamp=datetime.now()
         )
-        # Apply beat impact
+
         flow.momentum = max(-1.0, min(1.0, flow.momentum + beat.impact_on_flow * 0.5))
         flow.intensity = max(0.0, min(1.0, flow.intensity + abs(beat.impact_on_flow) * 0.3))
         flow.dramatic_beats.append(beat)
-        
+
         await self._store_dramatic_beat(flow.conflict_id, beat)
         await self._save_flow_state(flow)
+
+        queue_beat_description(
+            flow.conflict_id,
+            beat_type,
+            {'id': beat_id, 'type': beat_type, 'characters': characters},
+        )
+
         return beat
     
     # ========== Helper Methods ==========
@@ -831,43 +898,51 @@ Return JSON:
         flow: ConflictFlow,
         trigger_event: Dict[str, Any]
     ) -> PhaseTransition:
-        """Handle transition between phases"""
+        """Handle transition between phases using cached narration."""
+        from logic.conflict_system.conflict_flow_hotpath import (
+            get_cached_transition_payload,
+            queue_phase_narration,
+        )
+
+        from_phase = flow.current_phase
         next_phase = await self._determine_next_phase(flow, trigger_event)
-        
-        prompt = f"""
-Narrate phase transition:
 
-From: {flow.current_phase.value}
-To: {next_phase.value}
-Trigger: {json.dumps(trigger_event, indent=2)}
-Current Intensity: {flow.intensity}
+        queue_phase_narration(
+            flow.conflict_id,
+            from_phase.value if from_phase else None,
+            next_phase.value,
+            trigger_event,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            intensity=flow.intensity,
+            momentum=flow.momentum,
+        )
 
-Return JSON:
-{{
-  "type": "natural|triggered|forced|stalled|reversed",
-  "narrative": "2-3 sentences"
-}}
-"""
-        response = await Runner.run(self.transition_narrator, prompt)
-        try:
-            result = json.loads(extract_runner_response(response))
-        except Exception:
-            result = {}
-        
+        cached = get_cached_transition_payload(flow.conflict_id) or {}
+
+        fallback = self._create_fallback_transition(from_phase, next_phase)
+        transition_type = fallback.transition_type
+        narrative = fallback.narrative
+
+        if cached.get('to_phase') == next_phase.value:
+            cached_type = (cached.get('transition_type') or 'natural').upper()
+            if cached_type in TransitionType.__members__:
+                transition_type = TransitionType[cached_type]
+            narrative = cached.get('text') or cached.get('prose') or narrative
+
         transition = PhaseTransition(
-            from_phase=flow.current_phase,
+            from_phase=from_phase,
             to_phase=next_phase,
-            transition_type=TransitionType[(result.get('type', 'natural') or 'natural').upper()],
+            transition_type=transition_type,
             trigger=str(trigger_event),
-            narrative=result.get('narrative', 'The conflict shifts'),
+            narrative=narrative,
             timestamp=datetime.now()
         )
-        
-        # Update flow
+
         flow.current_phase = next_phase
         flow.phase_progress = 0.0
         flow.transitions_history.append(transition)
-        
+
         await self._store_transition(flow.conflict_id, transition)
         await self._save_flow_state(flow)
         return transition
