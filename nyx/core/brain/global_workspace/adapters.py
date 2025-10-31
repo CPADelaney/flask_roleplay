@@ -33,7 +33,8 @@ from typing import (
 
 # ── third‑party ────────────────────────────────────────────────────────────
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+from nyx.core.memory.embeddings import embed_texts
 
 # ── nyx core ───────────────────────────────────────────────────────────────
 from nyx.core.brain.global_workspace.global_workspace_architecture import (
@@ -62,24 +63,25 @@ async def maybe_async(fn: Callable, *args, **kw):
     return res
 
 
-_ST_MODEL: Optional[SentenceTransformer] = None
-def _get_st_model() -> SentenceTransformer:
-    global _ST_MODEL           # pylint: disable=global-statement
-    if _ST_MODEL is None:
-        _ST_MODEL = SentenceTransformer("text-embedding-3-small")
-    return _ST_MODEL
-
-
 def _cos(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) /
                  (np.linalg.norm(a) * np.linalg.norm(b) + 1e-6))
 
 
-def _sem_match(txt: str, prompts: Sequence[str], thresh: float = .55) -> bool:
-    mod = _get_st_model()
-    vtxt = mod.encode(txt, normalize_embeddings=True)
-    vref = [mod.encode(p, normalize_embeddings=True) for p in prompts]
-    return any(_cos(vtxt, v) >= thresh for v in vref)
+async def _sem_match(txt: str, prompts: Sequence[str], thresh: float = .55) -> bool:
+    if not prompts:
+        return False
+
+    payloads = [txt, *prompts]
+    try:
+        embeddings = await embed_texts(payloads)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("Semantic match embedding failed: %s", exc)
+        return False
+
+    vtxt = embeddings[0]
+    vrefs = embeddings[1:]
+    return any(_cos(vtxt, v) >= thresh for v in vrefs)
 
 
 # ╭──────────────────────────────────────────────────────────────────────────╮
@@ -615,7 +617,7 @@ class CreativeSystemAdapter(EnhancedWorkspaceModule):
         if phase != 1 or not self.cs:
             return
         for p in self.ws.focus:
-            if p.context_tag == "user_input" and _sem_match(
+            if p.context_tag == "user_input" and await _sem_match(
                 str(p.content),
                 ["write", "create", "draw", "compose",
                  "invent", "generate a"],
@@ -798,7 +800,7 @@ class CapabilityAdapter(EnhancedWorkspaceModule):
         for p in self.ws.focus:
             if p.context_tag != "user_input":
                 continue
-            if _sem_match(str(p.content),
+            if await _sem_match(str(p.content),
                           ["can you", "able to", "is it possible"], .6):
                 a = await maybe_async(self.cap.assess_required_capabilities,
                                       str(p.content))
