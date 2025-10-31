@@ -5,17 +5,13 @@ Refactored to work as a ConflictSubsystem with the synthesizer (circular-safe).
 """
 
 import logging
-import json
-import random
 import weakref
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 
-from agents import Agent, Runner
 from db.connection import get_db_connection_context
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 
 logger = logging.getLogger(__name__)
 
@@ -403,25 +399,11 @@ class SliceOfLifeConflictSubsystem:
 
 class EmergentConflictDetector:
     """Detects conflicts emerging from daily interactions using LLM analysis"""
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self._pattern_analyzer = None
-        
-    @property
-    def pattern_analyzer(self) -> Agent:
-        """Lazy-load pattern analysis agent"""
-        if self._pattern_analyzer is None:
-            self._pattern_analyzer = Agent(
-                name="Pattern Analyzer",
-                instructions="""
-                Analyze memory patterns and relationship dynamics for emerging slice-of-life conflicts.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._pattern_analyzer
-    
+
     async def detect_brewing_tensions(self) -> List[Dict[str, Any]]:
         """Analyze recent interactions for emerging conflicts using cache-first helper."""
         from logic.conflict_system.slice_of_life_conflicts_hotpath import (
@@ -430,10 +412,10 @@ class EmergentConflictDetector:
 
         return await get_detected_tensions(self.user_id, self.conversation_id)
 
-    async def _detect_tensions(self) -> List[Dict[str, Any]]:
-        """Slow-path implementation that gathers context and calls the LLM."""
+    async def collect_tension_inputs(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Fetch memory and relationship slices for downstream processing."""
         async with get_db_connection_context() as conn:
-            memory_patterns = await conn.fetch(
+            memory_rows = await conn.fetch(
                 """
                 SELECT entity_id, entity_type, memory_text, emotional_valence, tags
                 FROM enhanced_memories
@@ -446,7 +428,7 @@ class EmergentConflictDetector:
                 self.conversation_id,
             )
 
-            relationships = await conn.fetch(
+            relationship_rows = await conn.fetch(
                 """
                 SELECT entity1_id, entity2_id, dimension, current_value, recent_delta
                 FROM relationship_dimensions
@@ -456,11 +438,18 @@ class EmergentConflictDetector:
                 self.user_id,
                 self.conversation_id,
             )
+        memories = [dict(row) for row in memory_rows]
+        relationships = [dict(row) for row in relationship_rows]
+        return memories, relationships
 
-        if not memory_patterns and not relationships:
+    async def _detect_tensions(self) -> List[Dict[str, Any]]:
+        """Slow-path implementation that now returns heuristic tensions."""
+        memories, relationships = await self.collect_tension_inputs()
+
+        if not memories and not relationships:
             return []
 
-        tensions = await self._analyze_patterns_with_llm(memory_patterns, relationships)
+        tensions = await self._analyze_patterns_with_llm(memories, relationships)
 
         sanitized: List[Dict[str, Any]] = []
         for tension in tensions:
@@ -476,58 +465,81 @@ class EmergentConflictDetector:
                 }
             )
         return sanitized
-    
+
     async def _analyze_patterns_with_llm(
-        self, 
-        memories: List, 
-        relationships: List
-    ) -> List[Dict]:
-        """Use LLM to detect emerging tensions from patterns"""
-        memory_summary = self._summarize_memories(memories[:20])
-        relationship_summary = self._summarize_relationships(relationships)
-        
-        prompt = f"""
-Analyze recent patterns for emerging slice-of-life conflicts:
+        self,
+        memories: List[Dict[str, Any]],
+        relationships: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Heuristic approximation of tension analysis used as a fallback."""
 
-Recent Memories:
-{memory_summary}
+        tensions: List[Dict[str, Any]] = []
 
-Relationship Dynamics:
-{relationship_summary}
+        relationship_map = {
+            "dominance": SliceOfLifeConflictType.ROUTINE_DOMINANCE,
+            "control": SliceOfLifeConflictType.FINANCIAL_CONTROL,
+            "dependency": SliceOfLifeConflictType.CARE_DEPENDENCY,
+            "resistance": SliceOfLifeConflictType.INDEPENDENCE_STRUGGLE,
+        }
 
-Return a JSON array (1-3 items). Each item:
-{{
-  "conflict_type": "permission_patterns|boundary_erosion|subtle_rivalry|...",
-  "intensity": "subtext|tension|passive",
-  "description": "specific, contextual",
-  "evidence": ["..."]
-}}
-"""
-        response = await Runner.run(self.pattern_analyzer, prompt)
-        try:
-            parsed = extract_runner_response(response)
-            tensions = json.loads(parsed)
-            conflicts = []
-            for t in tensions:
-                try:
-                    ctype = SliceOfLifeConflictType[str(t.get('conflict_type', 'subtle_rivalry')).upper()]
-                except Exception:
-                    ctype = SliceOfLifeConflictType.SUBTLE_RIVALRY
-                try:
-                    intensity = ConflictIntensity[str(t.get('intensity', 'tension')).upper()]
-                except Exception:
-                    intensity = ConflictIntensity.TENSION
-                conflicts.append({
-                    'type': ctype,
-                    'intensity': intensity,
-                    'description': t.get('description', 'A subtle tension emerges'),
-                    'evidence': t.get('evidence', []),
-                    'tension_level': random.uniform(0.3, 0.7)
-                })
-            return conflicts
-        except Exception as e:
-            logger.warning(f"Failed to parse LLM tension analysis: {e}")
-            return []
+        for rel in relationships[:5]:
+            dimension = str(rel.get("dimension", "")).lower()
+            current_value = float(rel.get("current_value") or 0.0)
+            if abs(current_value) < 0.25:
+                continue
+
+            ctype = relationship_map.get(dimension, SliceOfLifeConflictType.SUBTLE_RIVALRY)
+            magnitude = min(max(abs(current_value), 0.1), 1.0)
+            if magnitude > 0.75:
+                intensity = ConflictIntensity.CONFRONTATION
+            elif magnitude > 0.55:
+                intensity = ConflictIntensity.DIRECT
+            elif magnitude > 0.4:
+                intensity = ConflictIntensity.PASSIVE
+            else:
+                intensity = ConflictIntensity.TENSION
+
+            description = (
+                f"{dimension.title()} dynamics are trending toward {('imbalance' if current_value > 0 else 'withdrawal')}"
+                if dimension
+                else "Subtle relationship pressure is forming"
+            )
+
+            evidence = []
+            if relationships and dimension:
+                evidence.append(
+                    f"{dimension.title()} score shifted by {float(rel.get('recent_delta') or 0.0):+.2f}"
+                )
+            if memories:
+                evidence.append(memories[0].get("memory_text", "Recent interaction felt strained."))
+
+            tensions.append(
+                {
+                    "type": ctype,
+                    "intensity": intensity,
+                    "description": description,
+                    "evidence": evidence,
+                    "tension_level": round(magnitude, 2),
+                }
+            )
+
+        if not tensions and memories:
+            sample = memories[0]
+            sentiment = str(sample.get("emotional_valence", "neutral")).lower()
+            intensity = ConflictIntensity.SUBTEXT if sentiment == "positive" else ConflictIntensity.TENSION
+            tensions.append(
+                {
+                    "type": SliceOfLifeConflictType.SUBTLE_RIVALRY,
+                    "intensity": intensity,
+                    "description": sample.get(
+                        "memory_text", "A low-grade disagreement is brewing in daily routines."
+                    ),
+                    "evidence": [sample.get("memory_text", "")],
+                    "tension_level": 0.35,
+                }
+            )
+
+        return tensions[:3]
     
     def _summarize_memories(self, memories: List) -> str:
         """Create a summary of memories for LLM context"""
@@ -549,25 +561,11 @@ Return a JSON array (1-3 items). Each item:
 
 class SliceOfLifeConflictManager:
     """Manages conflicts through daily activities with LLM generation"""
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self._conflict_agent = None
-        
-    @property
-    def conflict_agent(self) -> Agent:
-        """Lazy-load conflict generation agent"""
-        if self._conflict_agent is None:
-            self._conflict_agent = Agent(
-                name="Slice of Life Conflict Director",
-                instructions="""
-                Generate subtle conflicts embedded in daily routines.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._conflict_agent
-    
+
     async def embed_conflict_in_activity(
         self,
         conflict_id: int,
@@ -587,13 +585,12 @@ class SliceOfLifeConflictManager:
             participating_npcs,
         )
 
-    async def _embed_conflict_in_activity(
+    async def collect_activity_context(
         self,
         conflict_id: int,
-        activity_type: str,
         participating_npcs: List[int],
-    ) -> DailyConflictEvent:
-        """Slow-path LLM call for embedding a conflict in an activity."""
+    ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        """Load conflict record and NPC descriptors for downstream use."""
         async with get_db_connection_context() as conn:
             conflict = await conn.fetchrow(
                 """SELECT * FROM Conflicts WHERE id = $1""",
@@ -614,72 +611,81 @@ class SliceOfLifeConflictManager:
                         else npc["personality_traits"]
                     )
                     npc_details.append(f"{name} ({traits})")
+        return dict(conflict) if conflict else None, npc_details
 
-        prompt = f"""
-Generate how this conflict manifests during {activity_type}:
+    async def _generate_conflict_manifestation(
+        self,
+        conflict: Optional[Dict[str, Any]],
+        activity_type: str,
+        participating_npcs: List[int],
+        npc_descriptors: Optional[List[str]] = None,
+    ) -> DailyConflictEvent:
+        """Heuristic manifestation generator used when LLM support is unavailable."""
 
-Conflict Type: {conflict['conflict_type']}
-Intensity: {conflict.get('intensity', 'tension')}
-Phase: {conflict.get('phase', 'active')}
-NPCs Present: {', '.join(npc_details)}
+        npc_descriptors = npc_descriptors or []
+        intensity = str((conflict or {}).get("intensity", "tension")).lower()
+        phase = str((conflict or {}).get("phase", "active")).lower()
 
-Return JSON:
-{{
-  "manifestation": "1-2 sentences",
-  "choice_presented": false,
-  "impact": 0.1,
-  "npc_reactions": ["npc 1 line", "npc 2 line"]
-}}
-"""
-        response = await Runner.run(self.conflict_agent, prompt)
-        try:
-            parsed = extract_runner_response(response)
-            result = json.loads(parsed)
-            npc_reactions: Dict[int, str] = {}
-            if isinstance(result.get("npc_reactions"), list):
-                for i, npc_id in enumerate(participating_npcs[: len(result["npc_reactions"])]):
-                    npc_reactions[int(npc_id)] = str(result["npc_reactions"][i])
-            return DailyConflictEvent(
-                activity_type=activity_type,
-                conflict_manifestation=str(
-                    result.get("manifestation", "A subtle tension colors the moment")
-                ),
-                choice_presented=bool(result.get("choice_presented", False)),
-                accumulation_impact=float(result.get("impact", 0.1)),
-                npc_reactions=npc_reactions,
+        if intensity in {"confrontation", "direct"}:
+            manifestation = (
+                f"{activity_type.title()} is interrupted by a pointed exchange"
+                f" between the involved parties."
             )
-        except Exception as e:
-            logger.warning(f"Failed to parse conflict manifestation: {e}")
-            return DailyConflictEvent(
-                activity_type=activity_type,
-                conflict_manifestation="The underlying tension affects the interaction",
-                choice_presented=False,
-                accumulation_impact=0.1,
-                npc_reactions={},
+            impact = 0.25
+            choice = True
+        elif phase == "cooldown":
+            manifestation = (
+                f"Residual tension lingers during {activity_type}, but everyone keeps things polite."
             )
+            impact = 0.05
+            choice = False
+        else:
+            npc_clause = (
+                f" involving {', '.join(npc_descriptors[:2])}" if npc_descriptors else ""
+            )
+            manifestation = (
+                f"{activity_type.title()} carries an undercurrent of hesitation{npc_clause}."
+            )
+            impact = 0.12
+            choice = False
+
+        npc_reactions: Dict[int, str] = {}
+        for idx, npc_id in enumerate(participating_npcs[: len(npc_descriptors or [])]):
+            npc_reactions[int(npc_id)] = (
+                f"{npc_descriptors[idx].split('(')[0].strip()} keeps their distance."
+            )
+
+        return DailyConflictEvent(
+            activity_type=activity_type,
+            conflict_manifestation=manifestation,
+            choice_presented=choice,
+            accumulation_impact=impact,
+            npc_reactions=npc_reactions,
+        )
+
+    async def _embed_conflict_in_activity(
+        self,
+        conflict_id: int,
+        activity_type: str,
+        participating_npcs: List[int],
+    ) -> DailyConflictEvent:
+        """Heuristic-only embedding retained for compatibility with cache warmers."""
+
+        conflict, npc_details = await self.collect_activity_context(
+            conflict_id, participating_npcs
+        )
+        return await self._generate_conflict_manifestation(
+            conflict, activity_type, participating_npcs, npc_details
+        )
 
 
 class PatternBasedResolution:
     """Resolves conflicts based on accumulated patterns using LLM"""
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self._resolution_agent = None
-    
-    @property
-    def resolution_agent(self) -> Agent:
-        """Lazy-load resolution agent"""
-        if self._resolution_agent is None:
-            self._resolution_agent = Agent(
-                name="Conflict Resolution Analyst",
-                instructions="""
-                Analyze conflict patterns to determine natural resolutions.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._resolution_agent
-    
+
     async def check_resolution_by_pattern(self, conflict_id: int) -> Optional[Dict[str, Any]]:
         """Cache-first helper that returns pattern-based resolution if available."""
         from logic.conflict_system.slice_of_life_conflicts_hotpath import (
@@ -690,8 +696,10 @@ class PatternBasedResolution:
             self.user_id, self.conversation_id, conflict_id
         )
 
-    async def _evaluate_resolution(self, conflict_id: int) -> Optional[Dict[str, Any]]:
-        """Slow-path LLM evaluation for conflict resolution."""
+    async def collect_resolution_inputs(
+        self, conflict_id: int
+    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Gather conflict record and tagged memories for evaluation."""
         async with get_db_connection_context() as conn:
             conflict = await conn.fetchrow(
                 """SELECT * FROM Conflicts WHERE id = $1""",
@@ -710,46 +718,45 @@ class PatternBasedResolution:
                 self.conversation_id,
                 f"conflict_{int(conflict_id)}",
             )
+        return dict(conflict) if conflict else None, [dict(row) for row in memories]
 
-        if not memories or (
-            conflict and int(conflict.get("progress", conflict.get("progress", 0))) < 50
-        ):
+    async def _evaluate_resolution(self, conflict_id: int) -> Optional[Dict[str, Any]]:
+        """Heuristic evaluation that approximates the previous LLM decision."""
+
+        conflict, memories = await self.collect_resolution_inputs(conflict_id)
+
+        if not conflict or not memories:
             return None
 
-        prompt = f"""
-Analyze if this conflict should naturally resolve:
+        progress = float(conflict.get("progress", 0) or 0)
+        phase = str(conflict.get("phase", "active")).lower()
+        positive_memories = [
+            m for m in memories if str(m.get("emotional_valence", "")).lower() in {"positive", "hopeful"}
+        ]
 
-Conflict: {conflict['conflict_type']} (Progress: {conflict['progress']}%)
-Phase: {conflict.get('phase', 'active')}
-Recent Pattern:
-{self._format_memory_pattern(memories[:10])}
+        if progress >= 85 or phase in {"cooldown", "dormant"}:
+            resolution_type = ResolutionApproach.TIME_EROSION.value
+        elif progress >= 65 and positive_memories:
+            resolution_type = ResolutionApproach.NEGOTIATED_COMPROMISE.value
+        elif len(memories) >= 5 and all(
+            str(m.get("emotional_valence", "")).lower() == "negative" for m in memories[:3]
+        ):
+            resolution_type = ResolutionApproach.SUBTLE_RESISTANCE.value
+        else:
+            return None
 
-Return JSON:
-{{
-  "should_resolve": false,
-  "type": "time_erosion|subtle_resistance|...",
-  "description": "how it resolves",
-  "new_patterns": []
-}}
-"""
-        response = await Runner.run(self.resolution_agent, prompt)
-        try:
-            parsed = extract_runner_response(response)
-            result = json.loads(parsed)
-            if bool(result.get("should_resolve", False)):
-                resolution_type = str(result.get("type", "time_erosion"))
-                description = str(
-                    result.get("description", "The conflict fades into routine")
-                )
-                return {
-                    "resolution_type": resolution_type,
-                    "description": description,
-                    "new_patterns": list(result.get("new_patterns", [])),
-                    "final_state": "resolved",
-                }
-        except Exception as e:
-            logger.warning(f"Failed to parse resolution: {e}")
-        return None
+        description = "Conflict momentum suggests a natural winding down."
+        if resolution_type == ResolutionApproach.NEGOTIATED_COMPROMISE.value:
+            description = "Recent interactions show parties testing small compromises."
+        elif resolution_type == ResolutionApproach.SUBTLE_RESISTANCE.value:
+            description = "Persistence of negative beats indicates resistance rather than escalation."
+
+        return {
+            "resolution_type": resolution_type,
+            "description": description,
+            "new_patterns": [m.get("memory_text", "") for m in positive_memories[:2]],
+            "final_state": "resolved",
+        }
     
     def _format_memory_pattern(self, memories: List) -> str:
         """Format memories for LLM analysis"""
@@ -758,25 +765,11 @@ Return JSON:
 
 class ConflictDailyIntegration:
     """Integrates conflicts with daily routines using LLM"""
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self._integration_agent = None
-    
-    @property
-    def integration_agent(self) -> Agent:
-        """Lazy-load integration agent"""
-        if self._integration_agent is None:
-            self._integration_agent = Agent(
-                name="Daily Conflict Integrator",
-                instructions="""
-                Weave conflicts naturally into daily activities.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._integration_agent
-    
+
     async def get_conflicts_for_time_of_day(self, time_of_day: str) -> List[Dict]:
         """Get conflicts appropriate for current time"""
         async with get_db_connection_context() as conn:
@@ -811,18 +804,23 @@ class ConflictDailyIntegration:
     async def _evaluate_time_appropriateness(
         self, conflict: Dict, time_of_day: str
     ) -> bool:
-        """Slow-path LLM classification for time-of-day suitability."""
-        prompt = f"""
-Is this conflict appropriate for {time_of_day}?
+        """Heuristic classifier for time-of-day suitability."""
 
-Conflict Type: {conflict.get('conflict_type')}
-Intensity: {conflict.get('intensity', 'tension')}
-
-Answer just yes or no.
-"""
-        response = await Runner.run(self.integration_agent, prompt)
-        try:
-            text = extract_runner_response(response).strip().lower()
-            return "yes" in text and "no" not in text[:5]
-        except Exception:
+        if not conflict:
             return False
+
+        intensity = str(conflict.get("intensity", "tension")).lower()
+        phase = str(conflict.get("phase", "active")).lower()
+        time_key = time_of_day.lower()
+
+        quiet_hours = {"sleep", "rest", "late_night", "midnight"}
+        routine_hours = {"morning", "commute", "work", "afternoon"}
+
+        if intensity in {"confrontation", "direct"} and time_key in quiet_hours:
+            return False
+        if phase == "dormant" and time_key not in routine_hours:
+            return False
+        if intensity == "subtext":
+            return True
+
+        return time_key not in {"sleep", "rest"}
