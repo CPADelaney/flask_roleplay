@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agents import Agent
 
-import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
