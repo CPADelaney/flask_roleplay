@@ -239,8 +239,8 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         # HOT PATH: Use cached social data and dispatch background tasks
         from logic.conflict_system.social_circle_hotpath import (
             get_scene_bundle,
-            queue_gossip_generation,
-            get_cached_reputation,
+            schedule_gossip_generation,
+            get_cached_reputation_scores,
         )
 
         # Compute scene hash for cache lookups
@@ -255,7 +255,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         # If bundle is generating, queue explicit gossip generation for these NPCs
         if present_npcs and len(present_npcs) >= 2 and social_bundle.get('status') == 'generating':
             if random.random() < 0.3:  # 30% chance of gossip
-                queue_gossip_generation(
+                schedule_gossip_generation(
                     scene_context,
                     present_npcs[:2],
                     user_id=self.user_id,
@@ -265,7 +265,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         # Get cached reputations (fast)
         for npc_id in present_npcs:
             if npc_id not in self._reputation_cache:
-                reputation = await get_cached_reputation(npc_id)
+                reputation = await get_cached_reputation_scores(npc_id)
                 self._reputation_cache[npc_id] = reputation
 
         return SubsystemResponse(
@@ -363,7 +363,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
 
         # HOT PATH: Dispatch gossip generation to background
         if participants:
-            from logic.conflict_system.social_circle_hotpath import queue_gossip_generation
+            from logic.conflict_system.social_circle_hotpath import schedule_gossip_generation
 
             scene_context = {
                 'conflict_start': True,
@@ -376,7 +376,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
                 json.dumps(scene_context, sort_keys=True).encode()
             ).hexdigest()[:16]
 
-            queue_gossip_generation(
+            schedule_gossip_generation(
                 scene_context,
                 participants,
                 user_id=self.user_id,
@@ -412,10 +412,10 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         resolution = event.payload.get('resolution', {})
 
         from logic.conflict_system.social_circle_hotpath import (
-            queue_gossip_generation,
-            queue_reputation_calculation,
-            get_cached_gossip,
-            get_cached_reputation,
+            get_cached_gossip_items,
+            get_cached_reputation_scores,
+            schedule_gossip_generation,
+            schedule_reputation_calculation,
         )
 
         winners = resolution.get('winners', []) or []
@@ -438,20 +438,20 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
 
         initial_gossip_cache = []
         if all_participants:
-            queue_gossip_generation(
+            schedule_gossip_generation(
                 scene_context,
                 all_participants,
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
             )
-            initial_gossip_cache = await get_cached_gossip(
+            initial_gossip_cache = await get_cached_gossip_items(
                 scene_context['scene_hash'], limit=3
             )
 
         # Apply fast heuristic reputation adjustments
         for winner_id in winners:
             await self._adjust_reputation_from_action(winner_id, 'victory')
-            queue_reputation_calculation(
+            schedule_reputation_calculation(
                 self.user_id,
                 self.conversation_id,
                 winner_id,
@@ -460,7 +460,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
 
         for loser_id in losers:
             await self._adjust_reputation_from_action(loser_id, 'defeat')
-            queue_reputation_calculation(
+            schedule_reputation_calculation(
                 self.user_id,
                 self.conversation_id,
                 loser_id,
@@ -498,7 +498,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         # Capture existing cached reputation for follow-up diffing
         initial_reputation = {}
         for npc_id in all_participants:
-            cached_rep = await get_cached_reputation(npc_id)
+            cached_rep = await get_cached_reputation_scores(npc_id)
             if cached_rep:
                 initial_reputation[npc_id] = cached_rep
 
@@ -563,11 +563,11 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             return
 
         async def _poll_for_gossip() -> None:
-            from logic.conflict_system.social_circle_hotpath import get_cached_gossip
+            from logic.conflict_system.social_circle_hotpath import get_cached_gossip_items
 
             for attempt in range(4):
                 await asyncio.sleep(min(8, 2 ** attempt))
-                cached_items = await get_cached_gossip(scene_hash, limit=3)
+                cached_items = await get_cached_gossip_items(scene_hash, limit=3)
                 new_items = [
                     item for item in cached_items
                     if item.get('gossip_id') and item.get('gossip_id') not in baseline_ids
@@ -606,14 +606,14 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             return
 
         async def _poll_for_reputation() -> None:
-            from logic.conflict_system.social_circle_hotpath import get_cached_reputation
+            from logic.conflict_system.social_circle_hotpath import get_cached_reputation_scores
 
             for attempt in range(4):
                 await asyncio.sleep(min(8, 2 ** attempt))
                 updates: Dict[int, Dict[str, float]] = {}
 
                 for npc_id in npc_ids:
-                    cached = await get_cached_reputation(npc_id)
+                    cached = await get_cached_reputation_scores(npc_id)
                     if not cached:
                         continue
                     if baseline.get(npc_id) != cached:
@@ -807,37 +807,6 @@ class SocialCircleManager:
             )
         return self._alliance_strategist
     
-    # [Rest of the SocialCircleManager methods remain the same as in original]
-    # Including: generate_gossip, spread_gossip, calculate_reputation,
-    # narrate_reputation_change, form_alliance, betray_alliance, etc.
-    
-    async def generate_gossip(
-        self,
-        context: Dict[str, Any],
-        target_npcs: Optional[List[int]] = None
-    ) -> GossipItem:
-        """Queue gossip generation and return cached or fallback gossip."""
-
-        from logic.conflict_system.social_circle_hotpath import (
-            get_cached_gossip,
-            queue_gossip_generation,
-        )
-
-        scene_context, scene_hash = self._prepare_scene_context(context, target_npcs)
-
-        queue_gossip_generation(
-            scene_context,
-            target_npcs or [],
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-        )
-
-        cached_items = await get_cached_gossip(scene_hash, limit=1)
-        if cached_items:
-            return self._deserialize_gossip_dict(cached_items[0], target_npcs or [])
-
-        return self._create_fallback_gossip(target_npcs or [])
-
     async def generate_gossip_background(
         self,
         context: Dict[str, Any],
@@ -846,82 +815,18 @@ class SocialCircleManager:
         """Run the slow gossip generation flow (for background tasks)."""
 
         gossip_item = await self._run_gossip_llm(context, target_npcs or [])
-        return self._serialize_gossip_item(gossip_item)
-
-    def _prepare_scene_context(
-        self,
-        context: Dict[str, Any],
-        target_npcs: Optional[List[int]],
-    ) -> Tuple[Dict[str, Any], str]:
-        """Prepare scene context with stable hashing for caching."""
-
-        scene_context = dict(context or {})
-        scene_context.setdefault('user_id', self.user_id)
-        scene_context.setdefault('conversation_id', self.conversation_id)
-
-        if target_npcs and 'participants' not in scene_context:
-            scene_context['participants'] = target_npcs
-
-        scene_hash = scene_context.get('scene_hash') or scene_context.get('hash')
-        if not scene_hash:
-            serializable_context = {
-                key: scene_context[key]
-                for key in sorted(scene_context.keys())
-                if not isinstance(scene_context[key], (set, tuple))
-            }
-            serializable_context.update({
-                key: list(scene_context[key])
-                for key in scene_context
-                if isinstance(scene_context[key], (set, tuple))
-            })
-            serialized = json.dumps(serializable_context, sort_keys=True, default=str)
-            scene_hash = hashlib.sha256(serialized.encode()).hexdigest()[:16]
-
-        scene_context['scene_hash'] = scene_hash
-        return scene_context, scene_hash
-
-    def _serialize_gossip_item(self, gossip: GossipItem) -> Dict[str, Any]:
-        """Convert a GossipItem into a JSON-serializable dict."""
-
         return {
-            'gossip_id': gossip.gossip_id,
-            'gossip_type': gossip.gossip_type.value,
-            'content': gossip.content,
-            'about': gossip.about,
-            'spreaders': list(gossip.spreaders),
-            'believers': list(gossip.believers),
-            'deniers': list(gossip.deniers),
-            'spread_rate': gossip.spread_rate,
-            'truthfulness': gossip.truthfulness,
-            'impact': gossip.impact,
+            'gossip_id': gossip_item.gossip_id,
+            'gossip_type': gossip_item.gossip_type.value,
+            'content': gossip_item.content,
+            'about': gossip_item.about,
+            'spreaders': list(gossip_item.spreaders),
+            'believers': list(gossip_item.believers),
+            'deniers': list(gossip_item.deniers),
+            'spread_rate': gossip_item.spread_rate,
+            'truthfulness': gossip_item.truthfulness,
+            'impact': gossip_item.impact,
         }
-
-    def _deserialize_gossip_dict(
-        self,
-        cached: Dict[str, Any],
-        fallback_targets: List[int],
-    ) -> GossipItem:
-        """Rebuild a GossipItem from cached JSON data."""
-
-        gossip_type_value = str(cached.get('gossip_type', 'rumor')).upper()
-        gossip_type = GossipType.RUMOR
-        try:
-            gossip_type = GossipType[gossip_type_value]
-        except KeyError:
-            logger.debug("Unknown cached gossip type '%s'", gossip_type_value)
-
-        return GossipItem(
-            gossip_id=int(cached.get('gossip_id') or 0),
-            gossip_type=gossip_type,
-            content=str(cached.get('content', 'People are whispering...')),
-            about=cached.get('about') or fallback_targets,
-            spreaders=set(cached.get('spreaders', []) or []),
-            believers=set(cached.get('believers', []) or []),
-            deniers=set(cached.get('deniers', []) or []),
-            spread_rate=float(cached.get('spread_rate', 0.5) or 0.5),
-            truthfulness=float(cached.get('truthfulness', 0.5) or 0.5),
-            impact=cached.get('impact', {}),
-        )
 
     async def _run_gossip_llm(
         self,
@@ -1102,41 +1007,6 @@ class SocialCircleManager:
             logger.warning(f"Failed to process gossip spread: {e}")
             return {'new_believers': [], 'new_deniers': [], 'new_spreaders': [], 'reactions': {}}
     
-    async def calculate_reputation(
-        self,
-        target_id: int,
-        social_circle: Optional[SocialCircle] = None
-    ) -> Dict[ReputationType, float]:
-        """Queue reputation calculation and return cached or neutral values."""
-
-        from logic.conflict_system.social_circle_hotpath import (
-            get_cached_reputation,
-            queue_reputation_calculation,
-        )
-
-        queue_reputation_calculation(
-            self.user_id,
-            self.conversation_id,
-            target_id,
-            scene_context={'target_id': target_id, 'social_circle': social_circle.name if social_circle else None},
-        )
-
-        cached = await get_cached_reputation(target_id)
-        if cached:
-            reputation: Dict[ReputationType, float] = {}
-            for key, value in cached.items():
-                try:
-                    rep_key = ReputationType[key.upper()]
-                except KeyError:
-                    continue
-                reputation[rep_key] = float(value)
-
-            if reputation:
-                self._reputation_cache[target_id] = reputation
-                return reputation
-
-        return {rep_type: 0.3 for rep_type in ReputationType}
-
     async def calculate_reputation_background(
         self,
         target_id: int,
