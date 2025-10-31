@@ -20,6 +20,23 @@ from db.connection import get_db_connection_context
 logger = logging.getLogger(__name__)
 
 
+def _flow_init_cache_key(conflict_id: int) -> str:
+    return cache_key("conflict", conflict_id, "flow_init")
+
+
+def _event_analysis_cache_key(conflict_id: int, event_id: Optional[str]) -> str:
+    suffix = event_id or "latest"
+    return cache_key("conflict", conflict_id, "event", suffix)
+
+
+def _transition_cache_key(conflict_id: int) -> str:
+    return cache_key("conflict", conflict_id, "transition_narrative")
+
+
+def _beat_cache_key(conflict_id: int, beat_id: str) -> str:
+    return cache_key("conflict", conflict_id, "beat", beat_id)
+
+
 def apply_event_math(conflict: Any, event: Dict[str, Any]) -> None:
     """Apply numeric updates to conflict state (pure math, no LLM).
 
@@ -42,9 +59,14 @@ def apply_event_math(conflict: Any, event: Dict[str, Any]) -> None:
 
 def queue_phase_narration(
     conflict_id: int,
-    from_phase: str,
+    from_phase: Optional[str],
     to_phase: str,
-    context: Optional[Dict[str, Any]] = None
+    context: Optional[Dict[str, Any]] = None,
+    *,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
+    intensity: Optional[float] = None,
+    momentum: Optional[float] = None,
 ) -> None:
     """Queue background task to generate phase transition narration.
 
@@ -63,6 +85,10 @@ def queue_phase_narration(
             "to_phase": to_phase,
             "context": context or {},
             "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "intensity": intensity,
+            "momentum": momentum,
         }
 
         narrate_phase_transition.delay(payload)
@@ -83,13 +109,22 @@ def get_cached_transition_text(conflict_id: int) -> Optional[str]:
     Returns:
         Cached narrative text or None
     """
-    key = cache_key("conflict", conflict_id, "transition_narrative")
+    key = _transition_cache_key(conflict_id)
     cached = get_json(key)
 
     if cached:
         logger.debug(f"Cache hit for transition narrative: conflict={conflict_id}")
-        return cached.get("text")
+        return cached.get("text") or cached.get("prose")
 
+    return None
+
+
+def get_cached_transition_payload(conflict_id: int) -> Optional[Dict[str, Any]]:
+    """Return the cached transition payload if present."""
+
+    cached = get_json(_transition_cache_key(conflict_id))
+    if cached:
+        return cached
     return None
 
 
@@ -133,14 +168,137 @@ def get_cached_beat_text(conflict_id: int, beat_id: str) -> Optional[str]:
     Returns:
         Cached beat text or None
     """
-    key = cache_key("conflict", conflict_id, "beat", beat_id)
+    key = _beat_cache_key(conflict_id, beat_id)
     cached = get_json(key)
 
     if cached:
         logger.debug(f"Cache hit for beat: conflict={conflict_id}, beat={beat_id}")
-        return cached.get("text")
+        return cached.get("text") or cached.get("prose")
 
     return None
+
+
+def get_cached_beat_payload(conflict_id: int, beat_id: str) -> Optional[Dict[str, Any]]:
+    """Get cached beat payload (metadata + prose)."""
+
+    cached = get_json(_beat_cache_key(conflict_id, beat_id))
+    if cached:
+        return cached
+    return None
+
+
+def queue_flow_initialization(
+    conflict_id: int,
+    user_id: int,
+    conversation_id: int,
+    conflict_type: str,
+    context: Dict[str, Any],
+    *,
+    cache_ttl: int = 3600,
+) -> None:
+    """Queue background initialization for conflict flow."""
+
+    try:
+        from nyx.tasks.background.flow_tasks import initialize_conflict_flow  # type: ignore
+
+        payload = {
+            "conflict_id": conflict_id,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "conflict_type": conflict_type,
+            "context": context,
+            "ttl": cache_ttl,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        initialize_conflict_flow.delay(payload)
+        logger.debug("Queued conflict flow initialization for %s", conflict_id)
+    except Exception as exc:
+        logger.warning("Failed to queue flow initialization for %s: %s", conflict_id, exc)
+
+
+def get_cached_flow_bootstrap(conflict_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve cached flow bootstrap result if present."""
+
+    cached = get_json(_flow_init_cache_key(conflict_id))
+    if cached:
+        return cached
+    return None
+
+
+def queue_flow_event_analysis(
+    conflict_id: int,
+    user_id: int,
+    conversation_id: int,
+    event: Dict[str, Any],
+    flow_state: Dict[str, Any],
+    *,
+    cache_ttl: int = 900,
+) -> None:
+    """Queue background flow event analysis."""
+
+    try:
+        from nyx.tasks.background.flow_tasks import analyze_flow_event  # type: ignore
+
+        payload = {
+            "conflict_id": conflict_id,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "event": event,
+            "flow_state": flow_state,
+            "ttl": cache_ttl,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        analyze_flow_event.delay(payload)
+        logger.debug(
+            "Queued flow event analysis: conflict=%s event=%s",
+            conflict_id,
+            event.get("event_id") or event.get("type") or "unknown",
+        )
+    except Exception as exc:
+        logger.warning("Failed to queue flow event analysis for %s: %s", conflict_id, exc)
+
+
+def get_cached_event_analysis(
+    conflict_id: int,
+    event_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Retrieve cached flow event analysis."""
+
+    cached = get_json(_event_analysis_cache_key(conflict_id, event_id))
+    if cached:
+        return cached
+    return None
+
+
+def queue_dramatic_beat_generation(
+    conflict_id: int,
+    user_id: int,
+    conversation_id: int,
+    beat_id: str,
+    flow_state: Dict[str, Any],
+    context: Dict[str, Any],
+    *,
+    cache_ttl: int = 1800,
+) -> None:
+    """Queue background beat generation."""
+
+    try:
+        from nyx.tasks.background.flow_tasks import generate_dramatic_beat  # type: ignore
+
+        payload = {
+            "conflict_id": conflict_id,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "beat_id": beat_id,
+            "flow_state": flow_state,
+            "context": context,
+            "ttl": cache_ttl,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        generate_dramatic_beat.delay(payload)
+        logger.debug("Queued dramatic beat generation: conflict=%s beat=%s", conflict_id, beat_id)
+    except Exception as exc:
+        logger.warning("Failed to queue dramatic beat for %s: %s", conflict_id, exc)
 
 
 async def get_flow_state(conflict_id: int) -> Dict[str, Any]:
