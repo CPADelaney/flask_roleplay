@@ -8,11 +8,14 @@ import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
+from infra.cache import cache_key
 from nyx.tasks.base import NyxTask, app
 
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
 from logic.conflict_system.conflict_synthesizer_hotpath import (
     compute_scene_hash,
+    get_scene_route_versions,
+    scene_route_key_suffix,
     store_scene_route,
 )
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
@@ -37,10 +40,31 @@ def _idempotency_key(payload: Dict[str, Any]) -> str:
 
 
 def _routing_key(payload: Dict[str, Any]) -> str:
-    return "conflict-route:{conversation_id}:{scene_hash}".format(
-        conversation_id=payload.get("conversation_id"),
-        scene_hash=payload.get("scene_hash"),
+    conversation_id = payload.get("conversation_id")
+    user_id = payload.get("user_id")
+    scene_hash = payload.get("scene_hash") or ""
+    scene_context = payload.get("scene_context")
+    if not isinstance(scene_context, dict):
+        scene_context = {}
+
+    ids = (
+        _coerce_ids(str(user_id), str(conversation_id))
+        if user_id is not None and conversation_id is not None
+        else None
     )
+    versions: Dict[str, int] = {}
+    conversation_part = str(conversation_id)
+    if ids:
+        versions = get_scene_route_versions(
+            ids[0],
+            ids[1],
+            scene_context=scene_context,
+            versions=payload.get("versions"),
+        )
+        conversation_part = str(ids[1])
+
+    suffix = scene_route_key_suffix(versions)
+    return cache_key("conflict-route", conversation_part, scene_hash, *suffix)
 
 
 def _run_coro(coro):
@@ -210,15 +234,28 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     ]
 
     cache_ttl = int(payload.get("ttl") or getattr(synthesizer, "_cache_ttl", _ROUTE_CACHE_TTL))
+    versions = get_scene_route_versions(
+        ids[0],
+        ids[1],
+        scene_context=scene_context,
+        versions=payload.get("versions"),
+    )
     store_scene_route(
         user_id=ids[0],
         conversation_id=ids[1],
         scene_hash=scene_hash,
         subsystem_names=valid_names,
         cache_ttl=cache_ttl,
+        scene_context=scene_context,
+        versions=versions,
     )
 
-    return {"status": "cached", "scene_hash": scene_hash, "subsystems": valid_names}
+    return {
+        "status": "cached",
+        "scene_hash": scene_hash,
+        "subsystems": valid_names,
+        "versions": versions,
+    }
 
 
 __all__ = ["process_events", "route_subsystems"]
