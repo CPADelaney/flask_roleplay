@@ -35,6 +35,7 @@ from agents import Agent, function_tool
 import nyx.gateway.llm_gateway as llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
 from agents.run_context import RunContextWrapper
+from nyx.conflict import request_conflict_resolution
 
 from db.connection import get_db_connection_context, is_shutting_down
 import functools
@@ -2923,7 +2924,13 @@ async def process_day_end_conflicts(user_id: int, conversation_id: int) -> Dict[
             result["phase_changes"] += 1
 
         if updated_conflict["progress"] >= 100 and updated_conflict["phase"] == "resolution":
-            await conflict_system.resolve_conflict(c["conflict_id"])
+            await request_conflict_resolution(
+                user_id,
+                conversation_id,
+                c["conflict_id"],
+                "auto_day_end",
+                {"reason": "day_end_resolution"},
+            )
             result["conflicts_resolved"] += 1
 
     vitals_result = await conflict_system.update_player_vitals("sleep")

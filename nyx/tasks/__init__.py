@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover
 
 for _module in (
     "world_tasks",
+    "conflict_pipeline",
     "conflict_tasks",
     "conflict_template_tasks",
     "npc_tasks",

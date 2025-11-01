@@ -26,6 +26,7 @@ from agents import function_tool, RunContextWrapper, Agent, Runner, trace
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
+from nyx.conflict import request_conflict_resolution
 
 from db.connection import get_db_connection_context
 
@@ -604,10 +605,14 @@ class EventSystem:
                     return {"error": "No conflict_id provided for resolution"}
                 resolution_type = data.get("resolution_type", "natural")
                 context = data.get("context", {})
-                result = await self.conflict_synthesizer.resolve_conflict(
-                    conflict_id, resolution_type, context
+                result = await request_conflict_resolution(
+                    self.user_id,
+                    self.conversation_id,
+                    conflict_id,
+                    resolution_type,
+                    context,
                 )
-                return {"resolved": True, "resolution": result}
+                return {"resolved": False, "queued": result.get("queued", True), "resolution": result}
                 
             elif "process_scene" in data:
                 # Process a scene through conflicts
@@ -689,24 +694,19 @@ class EventSystem:
                 "trigger_event": event.get("id")
             }
             
-            result = await self.conflict_synthesizer.resolve_conflict(
-                conflict_id, resolution_type, context
+            result = await request_conflict_resolution(
+                self.user_id,
+                self.conversation_id,
+                conflict_id,
+                resolution_type,
+                context,
             )
-            
-            # Create follow-up events for consequences
-            if result.get("new_conflicts_created"):
-                for new_conflict_id in result["new_conflicts_created"]:
-                    await self.create_event(
-                        event_type="conflict_escalation",
-                        event_data={
-                            "parent_conflict": conflict_id,
-                            "new_conflict": new_conflict_id,
-                            "reason": "resolution_consequence"
-                        },
-                        priority=5
-                    )
-            
-            return result
+
+            return {
+                "queued": result.get("queued", True),
+                "conflict_id": result.get("conflict_id", str(conflict_id)),
+                "pipeline_status": result.get("pipeline_status"),
+            }
             
         except Exception as e:
             logger.error(f"Error handling conflict resolution: {e}", exc_info=True)
