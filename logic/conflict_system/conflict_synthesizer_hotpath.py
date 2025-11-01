@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Set
 
 from infra.cache import cache_key, get_json, redis_lock, set_json
 from monitoring.metrics import metrics
+from nyx.telemetry.metrics import CACHE_HIT, CACHE_MISS
 from nyx.common.outbox import DuplicateEventError, append_event, get_session_factory
 from nyx.conversation.version_registry import version_registry
 from sqlalchemy.orm import sessionmaker
@@ -331,10 +332,12 @@ def route_scene_subsystems(
 
     if isinstance(names, list):
         metrics().CACHE_HIT_COUNT.labels(cache_type=_CACHE_TYPE).inc()
+        CACHE_HIT.labels(section="conflict_scene_route").inc()
         metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
         return _deserialize_subsystems(names)
 
     metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
+    CACHE_MISS.labels(section="conflict_scene_route").inc()
 
     if orchestrator_available:
         _queue_background_route(

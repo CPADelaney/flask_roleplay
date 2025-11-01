@@ -57,6 +57,12 @@ from nyx.core.side_effects import (
     group_side_effects,
 )
 from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
+from nyx.telemetry.metrics import (
+    TASK_FAILURES,
+    TTFB_SECONDS,
+    record_queue_delay_from_context,
+)
+from nyx.telemetry.tracing import trace_step
 
 try:
     import openai
@@ -847,19 +853,17 @@ class NyxAgentSDK:
                 self._write_cache(cache_key, resp)
                 return resp
 
-            except Exception as e:
-                logger.error(f"[SDK-{trace_id}] Process failed", exc_info=True)
-                return NyxResponse(
-                    narrative=f"System error: {e}",
-                    metadata={"error": "sdk_process_failure", "details": str(e)},
-                    success=False,
-                    trace_id=trace_id,
-                    processing_time=time.time() - t0,
-                    error=str(e),
-                )
-            finally:
-                if lock and lock.locked():
-                    lock.release()
+        except Exception as e:
+            logger.error(f"[SDK-{trace_id}] Process failed", exc_info=True)
+            TASK_FAILURES.labels(task="nyx_sdk", reason=type(e).__name__).inc()
+            return NyxResponse(
+                narrative=f"System error: {e}",
+                metadata={"error": "sdk_process_failure", "details": str(e)},
+                success=False,
+                trace_id=trace_id,
+                processing_time=time.time() - t0,
+                error=str(e),
+            )
         finally:
             if lock and lock.locked():
                 lock.release()
@@ -882,6 +886,8 @@ class NyxAgentSDK:
         yield {"type": "start", "conversation_id": conversation_id, "user_id": user_id}
 
         resp = await self.process_user_input(message, conversation_id, user_id, metadata)
+        first_chunk_delay = time.time() - t0
+        TTFB_SECONDS.labels(channel="sdk_stream").observe(first_chunk_delay)
         text = resp.narrative or ""
         chunk = max(64, self.config.streaming_chunk_size)
 
@@ -917,13 +923,21 @@ class NyxAgentSDK:
             deadline = meta.get("_deadline") or (time.monotonic() + float(self.config.request_timeout_seconds))
         def _left() -> float:
             return max(float(getattr(self.config, "min_step_seconds", 0.25)), deadline - time.monotonic())
+        record_queue_delay_from_context(meta, queue="sdk")
         try:
-            return await _orchestrator_process(
-                user_id=int(user_id),
-                conversation_id=int(conversation_id),
-                user_input=message,
-                context_data=meta,
-            )
+            with trace_step(
+                "nyx_sdk.orchestrator_call",
+                meta.get("trace_id"),
+                conversation_id=str(conversation_id),
+                user_id=str(user_id),
+                attempt="primary",
+            ):
+                return await _orchestrator_process(
+                    user_id=int(user_id),
+                    conversation_id=int(conversation_id),
+                    user_input=message,
+                    context_data=meta,
+                )
         except Exception as first_error:
             logger.warning("orchestrator call failed: %s", first_error)
             if not self.config.retry_on_failure:
@@ -934,12 +948,19 @@ class NyxAgentSDK:
                 raise
             await asyncio.sleep(delay)
             logger.info("retrying orchestrator once…")
-            return await _orchestrator_process(
-                user_id=int(user_id),
-                conversation_id=int(conversation_id),
-                user_input=message,
-                context_data=meta,
-            )
+            with trace_step(
+                "nyx_sdk.orchestrator_call",
+                meta.get("trace_id"),
+                conversation_id=str(conversation_id),
+                user_id=str(user_id),
+                attempt="retry",
+            ):
+                return await _orchestrator_process(
+                    user_id=int(user_id),
+                    conversation_id=int(conversation_id),
+                    user_input=message,
+                    context_data=meta,
+                )
 
     async def _fallback_direct_run(
         self,

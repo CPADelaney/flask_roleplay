@@ -19,6 +19,7 @@ Exit codes:
     2: Script error
 """
 
+import ast
 import io
 import os
 import sys
@@ -28,6 +29,7 @@ from typing import List, Tuple
 
 # Description used when reporting Runner.run violations
 RUNNER_PATTERN_NAME = "Runner.run call"
+FORBIDDEN_SNIPPET = "Runner.run("
 
 # Allowed path prefixes (relative to repo root) where Runner.run() is legitimate
 ALLOWED_PREFIXES = (
@@ -40,6 +42,64 @@ ALLOWED_PREFIXES = (
 def is_allowed_path(rel_path: Path) -> bool:
     """Return True if the file is inside an allowed prefix."""
     return any(rel_path.parts[:len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES)
+
+
+def _collect_docstring_violations(source: str, lines: List[str]) -> List[Tuple[int, str, str]]:
+    """Return violations for docstrings containing the forbidden snippet."""
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    violations: List[Tuple[int, str, str]] = []
+
+    def _check_node(node: ast.AST, kind: str) -> None:
+        doc_node = None
+        if isinstance(node, ast.Module):
+            if node.body and isinstance(node.body[0], ast.Expr):
+                doc_node = node.body[0]
+        elif node.body and isinstance(node.body[0], ast.Expr):  # type: ignore[attr-defined]
+            doc_node = node.body[0]
+        if (
+            isinstance(doc_node, ast.Expr)
+            and isinstance(doc_node.value, ast.Constant)
+            and isinstance(doc_node.value.value, str)
+        ):
+            if FORBIDDEN_SNIPPET in doc_node.value.value:
+                lineno = getattr(doc_node.value, "lineno", doc_node.lineno)
+                snippet = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else doc_node.value.value
+                violations.append((lineno, kind, snippet))
+
+    _check_node(tree, "Runner.run mention in module docstring")
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _check_node(node, "Runner.run mention in docstring")
+
+    return violations
+
+
+def _collect_fstring_violations(source: str, lines: List[str]) -> List[Tuple[int, str, str]]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    violations: List[Tuple[int, str, str]] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            literal_parts = [
+                value.value
+                for value in node.values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            ]
+            if literal_parts and FORBIDDEN_SNIPPET in "".join(literal_parts):
+                lineno = getattr(node, "lineno", 1)
+                snippet = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else "Runner.run f-string"
+                violations.append((lineno, "Runner.run mention in f-string", snippet))
+
+    return violations
 
 
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
@@ -92,6 +152,9 @@ def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
                         index = lookahead  # Skip ahead to avoid duplicate reports on same call
                         continue
         index += 1
+
+    violations.extend(_collect_docstring_violations(source, lines))
+    violations.extend(_collect_fstring_violations(source, lines))
 
     return violations
 

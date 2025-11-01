@@ -17,7 +17,10 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from enum import Enum
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
+
+from nyx.telemetry.metrics import LLM_TOKENS_IN, LLM_TOKENS_OUT, REQUEST_LATENCY
+from nyx.telemetry.tracing import trace_step
 
 logger = logging.getLogger(__name__)
 
@@ -237,10 +240,33 @@ async def _run_once(
     attempt: int,
     use_fallback: bool,
 ) -> LLMResult:
+    def _safe_int(value: Any) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _lookup_usage(container: Any, *keys: str) -> Optional[int]:
+        if container is None:
+            return None
+        for key in keys:
+            candidate = None
+            if isinstance(container, Mapping) and key in container:
+                candidate = container.get(key)
+            elif hasattr(container, key):
+                candidate = getattr(container, key)
+            if candidate is not None:
+                parsed = _safe_int(candidate)
+                if parsed is not None:
+                    return parsed
+        return None
+
     start = time.perf_counter()
     runner_kwargs = dict(request.runner_kwargs or {})
     context = request.context
     metadata = dict(request.metadata or {})
+    operation = str(metadata.get("operation") or "unknown")
+    trace_id = metadata.get("trace_id")
 
     log_payload = {
         "agent": getattr(agent, "name", str(agent)),
@@ -250,16 +276,39 @@ async def _run_once(
     }
     logger.info("nyx.gateway.llm.execute.start", extra=log_payload)
 
-    raw_result = await runner_cls.run(
-        agent,
-        request.prompt,
-        context=context,
-        **runner_kwargs,
-    )
+    with trace_step(
+        "nyx.gateway.llm.run",
+        trace_id,
+        agent=getattr(agent, "name", str(agent)),
+        attempt=attempt,
+        fallback=use_fallback,
+        operation=operation,
+    ):
+        raw_result = await runner_cls.run(
+            agent,
+            request.prompt,
+            context=context,
+            **runner_kwargs,
+        )
 
     duration = time.perf_counter() - start
+    REQUEST_LATENCY.labels(component="llm_gateway").observe(duration)
+
     payload_metadata = {**metadata, **_extract_metadata(raw_result)}
     text = _extract_text(raw_result)
+
+    usage_source = getattr(raw_result, "usage", None)
+    if usage_source is None and isinstance(raw_result, Mapping):
+        usage_source = raw_result.get("usage")
+    if usage_source is None:
+        usage_source = metadata.get("usage")
+    prompt_tokens = _lookup_usage(usage_source, "prompt_tokens", "input_tokens")
+    completion_tokens = _lookup_usage(usage_source, "completion_tokens", "output_tokens")
+    if prompt_tokens is not None:
+        LLM_TOKENS_IN.labels(operation=operation).inc(prompt_tokens)
+    if completion_tokens is not None:
+        LLM_TOKENS_OUT.labels(operation=operation).inc(completion_tokens)
+
     result = LLMResult(
         text=text,
         raw=raw_result,

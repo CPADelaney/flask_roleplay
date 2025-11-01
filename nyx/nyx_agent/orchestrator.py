@@ -22,6 +22,12 @@ from nyx.nyx_agent.feasibility import (
 )
 
 from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
+from nyx.telemetry.metrics import (
+    REQUEST_LATENCY,
+    TASK_FAILURES,
+    record_queue_delay_from_context,
+)
+from nyx.telemetry.tracing import trace_step
 from .config import Config
 
 if TYPE_CHECKING:
@@ -237,14 +243,15 @@ async def _log_step(name: str, trace_id: str, **meta):
     """Async context manager for logging step execution"""
     t0 = time.time()
     logger.debug(f"[{trace_id}] ▶ START {name} meta={_js(meta)}")
-    try:
-        yield
-        dt = time.time() - t0
-        logger.info(f"[{trace_id}] ✔ DONE  {name} in {dt:.3f}s")
-    except Exception:
-        dt = time.time() - t0
-        logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
-        raise
+    with trace_step(f"nyx.orchestrator.{name}", trace_id, **meta):
+        try:
+            yield
+            dt = time.time() - t0
+            logger.info(f"[{trace_id}] ✔ DONE  {name} in {dt:.3f}s")
+        except Exception:
+            dt = time.time() - t0
+            logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
+            raise
 
 
 # ===== Error Handling =====
@@ -374,6 +381,10 @@ async def process_user_input(
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     monotonic = time.monotonic
+    request_started = time.perf_counter()
+    success = True
+    failure_reason: Optional[str] = None
+    record_queue_delay_from_context(context_data, queue="orchestrator")
     # Adopt a single absolute deadline from the SDK or create a reasonable one
     deadline = None
     if isinstance(context_data, dict):
@@ -682,9 +693,13 @@ async def process_user_input(
             return out
 
     except asyncio.CancelledError:
+        success = False
+        failure_reason = "cancelled"
         logger.info(f"[{trace_id}] ========== PROCESS CANCELLED ==========")
         raise
     except Exception as e:
+        success = False
+        failure_reason = type(e).__name__
         logger.error(f"[{trace_id}] ========== PROCESS FAILED ==========", exc_info=True)
         return {
             'success': False,
@@ -693,6 +708,11 @@ async def process_user_input(
             'trace_id': trace_id,
             'processing_time': time.time() - start_time,
         }
+    finally:
+        duration = time.perf_counter() - request_started
+        REQUEST_LATENCY.labels(component="orchestrator").observe(duration)
+        if not success:
+            TASK_FAILURES.labels(task="nyx_orchestrator", reason=failure_reason or "unknown").inc()
 
 # ===== State Management =====
 async def _save_context_state(ctx: NyxContext):
