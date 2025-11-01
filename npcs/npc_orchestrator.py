@@ -25,6 +25,7 @@ from npcs.npc_perception import EnvironmentPerception, PerceptionContext
 from npcs.npc_learning_adaptation import NPCLearningManager
 
 from nyx.scene_keys import generate_scene_cache_key
+from lore.version_registry import with_lore_version_suffix
 
 from npcs.npc_handler import NPCHandler, NPCInteractionProposal
 
@@ -406,7 +407,7 @@ class NPCOrchestrator:
     # ==================== SCENE BUNDLE METHODS ====================
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
         start_time = time.time()
-        scene_key = generate_scene_cache_key(scope)
+        scene_key = with_lore_version_suffix(generate_scene_cache_key(scope))
         cache_key = f"{scene_key}{NPCS_SECTION_SUFFIX}"
     
         # Fast path: serve from cache if fresh
