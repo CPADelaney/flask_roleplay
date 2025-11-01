@@ -14,15 +14,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from nyx.conflict.fsm import Status, transition
 from nyx.conflict.models import ConflictResolution, get_session_factory as get_conflict_session_factory
+from nyx.common.events import ConflictResolved, publish as publish_event
+from nyx.common.outbox import get_session_factory as get_outbox_session_factory
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
-from nyx.tasks.base import NyxTask, app
+from nyx.tasks.base import NyxTask, app, current_trace_id
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
 
 logger = logging.getLogger(__name__)
 
 _SESSION_FACTORY: sessionmaker | None = None
+_OUTBOX_SESSION_FACTORY: sessionmaker | None = None
 
 
 def _get_session_factory() -> sessionmaker:
@@ -31,6 +34,31 @@ def _get_session_factory() -> sessionmaker:
         return _SESSION_FACTORY
     _SESSION_FACTORY = get_conflict_session_factory()
     return _SESSION_FACTORY
+
+
+def _get_outbox_session_factory() -> sessionmaker:
+    global _OUTBOX_SESSION_FACTORY
+    if _OUTBOX_SESSION_FACTORY is not None:
+        return _OUTBOX_SESSION_FACTORY
+    _OUTBOX_SESSION_FACTORY = get_outbox_session_factory()
+    return _OUTBOX_SESSION_FACTORY
+
+
+def _publish_conflict_resolved(conflict_id: uuid.UUID, outcome: Dict[str, Any], trace_id: str | None) -> None:
+    factory = _get_outbox_session_factory()
+    session = factory()
+    try:
+        with session.begin():
+            publish_event(
+                session,
+                ConflictResolved(conflict_id=conflict_id, outcome=dict(outcome), trace_id=trace_id),
+            )
+    except Exception:  # pragma: no cover - logging side effect
+        logger.exception(
+            "Failed to publish ConflictResolved event", extra={"conflict_id": str(conflict_id)}
+        )
+    finally:
+        session.close()
 
 
 def _parse_conflict_id(payload: Dict[str, Any]) -> uuid.UUID:
@@ -404,6 +432,8 @@ def integrate_canon(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     session_factory = _get_session_factory()
     session = session_factory()
+    event_payload: Dict[str, Any] = {}
+    should_publish_event = False
 
     try:
         with session.begin():
@@ -425,10 +455,16 @@ def integrate_canon(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                     row = transition(session, row, Status.FAILED, eval_notes=f"integration_error: {exc}")
                 else:
                     row = transition(session, row, Status.INTEGRATED, integrated_changes=changes)
+                    event_payload = dict(row.integrated_changes or changes or {})
+                    should_publish_event = True
 
             result = _serialize_resolution(row)
     finally:
         session.close()
+
+    if should_publish_event:
+        trace_identifier = payload.get("trace_id") or current_trace_id()
+        _publish_conflict_resolved(conflict_id, event_payload, trace_identifier)
 
     return result
 
