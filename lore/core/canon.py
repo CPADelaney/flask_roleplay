@@ -37,7 +37,7 @@ from .validation import CanonValidationAgent
 
 from typing import List, Dict, Any, Union, Optional
 from datetime import datetime, timedelta
-import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
 
 from memory.memory_orchestrator import get_memory_orchestrator, EntityType

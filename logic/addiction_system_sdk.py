@@ -50,7 +50,7 @@ from lore.core.lore_system import LoreSystem
 
 # Nyx governance integration
 # Moved imports to function level to avoid circular imports
-import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
 
 from nyx.nyx_governance import (
