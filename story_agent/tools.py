@@ -18,7 +18,8 @@ from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
 # Agent SDK imports
-from agents import Agent, function_tool, FunctionTool, RunContextWrapper, Runner, ModelSettings
+from agents import Agent, function_tool, FunctionTool, RunContextWrapper, ModelSettings
+from nyx.gateway import llm_gateway
 
 from story_agent.world_simulation_models import PowerDynamicType
 
@@ -665,23 +666,35 @@ async def generate_daily_life_scene(
             "content": f"Generate a scene for {world_context.current_phase.value}"
         }]
         
-        result = await Runner.run(
-            DailyLifeDirector,
-            messages=messages,
-            calls=[{
-                "name": "generate_daily_scene",
-                "kwargs": {
-                    "time_phase": world_context.current_phase.value,
-                    "location": world_context.location.value,
-                    "participating_npcs": json.dumps(npc_data),
-                    "recent_context": json.dumps(world_context.recent_activities),
-                    "player_vitals": json.dumps(vitals.to_dict())
-                }
-            }]
+        request = llm_gateway.LLMRequest(
+            prompt=messages[0]["content"],
+            agent=DailyLifeDirector,
+            metadata={
+                "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                "stage": "daily_life_scene",
+            },
+            runner_kwargs={
+                "messages": messages,
+                "calls": [{
+                    "name": "generate_daily_scene",
+                    "kwargs": {
+                        "time_phase": world_context.current_phase.value,
+                        "location": world_context.location.value,
+                        "participating_npcs": json.dumps(npc_data),
+                        "recent_context": json.dumps(world_context.recent_activities),
+                        "player_vitals": json.dumps(vitals.to_dict()),
+                    },
+                }],
+            },
         )
-        
-        # Parse agent output
-        scene_data = json.loads(result.output) if result.output else {}
+
+        result_wrapper = await llm_gateway.execute(request)
+        raw_result = result_wrapper.raw
+
+        output_payload = getattr(raw_result, "output", None)
+        if not output_payload and result_wrapper.text:
+            output_payload = result_wrapper.text
+        scene_data = json.loads(output_payload) if output_payload else {}
         
         # Create scene ID based on game time (sanitized) - FIXED VERSION
         game_time = await get_current_time(context.user_id, context.conversation_id)
@@ -797,28 +810,41 @@ async def generate_organic_power_moment(
             "content": "Identify a natural power dynamic opportunity"
         }]
         
-        result = await Runner.run(
-            PowerDynamicsOrchestrator,
-            messages=messages,
-            calls=[{
-                "name": "identify_power_moment",
-                "kwargs": {
-                    "scene_context": json.dumps({
-                        "phase": world_context.current_phase.value,
-                        "location": world_context.location.value,
-                        "mood": world_context.overall_mood.value
-                    }),
-                    "npc_stage": stage.name,
-                    "recent_interactions": json.dumps(world_context.recent_activities),
-                    "player_state": json.dumps(player_state)
-                }
-            }]
+        request = llm_gateway.LLMRequest(
+            prompt=messages[0]["content"],
+            agent=PowerDynamicsOrchestrator,
+            metadata={
+                "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                "stage": "power_dynamic_moment",
+            },
+            runner_kwargs={
+                "messages": messages,
+                "calls": [{
+                    "name": "identify_power_moment",
+                    "kwargs": {
+                        "scene_context": json.dumps({
+                            "phase": world_context.current_phase.value,
+                            "location": world_context.location.value,
+                            "mood": world_context.overall_mood.value,
+                        }),
+                        "npc_stage": stage.name,
+                        "recent_interactions": json.dumps(world_context.recent_activities),
+                        "player_state": json.dumps(player_state),
+                    },
+                }],
+            },
         )
-        
-        if not result.output:
+
+        result_wrapper = await llm_gateway.execute(request)
+        raw_result = result_wrapper.raw
+
+        output_payload = getattr(raw_result, "output", None)
+        if not output_payload and result_wrapper.text:
+            output_payload = result_wrapper.text
+        if not output_payload:
             return None
 
-        moment_data = PowerMomentData(**json.loads(result.output))
+        moment_data = PowerMomentData(**json.loads(output_payload))
 
         # Generate player choices
         choices = await generate_player_choices_for_moment(
@@ -889,28 +915,41 @@ async def generate_contextual_interaction(
             "content": f"Create dialogue for {world_context.current_phase.value}"
         }]
         
-        result = await Runner.run(
-            AmbientDialogueWriter,
-            messages=messages,
-            calls=[{
-                "name": "create_ambient_dialogue",
-                "kwargs": {
-                    "npc_data": json.dumps(npc_info),
-                    "context": json.dumps({
-                        "phase": world_context.current_phase.value,
-                        "location": world_context.location.value,
-                        "recent_activities": world_context.recent_activities
-                    }),
-                    "relationship_state": json.dumps(relationship_data),
-                    "power_dynamic": power_dynamic
-                }
-            }]
+        request = llm_gateway.LLMRequest(
+            prompt=messages[0]["content"],
+            agent=AmbientDialogueWriter,
+            metadata={
+                "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                "stage": "ambient_dialogue",
+            },
+            runner_kwargs={
+                "messages": messages,
+                "calls": [{
+                    "name": "create_ambient_dialogue",
+                    "kwargs": {
+                        "npc_data": json.dumps(npc_info),
+                        "context": json.dumps({
+                            "phase": world_context.current_phase.value,
+                            "location": world_context.location.value,
+                            "recent_activities": world_context.recent_activities,
+                        }),
+                        "relationship_state": json.dumps(relationship_data),
+                        "power_dynamic": power_dynamic,
+                    },
+                }],
+            },
         )
-        
-        if not result.output:
+
+        result_wrapper = await llm_gateway.execute(request)
+        raw_result = result_wrapper.raw
+
+        output_payload = getattr(raw_result, "output", None)
+        if not output_payload and result_wrapper.text:
+            output_payload = result_wrapper.text
+        if not output_payload:
             return None
-        
-        dialogue_data = json.loads(result.output)
+
+        dialogue_data = json.loads(output_payload)
         
         # Determine intensity based on context
         intensity = InteractionIntensity.CASUAL
@@ -979,26 +1018,39 @@ async def generate_player_choices_for_moment(
             "content": "Generate player choices for this situation"
         }]
         
-        result = await Runner.run(
-            PlayerAgencyManager,
-            messages=messages,
-            calls=[{
-                "name": "generate_player_agency",
-                "kwargs": {
-                    "current_situation": moment_data.model_dump_json(),
-                    "power_dynamic": moment_data.approach or "subtle",
-                    "relationship_context": json.dumps({
-                        "stage": npc_stage,
-                        "influence": rel_state.dimensions.influence,
-                        "trust": rel_state.dimensions.trust,
-                        "patterns": list(rel_state.history.active_patterns)
-                    }),
-                    "player_history": json.dumps(player_history)
-                }
-            }]
+        request = llm_gateway.LLMRequest(
+            prompt=messages[0]["content"],
+            agent=PlayerAgencyManager,
+            metadata={
+                "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                "stage": "player_agency",
+            },
+            runner_kwargs={
+                "messages": messages,
+                "calls": [{
+                    "name": "generate_player_agency",
+                    "kwargs": {
+                        "current_situation": moment_data.model_dump_json(),
+                        "power_dynamic": moment_data.approach or "subtle",
+                        "relationship_context": json.dumps({
+                            "stage": npc_stage,
+                            "influence": rel_state.dimensions.influence,
+                            "trust": rel_state.dimensions.trust,
+                            "patterns": list(rel_state.history.active_patterns),
+                        }),
+                        "player_history": json.dumps(player_history),
+                    },
+                }],
+            },
         )
-        
-        if not result.output:
+
+        result_wrapper = await llm_gateway.execute(request)
+        raw_result = result_wrapper.raw
+
+        output_payload = getattr(raw_result, "output", None)
+        if not output_payload and result_wrapper.text:
+            output_payload = result_wrapper.text
+        if not output_payload:
             # Fallback choices
             return [
                 "Accept naturally",
@@ -1006,8 +1058,8 @@ async def generate_player_choices_for_moment(
                 "Deflect playfully",
                 "Resist firmly"
             ]
-        
-        choice_data = json.loads(result.output)
+
+        choice_data = json.loads(output_payload)
         return choice_data.get("choices", [])[:5]  # Max 5 choices
         
     except Exception as e:
@@ -1063,30 +1115,43 @@ async def detect_emergent_story(
             "content": "Detect any emergent narratives"
         }]
         
-        result = await Runner.run(
-            EmergentNarrativeDetector,
-            messages=messages,
-            calls=[{
-                "name": "detect_emergent_narrative",
-                "kwargs": {
-                    "recent_events": json.dumps([
-                        mem.content if hasattr(mem, 'content') else str(mem)
-                        for mem in recent_events[:5]
-                    ]),
-                    "relationship_patterns": json.dumps(list(all_patterns)),
-                    "world_state": json.dumps({
-                        "tension": world_context.tension_level,
-                        "mood": world_context.overall_mood.value,
-                        "active_npcs": len(world_context.present_npcs)
-                    })
-                }
-            }]
+        request = llm_gateway.LLMRequest(
+            prompt=messages[0]["content"],
+            agent=EmergentNarrativeDetector,
+            metadata={
+                "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                "stage": "emergent_narrative",
+            },
+            runner_kwargs={
+                "messages": messages,
+                "calls": [{
+                    "name": "detect_emergent_narrative",
+                    "kwargs": {
+                        "recent_events": json.dumps([
+                            mem.content if hasattr(mem, "content") else str(mem)
+                            for mem in recent_events[:5]
+                        ]),
+                        "relationship_patterns": json.dumps(list(all_patterns)),
+                        "world_state": json.dumps({
+                            "tension": world_context.tension_level,
+                            "mood": world_context.overall_mood.value,
+                            "active_npcs": len(world_context.present_npcs),
+                        }),
+                    },
+                }],
+            },
         )
-        
-        if not result.output:
+
+        result_wrapper = await llm_gateway.execute(request)
+        raw_result = result_wrapper.raw
+
+        output_payload = getattr(raw_result, "output", None)
+        if not output_payload and result_wrapper.text:
+            output_payload = result_wrapper.text
+        if not output_payload:
             return None
-        
-        narrative_data = json.loads(result.output)
+
+        narrative_data = json.loads(output_payload)
         
         # Only return if there's a meaningful narrative thread
         if narrative_data.get("narrative_thread"):

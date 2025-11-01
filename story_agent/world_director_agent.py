@@ -61,7 +61,8 @@ from story_agent.world_simulation_models import (
 )
 
 from db.connection import get_db_connection_context
-from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContextWrapper
+from agents import Agent, function_tool, trace, ModelSettings, RunContextWrapper
+from nyx.gateway import llm_gateway
 from rag import ask as rag_ask
 
 # ------------------------------------------------------------------------------
@@ -2953,11 +2954,25 @@ class CompleteWorldDirector:
             # Let agent orchestrate
             prompt = self._build_moment_prompt(patterns)
             
-            result = await Runner.run(self.agent, prompt, context=self.context)
+            request = llm_gateway.LLMRequest(
+                prompt=prompt,
+                agent=self.agent,
+                context=self.context,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "world_moment",
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            result = result_wrapper.raw
             
             # Store result canonically
             moment_event_id = None
-            moment_content = result.messages[-1].content if result and result.messages else None
+            moment_content = None
+            if result and getattr(result, "messages", None):
+                moment_content = result.messages[-1].content
+            elif result_wrapper.text:
+                moment_content = result_wrapper.text
             if moment_content:
                 async with get_db_connection_context() as conn:
                     moment_event_id = await find_or_create_event(
@@ -3128,10 +3143,24 @@ class CompleteWorldDirector:
             Generate complete response using all systems while maintaining narrative consistency.
             """
             
-            result = await Runner.run(self.agent, prompt, context=self.context)
-            
+            request = llm_gateway.LLMRequest(
+                prompt=prompt,
+                agent=self.agent,
+                context=self.context,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "process_player_action",
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            result = result_wrapper.raw
+
             # Extract response content
-            response_content = result.messages[-1].content if result and result.messages else None
+            response_content = None
+            if result and getattr(result, "messages", None):
+                response_content = result.messages[-1].content
+            elif result_wrapper.text:
+                response_content = result_wrapper.text
             
             # Store processing result and journal entry canonically
             async with get_db_connection_context() as conn:

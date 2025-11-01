@@ -1,7 +1,8 @@
 import asyncio
 import datetime
 import re
-from agents import Agent, Runner, RunConfig, ModelSettings
+from agents import Agent, RunConfig, ModelSettings
+from nyx.gateway import llm_gateway
 
 class ReflectionAgent(Agent):
     """Simple agent producing reflective insights from event logs."""
@@ -40,14 +41,26 @@ What patterns do you notice? What should Nyx pay attention to?"""
         trace_id=f"reflection-{datetime.datetime.utcnow().isoformat()}"
     )
     
-    result = await Runner.run(
-        agent,
-        prompt,
-        run_config=run_config
+    request = llm_gateway.LLMRequest(
+        prompt=prompt,
+        agent=agent,
+        metadata={
+            "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+            "stage": "reflection",
+        },
+        runner_kwargs={"run_config": run_config},
     )
-    
+
+    result_wrapper = await llm_gateway.execute(request)
+    result = result_wrapper.raw
+
     # Extract the insight text
-    insight = str(result.final_output) if result.final_output else "No insights generated."
+    if result is not None and getattr(result, "final_output", None):
+        insight = str(result.final_output)
+    elif result_wrapper.text:
+        insight = str(result_wrapper.text)
+    else:
+        insight = "No insights generated."
     
     # Extract priority
     priority = _extract_priority(insight)
