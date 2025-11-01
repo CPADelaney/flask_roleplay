@@ -44,6 +44,7 @@ from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
 import lore.core.canon as canon
+from lore.version_registry import with_lore_version_suffix
 
 from logic.conflict_system.conflict_synthesizer import get_synthesizer
 from logic.conflict_system.background_processor import get_conflict_scheduler
@@ -268,7 +269,7 @@ class SceneScope:
 
     def to_key(self) -> str:
         # Single canonical key path for all systems
-        return generate_scene_cache_key(self)
+        return with_lore_version_suffix(generate_scene_cache_key(self))
 
     def to_cache_key(self) -> str:
         # Orchestrator expects this name; forward to our canonical key

@@ -87,6 +87,7 @@ from lore.managers.religion import (
 
 # Cache + Canon integration
 from lore.core.cache import GLOBAL_LORE_CACHE
+from lore.version_registry import with_lore_version_suffix
 from lore.core.canon import (
     initialize_canon_memory_integration,
     log_canonical_event as canon_log_canonical_event,
@@ -2961,51 +2962,59 @@ class LoreOrchestrator:
           - Else use nyx.scene_keys.generate_scene_cache_key(scope).
           - Else fallback to deterministic local hash.
         """
+        base_key: Optional[str] = None
+
         to_key = getattr(scope, "to_key", None)
         if callable(to_key):
             try:
-                return to_key()
+                candidate = to_key()
+                if candidate:
+                    base_key = str(candidate)
             except Exception:
-                pass
-    
-        # Shared generator (keeps keys identical across Lore/NPC/Context)
-        try:
-            return generate_scene_cache_key(scope)
-        except Exception:
-            pass
-    
-        # Last-resort fallback (kept from your original logic)
-        key_parts: List[str] = []
-        loc_id = getattr(scope, "location_id", None)
-        if loc_id is not None:
-            key_parts.append(f"loc_{loc_id}")
-        else:
-            loc_name = getattr(scope, "location_name", None)
-            if loc_name:
-                key_parts.append(f"locname_{str(loc_name).lower()}")
-    
-        def _push_list(label: str, values: Any, head: int, coerce=str) -> None:
-            if not values:
-                return
+                base_key = None
+
+        if base_key is None:
+            # Shared generator (keeps keys identical across Lore/NPC/Context)
             try:
-                lst = list(values)
-            except TypeError:
-                return
-            lst = sorted(lst)
-            head_vals = [coerce(v) for v in lst[:head]]
-            key_parts.append(f"{label}_{'_'.join(head_vals)}+n={len(lst)}")
-    
-        _push_list("npcs", getattr(scope, "npc_ids", []), head=5, coerce=lambda v: str(int(v)))
-        _push_list("tags", getattr(scope, "lore_tags", []), head=5, coerce=str)
-        _push_list("topics", getattr(scope, "topics", []), head=3, coerce=lambda v: str(v).lower())
-        _push_list("nations", getattr(scope, "nation_ids", []), head=3, coerce=lambda v: str(int(v)))
-        _push_list("conflicts", getattr(scope, "conflict_ids", []), head=3, coerce=lambda v: str(int(v)))
-    
-        if not key_parts:
-            key_parts.append("empty")
-    
-        key_string = "|".join(key_parts)
-        return hashlib.md5(key_string.encode("utf-8")).hexdigest()
+                base_key = generate_scene_cache_key(scope)
+            except Exception:
+                base_key = None
+
+        if base_key is None:
+            # Last-resort fallback (kept from your original logic)
+            key_parts: List[str] = []
+            loc_id = getattr(scope, "location_id", None)
+            if loc_id is not None:
+                key_parts.append(f"loc_{loc_id}")
+            else:
+                loc_name = getattr(scope, "location_name", None)
+                if loc_name:
+                    key_parts.append(f"locname_{str(loc_name).lower()}")
+
+            def _push_list(label: str, values: Any, head: int, coerce=str) -> None:
+                if not values:
+                    return
+                try:
+                    lst = list(values)
+                except TypeError:
+                    return
+                lst = sorted(lst)
+                head_vals = [coerce(v) for v in lst[:head]]
+                key_parts.append(f"{label}_{'_'.join(head_vals)}+n={len(lst)}")
+
+            _push_list("npcs", getattr(scope, "npc_ids", []), head=5, coerce=lambda v: str(int(v)))
+            _push_list("tags", getattr(scope, "lore_tags", []), head=5, coerce=str)
+            _push_list("topics", getattr(scope, "topics", []), head=3, coerce=lambda v: str(v).lower())
+            _push_list("nations", getattr(scope, "nation_ids", []), head=3, coerce=lambda v: str(int(v)))
+            _push_list("conflicts", getattr(scope, "conflict_ids", []), head=3, coerce=lambda v: str(int(v)))
+
+            if not key_parts:
+                key_parts.append("empty")
+
+            key_string = "|".join(key_parts)
+            base_key = hashlib.md5(key_string.encode("utf-8")).hexdigest()
+
+        return with_lore_version_suffix(base_key)
 
     # ===== CACHE ANALYTICS / OPTIMIZATION =====
     
