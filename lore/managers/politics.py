@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, AsyncGenerator
 from datetime import datetime
 
 # Agents SDK imports
-from agents import Agent, function_tool, Runner, RunContextWrapper, RunConfig, trace
+from agents import Agent, function_tool, RunContextWrapper, RunConfig, trace
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,8 @@ from utils.embedding_service import get_embedding
 
 from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +160,7 @@ class DiplomaticNegotiation:
         Return your nation's position in a clear, diplomatic manner.
         """
 
-        result = await Runner.run(agent, prompt, context=ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(agent, prompt, context=ctx.context))).raw
         return result.final_output
 
     async def _get_mediator_proposal(self, ctx, round_num):
@@ -177,7 +179,7 @@ class DiplomaticNegotiation:
         If this is the final round, push harder for resolution.
         """
 
-        result = await Runner.run(self.mediator_agent, prompt, context=ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(self.mediator_agent, prompt, context=ctx.context))).raw
         return result.final_output
 
     async def _get_nation_response(self, ctx, agent, nation_data, mediator_proposal, round_num):
@@ -203,7 +205,7 @@ class DiplomaticNegotiation:
         {"This is the FINAL round. Consider accepting a reasonable compromise." if round_num >= self.max_rounds - 1 else ""}
         """
 
-        result = await Runner.run(agent, prompt, context=ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(agent, prompt, context=ctx.context))).raw
         return result.final_output
 
     async def _check_for_agreement(self, ctx, round_num):
@@ -225,7 +227,7 @@ class DiplomaticNegotiation:
         If no agreement has been reached, return null for agreement_terms.
         """
 
-        result = await Runner.run(self.mediator_agent, prompt, context=ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(self.mediator_agent, prompt, context=ctx.context))).raw
         try:
             agreement_data = json.loads(result.final_output)
             if agreement_data.get("agreement_reached", False):
@@ -299,7 +301,7 @@ class FactionAgentProxy:
         }}
         """
 
-        result = await Runner.run(self.agent, prompt, context=ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(self.agent, prompt, context=ctx.context))).raw
         try:
             reaction = json.loads(result.final_output)
             self.actions_history.append({
@@ -848,12 +850,11 @@ class WorldPoliticsManager(BaseLoreManager):
                     - potential_resolution
                     """
 
-                    # Use proper context for Runner.run
-                    result = await Runner.run(
-                        conflict_agent,
+                    # Use proper context for the LLM gateway execution
+                    result = (await llm_gateway.execute(build_llm_request(conflict_agent,
                         prompt,
                         context=proper_ctx.context
-                    )
+                    ))).raw
 
                     try:
                         conflict_data = json.loads(result.final_output)
@@ -958,7 +959,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 """
 
                 run_config = RunConfig(workflow_name="ConflictNewsGeneration")
-                result = await Runner.run(news_agent, prompt, context=ctx.context, run_config=run_config)
+                result = (await llm_gateway.execute(build_llm_request(news_agent, prompt, context=ctx.context, run_config=run_config))).raw
 
                 try:
                     news_data = json.loads(result.final_output)
@@ -1063,7 +1064,7 @@ class WorldPoliticsManager(BaseLoreManager):
             """
 
             run_ctx = RunContextWrapper(context=ctx.context)
-            result = await Runner.run(crisis_streaming_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(crisis_streaming_agent, prompt, context=run_ctx.context))).raw
 
             # Since this is not a streaming API, we'll parse the result and yield events one by one
             try:
@@ -1227,7 +1228,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 - bias_indicators (how your bias shows)
                 """
 
-                result = await Runner.run(media_agent, prompt, context=run_ctx.context)
+                result = (await llm_gateway.execute(build_llm_request(media_agent, prompt, context=run_ctx.context))).raw
                 try:
                     article = json.loads(result.final_output)
                     article["media_name"] = media["name"]
@@ -1328,7 +1329,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 - potential_resolution
                 """
                 run_config = RunConfig(workflow_name="DomesticIssueGeneration")
-                result = await Runner.run(issue_agent, prompt, context=run_ctx.context, run_config=run_config)
+                result = (await llm_gateway.execute(build_llm_request(issue_agent, prompt, context=run_ctx.context, run_config=run_config))).raw
 
                 try:
                     issue_data = json.loads(result.final_output)
@@ -1417,7 +1418,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 - source_faction (the faction or institution behind it)
                 """
                 run_config = RunConfig(workflow_name="DomesticNewsGeneration")
-                result = await Runner.run(news_agent, prompt, context=ctx.context, run_config=run_config)
+                result = (await llm_gateway.execute(build_llm_request(news_agent, prompt, context=ctx.context, run_config=run_config))).raw
 
                 try:
                     news_data = json.loads(result.final_output)
@@ -1697,7 +1698,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     """
 
                     run_config = RunConfig(workflow_name="ConflictEvolution")
-                    result = await Runner.run(evolution_agent, prompt, context=run_ctx.context, run_config=run_config)
+                    result = (await llm_gateway.execute(build_llm_request(evolution_agent, prompt, context=run_ctx.context, run_config=run_config))).raw
 
                     try:
                         evo_data = json.loads(result.final_output)
@@ -1877,7 +1878,7 @@ class WorldPoliticsManager(BaseLoreManager):
             """
 
             run_config = RunConfig(workflow_name="ConflictUpdateNews")
-            result = await Runner.run(news_agent, prompt, context=ctx.context, run_config=run_config)
+            result = (await llm_gateway.execute(build_llm_request(news_agent, prompt, context=ctx.context, run_config=run_config))).raw
 
             try:
                 news_data = json.loads(result.final_output)
@@ -1960,7 +1961,7 @@ class WorldPoliticsManager(BaseLoreManager):
             - rationale
             """
 
-            result = await Runner.run(agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(agent, prompt, context=run_ctx.context))).raw
             try:
                 reforms = json.loads(result.final_output)
             except json.JSONDecodeError:
@@ -2051,7 +2052,7 @@ class WorldPoliticsManager(BaseLoreManager):
             }}
             """
 
-            result = await Runner.run(agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(agent, prompt, context=run_ctx.context))).raw
             try:
                 lineage_updates = json.loads(result.final_output)
             except json.JSONDecodeError:

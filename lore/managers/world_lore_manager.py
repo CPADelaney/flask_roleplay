@@ -17,7 +17,7 @@ import random
 import re
 
 # Agents SDK (import what you need)
-from agents import Agent, function_tool, Runner, trace, handoff
+from agents import Agent, function_tool, trace, handoff
 from agents.run import RunConfig
 from agents.run_context import RunContextWrapper
 
@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 from db.connection import get_db_connection_context
 from lore.managers.base_manager import BaseLoreManager
 from lore.resource_manager import resource_manager
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 # Because we might want to store or retrieve data from an LLM orchestrator
 # we define a ResourceOpsAgent for demonstration:
@@ -87,7 +89,7 @@ class WorldLoreManager(BaseLoreManager):
         """Handle a natural language query about the world state."""
         query_agent = self.world_query_agent.clone()
         query_agent.query = query
-        result = await Runner.run(query_agent, query)
+        result = (await llm_gateway.execute(build_llm_request(query_agent, query))).raw
         return result.final_output
 
     @function_tool
@@ -95,7 +97,7 @@ class WorldLoreManager(BaseLoreManager):
         """Identify and resolve any inconsistencies in the world lore."""
         resolution_agent = self.inconsistency_resolution_agent.clone()
         resolution_agent.world_id = world_id
-        result = await Runner.run(resolution_agent, f"Resolve inconsistencies for world {world_id}")
+        result = (await llm_gateway.execute(build_llm_request(resolution_agent, f"Resolve inconsistencies for world {world_id}"))).raw
         return result.final_output
 
     @function_tool
@@ -105,7 +107,7 @@ class WorldLoreManager(BaseLoreManager):
         doc_agent.world_id = world_id
         doc_agent.include_history = include_history
         doc_agent.include_current_state = include_current_state
-        result = await Runner.run(doc_agent, f"Generate summary for world {world_id}")
+        result = (await llm_gateway.execute(build_llm_request(doc_agent, f"Generate summary for world {world_id}"))).raw
         return result.final_output
 
     @function_tool
@@ -946,7 +948,7 @@ class WorldLoreManager(BaseLoreManager):
                 Return just the number.
                 """
 
-                result = await Runner.run(timeline_agent, prompt)
+                result = (await llm_gateway.execute(build_llm_request(timeline_agent, prompt))).raw
                 try:
                     date_order = int(result.final_output.strip())
                 except:
@@ -1072,7 +1074,7 @@ class WorldLoreManager(BaseLoreManager):
             Return JSON with: issue_index, fix_type, fix_data
             """
 
-            result = await Runner.run(fix_agent, prompt)
+            result = (await llm_gateway.execute(build_llm_request(fix_agent, prompt))).raw
             try:
                 fixes = json.loads(result.final_output)
                 return {'issues': issues, 'proposed_fixes': fixes}
@@ -1217,12 +1219,11 @@ class MasterCoordinationAgent:
         Return a detailed JSON execution plan.
         """
 
-        result = await Runner.run(
-            self.agent,
+        result = (await llm_gateway.execute(build_llm_request(self.agent,
             prompt,
             context=run_ctx,
             run_config=run_config
-        )
+        ))).raw
 
         try:
             execution_plan = json.loads(result.final_output)
@@ -1267,12 +1268,11 @@ class MasterCoordinationAgent:
         Return JSON with validation results and any issues found.
         """
 
-        result = await Runner.run(
-            self.agent,
+        result = (await llm_gateway.execute(build_llm_request(self.agent,
             prompt,
             context={},
             run_config=run_config
-        )
+        ))).raw
 
         try:
             validation = json.loads(result.final_output)
@@ -1516,12 +1516,11 @@ class ContentValidationTool:
         - matriarchal_score: 1-10 rating of how well it upholds matriarchal themes
         """
 
-        result = await Runner.run(
-            self.validator_agent,
+        result = (await llm_gateway.execute(build_llm_request(self.validator_agent,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         try:
             validation_result = json.loads(result.final_output)
@@ -1658,7 +1657,7 @@ class LoreRelationshipMapper:
         - edges: list of connections with source, target, and relationship type
         """
 
-        result = await Runner.run(self.relationship_agent, prompt, context={})
+        result = (await llm_gateway.execute(build_llm_request(self.relationship_agent, prompt, context={}))).raw
 
         try:
             graph = json.loads(result.final_output)
@@ -1700,7 +1699,7 @@ class LoreRelationshipMapper:
             Return JSON with an array of related elements and their relationship details.
             """
 
-            result = await Runner.run(self.relationship_agent, prompt, context={})
+            result = (await llm_gateway.execute(build_llm_request(self.relationship_agent, prompt, context={}))).raw
 
             try:
                 new_relationships = json.loads(result.final_output)

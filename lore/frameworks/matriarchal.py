@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 # Agents SDK imports
 from agents import (
     Agent,
-    Runner,
     function_tool,
     handoff,
     RunResultStreaming,
@@ -24,6 +23,8 @@ from nyx.nyx_governance import AgentType, DirectivePriority
 
 # Project-specific import
 from lore.managers.base_manager import BaseLoreManager
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 # ------------------------------------------------------------------
 # PYDANTIC MODELS FOR STRUCTURED OUTPUTS
@@ -225,12 +226,11 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
         
-        result = await Runner.run(
-            starting_agent=self.transformation_agent,
+        result = (await llm_gateway.execute(build_llm_request(starting_agent=self.transformation_agent,
             input=prompt,
             context=run_ctx.context,
             run_config=run_cfg
-        )
+        ))).raw
         
         # Get feedback on the transformation
         transformed_text = result.final_output
@@ -257,11 +257,10 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             "purpose": "transformation evaluation"
         })
         
-        result = await Runner.run(
-            self.evaluation_agent,
+        result = (await llm_gateway.execute(build_llm_request(self.evaluation_agent,
             prompt,
             context=run_ctx.context
-        )
+        ))).raw
         
         evaluation = result.final_output_as(NarrativeEvaluation)
         
@@ -290,12 +289,11 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
 
-        result = await Runner.run(
-            starting_agent=self.transformation_agent,
+        result = (await llm_gateway.execute(build_llm_request(starting_agent=self.transformation_agent,
             input=prompt_text,
             context=run_ctx.context,
             run_config=run_cfg
-        )
+        ))).raw
 
         try:
             return json.loads(result.final_output)
@@ -354,12 +352,11 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
 
         # 2. Error Handling and Fallback Mechanism
         try:
-            result = await Runner.run(
-                principles_agent,
+            result = (await llm_gateway.execute(build_llm_request(principles_agent,
                 prompt,
                 context=run_ctx.context,
                 run_config=run_cfg
-            )
+            ))).raw
             # The .final_output_as() method will attempt to parse and validate.
             # If it fails, it will raise an exception that we now catch.
             return result.final_output_as(CorePrinciples)
@@ -423,12 +420,11 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
 
-        result = await Runner.run(
-            constraints_agent,
+        result = (await llm_gateway.execute(build_llm_request(constraints_agent,
             prompt,
             context=run_ctx.context,
             run_config=run_cfg
-        )
+        ))).raw
 
         return result.final_output_as(HierarchicalConstraint)
 
@@ -478,11 +474,10 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "and gendered power dynamics."
             )
             
-            social_result = await Runner.run(
-                self.cultural_specialist,
+            social_result = (await llm_gateway.execute(build_llm_request(self.cultural_specialist,
                 prompt,
                 context=run_ctx.context
-            )
+            ))).raw
             result["social_structure"] = social_result.final_output
         
         if "cosmology" in foundation_data:
@@ -494,11 +489,10 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "religious structures."
             )
             
-            cosmology_result = await Runner.run(
-                self.religious_specialist,
+            cosmology_result = (await llm_gateway.execute(build_llm_request(self.religious_specialist,
                 prompt,
                 context=run_ctx.context
-            )
+            ))).raw
             result["cosmology"] = cosmology_result.final_output
         
         if "magic_system" in foundation_data:
@@ -517,11 +511,10 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "supportive roles or as subjects/conquered peoples."
             )
             
-            history_result = await Runner.run(
-                self.political_specialist,
+            history_result = (await llm_gateway.execute(build_llm_request(self.political_specialist,
                 prompt,
                 context=run_ctx.context
-            )
+            ))).raw
             result["world_history"] = history_result.final_output
             
         if "calendar_system" in foundation_data:
@@ -570,12 +563,11 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
 
-        result = await Runner.run(
-            expressions_agent,
+        result = (await llm_gateway.execute(build_llm_request(expressions_agent,
             prompt,
             context=run_ctx.context,
             run_config=run_cfg
-        )
+        ))).raw
 
         return result.final_output_as(List[PowerExpression])
 
@@ -658,7 +650,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
         for step in range(5):  # 5 development steps
             # Plot development
             plot_prompt = f"Continue developing the plot for this narrative:\n\n{narrative}"
-            plot_result = await Runner.run(plot_agent, plot_prompt, context=run_ctx.context)
+            plot_result = (await llm_gateway.execute(build_llm_request(plot_agent, plot_prompt, context=run_ctx.context))).raw
             plot_development = plot_result.final_output
             
             narrative += f"\nPLOT DEVELOPMENT:\n{plot_development}\n"
@@ -666,7 +658,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             
             # Character development
             char_prompt = f"Develop the characters in this narrative:\n\n{narrative}"
-            char_result = await Runner.run(character_agent, char_prompt, context=run_ctx.context)
+            char_result = (await llm_gateway.execute(build_llm_request(character_agent, char_prompt, context=run_ctx.context))).raw
             char_development = char_result.final_output
             
             narrative += f"\nCHARACTER DEVELOPMENT:\n{char_development}\n"
@@ -674,7 +666,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             
             # Setting development
             setting_prompt = f"Enrich the setting in this narrative:\n\n{narrative}"
-            setting_result = await Runner.run(setting_agent, setting_prompt, context=run_ctx.context)
+            setting_result = (await llm_gateway.execute(build_llm_request(setting_agent, setting_prompt, context=run_ctx.context))).raw
             setting_development = setting_result.final_output
             
             narrative += f"\nSETTING DEVELOPMENT:\n{setting_development}\n"

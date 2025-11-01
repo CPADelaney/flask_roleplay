@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace,
+    Agent, function_tool, trace,
     GuardrailFunctionOutput, InputGuardrail, handoff,
     RunContextWrapper, RunConfig
 )
@@ -24,6 +24,8 @@ from nyx.directive_handler import DirectiveHandler
 from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from db.connection import get_db_connection_context
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -572,12 +574,11 @@ class EducationalSystemManager(BaseLoreManager):
         )
 
         run_config = RunConfig(workflow_name="EducationalSystemGeneration")
-        result = await Runner.run(
-            education_definition_agent,
+        result = (await llm_gateway.execute(build_llm_request(education_definition_agent,
             prompt,
             context={"manager": self},
             run_config=run_config
-        )
+        ))).raw
 
         return result.final_output
 
@@ -934,7 +935,7 @@ async def stream_educational_development(
         4. Matriarchal authority structure
         """
 
-        basic_result = await Runner.run(specialist, basic_prompt, context={"manager": manager})
+        basic_result = (await llm_gateway.execute(build_llm_request(specialist, basic_prompt, context={"manager": manager}))).raw
         basic_outline = basic_result.final_output
 
         yield StreamingPhaseUpdate(
@@ -970,31 +971,51 @@ async def stream_educational_development(
             trace_metadata={"component": "leadership_structure"}
         )
 
-        streaming_result = Runner.run_streamed(
-            specialist,
-            leadership_prompt,
-            context={"manager": manager},
-            run_config=stream_config
+        streaming_iterator = llm_gateway.execute_stream(
+            build_llm_request(
+                specialist,
+                leadership_prompt,
+                context={"manager": manager},
+                run_config=stream_config,
+            )
         )
 
-        # Process streaming events
-        leadership_content = []
-        async for event in streaming_result.stream_events():
-            if event.type == "run_item_stream_event":
-                if event.item.type == "message_output_item":
-                    # Extract text from the message output
-                    from agents.items import ItemHelpers
-                    message_text = ItemHelpers.text_message_output(event.item)
-                    leadership_content.append(message_text)
-                    yield StreamingPhaseUpdate(
-                        phase="leadership",
-                        status="streaming",
-                        chunk=message_text
-                    )
+        # Process streaming events (if available)
+        leadership_content: list[str] = []
+        final_chunk: llm_gateway.LLMResult | None = None
+        async for chunk in streaming_iterator:
+            final_chunk = chunk
+            raw_result = chunk.raw
+            if hasattr(raw_result, "stream_events"):
+                async for event in raw_result.stream_events():
+                    if event.type == "run_item_stream_event" and event.item.type == "message_output_item":
+                        from agents.items import ItemHelpers
 
-        # Get the final result
-        final_result = await streaming_result
-        leadership_structure = "".join(leadership_content) if leadership_content else final_result.final_output
+                        message_text = ItemHelpers.text_message_output(event.item)
+                        leadership_content.append(message_text)
+                        yield StreamingPhaseUpdate(
+                            phase="leadership",
+                            status="streaming",
+                            chunk=message_text,
+                        )
+            elif chunk.text:
+                leadership_content.append(chunk.text)
+                yield StreamingPhaseUpdate(
+                    phase="leadership",
+                    status="streaming",
+                    chunk=chunk.text,
+                )
+
+        if final_chunk is None:
+            raise RuntimeError("Streaming iterator returned no results")
+
+        final_raw = final_chunk.raw
+        if leadership_content:
+            leadership_structure = "".join(leadership_content)
+        elif hasattr(final_raw, "final_output"):
+            leadership_structure = final_raw.final_output
+        else:
+            leadership_structure = final_chunk.text
 
         yield StreamingPhaseUpdate(
             phase="leadership",
@@ -1023,7 +1044,7 @@ async def stream_educational_development(
         4. Evaluation methods
         """
 
-        curriculum_result = await Runner.run(specialist, curriculum_prompt, context={"manager": manager})
+        curriculum_result = (await llm_gateway.execute(build_llm_request(specialist, curriculum_prompt, context={"manager": manager}))).raw
         curriculum = curriculum_result.final_output
 
         yield StreamingPhaseUpdate(
@@ -1058,11 +1079,10 @@ async def stream_educational_development(
             input_guardrails=[manager.censorship_guardrail]
         )
 
-        restrictions_result = await Runner.run(
-            restrictions_agent,
+        restrictions_result = (await llm_gateway.execute(build_llm_request(restrictions_agent,
             restrictions_prompt,
             context={"manager": manager}
-        )
+        ))).raw
         restrictions = restrictions_result.final_output
 
         yield StreamingPhaseUpdate(
@@ -1103,11 +1123,10 @@ async def stream_educational_development(
             output_type=EducationalSystem
         )
 
-        definition_result = await Runner.run(
-            system_definition_agent,
+        definition_result = (await llm_gateway.execute(build_llm_request(system_definition_agent,
             complete_prompt,
             context={"manager": manager}
-        )
+        ))).raw
         system_definition = definition_result.final_output
 
         # Save the educational system
@@ -1222,7 +1241,7 @@ async def exchange_knowledge_between_systems(
             output_type=KnowledgeExchangeResult
         )
 
-        result = await Runner.run(exchange_agent, exchange_prompt, context={"manager": manager})
+        result = (await llm_gateway.execute(build_llm_request(exchange_agent, exchange_prompt, context={"manager": manager}))).raw
         exchange_results = result.final_output
 
         # Actually implement the knowledge transfer based on results
@@ -1287,11 +1306,10 @@ async def generate_educational_systems(
 
     with trace("GenerateEducationalSystems", metadata={"user_id": ctx.context.user_id}):
         # Determine count
-        dist_result = await Runner.run(
-            manager.distribution_agent,
+        dist_result = (await llm_gateway.execute(build_llm_request(manager.distribution_agent,
             "How many educational systems should we generate? Return JSON with 'count'.",
             context={"manager": manager}
-        )
+        ))).raw
 
         try:
             count = json.loads(dist_result.final_output).get("count", 3)
@@ -1356,12 +1374,11 @@ async def generate_knowledge_traditions(
         )
 
         dist_config = RunConfig(workflow_name="KnowledgeTraditionCount")
-        dist_result = await Runner.run(
-            manager.distribution_agent,
+        dist_result = (await llm_gateway.execute(build_llm_request(manager.distribution_agent,
             dist_prompt,
             context={"manager": manager},
             run_config=dist_config
-        )
+        ))).raw
 
         try:
             dist_data = json.loads(dist_result.final_output)
@@ -1428,7 +1445,7 @@ async def generate_knowledge_traditions(
         )
 
         run_config = RunConfig(workflow_name="KnowledgeTraditionGeneration")
-        result = await Runner.run(tradition_agent, prompt, context={"manager": manager})
+        result = (await llm_gateway.execute(build_llm_request(tradition_agent, prompt, context={"manager": manager}))).raw
         traditions = result.final_output
 
         # Save all traditions using canon

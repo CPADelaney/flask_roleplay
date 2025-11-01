@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 # ------------------ AGENTS SDK IMPORTS ------------------
 from agents import (
     Agent,
-    Runner,
     function_tool,
     trace,
     InputGuardrail,
@@ -30,6 +29,8 @@ from lore.utils.theming import MatriarchalThemingUtils
 from lore.core.cache import GLOBAL_LORE_CACHE
 
 from contextlib import asynccontextmanager
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 @asynccontextmanager
 async def _with_conn(self):
@@ -550,7 +551,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 trace_metadata=self.trace_metadata
             )
             
-            dist_result = await Runner.run(distribution_agent, dist_prompt, context=run_ctx.context, run_config=dist_config)
+            dist_result = (await llm_gateway.execute(build_llm_request(distribution_agent, dist_prompt, context=run_ctx.context, run_config=dist_config))).raw
             
             try:
                 distribution_plan = json.loads(dist_result.final_output)
@@ -610,7 +611,7 @@ class RegionalCultureSystem(BaseLoreManager):
                         trace_metadata={"language_index": i}
                     )
                     
-                    result = await Runner.run(language_agent, gen_prompt, context=run_ctx.context, run_config=run_config)
+                    result = (await llm_gateway.execute(build_llm_request(language_agent, gen_prompt, context=run_ctx.context, run_config=run_config))).raw
                     language_data = result.final_output
                     
                     # Override with planned distribution
@@ -648,7 +649,7 @@ class RegionalCultureSystem(BaseLoreManager):
                         Answer only 'true' or 'false'.
                         """
                         
-                        validation_result = await Runner.run(validation_agent.agent, prompt)
+                        validation_result = (await llm_gateway.execute(build_llm_request(validation_agent.agent, prompt))).raw
                         if validation_result.final_output.strip().lower() == 'true':
                             # Use existing language, maybe expand its reach
                             language_id = similar_language['id']
@@ -918,7 +919,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 workflow_name="DetermineNormCategories",
                 trace_metadata=self.trace_metadata
             )
-            cat_result = await Runner.run(category_agent, cat_prompt, context=run_ctx.context, run_config=cat_config)
+            cat_result = (await llm_gateway.execute(build_llm_request(category_agent, cat_prompt, context=run_ctx.context, run_config=cat_config))).raw
             
             try:
                 category_data = cat_result.final_output
@@ -964,7 +965,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 Ensure strong matriarchal themes.
                 """
                 
-                result = await Runner.run(norm_agent, prompt, context=run_ctx.context, run_config=run_config)
+                result = (await llm_gateway.execute(build_llm_request(norm_agent, prompt, context=run_ctx.context, run_config=run_config))).raw
                 norm_data = result.final_output
                 
                 # Insert into DB
@@ -1050,7 +1051,7 @@ class RegionalCultureSystem(BaseLoreManager):
             workflow_name="EtiquetteContexts",
             trace_metadata=self.trace_metadata
         )
-        ctx_result = await Runner.run(context_agent, ctx_prompt, context=run_ctx.context, run_config=ctx_config)
+        ctx_result = (await llm_gateway.execute(build_llm_request(context_agent, ctx_prompt, context=run_ctx.context, run_config=ctx_config))).raw
         
         try:
             contexts = ctx_result.final_output
@@ -1088,7 +1089,7 @@ class RegionalCultureSystem(BaseLoreManager):
             
             Be explicit about male deference to female authority.
             """
-            result = await Runner.run(etiquette_agent, prompt, context=run_ctx.context, run_config=run_config)
+            result = (await llm_gateway.execute(build_llm_request(etiquette_agent, prompt, context=run_ctx.context, run_config=run_config))).raw
             etiquette_data = result.final_output
             
             # Insert into DB
@@ -1245,7 +1246,7 @@ class RegionalCultureSystem(BaseLoreManager):
             Emphasize matriarchal power in daily life, key traditions, and important linguistic notes.
             """
             
-            result = await Runner.run(summary_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(summary_agent, prompt, context=run_ctx.context))).raw
             return result.final_output
     
     @function_tool(strict_mode=False)
@@ -1299,7 +1300,7 @@ class RegionalCultureSystem(BaseLoreManager):
             - recommendations: diplomatic advice
             """
             
-            result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(conflict_agent, prompt, context=run_ctx.context))).raw
             return result.final_output.dict()
                 
     @with_governance(
@@ -1381,7 +1382,7 @@ class RegionalCultureSystem(BaseLoreManager):
         """
         
         # Run the simulation
-        result = await Runner.run(diffusion_agent, prompt, context=run_ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(diffusion_agent, prompt, context=run_ctx.context))).raw
         diffusion_data = result.final_output
         
         # Apply the diffusion effects to the database
@@ -1750,7 +1751,7 @@ class RegionalCultureSystem(BaseLoreManager):
         Return only the adapted word.
         """
         
-        result = await Runner.run(adaptation_agent, prompt)
+        result = (await llm_gateway.execute(build_llm_request(adaptation_agent, prompt))).raw
         return result.final_output.strip()
     
     async def _localize_idiom(self, idiom: str, target_language: Dict[str, Any], nation_id: int) -> Dict[str, str]:
@@ -1787,7 +1788,7 @@ class RegionalCultureSystem(BaseLoreManager):
         - meaning: explanation of what it means
         """
         
-        result = await Runner.run(localization_agent, prompt)
+        result = (await llm_gateway.execute(build_llm_request(localization_agent, prompt))).raw
         try:
             return json.loads(result.final_output)
         except:
@@ -1884,7 +1885,7 @@ class RegionalCultureSystem(BaseLoreManager):
                         - status_indicators: how it shows social rank
                         """
                         
-                        result = await Runner.run(fashion_agent, prompt)
+                        result = (await llm_gateway.execute(build_llm_request(fashion_agent, prompt))).raw
                         try:
                             adaptation = json.loads(result.final_output)
                         except:
@@ -1935,7 +1936,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     - accessories: related items
                     """
                     
-                    result = await Runner.run(fashion_agent, prompt)
+                    result = (await llm_gateway.execute(build_llm_request(fashion_agent, prompt))).raw
                     try:
                         fashion_details = json.loads(result.final_output)
                     except:
@@ -2133,7 +2134,7 @@ class RegionalCultureSystem(BaseLoreManager):
                         - status_association: is it elite or common food
                         """
                         
-                        result = await Runner.run(cuisine_agent, prompt)
+                        result = (await llm_gateway.execute(build_llm_request(cuisine_agent, prompt))).raw
                         try:
                             adaptation = json.loads(result.final_output)
                         except:
@@ -2188,7 +2189,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     - presentation: how it's presented
                     """
                     
-                    result = await Runner.run(cuisine_agent, prompt)
+                    result = (await llm_gateway.execute(build_llm_request(cuisine_agent, prompt))).raw
                     try:
                         culinary_details = json.loads(result.final_output)
                     except:
@@ -2424,7 +2425,7 @@ class RegionalCultureSystem(BaseLoreManager):
                         - integration_method: how it merges with existing customs
                         """
                         
-                        result = await Runner.run(customs_agent, prompt)
+                        result = (await llm_gateway.execute(build_llm_request(customs_agent, prompt))).raw
                         try:
                             adaptation = json.loads(result.final_output)
                         except:
@@ -2484,7 +2485,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     - related_customs: other customs it connects to
                     """
                     
-                    result = await Runner.run(customs_agent, prompt)
+                    result = (await llm_gateway.execute(build_llm_request(customs_agent, prompt))).raw
                     try:
                         custom_details = json.loads(result.final_output)
                     except:
@@ -2801,7 +2802,7 @@ class RegionalCultureSystem(BaseLoreManager):
         """
         
         # Run the simulation
-        result = await Runner.run(dialect_agent, prompt, context=run_ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(dialect_agent, prompt, context=run_ctx.context))).raw
         dialect_model = result.final_output
         
         # Store the dialect in the database
@@ -2987,7 +2988,7 @@ class RegionalCultureSystem(BaseLoreManager):
             - Advice for visitors from each nation
             """
             
-            result = await Runner.run(comparison_agent, prompt, context={})
+            result = (await llm_gateway.execute(build_llm_request(comparison_agent, prompt, context={}))).raw
             
             return {
                 "nation1_id": nation_id1,
@@ -3057,7 +3058,7 @@ class RegionalCultureSystem(BaseLoreManager):
             Ensure the protocol respects both nations' matriarchal structures.
             """
             
-            result = await Runner.run(protocol_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(protocol_agent, prompt, context=run_ctx.context))).raw
             
             return {
                 "nation1_id": nation_id1,

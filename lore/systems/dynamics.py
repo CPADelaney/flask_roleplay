@@ -17,7 +17,6 @@ import lore.core.canon as canon
 # ------------------ AGENTS SDK IMPORTS ------------------
 from agents import (
     Agent,
-    Runner,
     function_tool,
     handoff,
     trace,
@@ -31,6 +30,8 @@ from agents.run import RunConfig
 # ------------------ NYX/GOVERNANCE IMPORTS ------------------
 from nyx.nyx_governance import AgentType, DirectivePriority
 from nyx.governance_helpers import with_governance
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 # ------------------ PROJECT IMPORTS ------------------
 try:
@@ -504,7 +505,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         """
         
         logger.debug(f"[_validate_event_description] Sending validation prompt to agent")
-        result = await Runner.run(validation_agent, prompt, context=run_ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(validation_agent, prompt, context=run_ctx.context))).raw
         validation = result.final_output
         
         logger.info(f"[_validate_event_description] Validation result: is_valid={validation.is_valid}")
@@ -736,12 +737,11 @@ class LoreDynamicsSystem(BaseLoreManager):
     
             # Single agent run with guardrail handling
             try:
-                result = await Runner.run(
-                    evolution_agent,
+                result = (await llm_gateway.execute(build_llm_request(evolution_agent,
                     prompt,
                     context=run_ctx.context,
                     run_config=run_config
-                )
+                ))).raw
                 logger.info(f"[evolve_lore_with_event] Agent workflow completed successfully")
             except InputGuardrailTripwireTriggered as e:
                 logger.error(f"[evolve_lore_with_event] Guardrail triggered! info={e}")
@@ -939,7 +939,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 
                 try:
                     # Run the agent
-                    result = await Runner.run(update_agent, prompt, context=run_ctx.context)
+                    result = (await llm_gateway.execute(build_llm_request(update_agent, prompt, context=run_ctx.context))).raw
                     update_data = result.final_output
                     
                     # Convert to dict for manipulation
@@ -1064,7 +1064,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
         
-        result = await Runner.run(agent, prompt, context=run_ctx.context, run_config=run_config)
+        result = (await llm_gateway.execute(build_llm_request(agent, prompt, context=run_ctx.context, run_config=run_config))).raw
         return result.final_output.dict()
 
     def _get_name_column_for_lore_type(self, lore_type: str) -> str:
@@ -1211,7 +1211,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             Return strictly valid JSON with 'elements' containing array of LoreElement objects, reinforcing matriarchal themes.
             """
             
-            result = await Runner.run(creation_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(creation_agent, prompt, context=run_ctx.context))).raw
             new_elements_wrapper = result.final_output
             new_elements = new_elements_wrapper.elements
             
@@ -1417,7 +1417,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             trace_metadata=self.trace_metadata
         )
         
-        result = await Runner.run(type_agent, prompt, context=run_ctx.context, run_config=run_config)
+        result = (await llm_gateway.execute(build_llm_request(type_agent, prompt, context=run_ctx.context, run_config=run_config))).raw
         event_type_data = result.final_output
         
         if event_type_data.event_type in event_types:
@@ -1531,12 +1531,11 @@ class LoreDynamicsSystem(BaseLoreManager):
             "Return a JSON or textual description of the event."
         ).format(**prompt_data)
         
-        result = await Runner.run(
-            event_orchestrator_agent,
+        result = (await llm_gateway.execute(build_llm_request(event_orchestrator_agent,
             prompt,
             context=run_ctx.context,
             run_config=run_config
-        )
+        ))).raw
         
         try:
             response_text = result.final_output
@@ -2019,12 +2018,11 @@ class LoreDynamicsSystem(BaseLoreManager):
                     }
                 )
                 
-                result = await Runner.run(
-                    myth_agent, 
+                result = (await llm_gateway.execute(build_llm_request(myth_agent, 
                     prompt, 
                     context=run_ctx.context,
                     run_config=trace_config
-                )
+                ))).raw
                 new_description = result.final_output
                 
                 # Apply matriarchal theming to the new description
@@ -2149,7 +2147,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 """
                 
                 # Run the agent
-                result = await Runner.run(culture_agent, prompt, context={})
+                result = (await llm_gateway.execute(build_llm_request(culture_agent, prompt, context={}))).raw
                 new_description = result.final_output
                 
                 # Apply matriarchal theming
@@ -2301,7 +2299,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     Include how they relate to {other_faction['name']} now.
                     """
                     
-                    result = await Runner.run(geo_agent, prompt, context={})
+                    result = (await llm_gateway.execute(build_llm_request(geo_agent, prompt, context={}))).raw
                     new_description = result.final_output
                     new_description = MatriarchalThemingUtils.apply_matriarchal_theme("faction", new_description)
                     
@@ -2357,7 +2355,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     or expansion of territory. Indicate who or what they're challenging.
                     """
                     
-                    result = await Runner.run(geo_agent, prompt, context={})
+                    result = (await llm_gateway.execute(build_llm_request(geo_agent, prompt, context={}))).raw
                     new_description = result.final_output
                     new_description = MatriarchalThemingUtils.apply_matriarchal_theme("faction", new_description)
                     
@@ -2405,7 +2403,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     Indicate how authority transitions, and how it impacts local life.
                     """
                     
-                    result = await Runner.run(geo_agent, prompt, context={})
+                    result = (await llm_gateway.execute(build_llm_request(geo_agent, prompt, context={}))).raw
                     new_description = result.final_output
                     new_description = MatriarchalThemingUtils.apply_matriarchal_theme("region", new_description)
                     
@@ -2441,7 +2439,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     Mention new alliances, resources, or strategies. Maintain matriarchal themes.
                     """
                     
-                    result = await Runner.run(geo_agent, prompt, context={})
+                    result = (await llm_gateway.execute(build_llm_request(geo_agent, prompt, context={}))).raw
                     new_description = result.final_output
                     new_description = MatriarchalThemingUtils.apply_matriarchal_theme("faction", new_description)
                     
@@ -2552,7 +2550,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 Return only the updated description text.
                 """
                 
-                result = await Runner.run(figure_agent, prompt, context={})
+                result = (await llm_gateway.execute(build_llm_request(figure_agent, prompt, context={}))).raw
                 new_description = result.final_output
                 new_description = MatriarchalThemingUtils.apply_matriarchal_theme("character", new_description)
                 
@@ -2724,7 +2722,7 @@ class MultiStepPlanner:
         Return a JSON plan with these steps, ensuring matriarchal themes remain central.
         """
         
-        result = await Runner.run(self.planning_agent, prompt, context=run_ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(self.planning_agent, prompt, context=run_ctx.context))).raw
         plan = result.final_output
         
         # Store the plan
@@ -2773,7 +2771,7 @@ class MultiStepPlanner:
         """
         
         run_ctx = RunContextWrapper(context=context)
-        result = await Runner.run(executor_agent, prompt, context=run_ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(executor_agent, prompt, context=run_ctx.context))).raw
         
         try:
             outcome = json.loads(result.final_output)
@@ -3132,7 +3130,7 @@ class NarrativeEvaluator:
             Include specific suggestions for improvement.
             """
             
-            result = await Runner.run(self.evaluation_agent, prompt, context={})
+            result = (await llm_gateway.execute(build_llm_request(self.evaluation_agent, prompt, context={}))).raw
             evaluation = result.final_output
             
             # Store the feedback for learning
@@ -3239,7 +3237,7 @@ class NarrativeEvaluator:
         Return JSON with actionable suggestions.
         """
         
-        result = await Runner.run(suggestion_agent, prompt, context={})
+        result = (await llm_gateway.execute(build_llm_request(suggestion_agent, prompt, context={}))).raw
         return result.final_output.dict()
     
     async def _apply_improvement_suggestions(self, suggestions: Dict[str, Any]) -> None:
@@ -3365,7 +3363,7 @@ class NarrativeEvolutionSystem:
             For this variation, emphasize {self._get_variation_emphasis(element_type, i)}.
             """
             
-            result = await Runner.run(generator_agent, variation_prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(generator_agent, variation_prompt, context=run_ctx.context))).raw
             candidate = result.final_output
             candidate.generation_index = i
             candidates.append(candidate.dict())
@@ -3408,7 +3406,7 @@ class NarrativeEvolutionSystem:
         - reasoning: why you selected this one
         """
         
-        result = await Runner.run(self.selection_agent, prompt, context={})
+        result = (await llm_gateway.execute(build_llm_request(self.selection_agent, prompt, context={}))).raw
         selection = result.final_output
         
         selected_index = selection.selected_index
@@ -3436,7 +3434,7 @@ class NarrativeEvolutionSystem:
         Return the improved JSON with all original fields plus any enhancements.
         """
         
-        result = await Runner.run(self.mutation_agent, prompt, context={})
+        result = (await llm_gateway.execute(build_llm_request(self.mutation_agent, prompt, context={}))).raw
         
         try:
             mutated = json.loads(result.final_output)
@@ -3550,7 +3548,7 @@ class NarrativeEvolutionSystem:
         Return JSON with mutation directives.
         """
         
-        result = await Runner.run(self.mutation_agent, prompt, context={})
+        result = (await llm_gateway.execute(build_llm_request(self.mutation_agent, prompt, context={}))).raw
         return result.final_output.dict()
 
 class WorldStateStreamer:
@@ -3603,7 +3601,7 @@ class WorldStateStreamer:
             # Note: The SDK might not support streaming directly, so we'll simulate it
             # In a real implementation, you'd use the streaming API if available
             
-            result = await Runner.run(self.streamer_agent, prompt, context={})
+            result = (await llm_gateway.execute(build_llm_request(self.streamer_agent, prompt, context={}))).raw
             content = result.final_output
             
             # Process the content into phases
@@ -3665,7 +3663,7 @@ class WorldStateStreamer:
             """
             
             # Get the full result
-            result = await Runner.run(self.streamer_agent, prompt, context={})
+            result = (await llm_gateway.execute(build_llm_request(self.streamer_agent, prompt, context={}))).raw
             content = result.final_output
             
             # Parse and yield year by year
