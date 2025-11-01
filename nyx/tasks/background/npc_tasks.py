@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import asyncio
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from nyx.nyx_agent.context import (
@@ -105,9 +104,14 @@ async def _execute_adaptation_async(
     return cycle_result
 
 
-@shared_task(name="nyx.tasks.background.npc_tasks.run_adaptation_cycle", acks_late=True)
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.npc_tasks.run_adaptation_cycle",
+    acks_late=True,
+)
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
-def run_adaptation_cycle(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+def run_adaptation_cycle(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     """Update NPC state in the background."""
 
     if not payload:

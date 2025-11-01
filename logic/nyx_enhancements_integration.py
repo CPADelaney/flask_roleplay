@@ -13,7 +13,7 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
-from celery_config import celery_app
+from nyx.tasks.celery_app import app as celery_app
 from quart import Blueprint, current_app, jsonify
 
 # New SDK imports - use the 'final stop'

@@ -144,6 +144,17 @@ def dispatch_once(
     return summary
 
 
+def run_once(limit: int = 100) -> int:
+    """Dispatch pending events using the default session factory."""
+
+    from nyx.common.outbox import get_session_factory
+
+    dsn = os.getenv("DB_DSN") or os.getenv("DATABASE_URL")
+    session_factory = get_session_factory(dsn)
+    summary = dispatch_once(session_factory, limit=limit)
+    return summary.dispatched
+
+
 def main(argv: Optional[Iterable[str]] = None) -> DispatchSummary:
     """Command-line entry point for Celery beat to invoke once."""
 
@@ -179,6 +190,7 @@ __all__ = [
     "DispatchSummary",
     "clear_topic_handlers",
     "dispatch_once",
+    "run_once",
     "register_default_topic_handlers",
     "register_topic_handler",
 ]

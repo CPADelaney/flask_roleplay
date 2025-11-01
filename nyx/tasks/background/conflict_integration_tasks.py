@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from nyx.tasks.background.conflict_integration_helpers import (
     run_activity_integration,
@@ -123,12 +123,10 @@ async def _integrate_activity_async(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"integration_key": integration_key, "integration": integration}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_integration.analyze_scene_tension",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_integration.analyze_scene_tension",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_tension)
 def analyze_scene_tension(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -142,12 +140,10 @@ def analyze_scene_tension(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "ok", **result}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_integration.generate_contextual_conflict",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_integration.generate_contextual_conflict",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_contextual)
 def generate_contextual_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -161,12 +157,10 @@ def generate_contextual_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any
     return {"status": "ok", **result}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_integration.integrate_activity",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_integration.integrate_activity",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_activity)
 def integrate_activity(self, payload: Dict[str, Any]) -> Dict[str, Any]:

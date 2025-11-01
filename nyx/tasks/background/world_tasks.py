@@ -6,8 +6,6 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from celery import shared_task
-
 from db.connection import get_db_connection_context
 from logic.universal_updater_agent import (
     UniversalUpdaterContext,
@@ -21,6 +19,7 @@ from nyx.nyx_agent.context import (
     persist_canonical_snapshot,
 )
 from nyx.utils.idempotency import idempotent
+from nyx.tasks.base import NyxTask, app
 from nyx.utils.versioning import reject_if_stale
 
 logger = logging.getLogger(__name__)
@@ -94,9 +93,14 @@ async def _apply_world_deltas_async(
         )
 
 
-@shared_task(name="nyx.tasks.background.world_tasks.apply_universal", acks_late=True)
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.world_tasks.apply_universal",
+    acks_late=True,
+)
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
-def apply_universal(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     """Apply normalized world deltas with optimistic concurrency."""
 
     if not payload:

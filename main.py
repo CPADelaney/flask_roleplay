@@ -2192,7 +2192,7 @@ def create_quart_app():
         try:
             # Assuming celery_app is accessible, maybe attach to app context?
             # Or import directly from celery_config (might cause circular import issues)
-            from celery_config import celery_app as current_celery_app
+            from nyx.tasks.celery_app import app as current_celery_app
             # Add a timeout to inspect to prevent hanging
             inspector = current_celery_app.control.inspect(timeout=5)
             active_workers = inspector.ping() # Ping is usually faster than active()

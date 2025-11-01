@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from infra.cache import cache_key, get_json, set_json
 from nyx.tasks.utils import with_retry, run_coro
@@ -74,12 +74,10 @@ async def _calculate_reputation_async(
     return reputation
 
 
-@shared_task(
-    name="nyx.tasks.background.social_tasks.generate_social_bundle",
+@app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.generate_social_bundle",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_social_bundle)
 def generate_social_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -226,12 +224,10 @@ async def _form_alliance_async(
     return await manager.form_alliance(initiator_id, target_id, reason)
 
 
-@shared_task(
-    name="nyx.tasks.background.social_tasks.generate_gossip",
+@app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.generate_gossip",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_gossip)
 def generate_gossip(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -288,12 +284,10 @@ def generate_gossip(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.social_tasks.calculate_reputation",
+@app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.calculate_reputation",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_reputation)
 def calculate_reputation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -335,12 +329,10 @@ def calculate_reputation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.social_tasks.narrate_reputation_change",
+@app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.narrate_reputation_change",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_reputation_narration)
 def narrate_reputation_change(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -393,12 +385,10 @@ def narrate_reputation_change(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.social_tasks.form_alliance",
+@app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.form_alliance",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_alliance)
 def form_alliance(self, payload: Dict[str, Any]) -> Dict[str, Any]:

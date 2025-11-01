@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from db.connection import get_db_connection_context
 from lore.lore_orchestrator import get_lore_orchestrator
@@ -160,9 +160,14 @@ async def _refresh_culture_summaries_async(
         )
 
 
-@shared_task(name="nyx.tasks.background.lore_tasks.precompute_scene_bundle", acks_late=True)
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.lore_tasks.precompute_scene_bundle",
+    acks_late=True,
+)
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
-def precompute_scene_bundle(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+def precompute_scene_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     """Warm the lore cache for the referenced scene."""
 
     if not payload:

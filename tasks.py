@@ -15,7 +15,7 @@ import re
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
-from celery_config import celery_app
+from nyx.tasks.celery_app import app as celery_app
 from celery.signals import task_revoked
 from celery import shared_task
 from agents import trace, custom_span, RunContextWrapper

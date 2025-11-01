@@ -8,7 +8,7 @@ import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
 from logic.conflict_system.conflict_synthesizer_hotpath import (
@@ -83,9 +83,14 @@ def _persist_snapshot(user_id: str, conversation_id: str, snapshot: Dict[str, An
     _run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
 
 
-@shared_task(name="nyx.tasks.background.conflict_tasks.process_events", acks_late=True)
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.conflict_tasks.process_events",
+    acks_late=True,
+)
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
-def process_events(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+def process_events(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     """Process deferred conflict computations."""
 
     if not payload:
@@ -129,9 +134,14 @@ async def _run_orchestrator(synthesizer, prompt: str):
     return result.raw
 
 
-@shared_task(name="nyx.tasks.background.conflict_tasks.route_subsystems", acks_late=True)
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.conflict_tasks.route_subsystems",
+    acks_late=True,
+)
 @idempotent(key_fn=_routing_key)
-def route_subsystems(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     """Run the orchestrator routing prompt and cache subsystem decisions."""
 
     if not payload:

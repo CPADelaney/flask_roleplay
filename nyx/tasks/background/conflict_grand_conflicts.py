@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import asyncpg
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from db.connection import get_db_connection_context
@@ -699,12 +699,10 @@ def _idempotency_key_opportunities(payload: Dict[str, Any]) -> str:
     return f"grand_conflict:opportunities:{payload.get('user_id')}:{payload.get('conversation_id')}"
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_grand_conflicts.generate_grand_conflict",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_grand_conflicts.generate_grand_conflict",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_generate)
 def generate_grand_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -723,12 +721,10 @@ def generate_grand_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_grand_conflicts.advance_grand_conflict",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_grand_conflicts.advance_grand_conflict",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_advance)
 def advance_grand_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -743,12 +739,10 @@ def advance_grand_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_grand_conflicts.generate_conflict_news",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_grand_conflicts.generate_conflict_news",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_news)
 def generate_conflict_news(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -763,12 +757,10 @@ def generate_conflict_news(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_grand_conflicts.generate_conflict_ripples",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_grand_conflicts.generate_conflict_ripples",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_ripples)
 def generate_conflict_ripples(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -787,12 +779,10 @@ def generate_conflict_ripples(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_grand_conflicts.check_conflict_opportunities",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_grand_conflicts.check_conflict_opportunities",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_opportunities)
 def check_conflict_opportunities(self, payload: Dict[str, Any]) -> Dict[str, Any]:

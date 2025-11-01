@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, List, Sequence, Tuple
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from logic.conflict_system import conflict_victory_hotpath
@@ -145,11 +145,9 @@ def _parse_conditions(payload: Dict[str, Any], raw: str) -> List[Dict[str, Any]]
     return conflict_victory_hotpath.fallback_victory_conditions(conflict_type, stakeholder)
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_victory.generate_victory_conditions",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_victory.generate_victory_conditions",
     bind=True,
-    acks_late=True,
-)
+    acks_late=True,)
 def generate_victory_conditions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     condition_ids = [int(cid) for cid in payload.get('condition_ids') or [] if int(cid) > 0]
     if not condition_ids:
@@ -206,11 +204,9 @@ Return JSON:
     return {'status': 'updated', 'updated_conditions': len(updates)}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_victory.generate_achievement_summary",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_victory.generate_achievement_summary",
     bind=True,
-    acks_late=True,
-)
+    acks_late=True,)
 def generate_achievement_summary(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     condition_id = int(payload.get('condition_id') or 0)
     if not condition_id:
@@ -264,11 +260,9 @@ Write a powerful 2-3 paragraph narration.
     return {'status': 'ready', 'condition_id': condition_id, 'summary': summary}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_victory.calculate_victory_consequences",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_victory.calculate_victory_consequences",
     bind=True,
-    acks_late=True,
-)
+    acks_late=True,)
 def calculate_victory_consequences(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     condition_id = int(payload.get('condition_id') or 0)
     if not condition_id:
@@ -331,11 +325,9 @@ Return JSON:
     return {'status': 'ready', 'condition_id': condition_id}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_victory.generate_conflict_epilogue",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_victory.generate_conflict_epilogue",
     bind=True,
-    acks_late=True,
-)
+    acks_late=True,)
 def generate_conflict_epilogue(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     condition_ids = [int(cid) for cid in payload.get('condition_ids') or [] if int(cid) > 0]
     conflict = payload.get('conflict') or {}
@@ -388,11 +380,9 @@ Write 3-4 paragraphs that feel like the end of a chapter, not the end of the sto
     return {'status': 'ready', 'epilogue': epilogue}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_victory.generate_consolation",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_victory.generate_consolation",
     bind=True,
-    acks_late=True,
-)
+    acks_late=True,)
 def generate_consolation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     condition_id = int(payload.get('condition_id') or 0)
     if not condition_id:

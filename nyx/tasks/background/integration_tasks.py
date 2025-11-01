@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from logic.conflict_system.integration import IntegrationMode
@@ -56,7 +56,11 @@ def _extract_mode_name(response: Any) -> Optional[str]:
     return raw or None
 
 
-@shared_task(name="nyx.tasks.background.integration_tasks.recommend_mode", bind=True)
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.integration_tasks.recommend_mode",
+)
 def recommend_mode(
     self,
     user_id: int,

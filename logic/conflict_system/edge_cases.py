@@ -23,7 +23,7 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 
-from celery_config import celery_app
+from nyx.tasks.celery_app import app as celery_app
 
 from agents import Agent, function_tool, RunContextWrapper
 from nyx.tasks.background.conflict_edge_tasks import (

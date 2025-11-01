@@ -25,6 +25,6 @@ services:
       - REDIS_URL=redis://redis:6379/0
 
     build: .
-    command: celery -A tasks.celery_app worker --loglevel=info --queues background,heavy,realtime
+    command: celery -A nyx.tasks.celery_app:app worker --loglevel=info --queues background,heavy,realtime
     depends_on:
       - redis

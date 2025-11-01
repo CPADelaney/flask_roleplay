@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import redis
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from logic.conflict_system.dynamic_conflict_template import (
@@ -311,60 +311,75 @@ def _handle_generation(
         _release_lock(lock_key)
 
 
-@shared_task(
+@app.task(
+    bind=True,
+    base=NyxTask,
     name="nyx.tasks.background.conflict_edge_tasks.generate_orphan_recovery",
     queue="background",
     acks_late=True,
 )
-def generate_orphan_recovery(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+@with_retry
+def generate_orphan_recovery(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     conflict = payload.get("conflict", {})
     cache_key = payload.get("cache_key", "")
     lock_key = payload.get("lock_key", "")
     return _handle_generation(cache_key, lock_key, _build_orphan_prompt(conflict), _orphan_agent)
 
 
-@shared_task(
+@app.task(
+    bind=True,
+    base=NyxTask,
     name="nyx.tasks.background.conflict_edge_tasks.generate_stale_recovery",
     queue="background",
     acks_late=True,
 )
-def generate_stale_recovery(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+@with_retry
+def generate_stale_recovery(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     conflict = payload.get("conflict", {})
     cache_key = payload.get("cache_key", "")
     lock_key = payload.get("lock_key", "")
     return _handle_generation(cache_key, lock_key, _build_stale_prompt(conflict), _orphan_agent)
 
 
-@shared_task(
+@app.task(
+    bind=True,
+    base=NyxTask,
     name="nyx.tasks.background.conflict_edge_tasks.generate_loop_recovery",
     queue="background",
     acks_late=True,
 )
-def generate_loop_recovery(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+@with_retry
+def generate_loop_recovery(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     conflicts = payload.get("conflicts", [])
     cache_key = payload.get("cache_key", "")
     lock_key = payload.get("lock_key", "")
     return _handle_generation(cache_key, lock_key, _build_loop_prompt(conflicts), _orphan_agent)
 
 
-@shared_task(
+@app.task(
+    bind=True,
+    base=NyxTask,
     name="nyx.tasks.background.conflict_edge_tasks.generate_overload_recovery",
     queue="background",
     acks_late=True,
 )
-def generate_overload_recovery(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+@with_retry
+def generate_overload_recovery(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     count = int(payload.get("active_count", 0))
     cache_key = payload.get("cache_key", "")
     lock_key = payload.get("lock_key", "")
     return _handle_generation(cache_key, lock_key, _build_overload_prompt(count), _degrader_agent)
 
 
-@shared_task(
+@app.task(
+    bind=True,
+    base=NyxTask,
     name="nyx.tasks.background.conflict_edge_tasks.generate_contradiction_recovery",
     queue="background",
     acks_late=True,
 )
-def generate_contradiction_recovery(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+@with_retry
+def generate_contradiction_recovery(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     contradiction = payload.get("contradiction", {})
     cache_key = payload.get("cache_key", "")
     lock_key = payload.get("lock_key", "")
