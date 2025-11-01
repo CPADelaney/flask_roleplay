@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, Field, validator
 
 # Import Agents SDK components
-from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
+from agents import Agent, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
 from agents import RunContextWrapper
 
 from npcs.npc_agent import NPCAgent, ResourcePool
@@ -26,6 +26,7 @@ from db.connection import get_db_connection_context
 from lore.core import canon
 from lore.core.lore_system import LoreSystem
 from npcs.belief_system_integration import enhance_npc_with_belief_system
+from nyx.gateway import llm_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -155,11 +156,30 @@ class ModerationCheck(BaseModel):
     reasoning: str = ""
 
 # --- Small utilities ---
-def _safe_json_loads(s: str) -> Dict[str, Any]:
-    try:
-        return json.loads((s or "").strip().strip("`").strip())
-    except Exception:
-        return {}
+def _safe_json_loads(value: Any) -> Dict[str, Any]:
+    if isinstance(value, llm_gateway.LLMResult):
+        raw_value = None
+        if value.raw is not None and hasattr(value.raw, "final_output"):
+            raw_value = getattr(value.raw, "final_output")
+        if isinstance(raw_value, dict):
+            return raw_value
+        if isinstance(raw_value, str):
+            value = raw_value
+        elif isinstance(raw_value, (list, tuple)):
+            value = json.dumps(raw_value)
+        elif value.text:
+            value = value.text
+        else:
+            value = raw_value
+
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads((value or "").strip().strip("`").strip())
+        except Exception:
+            return {}
+    return {}
 
 # Fallback functions for when agents aren't available
 async def _fallback_moderation_check(text: str) -> ModerationCheck:
@@ -357,8 +377,16 @@ class NPCAgentSystem:
                 # Check moderation if we have text
                 if text:
                     try:
-                        result = await Runner.run(moderation_agent, text, context=ctx.context)
-                        final_output = result.final_output_as(ModerationCheck)
+                        request = llm_gateway.LLMRequest(
+                            agent=moderation_agent,
+                            prompt=text,
+                            context=ctx.context,
+                        )
+                        llm_result = await llm_gateway.execute(request)
+                        raw_result = llm_result.raw
+                        if raw_result is None:
+                            raise ValueError("Moderation agent returned no result")
+                        final_output = raw_result.final_output_as(ModerationCheck)
                     except Exception as e:
                         logger.error(f"Moderation agent failed, using fallback: {e}")
                         final_output = await _fallback_moderation_check(text)
@@ -1403,10 +1431,22 @@ class NPCAgentSystem:
             group_id=f"user_{self.user_id}_conv_{self.conversation_id}"
         ):
             # Run the system agent
-            result = await Runner.run(system_agent, input_data)
-            
-            # Return the result
-            return result.final_output.result
+            request = llm_gateway.LLMRequest(
+                agent=system_agent,
+                prompt=input_data,
+            )
+            result = await llm_gateway.execute(request)
+
+            raw_result = result.raw
+            if raw_result is None or not hasattr(raw_result, "final_output"):
+                raise ValueError("System agent returned no result")
+
+            final_output = getattr(raw_result, "final_output")
+            if isinstance(final_output, dict):
+                return final_output.get("result")
+            if hasattr(final_output, "result"):
+                return final_output.result
+            return final_output
                 
     async def get_npc_name(self, npc_id: int) -> str:
         """

@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
-from agents import Agent, Runner, function_tool, handoff, trace, InputGuardrail, RunContextWrapper, GuardrailFunctionOutput
+from agents import Agent, function_tool, handoff, trace, InputGuardrail, RunContextWrapper, GuardrailFunctionOutput
 from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
 
 from npcs.npc_agent import NPCAgent, ResourcePool
+from nyx.gateway import llm_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -440,8 +441,15 @@ class NPCAgentCoordinator:
                 group_id=f"user_{self.user_id}_conv_{self.conversation_id}",
             ):
                 # 5. Run the coordinator agent
-                result = await Runner.run(coordinator_agent, input_data)
-                output = result.final_output_as(GroupDecisionOutput)
+                request = llm_gateway.LLMRequest(
+                    agent=coordinator_agent,
+                    prompt=input_data,
+                )
+                result = await llm_gateway.execute(request)
+                raw_result = result.raw
+                if raw_result is None:
+                    raise ValueError("Coordinator agent returned no result")
+                output = raw_result.final_output_as(GroupDecisionOutput)
 
                 # 6. Create memories for all NPCs based on the decision
                 location = enhanced_context.get("location", "Unknown")
@@ -910,8 +918,16 @@ class NPCAgentCoordinator:
         )
 
         async def homework_guardrail(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
-            result = await Runner.run(guardrail_agent, input_data, context=ctx.context)
-            final_output = result.final_output_as(HomeworkCheck)
+            request = llm_gateway.LLMRequest(
+                agent=guardrail_agent,
+                prompt=input_data,
+                context=ctx.context,
+            )
+            result = await llm_gateway.execute(request)
+            raw_result = result.raw
+            if raw_result is None:
+                raise ValueError("Homework guardrail returned no result")
+            final_output = raw_result.final_output_as(HomeworkCheck)
             return GuardrailFunctionOutput(
                 output_info=final_output,
                 tripwire_triggered=final_output.is_homework
@@ -945,8 +961,14 @@ class NPCAgentCoordinator:
             f"player_action_{self.user_id}_{self.conversation_id}",
             group_id=f"user_{self.user_id}_conv_{self.conversation_id}",
         ):
-            result = await Runner.run(coordinator, input_data)
-            return result.final_output
+            request = llm_gateway.LLMRequest(
+                agent=coordinator,
+                prompt=input_data,
+            )
+            result = await llm_gateway.execute(request)
+            if result.raw is not None and hasattr(result.raw, "final_output"):
+                return getattr(result.raw, "final_output")
+            return result.text
 
     @function_tool(strict_mode=False)
     async def _process_player_action_for_npcs(

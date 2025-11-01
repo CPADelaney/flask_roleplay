@@ -16,7 +16,7 @@ import asyncpg
 from logic.game_time_helper import get_game_time_string, GameTimeContext
 from agents.models.openai_responses import OpenAIResponsesModel
 
-from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, ModelSettings
+from agents import Agent, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, ModelSettings
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from memory.core import Memory, MemoryType, MemorySignificance
@@ -60,6 +60,7 @@ from npcs.dynamic_templates import (
 )
 
 from lore.core import canon
+from nyx.gateway import llm_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -3485,14 +3486,19 @@ class NPCCreationHandler:
 
             # --- Run via Agent SDK --------------------------------------------
             mem_agent  = self._get_memory_generation_agent()
-            run_result = await Runner.run(
-                mem_agent,
-                user_prompt,            # send the rich creative brief
-                context=ctx.context,    # pass through metadata (user_id, etc.)
+            request = llm_gateway.LLMRequest(
+                agent=mem_agent,
+                prompt=user_prompt,            # send the rich creative brief
+                context=ctx.context,           # pass through metadata (user_id, etc.)
             )
+            run_result = await llm_gateway.execute(request)
+
+            raw_result = run_result.raw
+            if raw_result is None:
+                raise ValueError("Memory generation returned no result")
 
             # parse -> Pydantic
-            mem_obj = run_result.final_output_as(NPCMemories)
+            mem_obj = raw_result.final_output_as(NPCMemories)
 
             if mem_obj and mem_obj.memories:
                 mems = [m.strip() for m in mem_obj.memories if isinstance(m, str) and m.strip()]
@@ -4055,13 +4061,32 @@ class NPCCreationHandler:
         """
         
         # Run the NPC creator
-        result = await Runner.run(
-            self.npc_creator,
-            prompt,
-            context=ctx.context
+        request = llm_gateway.LLMRequest(
+            agent=self.npc_creator,
+            prompt=prompt,
+            context=ctx.context,
         )
-        
-        npc_data = result.final_output
+        result = await llm_gateway.execute(request)
+
+        npc_data: Dict[str, Any] | None = None
+        raw_result = result.raw
+        if raw_result is not None and hasattr(raw_result, "final_output"):
+            npc_data = getattr(raw_result, "final_output")
+
+        if isinstance(npc_data, str):
+            try:
+                npc_data = json.loads(npc_data)
+            except json.JSONDecodeError as exc:
+                raise ValueError("NPC creator returned non-JSON output") from exc
+
+        if npc_data is None and result.text:
+            try:
+                npc_data = json.loads(result.text)
+            except json.JSONDecodeError as exc:
+                raise ValueError("NPC creator returned non-JSON text output") from exc
+
+        if not isinstance(npc_data, dict):
+            raise ValueError("NPC creator returned unexpected payload")
         
         # Now create the NPC in the database
         created_npc = await self.create_npc_in_database(ctx, npc_data)
