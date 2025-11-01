@@ -15,6 +15,7 @@ from datetime import datetime
 
 from celery import current_app
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper
+from nyx.conflict import request_conflict_resolution
 from db.connection import get_db_connection_context
 from logic.conflict_system.mode_recommendation import (
     MODE_OPTIMIZER_INSTRUCTIONS,
@@ -103,14 +104,16 @@ class CreateContextualConflictResponse(TypedDict):
     created_at: str
     error: str
 
-class ResolveActiveConflictResponse(TypedDict):
-    conflict_id: int
+class ResolveActiveConflictResponse(TypedDict, total=False):
+    conflict_id: str
     resolved: bool
     resolution_type: str
     outcome: str
     victory_achieved: bool
     epilogue: str
     error: str
+    queued: bool
+    pipeline_status: str | None
 
 
 
@@ -324,16 +327,14 @@ class ConflictSystemInterface:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Resolve a conflict"""
-        
-        # Resolve through synthesizer
-        synthesizer = await self._get_synthesizer()
-        result = await synthesizer.resolve_conflict(
+
+        return await request_conflict_resolution(
+            self.user_id,
+            self.conversation_id,
             conflict_id,
             resolution_type,
-            context
+            context,
         )
-        
-        return result
     
     async def get_system_status(self) -> IntegrationState:
         """Get comprehensive system status (no direct orchestrator API needed)"""
@@ -611,8 +612,7 @@ class ConflictSystemInterface:
     
     async def _reduce_complexity(self) -> str:
         """Reduce system complexity"""
-        synthesizer = await self._get_synthesizer()
-    
+
         async with get_db_connection_context() as conn:
             low_priority = await conn.fetch("""
                 SELECT id FROM Conflicts
@@ -624,10 +624,12 @@ class ConflictSystemInterface:
             """, self.user_id, self.conversation_id)
     
         for conflict in low_priority:
-            await synthesizer.resolve_conflict(
-                int(conflict['id']),
+            await request_conflict_resolution(
+                self.user_id,
+                self.conversation_id,
+                conflict['id'],
                 'natural_resolution',
-                {'reason': 'complexity_reduction'}
+                {'reason': 'complexity_reduction'},
             )
     
         return f"Resolved {len(low_priority)} low-priority conflicts"
@@ -946,12 +948,16 @@ async def resolve_active_conflict(
 
     raw = await interface.resolve_conflict(conflict_id, resolution_type, rctx) or {}
 
+    conflict_identifier = str(raw.get('conflict_id', conflict_id))
+
     return {
-        'conflict_id': int(raw.get('conflict_id', conflict_id)),
-        'resolved': bool(raw.get('resolved', True)),
+        'conflict_id': conflict_identifier,
+        'resolved': False,
         'resolution_type': str(raw.get('resolution_type', resolution_type)),
-        'outcome': str(raw.get('outcome', '')),
-        'victory_achieved': bool(raw.get('victory_achieved', False)),
-        'epilogue': str(raw.get('epilogue', '')),
-        'error': "",
+        'outcome': '',
+        'victory_achieved': False,
+        'epilogue': '',
+        'error': str(raw.get('error', '')),
+        'queued': bool(raw.get('queued', True)),
+        'pipeline_status': raw.get('pipeline_status'),
     }

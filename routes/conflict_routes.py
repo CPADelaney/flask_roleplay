@@ -34,6 +34,7 @@ from nyx.governance_helpers import (
     report_action,
     propose_canonical_change,
 )
+from nyx.conflict import request_conflict_resolution
 
 logger = logging.getLogger(__name__)
 
@@ -576,10 +577,14 @@ async def resolve_conflict(user_id):
             if "context" in permission["override_action"]:
                 context.update(permission["override_action"]["context"])
         
-        # Resolve through synthesizer
-        synthesizer = await get_synthesizer(user_id, conversation_id)
-        result = await synthesizer.resolve_conflict(conflict_id, resolution_type, context)
-        
+        result = await request_conflict_resolution(
+            user_id,
+            conversation_id,
+            conflict_id,
+            resolution_type,
+            context,
+        )
+
         # Report to governance
         await report_action(
             user_id=user_id,
@@ -592,29 +597,14 @@ async def resolve_conflict(user_id):
                 "resolution_type": resolution_type
             },
             result={
-                "success": result.get("resolved", False),
-                "resolution_details": result.get("resolution_details")
+                "queued": result.get("queued", True),
+                "pipeline_status": result.get("pipeline_status"),
             }
         )
-        
-        # Propose canonical change for significant resolutions
-        if result.get("resolved") and resolution_type in ["victory", "defeat", "treaty"]:
-            await propose_canonical_change(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                agent_type=AgentType.CONFLICT_ANALYST,
-                agent_id=format_agent_id("conflict_system", conversation_id),
-                change_type="conflict_resolution",
-                change_data={
-                    "conflict_id": conflict_id,
-                    "resolution_type": resolution_type,
-                    "impact": "high",
-                    "resolution_details": result.get("resolution_details", {})
-                }
-            )
-        
+
         return jsonify({
             "success": True,
+            "queued": result.get("queued", True),
             "resolution": result,
             "governance_metadata": {
                 "permission_tracking_id": permission.get("tracking_id", -1),

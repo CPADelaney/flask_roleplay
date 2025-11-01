@@ -24,7 +24,7 @@ _TOPICS: Dict[str, TopicHandler] = {}
 
 _DEFAULT_TASKS: Dict[str, str] = {
     "ConflictRouteRequested": "nyx.tasks.background.conflict.route_subsystems",
-    "ConflictResolutionRequested": "nyx.tasks.background.conflict.resolve_conflict",
+    "ConflictResolutionRequested": "nyx.tasks.background.conflict.start_pipeline",
     "NPCDecisionNeeded": "nyx.tasks.background.npc.compute_decision",
 }
 
