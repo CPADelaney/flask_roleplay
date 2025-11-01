@@ -25,10 +25,11 @@ from lore.core import canon
 from lore.core.lore_system import LoreSystem
 
 from openai import AsyncOpenAI
-from agents import Agent, Runner
+from agents import Agent
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.model_settings import ModelSettings
 from pydantic import BaseModel, Field
+from nyx.gateway import llm_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -403,8 +404,15 @@ class LoreImpactAnalyzer:
                 "Return the list of belief updates."
             )
 
-            result = await Runner.run(self._belief_agent, prompt)
-            updates: List[BeliefUpdate] = result.final_output or []
+            request = llm_gateway.LLMRequest(
+                agent=self._belief_agent,
+                prompt=prompt,
+            )
+            result = await llm_gateway.execute(request)
+            raw_result = result.raw
+            if raw_result is None:
+                raise ValueError("Belief agent returned no result")
+            updates: List[BeliefUpdate] = getattr(raw_result, "final_output", None) or []
             # Convert Pydantic -> plain dicts for your system
             return [u.model_dump() for u in updates]
 
@@ -476,8 +484,15 @@ class LoreImpactAnalyzer:
                 "Return the list of predicted impacts."
             )
 
-            result = await Runner.run(self._rel_agent, prompt)
-            impacts: List[RelationshipImpact] = result.final_output or []
+            request = llm_gateway.LLMRequest(
+                agent=self._rel_agent,
+                prompt=prompt,
+            )
+            result = await llm_gateway.execute(request)
+            raw_result = result.raw
+            if raw_result is None:
+                raise ValueError("Relationship agent returned no result")
+            impacts: List[RelationshipImpact] = getattr(raw_result, "final_output", None) or []
             return [i.model_dump() for i in impacts]
 
         except Exception as e:

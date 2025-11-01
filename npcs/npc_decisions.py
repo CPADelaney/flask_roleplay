@@ -14,12 +14,13 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, RunContextWrapper, function_tool, handoff
+from agents import Agent, RunContextWrapper, function_tool, handoff
 from agents.tracing import custom_span, function_span, generation_span
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from memory.core import MemoryType, MemorySignificance
 from npcs.npc_behavior import BehaviorEvolution
+from nyx.gateway import llm_gateway
 
 
 import openai
@@ -2028,13 +2029,17 @@ class NPCDecisionEngine:
             # --- Agent Runner Call ---
             # The agent runner executes the tools (get_npc_data, score_actions etc.) which handle DB access
             try:
-                 result = await Runner.run(
-                     decision_engine_agent,
-                     f"Make a decision for NPC {self.npc_id} based on perception and context.",
-                     context=self.context # Pass the DecisionContext object
+                 request = llm_gateway.LLMRequest(
+                     agent=decision_engine_agent,
+                     prompt=f"Make a decision for NPC {self.npc_id} based on perception and context.",
+                     context=self.context
                  )
+                 result = await llm_gateway.execute(request)
 
-                 chosen_action = result.final_output
+                 if result.raw is None or not hasattr(result.raw, "final_output"):
+                     raise ValueError("Decision engine returned no result")
+
+                 chosen_action = getattr(result.raw, "final_output")
 
                  # Convert back to dict for external usage
                  if isinstance(chosen_action, NPCAction):

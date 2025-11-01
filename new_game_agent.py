@@ -17,7 +17,7 @@ import asyncpg
 
 from logic.setting_rules import synthesize_setting_rules
 
-from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, OutputGuardrail
+from agents import Agent, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, OutputGuardrail
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from memory.wrapper import MemorySystem
@@ -38,6 +38,7 @@ from db.connection import get_db_connection_context
 
 # Import Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.gateway import llm_gateway
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.location.hierarchy import get_or_create_location
@@ -1056,23 +1057,38 @@ class NewGameAgent:
         while retry_count < max_retries:
             try:
                 logger.info(f"Generating environment (attempt {retry_count + 1}/{max_retries})")
-                raw_run = await Runner.run(env_agent_isolated, prompt, context=ctx.context)
+                request = llm_gateway.LLMRequest(
+                    agent=env_agent_isolated,
+                    prompt=prompt,
+                    context=ctx.context,
+                )
+                llm_result = await llm_gateway.execute(request)
 
-                if not raw_run.final_output:
-                    raise ValueError("Empty response from GPT")
-                
-                # Parse response
-                if isinstance(raw_run.final_output, dict):
-                    raw_data = raw_run.final_output
+                final_output = None
+                if llm_result.raw is not None and hasattr(llm_result.raw, "final_output"):
+                    final_output = getattr(llm_result.raw, "final_output")
+
+                if isinstance(final_output, dict):
+                    raw_data = final_output
                 else:
-                    output_str = str(raw_run.final_output).strip()
+                    output_str = ""
+                    if isinstance(final_output, str):
+                        output_str = final_output
+                    elif isinstance(final_output, (list, tuple)):
+                        output_str = " ".join(str(part) for part in final_output if part)
+
                     if not output_str:
-                        raise ValueError("Empty string response")
-                    
+                        output_str = (llm_result.text or "").strip()
+
+                    if not output_str:
+                        raise ValueError("Empty response from GPT")
+
+                    output_str = output_str.strip()
+
                     # Find JSON in response
                     json_start = output_str.find('{')
                     json_end = output_str.rfind('}') + 1
-                    
+
                     if json_start != -1 and json_end > json_start:
                         json_str = output_str[json_start:json_end]
                         raw_data = json.loads(json_str)
@@ -2169,13 +2185,22 @@ class NewGameAgent:
         """
         
         # Run the narrative agent
-        result = await Runner.run(
-            self.narrative_agent,
-            prompt,
-            context=ctx.context
+        request = llm_gateway.LLMRequest(
+            agent=self.narrative_agent,
+            prompt=prompt,
+            context=ctx.context,
         )
-        
-        opening_narrative = result.final_output
+        result = await llm_gateway.execute(request)
+
+        opening_narrative: str | None = None
+        if result.raw is not None and hasattr(result.raw, "final_output"):
+            opening_narrative = getattr(result.raw, "final_output")
+        if isinstance(opening_narrative, (list, tuple)):
+            opening_narrative = " ".join(str(part) for part in opening_narrative if part)
+        if not isinstance(opening_narrative, str) or not opening_narrative.strip():
+            opening_narrative = (result.text or "").strip()
+        if not opening_narrative:
+            raise ValueError("Narrative agent returned no output")
         
         async with get_db_connection_context() as conn:
             canon_ctx = _build_run_context_wrapper(user_id, conversation_id)

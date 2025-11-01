@@ -19,12 +19,13 @@ from collections import OrderedDict
 from pydantic import BaseModel, validator, Field
 
 # Import Agents SDK components
-from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
+from agents import Agent, RunContextWrapper, trace, function_tool, handoff, ModelSettings
 from agents.tracing import custom_span, generation_span, function_span
 
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from npcs.npc_memory import NPCMemoryManager
+from nyx.gateway import llm_gateway
 from .lore_context_manager import LoreContextManager
 
 logger = logging.getLogger(__name__)
@@ -87,11 +88,30 @@ Return JSON: { "description": "<text>" }
 else:
     activity_generator = None
 
-def _safe_json_loads(s: str) -> Dict[str, Any]:
-    try:
-        return json.loads(s.strip().strip("`").strip())
-    except Exception:
-        return {}
+def _safe_json_loads(value: Any) -> Dict[str, Any]:
+    if isinstance(value, llm_gateway.LLMResult):
+        raw_value = None
+        if value.raw is not None and hasattr(value.raw, "final_output"):
+            raw_value = getattr(value.raw, "final_output")
+        if isinstance(raw_value, dict):
+            return raw_value
+        if isinstance(raw_value, str):
+            value = raw_value
+        elif isinstance(raw_value, (list, tuple)):
+            value = json.dumps(raw_value)
+        elif value.text:
+            value = value.text
+        else:
+            value = raw_value
+
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value.strip().strip("`").strip())
+        except Exception:
+            return {}
+    return {}
 
 # Fallback generation functions using async OpenAI client
 async def _fallback_generate_outcome(action_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -665,11 +685,12 @@ async def execute_npc_action(
                 }
 
                 if action_outcome_generator:
-                    outcome_result = await Runner.run(
-                        starting_agent=action_outcome_generator,
-                        input=json.dumps(outcome_payload, ensure_ascii=False)
+                    request = llm_gateway.LLMRequest(
+                        agent=action_outcome_generator,
+                        prompt=json.dumps(outcome_payload, ensure_ascii=False),
                     )
-                    parsed = _safe_json_loads(outcome_result.output)
+                    outcome_result = await llm_gateway.execute(request)
+                    parsed = _safe_json_loads(outcome_result)
                     if not parsed:
                         parsed = await _fallback_generate_outcome(outcome_payload)
                 else:
@@ -1129,16 +1150,28 @@ class NPCAgent:
                 """
                 
                 # Run the decision agent
-                result = await Runner.run(
-                    starting_agent=decision_agent,
-                    input=prompt,
+                request = llm_gateway.LLMRequest(
+                    agent=decision_agent,
+                    prompt=prompt,
                     context=RunContextWrapper(self.context)
                 )
-                
+                result = await llm_gateway.execute(request)
+
+                final_output = None
+                if result.raw is not None and hasattr(result.raw, "final_output"):
+                    final_output = getattr(result.raw, "final_output")
+
                 # Extract the action from the result
-                if hasattr(result, 'final_output') and isinstance(result.final_output, NPCAction):
-                    return result.final_output
-            
+                if isinstance(final_output, NPCAction):
+                    return final_output
+                if isinstance(final_output, dict):
+                    logger.info(f"NPC {self.npc_id} chose action (dict): {final_output.get('type', 'Unknown')}")
+                    return final_output
+                if final_output is not None:
+                    logger.error(
+                        f"Decision agent for NPC {self.npc_id} returned unexpected type: {type(final_output)}"
+                    )
+
             # Fallback decision making using centralized integration
             return await self._fallback_make_decision(context)
                 
@@ -2043,8 +2076,12 @@ Generate a single action as JSON with these fields:
                     "location": context.get("location", "unknown")
                 }, ensure_ascii=False)
 
-                res = await Runner.run(starting_agent=interaction_detail_generator, input=payload)
-                parsed = _safe_json_loads(res.output)
+                request = llm_gateway.LLMRequest(
+                    agent=interaction_detail_generator,
+                    prompt=payload,
+                )
+                res = await llm_gateway.execute(request)
+                parsed = _safe_json_loads(res)
                 return parsed.get("details", f"{interaction_type.replace('_',' ')} with {target_npc['npc_name']}")
             else:
                 # Use fallback
@@ -2091,8 +2128,12 @@ Generate a single action as JSON with these fields:
                     "location": location,
                     "npc_name": npc_name
                 })
-                res = await Runner.run(activity_generator, payload)
-                desc = _safe_json_loads(res.output).get("description", f"working at {location}")
+                request = llm_gateway.LLMRequest(
+                    agent=activity_generator,
+                    prompt=payload,
+                )
+                res = await llm_gateway.execute(request)
+                desc = _safe_json_loads(res).get("description", f"working at {location}")
             else:
                 desc = await _fallback_generate_activity("work", work_type, location, npc_name)
         except Exception as e:
@@ -2117,8 +2158,12 @@ Generate a single action as JSON with these fields:
                     "location": location,
                     "npc_name": npc_name
                 })
-                res = await Runner.run(activity_generator, payload)
-                desc = _safe_json_loads(res.output).get("description", f"relaxing at {location}")
+                request = llm_gateway.LLMRequest(
+                    agent=activity_generator,
+                    prompt=payload,
+                )
+                res = await llm_gateway.execute(request)
+                desc = _safe_json_loads(res).get("description", f"relaxing at {location}")
             else:
                 desc = await _fallback_generate_activity("relax", relax_type, location, npc_name)
         except Exception as e:
