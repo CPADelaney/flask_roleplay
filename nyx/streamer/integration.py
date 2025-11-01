@@ -13,9 +13,11 @@ from nyx.streamer.streaming_reflection import StreamingIntegration
 
 # Import from OpenAI Agents SDK
 from agents import (
-    Agent, Runner, trace, function_tool, 
+    Agent, trace, function_tool,
     RunContextWrapper, handoff
 )
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger("nyx_streaming_integration")
 
@@ -92,14 +94,19 @@ async def enhance_with_reasoning(brain: NyxBrain, streaming_core: StreamingCore)
         }
         
         # Use integrated reasoning agent
-        result = await Runner.run(
-            brain.reasoning_core.integrated_reasoning_agent,
-            json.dumps(event_data),
-            context=context
+        result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=json.dumps(event_data),
+                agent=brain.reasoning_core.integrated_reasoning_agent,
+                context=context,
+            )
         )
-        
+
+        raw_payload = result.raw
+        final_output = getattr(raw_payload, "final_output", None) or getattr(raw_payload, "output", None) or result.text
+
         # Store reasoning result as memory
-        memory_text = f"While streaming {game_name}, I reasoned about {event_type}: {result.final_output}"
+        memory_text = f"While streaming {game_name}, I reasoned about {event_type}: {final_output}"
         
         memory_id = await brain.memory_core.add_memory(
             memory_text=memory_text,
@@ -111,13 +118,13 @@ async def enhance_with_reasoning(brain: NyxBrain, streaming_core: StreamingCore)
                 "timestamp": datetime.now().isoformat(),
                 "game_name": game_name,
                 "event_type": event_type,
-                "reasoning_process": result.trace,
+                "reasoning_process": getattr(raw_payload, "trace", None),
                 "streaming": True
             }
         )
         
         return {
-            "reasoning": result.final_output,
+            "reasoning": final_output,
             "memory_id": memory_id
         }
     

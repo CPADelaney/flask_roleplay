@@ -14,10 +14,12 @@ from typing import Any, Dict
 
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from infra.cache import cache_key, set_json
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from nyx.tasks.utils import with_retry, run_coro
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 from nyx.utils.idempotency import idempotent
 
 logger = logging.getLogger(__name__)
@@ -108,7 +110,12 @@ async def _generate_manifestation_slow(
     )
 
     try:
-        run_result = await Runner.run(agent, prompt)
+        run_result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
         raw = extract_runner_response(run_result) or "{}"
         parsed = json.loads(raw)
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -171,7 +178,12 @@ async def _generate_escalation_narrative(escalation_event: Dict[str, Any]) -> Di
     )
 
     try:
-        run_result = await Runner.run(agent, prompt)
+        run_result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
         raw = extract_runner_response(run_result) or "{}"
         parsed = json.loads(raw)
     except Exception as exc:  # pragma: no cover - defensive logging

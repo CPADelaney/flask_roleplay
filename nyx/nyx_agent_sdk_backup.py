@@ -84,10 +84,12 @@ import pydantic.json_schema
 
 # Now import agents and Pydantic
 from agents import (
-    Agent, Runner, function_tool, handoff,
+    Agent, function_tool, handoff,
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 from lore.core.canon import (
     find_or_create_npc,
@@ -505,7 +507,13 @@ def run_compat(agent, *, instruction=None, messages=None, context=None):
         instruction = "\n".join(p for p in parts if p)
     if instruction is None:
         instruction = ""
-    return Runner.run(agent, instruction, context=context)
+    return llm_gateway.execute(
+        LLMRequest(
+            prompt=instruction,
+            agent=agent,
+            context=context,
+        )
+    )
 
 def sanitize_agent_tools_in_place(agent):
     """
@@ -1885,11 +1893,13 @@ async def run_agent_safely(
     """Run agent with automatic fallback on strict schema errors"""
     try:
         # First attempt with the agent as-is
-        result = await Runner.run(
-            agent,
-            input_data,
-            context=context,
-            run_config=run_config
+        result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=input_data,
+                agent=agent,
+                context=context,
+                runner_kwargs={"run_config": run_config} if run_config else None,
+            )
         )
         return result
     except Exception as e:
@@ -1907,11 +1917,13 @@ async def run_agent_safely(
             )
             
             try:
-                result = await Runner.run(
-                    fallback_agent,
-                    input_data,
-                    context=context,
-                    run_config=run_config
+                result = await llm_gateway.execute(
+                    LLMRequest(
+                        prompt=input_data,
+                        agent=fallback_agent,
+                        context=context,
+                        runner_kwargs={"run_config": run_config} if run_config else None,
+                    )
                 )
                 return result
             except Exception as e2:
@@ -2067,7 +2079,13 @@ async def generate_ambient_narration(
         f"World State: {json.dumps(ws, ensure_ascii=False)}\n"
     )
 
-    resp = await Runner.run(narrator.ambient_narrator, prompt, context=narrator.context)
+    resp = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=narrator.ambient_narrator,
+            context=narrator.context,
+        )
+    )
     raw = extract_runner_response(resp)
 
     try:
@@ -4357,42 +4375,46 @@ async def process_user_input(
         
         try:
             # Run the agent
-            result = await Runner.run(
-                nyx_main_agent,
-                user_input,
-                context=runner_context,
-                run_config=run_config
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=user_input,
+                    agent=nyx_main_agent,
+                    context=runner_context,
+                    runner_kwargs={"run_config": run_config},
+                )
             )
-            
+
+            payload = result.raw
+
             # Convert result to list format for processing
             # Different SDK versions may have different structures
             resp = []
-            
+
             # Try different ways to extract the response history
-            if hasattr(result, 'messages'):
-                resp = result.messages
-            elif hasattr(result, 'history'):
-                resp = result.history
-            elif hasattr(result, 'events'):
-                resp = result.events
-            elif hasattr(result, '__iter__'):
+            if hasattr(payload, 'messages'):
+                resp = payload.messages
+            elif hasattr(payload, 'history'):
+                resp = payload.history
+            elif hasattr(payload, 'events'):
+                resp = payload.events
+            elif hasattr(payload, '__iter__'):
                 # If result is iterable, try to use it directly
                 try:
-                    resp = list(result)
+                    resp = list(payload)
                 except:
                     pass
-            
+
             # If we still don't have a response list, create minimal structure
             if not resp:
                 response_text = ""
-                if hasattr(result, 'final_output'):
-                    response_text = str(result.final_output)
-                elif hasattr(result, 'output'):
-                    response_text = str(result.output)
-                elif hasattr(result, 'text'):
-                    response_text = str(result.text)
+                if hasattr(payload, 'final_output'):
+                    response_text = str(payload.final_output)
+                elif hasattr(payload, 'output'):
+                    response_text = str(payload.output)
+                elif hasattr(payload, 'text'):
+                    response_text = str(payload.text)
                 else:
-                    response_text = str(result)
+                    response_text = str(payload)
                 
                 resp = [
                     {

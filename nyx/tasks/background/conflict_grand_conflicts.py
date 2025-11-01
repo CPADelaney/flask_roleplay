@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from db.connection import get_db_connection_context
 from infra.cache import cache_key, redis_client
 from logic.conflict_system.background_grand_conflicts import (
@@ -23,6 +23,8 @@ from logic.conflict_system.dynamic_conflict_template import extract_runner_respo
 from logic.conflict_system.background_processor import resolve_intensity_value
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +282,12 @@ async def _generate_background_conflict_async(payload: Dict[str, Any]) -> Dict[s
     """
 
     agent = _get_conflict_generator()
-    response = await Runner.run(agent, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=agent,
+        )
+    )
     data = json.loads(extract_runner_response(response))
 
     intensity_label = data.get("initial_intensity", "distant_rumor")
@@ -390,7 +397,12 @@ async def _advance_conflict_async(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     agent = _get_evolution_agent()
-    response = await Runner.run(agent, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=agent,
+        )
+    )
     data = json.loads(extract_runner_response(response))
 
     current_intensity = conflict.get("intensity", "distant_rumor")
@@ -504,7 +516,12 @@ async def _generate_news_async(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     agent = _get_news_agent()
-    response = await Runner.run(agent, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=agent,
+        )
+    )
     news_data = json.loads(extract_runner_response(response))
 
     current_day = await _get_current_game_day(user_id, conversation_id)
@@ -570,7 +587,12 @@ async def _generate_ripples_async(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     agent = _get_ripple_agent()
-    response = await Runner.run(agent, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=agent,
+        )
+    )
     ripple_data = json.loads(extract_runner_response(response))
 
     current_day = await _get_current_game_day(user_id, conversation_id)
@@ -640,7 +662,12 @@ async def _check_opportunities_async(payload: Dict[str, Any]) -> Dict[str, Any]:
         """
 
         agent = _get_opportunity_agent()
-        response = await Runner.run(agent, prompt)
+        response = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
         opp_data = json.loads(extract_runner_response(response))
         opp_data["conflict_id"] = int(conflict.get("conflict_id"))
         opportunities.append(opp_data)

@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
-from agents import Agent, Runner
+from agents import Agent
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from logic.conflict_system.slice_of_life_conflicts import (
     ConflictIntensity,
@@ -14,6 +14,8 @@ from logic.conflict_system.slice_of_life_conflicts import (
     ResolutionApproach,
     SliceOfLifeConflictType,
 )
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +103,12 @@ Return a JSON array (1-3 items). Each item:
 }}
 """
 
-    response = await Runner.run(_PATTERN_ANALYZER, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=_PATTERN_ANALYZER,
+        )
+    )
     parsed = extract_runner_response(response)
     try:
         tensions = json.loads(parsed)
@@ -166,7 +173,12 @@ Return JSON:
 }}
 """
 
-    response = await Runner.run(_CONFLICT_AGENT, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=_CONFLICT_AGENT,
+        )
+    )
     parsed = extract_runner_response(response)
     result = json.loads(parsed)
 
@@ -212,7 +224,12 @@ Return JSON:
 }}
 """
 
-    response = await Runner.run(_RESOLUTION_AGENT, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=_RESOLUTION_AGENT,
+        )
+    )
     parsed = extract_runner_response(response)
     data = json.loads(parsed)
 
@@ -243,7 +260,12 @@ Intensity: {conflict.get('intensity', 'tension')}
 Answer just yes or no.
 """
 
-    response = await Runner.run(_TIME_AGENT, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=_TIME_AGENT,
+        )
+    )
     text = extract_runner_response(response).strip().lower()
     return "yes" in text and "no" not in text[:5]
 

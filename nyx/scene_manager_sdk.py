@@ -6,13 +6,15 @@ import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
-from agents import Agent, handoff, function_tool, Runner
+from agents import Agent, handoff, function_tool
 from agents import ModelSettings, RunConfig
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
 from nyx.location.types import Location
 from utils.caching import NPC_CACHE
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -390,21 +392,27 @@ async def process_scene_input(
         scene_context.scene_data = context_data
     
     # Run the scene manager agent
-    result = await Runner.run(
-        scene_manager_agent,
-        user_input,
-        context=scene_context,
-        run_config=RunConfig(
-            workflow_name="Scene Management",
-            trace_id=f"scene-{conversation_id}-{int(datetime.now().timestamp())}",
-            group_id=f"user-{user_id}"
+    result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=user_input,
+            agent=scene_manager_agent,
+            context=scene_context,
+            runner_kwargs={
+                "run_config": RunConfig(
+                    workflow_name="Scene Management",
+                    trace_id=f"scene-{conversation_id}-{int(datetime.now().timestamp())}",
+                    group_id=f"user-{user_id}",
+                )
+            },
         )
     )
-    
+
     # Process all the new items generated
     scene_result = {}
-    
-    for item in result.new_items:
+
+    raw_result = result.raw
+
+    for item in getattr(raw_result, "new_items", []) if raw_result else []:
         if item.type == "message_output_item":
             # Main scene manager response
             scene_result["narrative"] = item.raw_item.content
@@ -466,14 +474,16 @@ Current context:
 """
     
     # Run the NPC agent
-    result = await Runner.run(
-        npc_agent,
-        prompt,
-        context=scene_context
+    result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=npc_agent,
+            context=scene_context,
+        )
     )
-    
+
     # Get structured output
-    npc_response = result.final_output_as(NPCResponse)
+    npc_response = result.raw.final_output_as(NPCResponse)
     
     return npc_response
 
@@ -513,14 +523,16 @@ Current context:
 """
     
     # Run the scene trigger agent
-    result = await Runner.run(
-        scene_trigger_agent,
-        prompt,
-        context=scene_context
+    result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=scene_trigger_agent,
+            context=scene_context,
+        )
     )
-    
+
     # Get structured output
-    scene_trigger = result.final_output_as(SceneTrigger)
+    scene_trigger = result.raw.final_output_as(SceneTrigger)
     
     return scene_trigger
 

@@ -7,7 +7,9 @@ import json
 import logging
 from typing import Dict, List, Any, Optional
 
-from agents import RunContextWrapper
+from agents import RunConfig, RunContextWrapper
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 from .context import NyxContext
 from .config import Config
@@ -339,15 +341,17 @@ async def determine_image_generation_impl(ctx, response_text: str) -> str:
     except Exception as e:
         logger.debug("decide_image_generation failed: %s", e, exc_info=True)
         try:
-            from agents import Runner, RunConfig
             from .agents import visual_agent
-            r = await Runner.run(
-                visual_agent,
-                f"Should an image be generated for this scene? {response_text}",
-                context=visual_ctx,
-                run_config=RunConfig(workflow_name="Nyx Visual Decision"),
+
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=f"Should an image be generated for this scene? {response_text}",
+                    agent=visual_agent,
+                    context=visual_ctx,
+                    runner_kwargs={"run_config": RunConfig(workflow_name="Nyx Visual Decision")},
+                )
             )
-            decision = r.final_output_as(ImageGenerationDecision)
+            decision = result.raw.final_output_as(ImageGenerationDecision)
             return decision.model_dump_json()
         except Exception as e2:
             logger.warning("Visual agent fallback failed: %s", e2, exc_info=True)

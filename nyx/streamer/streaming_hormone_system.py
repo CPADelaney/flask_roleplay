@@ -9,7 +9,9 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 
 # Import from OpenAI Agents SDK
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper
+from agents import Agent, trace, function_tool, RunContextWrapper
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger("streaming_hormones")
 
@@ -331,13 +333,15 @@ class StreamingHormoneSystem:
             
             # Run the hormone response agent
             with trace(workflow_name="hormone_response_generation"):
-                result = await Runner.run(
-                    self.hormone_response_agent,
-                    response_input.json(),
-                    context={"event_type": event_type, "event_intensity": event_intensity}
+                result = await llm_gateway.execute(
+                    LLMRequest(
+                        prompt=response_input.json(),
+                        agent=self.hormone_response_agent,
+                        context={"event_type": event_type, "event_intensity": event_intensity},
+                    )
                 )
-                
-                hormone_response = result.final_output_as(HormoneResponseOutput)
+
+                hormone_response = result.raw.final_output_as(HormoneResponseOutput)
             
             # Apply hormone changes
             for hormone, change in hormone_response.hormone_changes.items():

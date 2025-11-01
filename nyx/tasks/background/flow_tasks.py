@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from db.connection import get_db_connection_context
 from infra.cache import set_json
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
@@ -35,6 +35,8 @@ from logic.conflict_system.conflict_flow_hotpath import (
 )
 from nyx.tasks.utils import with_retry, run_coro
 from nyx.utils.idempotency import idempotent
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,12 @@ def _get_transition_narrator() -> Agent:
 
 
 async def _run_prompt(agent: Agent, prompt: str) -> str:
-    response = await Runner.run(agent, prompt)
+    response = await llm_gateway.execute(
+        LLMRequest(
+            prompt=prompt,
+            agent=agent,
+        )
+    )
     return extract_runner_response(response)
 
 

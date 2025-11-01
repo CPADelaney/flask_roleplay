@@ -7,8 +7,10 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List
 
-from agents import Agent, Runner
+from agents import Agent
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,12 @@ async def run_scene_tension_analysis(
     """
 
     try:
-        response = await Runner.run(agent, prompt)
+        response = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
     except Exception:
         logger.debug("Scene tension analysis runner failed; using fallback", exc_info=True)
         response = None
@@ -101,7 +108,12 @@ async def run_contextual_conflict_generation(
     """
 
     try:
-        response = await Runner.run(agent, prompt)
+        response = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
     except Exception:
         logger.debug(
             "Contextual conflict generation runner failed; using fallback",
@@ -154,7 +166,12 @@ async def run_activity_integration(
     """
 
     try:
-        response = await Runner.run(agent, prompt)
+        response = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
     except Exception:
         logger.debug(
             "Activity integration runner failed; using fallback",

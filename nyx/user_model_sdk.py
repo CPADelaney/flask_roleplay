@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
-from agents import Agent, function_tool, Runner, trace, handoff
+from agents import Agent, function_tool, trace, handoff
 from agents import ModelSettings, RunConfig
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,8 @@ from nyx.nyx_profile_agents import ProfilingAgent, ResponseAnalysisAgent
 from nyx.nyx_profile_integration import ProfileIntegration
 from nyx.nyx_reinforcement import ReinforcementAgent
 from utils.caching import USER_MODEL_CACHE
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -767,14 +769,16 @@ Focus on detecting preferences, boundaries, and behavior patterns.
         group_id=f"user-{user_id}"
     ):
         # Run the user model manager agent
-        result = await Runner.run(
-            user_model_manager_agent,
-            prompt,
-            context=user_model_context
+        result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=user_model_manager_agent,
+                context=user_model_context,
+            )
         )
-    
+
     # Get structured output
-    analysis = result.final_output_as(UserModelAnalysis)
+    analysis = result.raw.final_output_as(UserModelAnalysis)
     
     # Create summary of changes
     changes = {
@@ -826,14 +830,16 @@ async def get_response_guidance_for_user(
         user_model_context.context_data = context_data
     
     # Run the response guidance agent
-    result = await Runner.run(
-        response_guidance_agent,
-        "Generate response guidance based on the current user model",
-        context=user_model_context
+    result = await llm_gateway.execute(
+        LLMRequest(
+            prompt="Generate response guidance based on the current user model",
+            agent=response_guidance_agent,
+            context=user_model_context,
+        )
     )
-    
+
     # Get structured output
-    guidance = result.final_output_as(ResponseGuidance)
+    guidance = result.raw.final_output_as(ResponseGuidance)
     
     return {
         "suggested_intensity": guidance.suggested_intensity,

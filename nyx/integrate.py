@@ -29,6 +29,8 @@ from lore.validation import ValidationManager
 import asyncpg
 
 from nyx.governance.ids import format_agent_id
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 # Type checking imports (don't cause circular imports)
 if TYPE_CHECKING:
@@ -97,7 +99,6 @@ if TYPE_CHECKING:
     from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
     from logic.chatgpt_integration import generate_text_completion
     from new_game_agent import NewGameAgent
-    from agents import Runner
     from nyx.nyx_enhanced_system import NyxEnhancedSystem
     from nyx.response_filter import ResponseFilter
     from nyx.nyx_planner import NyxPlanner
@@ -314,11 +315,6 @@ def _lazy_load_new_game():
     """Lazy load new game agent"""
     from new_game_agent import NewGameAgent
     return NewGameAgent
-
-def _lazy_load_runner():
-    """Lazy load agent runner"""
-    from agents import Runner
-    return Runner
 
 # ===============================================================================
 # CORE GOVERNANCE FUNCTIONS (preserved)
@@ -680,15 +676,20 @@ async def generate_daily_task_with_governance(
     governance = await get_central_governance(user_id, conversation_id)
     
     # Lazy load components
-    Runner = _lazy_load_runner()
     task_components = _lazy_load_task_generator()
     DailyTaskGenerator = task_components['DailyTaskGenerator']
-    
+
     # Initialize task generator
     task_prompt = f"Generate a daily task{f' of type {task_type.value}' if task_type else ''}"
-    
-    result = await Runner.run(DailyTaskGenerator, task_prompt)
-    task = result.final_output if result else None
+
+    result = await llm_gateway.execute(
+        LLMRequest(
+            prompt=task_prompt,
+            agent=DailyTaskGenerator,
+        )
+    )
+    raw_payload = result.raw if result else None
+    task = getattr(raw_payload, "final_output", None) if raw_payload else None
     
     if task:
         # Check with governance

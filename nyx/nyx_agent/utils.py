@@ -13,6 +13,9 @@ from datetime import datetime, date
 from typing import Dict, List, Any, Optional, Union
 from contextlib import suppress
 
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest, LLMResult
+
 logger = logging.getLogger(__name__)
 
 def safe_psutil(func_name: str, *args, default=None, **kwargs):
@@ -183,18 +186,19 @@ def _default_json_encoder(obj):
 
 def extract_runner_response(result: Any) -> str:
     """Best-effort extraction of model output from nyx.gateway.llm_gateway.execute(...) result."""
+    source = result.raw if isinstance(result, LLMResult) else result
     try:
         for attr in ("final_output", "output_text", "text"):
-            v = getattr(result, attr, None)
+            v = getattr(source, attr, None)
             if isinstance(v, str) and v.strip():
                 return v
-        data = getattr(result, "data", None)
+        data = getattr(source, "data", None)
         if data is not None:
             try:
                 return json.dumps(_json_safe(data), ensure_ascii=False)
             except Exception:
                 return str(data)
-        msgs = getattr(result, "messages", None)
+        msgs = getattr(source, "messages", None)
         if isinstance(msgs, list):
             for m in reversed(msgs):
                 if isinstance(m, dict) and m.get("role") == "assistant":
@@ -202,9 +206,9 @@ def extract_runner_response(result: Any) -> str:
                     for part in reversed(parts):
                         if isinstance(part, dict) and part.get("type") == "output_text" and part.get("text"):
                             return part["text"]
-        return str(result)
+        return str(source)
     except Exception:
-        return str(result)
+        return str(source)
 
 def _get_tool_schema_dict(tool):
     for attr in ("parameters", "_parameters", "schema", "_schema", "openai_schema"):
@@ -528,8 +532,13 @@ def run_compat(agent, *, instruction=None, messages=None, context=None):
         instruction = "\n".join(p for p in parts if p)
     if instruction is None:
         instruction = ""
-    from agents import Runner
-    return Runner.run(agent, instruction, context=context)
+    return llm_gateway.execute(
+        LLMRequest(
+            prompt=instruction,
+            agent=agent,
+            context=context,
+        )
+    )
 
 def force_fix_tool_parameters(agent, *, tool_name="narrate_slice_of_life_scene"):
     """0.2.x-safe hardening for a single tool."""

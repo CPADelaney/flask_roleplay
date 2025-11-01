@@ -8,10 +8,12 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from logic.conflict_system import conflict_victory_hotpath
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from nyx.tasks.utils import run_coro
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
@@ -175,7 +177,14 @@ Return JSON:
 """
 
     try:
-        response = run_coro(Runner.run(_victory_generator(), prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=_victory_generator(),
+                )
+            )
+        )
         raw = extract_runner_response(response)
     except Exception:
         logger.exception("Victory condition generation failed for condition_ids=%s", condition_ids)
@@ -224,7 +233,14 @@ Write a powerful 2-3 paragraph narration.
 """
 
     try:
-        response = run_coro(Runner.run(_achievement_narrator(), prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=_achievement_narrator(),
+                )
+            )
+        )
         summary = extract_runner_response(response).strip()
     except Exception:
         logger.exception("Achievement summary generation failed for condition_id=%s", condition_id)
@@ -277,7 +293,14 @@ Return JSON:
 """
 
     try:
-        response = run_coro(Runner.run(_consequence_calculator(), prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=_consequence_calculator(),
+                )
+            )
+        )
         raw = extract_runner_response(response)
         consequences = json.loads(raw)
     except Exception:
@@ -332,7 +355,14 @@ Write 3-4 paragraphs that feel like the end of a chapter, not the end of the sto
 """
 
     try:
-        response = run_coro(Runner.run(_epilogue_writer(), prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=_epilogue_writer(),
+                )
+            )
+        )
         epilogue = extract_runner_response(response).strip()
     except Exception:
         logger.exception("Conflict epilogue generation failed for conflict_id=%s", payload.get('conflict_id'))
@@ -386,7 +416,14 @@ Write a single encouraging paragraph.
 """
 
     try:
-        response = run_coro(Runner.run(_achievement_narrator(), prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=_achievement_narrator(),
+                )
+            )
+        )
         consolation = extract_runner_response(response).strip()
     except Exception:
         logger.exception("Consolation generation failed for condition_id=%s", condition_id)

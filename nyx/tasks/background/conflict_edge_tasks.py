@@ -12,10 +12,12 @@ from typing import Any, Dict, List
 import redis
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from logic.conflict_system.dynamic_conflict_template import (
     extract_runner_response,
 )
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +72,12 @@ def _release_lock(lock_key: str) -> None:
 
 def _run_runner(agent: Agent, prompt: str) -> Any:
     async def _run() -> Any:
-        return await Runner.run(agent, prompt)
+        return await llm_gateway.execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=agent,
+            )
+        )
 
     return asyncio.run(_run())
 
