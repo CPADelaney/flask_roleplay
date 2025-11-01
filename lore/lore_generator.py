@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from db.connection import get_db_connection_context
 
 # Agents SDK imports
-from agents import Agent, function_tool, Runner
+from agents import Agent, function_tool
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.run_context import RunContextWrapper
 
@@ -55,6 +55,8 @@ from nyx.location.types import Candidate, Place
 
 # Import error handling
 from .error_manager import LoreError, ErrorHandler, handle_errors
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 _LORE_GENERATOR_INSTANCES: Dict[Tuple[int, int], "DynamicLoreGenerator"] = {}
@@ -85,9 +87,8 @@ async def _generate_foundation_lore_impl(ctx, environment_desc: str) -> Dict[str
     """
 
     foundation_lore_agent = get_foundation_lore_agent()
-    result = await Runner.run(
-        foundation_lore_agent, user_prompt, context=run_ctx.context
-    )
+    result = (await llm_gateway.execute(build_llm_request(foundation_lore_agent, user_prompt, context=run_ctx.context
+    ))).raw
     final_output = result.final_output_as(FoundationLoreOutput)
     return final_output.dict()
 
@@ -115,7 +116,7 @@ async def _generate_factions_impl(
     """
 
     factions_agent = get_factions_agent()
-    result = await Runner.run(factions_agent, user_prompt, context=run_ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(factions_agent, user_prompt, context=run_ctx.context))).raw
     final_output = result.final_output_as(FactionsOutput)
     return [f.dict() for f in final_output.factions]
 
@@ -143,7 +144,7 @@ async def _generate_cultural_elements_impl(
     """
 
     cultural_agent = get_cultural_agent()
-    result = await Runner.run(cultural_agent, user_prompt, context=run_ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(cultural_agent, user_prompt, context=run_ctx.context))).raw
     final_output = result.final_output_as(CulturalElementsOutput)
     return [c.dict() for c in final_output.elements]
 
@@ -172,7 +173,7 @@ async def _generate_historical_events_impl(
     """
 
     history_agent = get_history_agent()
-    result = await Runner.run(history_agent, user_prompt, context=run_ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(history_agent, user_prompt, context=run_ctx.context))).raw
     final_output = result.final_output_as(HistoricalEventsOutput)
     return [h.dict() for h in final_output.events]
 
@@ -200,7 +201,7 @@ async def _generate_locations_impl(
     """
 
     locations_agent = get_locations_agent()
-    result = await Runner.run(locations_agent, user_prompt, context=run_ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(locations_agent, user_prompt, context=run_ctx.context))).raw
     final_output = result.final_output_as(LocationsOutput)
     return [l.dict() for l in final_output.locations]
 
@@ -228,7 +229,7 @@ async def _generate_quest_hooks_impl(
     """
 
     quests_agent = get_quests_agent()
-    result = await Runner.run(quests_agent, user_prompt, context=run_ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(quests_agent, user_prompt, context=run_ctx.context))).raw
     final_output = result.final_output_as(QuestsOutput)
     return [q.dict() for q in final_output.quests]
 

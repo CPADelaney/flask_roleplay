@@ -10,7 +10,6 @@ from typing import Dict, List, Any, Optional, Type, Set, Callable, Protocol, run
 # Agents SDK imports - v0.0.17 best practices
 from agents import (
     Agent,
-    Runner,
     function_tool,
     trace,
     RunContextWrapper,
@@ -32,6 +31,8 @@ from embedding.vector_store import generate_embedding, compute_similarity
 
 # Cache system
 from lore.core.cache import GLOBAL_LORE_CACHE
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -1212,12 +1213,11 @@ class BaseLoreManager:
                 trace_metadata=self.trace_metadata
             )
 
-            result = await Runner.run(
-                starting_agent=maintenance_agent,
+            result = (await llm_gateway.execute(build_llm_request(starting_agent=maintenance_agent,
                 input=prompt,
                 context=run_ctx.context,
                 run_config=run_config
-            )
+            ))).raw
 
             try:
                 decision = json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
@@ -1309,12 +1309,11 @@ class BaseLoreManager:
                 trace_metadata=self.trace_metadata
             )
 
-            result = await Runner.run(
-                starting_agent=agent,
+            result = (await llm_gateway.execute(build_llm_request(starting_agent=agent,
                 input=prompt,
                 context=self.create_run_context().context,
                 run_config=run_config
-            )
+            ))).raw
 
             return result.final_output
 

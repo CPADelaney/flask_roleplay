@@ -7,9 +7,11 @@ import json
 import logging
 from typing import Any, Callable, Dict, List, Type, Optional, Tuple
 
-from agents import Agent, Runner, RunConfig, function_tool, trace
+from agents import Agent, RunConfig, function_tool, trace
 from agents.tool import FunctionTool
 from pydantic import BaseModel, Field
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -373,12 +375,11 @@ class ManagerRegistry:
                     f"Ensure proper data transformation and parameter mapping between managers."
                 )
                 
-                result = await Runner.run(
-                    self.orchestrator,
+                result = (await llm_gateway.execute(build_llm_request(self.orchestrator,
                     prompt,
                     context=handoff_context,
                     run_config=run_config,
-                )
+                ))).raw
                 
                 return CrossManagerHandoffResult(
                     result=result.final_output,

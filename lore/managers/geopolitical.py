@@ -14,7 +14,7 @@ from db.connection import get_db_connection_context
 logger = logging.getLogger(__name__)
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, RunConfig, RunResultStreaming,
+    Agent, function_tool, trace, RunConfig, RunResultStreaming,
     GuardrailFunctionOutput, InputGuardrail, handoff
 )
 from agents.run_context import RunContextWrapper
@@ -26,6 +26,8 @@ from nyx.nyx_governance import AgentType, DirectivePriority
 # Project imports
 from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -619,12 +621,11 @@ class GeopoliticalSystemManager(BaseLoreManager):
             )
 
             dist_config = RunConfig(workflow_name="NationDistribution")
-            dist_result = await Runner.run(
-                manager.distribution_agent,
+            dist_result = (await llm_gateway.execute(build_llm_request(manager.distribution_agent,
                 dist_prompt,
                 context=run_ctx.context,
                 run_config=dist_config
-            )
+            ))).raw
 
             try:
                 dist_data = json.loads(dist_result.final_output)
@@ -688,7 +689,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             """
 
             run_config = RunConfig(workflow_name="NationGen")
-            result = await Runner.run(nation_agent, prompt, context=run_ctx.context, run_config=run_config)
+            result = (await llm_gateway.execute(build_llm_request(nation_agent, prompt, context=run_ctx.context, run_config=run_config))).raw
 
             nations = result.final_output
             generated_nations = []
@@ -913,12 +914,11 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 }
             )
 
-            result = await Runner.run(
-                conflict_agent,
+            result = (await llm_gateway.execute(build_llm_request(conflict_agent,
                 simulation_prompt,
                 context=run_ctx.context,
                 run_config=run_config
-            )
+            ))).raw
 
             simulation = result.final_output
 
@@ -1293,11 +1293,10 @@ class GeopoliticalSystemManager(BaseLoreManager):
             """
 
             # Run the resolution
-            result = await Runner.run(
-                manager.border_resolution_agent,
+            result = (await llm_gateway.execute(build_llm_request(manager.border_resolution_agent,
                 resolution_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             try:
                 resolution_data = json.loads(result.final_output)
@@ -1475,30 +1474,66 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 workflow_name="GeopoliticalEvolution",
                 trace_metadata={"user_id": str(manager.user_id), "conversation_id": str(manager.conversation_id), "entity_id": str(entity_id)}
             )
-            streaming_result = Runner.run_streamed(manager.time_evolution_agent, evolution_prompt, context=run_ctx.context, run_config=streaming_config)
+            streaming_iterator = llm_gateway.execute_stream(
+                build_llm_request(
+                    manager.time_evolution_agent,
+                    evolution_prompt,
+                    context=run_ctx.context,
+                    run_config=streaming_config,
+                )
+            )
 
             current_year = None
             buffer = ""
-            async for event in streaming_result.stream_events():
-                if event.type == "run_item_stream_event" and event.item.type == "message_output_item":
-                    from agents.items import ItemHelpers
-                    message_text = ItemHelpers.text_message_output(event.item)
-                    year_match = re.search(r'year (\d+)', message_text.lower())
+            async for chunk in streaming_iterator:
+                raw_result = chunk.raw
+                if hasattr(raw_result, "stream_events"):
+                    async for event in raw_result.stream_events():
+                        if event.type == "run_item_stream_event" and event.item.type == "message_output_item":
+                            from agents.items import ItemHelpers
+
+                            message_text = ItemHelpers.text_message_output(event.item)
+                            year_match = re.search(r'year (\d+)', message_text.lower())
+                            if year_match and buffer:
+                                if current_year is not None:
+                                    year_data = {
+                                        "year": current_year,
+                                        "prediction": buffer.strip(),
+                                        "entity_name": entity_data["name"],
+                                        "prediction_status": "in_progress",
+                                    }
+                                    yield year_data
+                                    await asyncio.sleep(0.2)
+                                current_year = int(year_match.group(1))
+                                buffer = message_text
+                            else:
+                                buffer += message_text
+                elif chunk.text:
+                    year_match = re.search(r'year (\d+)', chunk.text.lower())
                     if year_match and buffer:
                         if current_year is not None:
-                            year_data = {"year": current_year, "prediction": buffer.strip(), "entity_name": entity_data["name"], "prediction_status": "in_progress"}
-                            yield year_data
+                            yield {
+                                "year": current_year,
+                                "prediction": buffer.strip(),
+                                "entity_name": entity_data["name"],
+                                "prediction_status": "in_progress",
+                            }
                             await asyncio.sleep(0.2)
                         current_year = int(year_match.group(1))
-                        buffer = message_text
+                        buffer = chunk.text
                     else:
-                        buffer += message_text
+                        buffer += chunk.text
 
             if current_year is not None and buffer:
-                yield {"year": current_year, "prediction": buffer.strip(), "entity_name": entity_data["name"], "prediction_status": "in_progress"}
+                yield {
+                    "year": current_year,
+                    "prediction": buffer.strip(),
+                    "entity_name": entity_data["name"],
+                    "prediction_status": "in_progress",
+                }
 
             try:
-                complete_evolution = await Runner.run(manager.time_evolution_agent, evolution_prompt, context=run_ctx.context)
+                complete_evolution = (await llm_gateway.execute(build_llm_request(manager.time_evolution_agent, evolution_prompt, context=run_ctx.context))).raw
                 try:
                     evolution_data = json.loads(complete_evolution.final_output)
                     yield {"entity_name": entity_data["name"], "complete_evolution": evolution_data, "prediction_status": "complete"}
@@ -1575,7 +1610,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             Return an EconomicTradeSimulation object with all fields.
             """
 
-            result = await Runner.run(manager.trade_modeling_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(manager.trade_modeling_agent, prompt, context=run_ctx.context))).raw
             trade_sim = result.final_output
             return trade_sim.dict() if hasattr(trade_sim, "dict") else trade_sim
 
@@ -1635,7 +1670,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             Return a ClimateGeographyEffect object with all fields.
             """
 
-            result = await Runner.run(manager.geography_effect_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(manager.geography_effect_agent, prompt, context=run_ctx.context))).raw
             geography_effect = result.final_output
             return geography_effect.dict() if hasattr(geography_effect, "dict") else geography_effect
 
@@ -1701,6 +1736,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             Return a CovertOperation object with all fields.
             """
 
-            result = await Runner.run(manager.covert_operations_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(manager.covert_operations_agent, prompt, context=run_ctx.context))).raw
             espionage_result = result.final_output
             return espionage_result.dict() if hasattr(espionage_result, "dict") else espionage_result

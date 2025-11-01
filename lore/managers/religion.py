@@ -11,7 +11,6 @@ from enum import Enum
 from agents import (
     Agent,
     function_tool,
-    Runner,
     RunConfig,
     handoff,
     InputGuardrail,
@@ -32,6 +31,8 @@ from lore.managers.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.core.cache import GLOBAL_LORE_CACHE
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -598,7 +599,7 @@ class ReligionManager(BaseLoreManager):
     # Guardrail function
     async def _matriarchal_theme_guardrail(self, ctx: RunContextWrapper, agent, input_data: str) -> GuardrailFunctionOutput:
         """Guardrail to ensure content maintains matriarchal themes."""
-        result = await Runner.run(self.theme_validator, input_data, context=ctx.context)
+        result = (await llm_gateway.execute(build_llm_request(self.theme_validator, input_data, context=ctx.context))).raw
         validation_result = result.final_output_as(MatriarchalThemeValidation)
 
         return GuardrailFunctionOutput(
@@ -951,12 +952,11 @@ class ReligionManager(BaseLoreManager):
             trace_metadata={"user_id": self.user_id, "conversation_id": self.conversation_id}
         )
 
-        result = await Runner.run(
-            self.pantheon_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.pantheon_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         generated_data = result.final_output_as(GeneratedPantheon)
 
@@ -1030,12 +1030,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="PracticeGeneration")
-        result = await Runner.run(
-            self.practice_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.practice_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         practices = result.final_output_as(List[ReligiousPracticeParams])
 
@@ -1126,12 +1125,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="HolySiteGeneration")
-        result = await Runner.run(
-            self.site_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.site_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         sites = result.final_output_as(List[HolySiteParams])
 
@@ -1182,12 +1180,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="TextGeneration")
-        result = await Runner.run(
-            self.text_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.text_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         texts = result.final_output_as(List[ReligiousTextParams])
 
@@ -1273,12 +1270,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="OrderGeneration")
-        result = await Runner.run(
-            self.order_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.order_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         orders = result.final_output_as(List[ReligiousOrderParams])
         created_orders = []
@@ -1434,12 +1430,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="ConflictGeneration")
-        result = await Runner.run(
-            self.conflict_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.conflict_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         conflicts = result.final_output_as(List[ReligiousConflictParams])
         created_conflicts = []
@@ -1582,7 +1577,7 @@ class ReligionManager(BaseLoreManager):
             """
 
             run_config = RunConfig(workflow_name="ReligiousDistribution")
-            result = await Runner.run(self.distribution_agent, prompt, context=ctx.context, run_config=run_config)
+            result = (await llm_gateway.execute(build_llm_request(self.distribution_agent, prompt, context=ctx.context, run_config=run_config))).raw
 
             try:
                 dist_data = result.final_output_as(NationReligionDistribution)
@@ -1688,12 +1683,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="RitualGeneration")
-        result = await Runner.run(
-            self.ritual_generator,
+        result = (await llm_gateway.execute(build_llm_request(self.ritual_generator,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         ritual = result.final_output_as(CompleteRitual)
 
@@ -1845,12 +1839,11 @@ class ReligionManager(BaseLoreManager):
         """
 
         run_config = RunConfig(workflow_name="ReligiousEvolution")
-        result = await Runner.run(
-            self.evolution_agent,
+        result = (await llm_gateway.execute(build_llm_request(self.evolution_agent,
             prompt,
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         evolution_data = result.final_output_as(ReligiousEvolution)
 
@@ -1940,26 +1933,23 @@ class ReligionManager(BaseLoreManager):
 
         run_config = RunConfig(workflow_name="SectarianDevelopment")
 
-        orthodox_result = await Runner.run(
-            orthodox_agent,
+        orthodox_result = (await llm_gateway.execute(build_llm_request(orthodox_agent,
             base_prompt.format("the orthodox tradition"),
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
-        reformist_result = await Runner.run(
-            reformist_agent,
+        reformist_result = (await llm_gateway.execute(build_llm_request(reformist_agent,
             base_prompt.format("a reformist movement"),
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
-        mystic_result = await Runner.run(
-            mystic_agent,
+        mystic_result = (await llm_gateway.execute(build_llm_request(mystic_agent,
             base_prompt.format("a mystic tradition"),
             context=ctx.context,
             run_config=run_config
-        )
+        ))).raw
 
         sects = [
             orthodox_result.final_output_as(SectarianPosition).dict(),
@@ -2113,12 +2103,11 @@ class ReligionManager(BaseLoreManager):
             """
 
             run_config = RunConfig(workflow_name="RegionalPracticeVariation")
-            result = await Runner.run(
-                self.regional_practice_agent,
+            result = (await llm_gateway.execute(build_llm_request(self.regional_practice_agent,
                 prompt,
                 context=ctx.context,
                 run_config=run_config
-            )
+            ))).raw
 
             try:
                 var_data = result.final_output_as(RegionalPracticeVariation)
@@ -2175,11 +2164,10 @@ class ReligionManager(BaseLoreManager):
             output_type=List[TheologicalPosition]
         )
 
-        result = await Runner.run(
-            position_generator,
+        result = (await llm_gateway.execute(build_llm_request(position_generator,
             prompt,
             context=ctx.context
-        )
+        ))).raw
 
         positions = result.final_output_as(List[TheologicalPosition])
         return [pos.dict() for pos in positions]
@@ -2391,12 +2379,11 @@ class TheologicalDisputeSimulation:
             Be concise but thorough.
             """
 
-            result = await Runner.run(
-                agent_data["agent"],
+            result = (await llm_gateway.execute(build_llm_request(agent_data["agent"],
                 prompt,
                 context=context,
                 run_config=run_config
-            )
+            ))).raw
 
             first_round.append({
                 "position": agent_data["position"]["name"],
@@ -2432,12 +2419,11 @@ class TheologicalDisputeSimulation:
                 Show why your interpretation best serves the faith.
                 """
 
-                result = await Runner.run(
-                    agent_data["agent"],
+                result = (await llm_gateway.execute(build_llm_request(agent_data["agent"],
                     prompt,
                     context=context,
                     run_config=run_config
-                )
+                ))).raw
 
                 round_arguments.append({
                     "position": agent_data["position"]["name"],
@@ -2466,12 +2452,11 @@ class TheologicalDisputeSimulation:
         Provide your judgment maintaining orthodox matriarchal principles.
         """
 
-        arbiter_result = await Runner.run(
-            self.arbiter_agent,
+        arbiter_result = (await llm_gateway.execute(build_llm_request(self.arbiter_agent,
             arbiter_prompt,
             context=context,
             run_config=run_config
-        )
+        ))).raw
 
         conclusion = arbiter_result.final_output_as(DisputeConclusion)
 

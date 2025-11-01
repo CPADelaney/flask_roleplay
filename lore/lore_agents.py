@@ -20,7 +20,7 @@ import time
 import functools
 
 # Agents SDK imports
-from agents import Agent, function_tool, Runner, trace
+from agents import Agent, function_tool, trace
 from agents.models.openai_responses import OpenAIResponsesModel
 
 # Nyx governance integration
@@ -59,6 +59,8 @@ from lore.managers.base_manager import BaseLoreManager
 from .resource_manager import resource_manager
 from .dynamic_lore_generator import DynamicLoreGenerator
 from .unified_validation import ValidationManager
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -345,7 +347,7 @@ async def generate_foundation_lore(ctx, environment_desc: str) -> Dict[str, Any]
     Return as JSON with keys:
     cosmology, magic_system, world_history, calendar_system, social_structure
     """
-    result = await Runner.run(foundation_lore_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(foundation_lore_agent, user_prompt, context=ctx.context))).raw
     final_output = result.final_output_as(FoundationLoreOutput)
     return final_output.dict()
 
@@ -371,7 +373,7 @@ async def generate_factions(ctx, environment_desc: str, social_structure: str) -
     
     Return JSON as an array of objects (matching FactionsOutput).
     """
-    result = await Runner.run(factions_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(factions_agent, user_prompt, context=ctx.context))).raw
     final_output = result.final_output_as(FactionsOutput)
     return [f.dict() for f in final_output.factions]
 
@@ -397,7 +399,7 @@ async def generate_cultural_elements(ctx, environment_desc: str, faction_names: 
 
     Return JSON array matching CulturalElementsOutput.
     """
-    result = await Runner.run(cultural_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(cultural_agent, user_prompt, context=ctx.context))).raw
     final_output = result.final_output_as(CulturalElementsOutput)
     return [c.dict() for c in final_output.elements]
 
@@ -425,7 +427,7 @@ async def generate_historical_events(ctx, environment_desc: str, world_history: 
 
     Return JSON array matching HistoricalEventsOutput.
     """
-    result = await Runner.run(history_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(history_agent, user_prompt, context=ctx.context))).raw
     final_output = result.final_output_as(HistoricalEventsOutput)
     return [h.dict() for h in final_output.events]
 
@@ -451,7 +453,7 @@ async def generate_locations(ctx, environment_desc: str, faction_names: str) -> 
 
     Return JSON array matching LocationsOutput.
     """
-    result = await Runner.run(locations_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(locations_agent, user_prompt, context=ctx.context))).raw
     final_output = result.final_output_as(LocationsOutput)
     return [l.dict() for l in final_output.locations]
 
@@ -479,7 +481,7 @@ async def generate_quest_hooks(ctx, environment_desc: str, faction_names: str, l
 
     Return JSON array matching QuestsOutput.
     """
-    result = await Runner.run(quests_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(quests_agent, user_prompt, context=ctx.context))).raw
     final_output = result.final_output_as(QuestsOutput)
     return [q.dict() for q in final_output.quests]
 
@@ -508,7 +510,7 @@ async def analyze_setting(ctx, environment_desc: str) -> Dict[str, Any]:
     - cultural_norms
     - economic_systems
     """
-    result = await Runner.run(setting_analysis_agent, user_prompt, context=ctx.context)
+    result = (await llm_gateway.execute(build_llm_request(setting_analysis_agent, user_prompt, context=ctx.context))).raw
     return result.final_output
 
 # -------------------------------------------------------------------------------
@@ -2329,7 +2331,7 @@ class FoundationAgent(BaseLoreAgent):
             Each category should be an array of objects with fields like name, type, description, membership_basis, hierarchy, gathering_location, etc.
             """
             
-            result = await Runner.run(setting_analysis_agent, user_prompt)
+            result = (await llm_gateway.execute(build_llm_request(setting_analysis_agent, user_prompt))).raw
             return result.final_output
         except Exception as e:
             logger.error(f"Error generating organizations: {e}")
@@ -2382,15 +2384,14 @@ class FactionAgent(BaseLoreAgent):
             run_ctx = RunContextWrapper(context={})
             
             # Use the generate_factions_agent
-            result = await Runner.run(
-                factions_agent,
+            result = (await llm_gateway.execute(build_llm_request(factions_agent,
                 json.dumps({
                     'environment_desc': environment_desc,
                     'social_structure': social_structure,
                     'existing_factions': self._cached_data
                 }),
                 context=run_ctx.context
-            )
+            ))).raw
             
             factions = result.final_output_as(FactionsOutput)
             faction_data = [f.dict() for f in factions.__root__]

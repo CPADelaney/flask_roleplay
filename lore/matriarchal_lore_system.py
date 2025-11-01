@@ -9,7 +9,7 @@ import datetime
 from typing import Dict, List, Any, Optional, Set, Tuple
 
 # Agents SDK imports
-from agents import Agent, function_tool, Runner
+from agents import Agent, function_tool
 from agents.run_context import RunContextWrapper
 
 # Nyx governance integration
@@ -25,6 +25,8 @@ from utils.caching import LoreCache, FAITH_CACHE
 # Import existing modules
 from lore.lore_manager import LoreManager
 from lore.enhanced_lore import GeopoliticalSystemManager, EmergentLoreSystem, FaithSystem
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 # Initialize cache for various lore elements
 LORE_CACHE = LoreCache(max_size=200, ttl=3600)  # 1 hour TTL
@@ -849,7 +851,7 @@ class RegionalCultureSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(language_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(language_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 # Parse JSON response
@@ -975,7 +977,7 @@ class RegionalCultureSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(norm_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(norm_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 # Parse JSON response
@@ -1096,7 +1098,7 @@ class RegionalCultureSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(etiquette_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(etiquette_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 # Parse JSON response
@@ -1530,7 +1532,7 @@ class NationalConflictSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(issue_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(issue_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 # Parse response
@@ -1636,7 +1638,7 @@ class NationalConflictSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(news_agent, prompt, context=ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(news_agent, prompt, context=ctx.context))).raw
             
             try:
                 # Parse response
@@ -1768,7 +1770,7 @@ class NationalConflictSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(conflict_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 # Parse response
@@ -1866,7 +1868,7 @@ class NationalConflictSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(news_agent, prompt, context=ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(news_agent, prompt, context=ctx.context))).raw
             
             try:
                 # Parse response
@@ -2169,7 +2171,7 @@ class ReligiousDistributionSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(distribution_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(distribution_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 # Parse JSON response
@@ -2291,7 +2293,7 @@ class ReligiousDistributionSystem:
             """
             
             # Get response from agent
-            result = await Runner.run(practice_agent, prompt, context=ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(practice_agent, prompt, context=ctx.context))).raw
             
             try:
                 # Parse JSON response
@@ -3213,12 +3215,11 @@ class LoreUpdateSystem:
             
             # Get the response with enhanced error handling
             try:
-                result = await Runner.run(
-                    lore_update_agent, 
+                result = (await llm_gateway.execute(build_llm_request(lore_update_agent, 
                     prompt, 
                     context=run_ctx.context,
                     timeout=15
-                )
+                ))).raw
                 response_text = result.final_output
                 
                 # Parse the enhanced JSON response

@@ -7,8 +7,10 @@ from dataclasses import dataclass
 import json
 import logging
 
-from agents import Agent, function_tool, Runner, trace
+from agents import Agent, function_tool, trace
 from agents.run import RunConfig
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 @dataclass
 class CacheAnalytics:
@@ -332,7 +334,7 @@ class LoreCache:
             )
             
             run_ctx = RunContextWrapper(context={"component": "LoreCache"})
-            result = await Runner.run(self.optimization_agent, prompt, context=run_ctx.context)
+            result = (await llm_gateway.execute(build_llm_request(self.optimization_agent, prompt, context=run_ctx.context))).raw
             
             try:
                 recommendations = json.loads(result.final_output)

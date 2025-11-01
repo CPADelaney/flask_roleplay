@@ -3,8 +3,11 @@
 Contains specialized agents for validation tasks within the Canon.
 """
 import logging
-from agents import Agent, Runner
 from typing import Dict, Any
+
+from agents import Agent
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ class CanonValidationAgent:
         Answer with only the word 'true' or 'false'.
         """
 
-        result = await Runner.run(self.agent, prompt)
+        result = (await llm_gateway.execute(build_llm_request(self.agent, prompt))).raw
         response_text = result.final_output.strip().lower()
 
         logger.debug(f"Validator agent response for NPC duplicate check: '{response_text}'")

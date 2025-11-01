@@ -30,7 +30,7 @@ from datetime import datetime
 
 # Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, RunResultStreaming,
+    Agent, function_tool, trace, RunResultStreaming,
     GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff, RunContextWrapper, RunConfig
 )
 
@@ -43,6 +43,8 @@ from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
 from db.connection import get_db_connection_context
+from nyx.gateway import llm_gateway
+from lore.utils.llm_gateway import build_llm_request
 
 if TYPE_CHECKING:
     from lore.core.registry import ManagerRegistry
@@ -989,11 +991,10 @@ class LocalLoreManager(BaseLoreManager):
             selected_agent = agent_map.get(evolution_type, self.specialized_agents.myth_evolution_agent)
 
             # Run the evolution
-            result = await Runner.run(
-                selected_agent,
+            result = (await llm_gateway.execute(build_llm_request(selected_agent,
                 evolution_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             new_description = result.final_output
 
@@ -1155,11 +1156,10 @@ Be specific and compelling in your connection.
 """
 
             # Use the connector agent via specialized_agents
-            result = await Runner.run(
-                self.specialized_agents.myth_history_connector,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.myth_history_connector,
                 connection_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             connection: NarrativeConnection = result.final_output
 
@@ -1214,11 +1214,10 @@ Be historically plausible and culturally sensitive.
 """
 
             # Use the connector agent via specialized_agents
-            result = await Runner.run(
-                self.specialized_agents.history_landmark_connector,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.history_landmark_connector,
                 connection_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             connection: NarrativeConnection = result.final_output
 
@@ -1328,11 +1327,10 @@ Be historically plausible and culturally sensitive.
             """
 
             # Run consistency check using specialized agent
-            result = await Runner.run(
-                self.specialized_agents.consistency_agent,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.consistency_agent,
                 consistency_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             consistency_result: ConsistencyCheckResult = result.final_output
 
@@ -1580,11 +1578,10 @@ Based on this event, determine:
 Return a JSON object with your analysis and specific recommendations.
 """
 
-            result = await Runner.run(
-                evolution_agent,
+            result = (await llm_gateway.execute(build_llm_request(evolution_agent,
                 evolution_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             # Parse recommendations
             try:
@@ -1789,11 +1786,10 @@ different antagonists, different outcomes, etc.
 """
 
             # Run variant generation using specialized agent
-            result = await Runner.run(
-                self.specialized_agents.variant_agent,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.variant_agent,
                 variants_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             variants: List[LegendVariant] = result.final_output
 
@@ -1867,11 +1863,10 @@ Balance commercialization with cultural preservation.
 """
 
             # Run tourism development using specialized agent
-            result = await Runner.run(
-                self.specialized_agents.tourism_agent,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.tourism_agent,
                 tourism_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             tourism_plan: TouristDevelopment = result.final_output
 
@@ -1930,11 +1925,10 @@ Show specific differences in language, detail, and emphasis.
 """
 
             # Run tradition analysis using specialized agent
-            result = await Runner.run(
-                self.specialized_agents.tradition_agent,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.tradition_agent,
                 tradition_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             tradition_analysis: TraditionDynamics = result.final_output
 
@@ -2029,11 +2023,10 @@ Show specific differences in language, detail, and emphasis.
             """
 
             # Run transmission simulation using specialized agent
-            result = await Runner.run(
-                self.specialized_agents.transmission_agent,
+            result = (await llm_gateway.execute(build_llm_request(self.specialized_agents.transmission_agent,
                 transmission_prompt,
                 context=run_ctx.context
-            )
+            ))).raw
 
             transmission_result: MythTransmissionResult = result.final_output
 
@@ -2159,12 +2152,11 @@ Show specific differences in language, detail, and emphasis.
             output_type=List[Dict[str, Any]]
         )
 
-        result = await Runner.run(
-            myth_gen_agent,
+        result = (await llm_gateway.execute(build_llm_request(myth_gen_agent,
             prompt,
             context=ctx.context,
             run_config=RunConfig(workflow_name="GenerateLocationMyths")
-        )
+        ))).raw
 
         generated_ids = []
         for myth_data in result.final_output:
@@ -2225,12 +2217,11 @@ Show specific differences in language, detail, and emphasis.
             output_type=List[Dict[str, Any]]
         )
 
-        result = await Runner.run(
-            history_gen_agent,
+        result = (await llm_gateway.execute(build_llm_request(history_gen_agent,
             prompt,
             context=ctx.context,
             run_config=RunConfig(workflow_name="GenerateLocationHistory")
-        )
+        ))).raw
 
         generated_ids = []
         for event_data in result.final_output:
@@ -2291,12 +2282,11 @@ Show specific differences in language, detail, and emphasis.
             output_type=List[Dict[str, Any]]
         )
 
-        result = await Runner.run(
-            landmark_gen_agent,
+        result = (await llm_gateway.execute(build_llm_request(landmark_gen_agent,
             prompt,
             context=ctx.context,
             run_config=RunConfig(workflow_name="GenerateLocationLandmarks")
-        )
+        ))).raw
 
         generated_ids = []
         for landmark_data in result.final_output:
