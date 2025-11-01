@@ -40,6 +40,100 @@ def get_redis_client() -> redis.Redis:
 redis_client = get_redis_client()
 
 
+class VersionedKeyRegistry:
+    """Manage per-player version counters for cache keys."""
+
+    def __init__(self, namespace: str = "cache:versions") -> None:
+        self._namespace = namespace
+
+    def _normalize_player(self, player_id: Any) -> str:
+        if player_id is None:
+            raise ValueError("player_id is required for versioned cache keys")
+        return str(player_id)
+
+    def _normalize_label(self, label: str) -> str:
+        if not label:
+            raise ValueError("label is required for versioned cache keys")
+        return str(label)
+
+    def _counter_key(self, player_id: Any, label: str) -> str:
+        player = self._normalize_player(player_id)
+        normalized_label = self._normalize_label(label)
+        return f"{self._namespace}:{player}:{normalized_label}"
+
+    def get_version(self, player_id: Any, label: str) -> int:
+        """Return the current version counter for the player/label pair."""
+
+        client = get_redis_client()
+        raw = client.get(self._counter_key(player_id, label))
+        try:
+            return int(raw) if raw is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def bump(self, player_id: Any, label: str) -> int:
+        """Atomically increment the version counter for the player/label pair."""
+
+        client = get_redis_client()
+        return int(client.incr(self._counter_key(player_id, label)))
+
+    def suffix(self, player_id: Any, label: str) -> str:
+        """Return the formatted suffix for the current version."""
+
+        version = self.get_version(player_id, label)
+        return f"v{version}"
+
+    def bump_suffix(self, player_id: Any, label: str) -> str:
+        """Increment the counter and return the formatted suffix."""
+
+        version = self.bump(player_id, label)
+        return f"v{version}"
+
+
+_VERSIONED_REGISTRY = VersionedKeyRegistry()
+
+
+def _versioned_cache_key(player_id: Any, label: str, *parts: Any) -> str:
+    suffix = _VERSIONED_REGISTRY.suffix(player_id, label)
+    return cache_key(label, player_id, *parts, suffix)
+
+
+def conflict_cache_key_with_version(player_id: Any, *parts: Any) -> str:
+    """Build a conflict cache key including the player's version suffix."""
+
+    return _versioned_cache_key(player_id, "conflict", *parts)
+
+
+def bump_conflict_cache_version(player_id: Any) -> str:
+    """Bump the conflict cache counter for this player and return the suffix."""
+
+    return _VERSIONED_REGISTRY.bump_suffix(player_id, "conflict")
+
+
+def memory_cache_key_with_version(player_id: Any, *parts: Any) -> str:
+    """Build a memory cache key including the player's version suffix."""
+
+    return _versioned_cache_key(player_id, "memory", *parts)
+
+
+def bump_memory_cache_version(player_id: Any) -> str:
+    """Bump the memory cache counter for this player and return the suffix."""
+
+    return _VERSIONED_REGISTRY.bump_suffix(player_id, "memory")
+
+
+def lore_cache_key_with_version(player_id: Any, *parts: Any) -> str:
+    """Build a lore cache key including the player's version suffix."""
+
+    return _versioned_cache_key(player_id, "lore", *parts)
+
+
+def bump_lore_cache_version(player_id: Any) -> str:
+    """Bump the lore cache counter for this player and return the suffix."""
+
+    return _VERSIONED_REGISTRY.bump_suffix(player_id, "lore")
+
+
 def get_json(key: str, default: Any = None) -> Any:
     """Get a JSON value from Redis cache (hot path optimized).
 
