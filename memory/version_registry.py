@@ -1,44 +1,144 @@
-"""In-process registry for tracking user memory version numbers."""
+"""Lightweight registry for tracking per‑player memory cache versions.
+
+Backed by Redis for cross‑process consistency with a local in‑process cache
+as a fast path. Use `bump_memory_version(user_id)` after any durable memory
+write to force cache keys to refresh.
+"""
 
 from __future__ import annotations
 
 import logging
-from threading import Lock
-from typing import Dict, Tuple, Optional
+import threading
+from typing import Dict, Optional
 
-logger = logging.getLogger("memory_version_registry")
+try:
+    # Avoid coupling to core; use the shared cache layer if present
+    from utils.caching import enhanced_main_cache
+except Exception:  # pragma: no cover - defensive import guard
+    enhanced_main_cache = None  # type: ignore
 
-# Internal state guarded by a process-wide lock. The key is a tuple of
-# (user_id, conversation_id) so we can differentiate between concurrent
-# conversations if callers provide that context. For callers that only pass
-# the user identifier we normalize to ``(user_id, None)``.
-_memory_versions: Dict[Tuple[int, Optional[int]], int] = {}
-_registry_lock = Lock()
+logger = logging.getLogger(__name__)
 
-
-def _normalize_key(user_id: int, conversation_id: Optional[int] = None) -> Tuple[int, Optional[int]]:
-    if user_id is None:
-        raise ValueError("user_id is required to bump the memory version")
-    return user_id, conversation_id
+_MEMORY_VERSION_PREFIX = "memory:version:"
+_local_versions: Dict[int, int] = {}
+_lock = threading.RLock()
 
 
-def get_memory_version(user_id: int, conversation_id: Optional[int] = None) -> int:
-    """Return the current memory version for the given scope."""
-    key = _normalize_key(user_id, conversation_id)
-    with _registry_lock:
-        return _memory_versions.get(key, 0)
+def _normalize_user_id(user_id: int) -> Optional[int]:
+    """Normalize incoming IDs to ints; return None when invalid."""
+    try:
+        value = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
-def bump_memory_version(user_id: int, conversation_id: Optional[int] = None) -> int:
-    """Increment and return the memory version for the given scope."""
-    key = _normalize_key(user_id, conversation_id)
-    with _registry_lock:
-        next_version = _memory_versions.get(key, 0) + 1
-        _memory_versions[key] = next_version
-    logger.debug(
-        "Bumped memory version", extra={"user_id": user_id, "conversation_id": conversation_id, "version": next_version}
-    )
-    return next_version
+def _get_redis_client():
+    """Return the shared Redis client, if available."""
+    if enhanced_main_cache is None:
+        return None
+    return getattr(enhanced_main_cache, "redis_client", None)
 
 
-__all__ = ["bump_memory_version", "get_memory_version"]
+def _key(user_id: int) -> str:
+    return f"{_MEMORY_VERSION_PREFIX}{user_id}"
+
+
+def get_memory_version(user_id: int, *, default: int = 0, force_refresh: bool = False) -> int:
+    """Fetch the current memory version for a player.
+
+    Falls back to an in-process cache when Redis is unavailable.
+    """
+    normalized = _normalize_user_id(user_id)
+    if normalized is None:
+        return default
+
+    if not force_refresh:
+        with _lock:
+            cached = _local_versions.get(normalized)
+            if cached is not None:
+                return cached
+
+    version = default
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            raw = client.get(_key(normalized))
+            if raw is not None:
+                version = int(raw)
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            logger.debug("memory.version_registry: redis GET failed for %s: %s", normalized, exc)
+
+    with _lock:
+        _local_versions[normalized] = version
+    return version
+
+
+def set_memory_version(user_id: int, version: int) -> int:
+    """Explicitly set the memory version for a player (primarily for tests)."""
+    normalized = _normalize_user_id(user_id)
+    if normalized is None:
+        return 0
+
+    value = int(version or 0)
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            client.set(_key(normalized), value)
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            logger.debug("memory.version_registry: redis SET failed for %s: %s", normalized, exc)
+
+    with _lock:
+        _local_versions[normalized] = value
+    return value
+
+
+def bump_memory_version(user_id: int) -> int:
+    """Atomically increment and return the player's memory version."""
+    normalized = _normalize_user_id(user_id)
+    if normalized is None:
+        return 0
+
+    client = _get_redis_client()
+    new_version: Optional[int] = None
+    if client is not None:
+        try:
+            new_version = int(client.incr(_key(normalized)))
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            logger.debug("memory.version_registry: redis INCR failed for %s: %s", normalized, exc)
+            new_version = None
+
+    if new_version is None:
+        with _lock:
+            new_version = _local_versions.get(normalized, 0) + 1
+            _local_versions[normalized] = new_version
+    else:
+        with _lock:
+            _local_versions[normalized] = new_version
+
+    return new_version
+
+
+def clear_memory_version(user_id: int) -> None:
+    """Remove any cached version information for a player (useful in tests)."""
+    normalized = _normalize_user_id(user_id)
+    if normalized is None:
+        return
+
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            client.delete(_key(normalized))
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            logger.debug("memory.version_registry: redis DEL failed for %s: %s", normalized, exc)
+
+    with _lock:
+        _local_versions.pop(normalized, None)
+
+
+__all__ = [
+    "get_memory_version",
+    "set_memory_version",
+    "bump_memory_version",
+    "clear_memory_version",
+]

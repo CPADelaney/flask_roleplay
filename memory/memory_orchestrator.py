@@ -40,6 +40,8 @@ try:
 except Exception:
     get_memory_config = None
 
+from memory.version_registry import get_memory_version
+
 # Optional/new components with safe fallbacks
 try:
     from memory.memory_service import MemoryEmbeddingService as LC_MemoryEmbeddingService
@@ -666,9 +668,19 @@ class MemoryOrchestrator:
                 await self.initialize()
     
             scope = self._coerce_scope(scope)
-    
+
             cls = self.__class__
-            cache_key = f"{self.user_id}:{self.conversation_id}:{scope.to_cache_key()}"
+            try:
+                memory_version = get_memory_version(self.user_id)
+            except Exception as exc:
+                logger.debug(
+                    "Memory version lookup failed for user %s: %s",
+                    self.user_id,
+                    exc,
+                )
+                memory_version = 0
+            cache_suffix = f":m{memory_version}"
+            cache_key = f"{self.user_id}:{self.conversation_id}:{scope.to_cache_key()}{cache_suffix}"
     
             # Fast path with separate TTL and LRU tracking
             cached = cls._bundle_cache.get(cache_key)
