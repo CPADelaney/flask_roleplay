@@ -39,7 +39,7 @@ Run (local)
 hypercorn wsgi:app --bind 0.0.0.0:8080 --reload
 
 # Celery workers (queues: realtime, background, heavy)
-celery -A tasks.celery_app worker \
+celery -A nyx.tasks.celery_app:app worker \
   --loglevel=INFO --queues realtime,background,heavy \
   --pool=prefork --concurrency=1
 
@@ -123,7 +123,7 @@ Celery app: celery_config.py (merges native tasks + nyx.tasks routes/queues; sup
 
 Start:
 
-celery -A tasks.celery_app worker --loglevel=INFO \
+celery -A nyx.tasks.celery_app:app worker --loglevel=INFO \
   --queues realtime,background,heavy --pool=prefork --concurrency=1
 
 

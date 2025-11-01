@@ -7,7 +7,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from celery_config import celery_app
+from nyx.tasks.celery_app import app
 from nyx.tasks.queues import QUEUES as NYX_QUEUES
 
 
@@ -23,7 +23,7 @@ def test_new_game_tasks_use_registered_queues():
     known_queues = {queue.name for queue in NYX_QUEUES}
     assert known_queues, "Expected Nyx queue list to be populated"
 
-    routes = celery_app.conf.task_routes or {}
+    routes = app.conf.task_routes or {}
     tasks_to_verify = {
         "tasks.process_new_game_task",
         "tasks.create_npcs_task",

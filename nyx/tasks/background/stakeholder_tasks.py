@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 from openai import AsyncOpenAI
 
 from db.connection import get_db_connection_context
@@ -404,12 +404,10 @@ Return JSON:
     return payload_record
 
 
-@shared_task(
-    name="nyx.tasks.background.stakeholder_tasks.create_stakeholder_profile",
+@app.task(base=NyxTask, name="nyx.tasks.background.stakeholder_tasks.create_stakeholder_profile",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_populate)
 def create_stakeholder_profile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -429,12 +427,10 @@ def create_stakeholder_profile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return run_coro(_create_stakeholder_profile_async(payload))
 
 
-@shared_task(
-    name="nyx.tasks.background.stakeholder_tasks.generate_stakeholder_action",
+@app.task(base=NyxTask, name="nyx.tasks.background.stakeholder_tasks.generate_stakeholder_action",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_action)
 def generate_stakeholder_action(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -449,12 +445,10 @@ def generate_stakeholder_action(self, payload: Dict[str, Any]) -> Dict[str, Any]
     return run_coro(_generate_action_async(payload))
 
 
-@shared_task(
-    name="nyx.tasks.background.stakeholder_tasks.generate_stakeholder_reaction",
+@app.task(base=NyxTask, name="nyx.tasks.background.stakeholder_tasks.generate_stakeholder_reaction",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_reaction)
 def generate_stakeholder_reaction(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -472,12 +466,10 @@ def generate_stakeholder_reaction(self, payload: Dict[str, Any]) -> Dict[str, An
     return run_coro(_generate_reaction_async(payload))
 
 
-@shared_task(
-    name="nyx.tasks.background.stakeholder_tasks.evaluate_stakeholder_role",
+@app.task(base=NyxTask, name="nyx.tasks.background.stakeholder_tasks.evaluate_stakeholder_role",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_role)
 def evaluate_stakeholder_role(self, payload: Dict[str, Any]) -> Dict[str, Any]:

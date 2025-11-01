@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from celery.result import AsyncResult
 
-from celery_config import celery_app
+from nyx.tasks.celery_app import app as celery_app
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)

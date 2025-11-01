@@ -1794,7 +1794,7 @@ class NewGameAgent:
             )
 
         try:
-            from celery_config import celery_app
+            from nyx.tasks.celery_app import app as celery_app
 
             celery_app.send_task(
                 'tasks.ensure_npc_pool_task',
@@ -1876,7 +1876,7 @@ class NewGameAgent:
             return "Lore generation skipped - unable to record status"
 
         try:
-            from celery_config import celery_app
+            from nyx.tasks.celery_app import app as celery_app
 
             celery_app.send_task(
                 'tasks.generate_lore_background_task',
@@ -2013,7 +2013,7 @@ class NewGameAgent:
             )
 
         try:
-            from celery_config import celery_app
+            from nyx.tasks.celery_app import app as celery_app
 
             celery_app.send_task(
                 'tasks.generate_initial_conflict_task',

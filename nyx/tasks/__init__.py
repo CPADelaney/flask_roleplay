@@ -24,7 +24,15 @@ except Exception:  # pragma: no cover
 
 
 
-for _module in ("world_tasks", "conflict_tasks", "conflict_template_tasks", "npc_tasks", "lore_tasks", "canon_tasks", "integration_tasks"):
+for _module in (
+    "world_tasks",
+    "conflict_tasks",
+    "conflict_template_tasks",
+    "npc_tasks",
+    "lore_tasks",
+    "canon_tasks",
+    "integration_tasks",
+):
     try:  # pragma: no cover - defensive import
         __import__(f"nyx.tasks.background.{_module}")
     except Exception:
@@ -41,12 +49,18 @@ for _module in ("memory_tasks",):
         logging.getLogger(__name__).exception("Failed to import heavy task %s", _module)
 
 try:  # pragma: no cover
-    __import__("nyx.tasks.beat.periodic")
+    from . import beat  # noqa: F401
 except Exception:
     import logging
 
-    logging.getLogger(__name__).exception("Failed to import beat.periodic")
+    logging.getLogger(__name__).exception("Failed to import beat schedule")
 
 __all__ = [
     "post_turn",
 ]
+try:  # pragma: no cover - ensure maintenance tasks register
+    from . import maintenance  # noqa: F401
+except Exception:
+    import logging
+
+    logging.getLogger(__name__).exception("Failed to import maintenance tasks")

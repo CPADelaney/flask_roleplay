@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from db.connection import get_db_connection_context
@@ -534,10 +534,8 @@ def _fallback_unique() -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_template_tasks.create_template_for_category",
-    bind=True,
-)
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_template_tasks.create_template_for_category",
+    bind=True,)
 @with_retry
 def create_template_for_category(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     template_id = int(payload["template_id"])
@@ -610,10 +608,8 @@ def create_template_for_category(self, payload: Dict[str, Any]) -> Dict[str, Any
     return {"template_id": template_id, "status": "ready"}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_template_tasks.generate_variation",
-    bind=True,
-)
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_template_tasks.generate_variation",
+    bind=True,)
 @with_retry
 def generate_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(payload["user_id"])
@@ -718,10 +714,8 @@ def generate_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"template_id": template_id, "context_hash": context_hash}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_template_tasks.adapt_variation",
-    bind=True,
-)
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_template_tasks.adapt_variation",
+    bind=True,)
 @with_retry
 def adapt_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(payload["user_id"])
@@ -804,10 +798,8 @@ def adapt_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"template_id": template_id, "context_hash": context_hash}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_template_tasks.add_unique_elements",
-    bind=True,
-)
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_template_tasks.add_unique_elements",
+    bind=True,)
 @with_retry
 def add_unique_elements(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(payload["user_id"])
@@ -891,10 +883,8 @@ def add_unique_elements(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"template_id": template_id, "context_hash": context_hash}
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_template_tasks.generate_hooks",
-    bind=True,
-)
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_template_tasks.generate_hooks",
+    bind=True,)
 @with_retry
 def generate_hooks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(payload["user_id"])
@@ -1039,10 +1029,8 @@ def _queue_stage(stage: str, entry: Dict[str, Any]) -> bool:
     return True
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_template_tasks.warm_template_cache",
-    bind=True,
-)
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_template_tasks.warm_template_cache",
+    bind=True,)
 @with_retry
 def warm_template_cache(self, limit: int = 20) -> Dict[str, Any]:
     entries = run_coro(_fetch_warmup_entries(limit))

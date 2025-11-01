@@ -8,8 +8,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, TypedDict
 
-from celery import Celery, shared_task
+from celery import Celery
 from db.connection import AsyncpgConnection, get_db_connection_context, run_async_in_worker_loop
+from nyx.tasks.base import NyxTask, app
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,8 @@ class OutboxService:
     def _get_celery_app(self) -> Celery:
         if self._celery_app:
             return self._celery_app
-        from celery_config import celery_app
+        from nyx.tasks.celery_app import app as celery_app
+
         self._celery_app = celery_app
         return self._celery_app
 
@@ -178,8 +180,8 @@ def _outbox_entries_from_payload(payload: TurnPayload) -> List[OutboxEntryPayloa
 
 # --- Celery Tasks ---
 
-@shared_task(name="nyx.tasks.realtime.post_turn.dispatch")
-def dispatch(payload: TurnPayload | None = None) -> str:
+@app.task(bind=True, base=NyxTask, name="nyx.tasks.realtime.post_turn.dispatch")
+def dispatch(self, payload: TurnPayload | None = None) -> str:
     """Persists side effects into the outbox and triggers the drain worker."""
     payload = payload or {}
     entries = _outbox_entries_from_payload(payload)
@@ -198,8 +200,13 @@ def dispatch(payload: TurnPayload | None = None) -> str:
     return f"outbox:{inserted}"
 
 
-@shared_task(name="nyx.tasks.realtime.post_turn.drain_outbox", acks_late=True)
-def drain_outbox(limit: int = 10) -> int:
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.realtime.post_turn.drain_outbox",
+    acks_late=True,
+)
+def drain_outbox(self, limit: int = 10) -> int:
     """Processes a batch of pending entries from the outbox table."""
     service = OutboxService()
     return run_async_in_worker_loop(service.drain(limit=limit))

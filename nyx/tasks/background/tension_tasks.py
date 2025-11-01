@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from infra.cache import cache_key, set_json
@@ -244,12 +244,10 @@ def _cache_escalation_narrative(
     return key
 
 
-@shared_task(
-    name="nyx.tasks.background.tension_tasks.update_tension_bundle_cache",
+@app.task(base=NyxTask, name="nyx.tasks.background.tension_tasks.update_tension_bundle_cache",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_tension_bundle)
 def update_tension_bundle_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -258,12 +256,10 @@ def update_tension_bundle_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]
     return generate_tension_manifestations(payload)
 
 
-@shared_task(
-    name="nyx.tasks.background.tension_tasks.generate_tension_manifestations",
+@app.task(base=NyxTask, name="nyx.tasks.background.tension_tasks.generate_tension_manifestations",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_manifestation)
 def generate_tension_manifestations(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -320,12 +316,10 @@ def generate_tension_manifestations(self, payload: Dict[str, Any]) -> Dict[str, 
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.tension_tasks.narrate_escalation",
+@app.task(base=NyxTask, name="nyx.tasks.background.tension_tasks.narrate_escalation",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_escalation)
 def narrate_escalation(self, payload: Dict[str, Any]) -> Dict[str, Any]:

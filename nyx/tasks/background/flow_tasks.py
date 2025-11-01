@@ -21,7 +21,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
 from db.connection import get_db_connection_context
@@ -330,12 +330,10 @@ Return JSON:
         return {}
 
 
-@shared_task(
-    name="nyx.tasks.background.flow_tasks.initialize_conflict_flow",
+@app.task(base=NyxTask, name="nyx.tasks.background.flow_tasks.initialize_conflict_flow",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=lambda payload: f"flow_init:{payload.get('conflict_id')}")
 def initialize_conflict_flow(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -396,12 +394,10 @@ def initialize_conflict_flow(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.flow_tasks.analyze_flow_event",
+@app.task(base=NyxTask, name="nyx.tasks.background.flow_tasks.analyze_flow_event",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=lambda payload: _event_analysis_cache_key(payload.get("conflict_id"), payload.get("event", {}).get("event_id")))
 def analyze_flow_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -464,12 +460,10 @@ def analyze_flow_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.flow_tasks.generate_dramatic_beat",
+@app.task(base=NyxTask, name="nyx.tasks.background.flow_tasks.generate_dramatic_beat",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=lambda payload: _beat_cache_key(payload.get("conflict_id"), payload.get("beat_id", "")))
 def generate_dramatic_beat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -523,12 +517,10 @@ def generate_dramatic_beat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.flow_tasks.narrate_phase_transition",
+@app.task(base=NyxTask, name="nyx.tasks.background.flow_tasks.narrate_phase_transition",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_transition)
 def narrate_phase_transition(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -595,12 +587,10 @@ def narrate_phase_transition(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@shared_task(
-    name="nyx.tasks.background.flow_tasks.generate_beat_description",
+@app.task(base=NyxTask, name="nyx.tasks.background.flow_tasks.generate_beat_description",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_beat)
 def generate_beat_description(self, payload: Dict[str, Any]) -> Dict[str, Any]:

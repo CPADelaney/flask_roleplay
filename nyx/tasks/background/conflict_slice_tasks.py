@@ -7,7 +7,7 @@ import logging
 from dataclasses import asdict
 from typing import Any, Dict, Optional
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from db.connection import get_db_connection_context
 from logic.conflict_system.slice_of_life_conflicts import (
@@ -201,12 +201,10 @@ def _time_key(payload: Dict[str, Any]) -> str:
     return f"slice_time:{payload.get('conflict_id')}:{payload.get('time_of_day')}"
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_slice_tasks.refresh_tension_cache",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_slice_tasks.refresh_tension_cache",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_tension_key)
 def refresh_tension_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -250,12 +248,10 @@ def refresh_tension_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_slice_tasks.generate_conflict_activity",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_slice_tasks.generate_conflict_activity",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_activity_key)
 def generate_conflict_activity(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -320,12 +316,10 @@ def generate_conflict_activity(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_slice_tasks.evaluate_conflict_resolution",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_slice_tasks.evaluate_conflict_resolution",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_resolution_key)
 def evaluate_conflict_resolution(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -380,12 +374,10 @@ async def _load_conflict(conflict_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-@shared_task(
-    name="nyx.tasks.background.conflict_slice_tasks.evaluate_time_appropriateness",
+@app.task(base=NyxTask, name="nyx.tasks.background.conflict_slice_tasks.evaluate_time_appropriateness",
     bind=True,
     max_retries=2,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_time_key)
 def evaluate_time_appropriateness(self, payload: Dict[str, Any]) -> Dict[str, Any]:

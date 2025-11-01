@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
 fake_celery_app = types.SimpleNamespace(send_task=lambda *args, **kwargs: None)
-sys.modules["celery_config"] = types.SimpleNamespace(celery_app=fake_celery_app)
+sys.modules["nyx.tasks.celery_app"] = types.SimpleNamespace(app=fake_celery_app)
 
 _db_pkg = types.ModuleType("db")
 _db_connection = types.ModuleType("db.connection")

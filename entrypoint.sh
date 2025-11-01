@@ -9,7 +9,7 @@ if [ "$SERVICE_TYPE" = "worker" ]; then
     echo "Starting Celery Worker with prefork pool and concurrency=1..."
     # Use prefork with concurrency=1 to avoid asyncpg issues
     # The -E flag enables events for monitoring
-    exec celery -A tasks.celery_app worker --loglevel=INFO --concurrency=1 --pool=prefork --queues background,heavy,realtime -E
+    exec celery -A nyx.tasks.celery_app:app worker --loglevel=INFO --concurrency=1 --pool=prefork --queues background,heavy,realtime -E
 else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}

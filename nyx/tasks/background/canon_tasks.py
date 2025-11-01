@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
-from celery import shared_task
+from nyx.tasks.base import NyxTask, app
 
 from db.connection import get_db_connection_context
 from infra.cache import cache_key, set_json
@@ -430,12 +430,10 @@ async def _canonize_background(
         raise
 
 
-@shared_task(
-    name="canon.canonize_conflict",
+@app.task(base=NyxTask, name="canon.canonize_conflict",
     bind=True,
     max_retries=3,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_canonize)
 def canonize_conflict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -475,12 +473,10 @@ async def _reference_background(
     await _build_reference_cache_pipeline(subsystem, cache_id, event_id, context)
 
 
-@shared_task(
-    name="canon.generate_canon_references",
+@app.task(base=NyxTask, name="canon.generate_canon_references",
     bind=True,
     max_retries=3,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_references)
 def generate_canon_references(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -586,12 +582,10 @@ async def _suggestions_background(
     )
 
 
-@shared_task(
-    name="canon.generate_lore_suggestions",
+@app.task(base=NyxTask, name="canon.generate_lore_suggestions",
     bind=True,
     max_retries=3,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_suggestions)
 def generate_lore_suggestions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -642,12 +636,10 @@ async def _mythology_background(
     return mythology_text
 
 
-@shared_task(
-    name="canon.generate_mythology",
+@app.task(base=NyxTask, name="canon.generate_mythology",
     bind=True,
     max_retries=3,
-    acks_late=True,
-)
+    acks_late=True,)
 @with_retry
 @idempotent(key_fn=_idempotency_key_mythology)
 def generate_mythology_reinterpretation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
