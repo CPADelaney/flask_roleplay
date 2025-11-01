@@ -1,4 +1,9 @@
-"""Lightweight registry for tracking per-player memory cache versions."""
+"""Lightweight registry for tracking per‑player memory cache versions.
+
+Backed by Redis for cross‑process consistency with a local in‑process cache
+as a fast path. Use `bump_memory_version(user_id)` after any durable memory
+write to force cache keys to refresh.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,7 @@ import threading
 from typing import Dict, Optional
 
 try:
+    # Avoid coupling to core; use the shared cache layer if present
     from utils.caching import enhanced_main_cache
 except Exception:  # pragma: no cover - defensive import guard
     enhanced_main_cache = None  # type: ignore
@@ -61,7 +67,7 @@ def get_memory_version(user_id: int, *, default: int = 0, force_refresh: bool = 
             if raw is not None:
                 version = int(raw)
         except Exception as exc:  # pragma: no cover - defensive logging path
-            logger.debug("memory.version_registry: redis get failed for %s: %s", normalized, exc)
+            logger.debug("memory.version_registry: redis GET failed for %s: %s", normalized, exc)
 
     with _lock:
         _local_versions[normalized] = version
@@ -69,7 +75,7 @@ def get_memory_version(user_id: int, *, default: int = 0, force_refresh: bool = 
 
 
 def set_memory_version(user_id: int, version: int) -> int:
-    """Explicitly set the memory version for a player."""
+    """Explicitly set the memory version for a player (primarily for tests)."""
     normalized = _normalize_user_id(user_id)
     if normalized is None:
         return 0
@@ -80,7 +86,7 @@ def set_memory_version(user_id: int, version: int) -> int:
         try:
             client.set(_key(normalized), value)
         except Exception as exc:  # pragma: no cover - defensive logging path
-            logger.debug("memory.version_registry: redis set failed for %s: %s", normalized, exc)
+            logger.debug("memory.version_registry: redis SET failed for %s: %s", normalized, exc)
 
     with _lock:
         _local_versions[normalized] = value
@@ -99,7 +105,7 @@ def bump_memory_version(user_id: int) -> int:
         try:
             new_version = int(client.incr(_key(normalized)))
         except Exception as exc:  # pragma: no cover - defensive logging path
-            logger.debug("memory.version_registry: redis incr failed for %s: %s", normalized, exc)
+            logger.debug("memory.version_registry: redis INCR failed for %s: %s", normalized, exc)
             new_version = None
 
     if new_version is None:
@@ -114,7 +120,7 @@ def bump_memory_version(user_id: int) -> int:
 
 
 def clear_memory_version(user_id: int) -> None:
-    """Remove any cached version information for a player."""
+    """Remove any cached version information for a player (useful in tests)."""
     normalized = _normalize_user_id(user_id)
     if normalized is None:
         return
@@ -124,7 +130,7 @@ def clear_memory_version(user_id: int) -> None:
         try:
             client.delete(_key(normalized))
         except Exception as exc:  # pragma: no cover - defensive logging path
-            logger.debug("memory.version_registry: redis delete failed for %s: %s", normalized, exc)
+            logger.debug("memory.version_registry: redis DEL failed for %s: %s", normalized, exc)
 
     with _lock:
         _local_versions.pop(normalized, None)

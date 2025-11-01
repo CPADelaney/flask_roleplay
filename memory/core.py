@@ -20,6 +20,7 @@ logger = logging.getLogger("memory_system")
 # Telemetry setup
 # (Assuming there's a .telemetry module with MemoryTelemetry)
 from .telemetry import MemoryTelemetry
+from .version_registry import bump_memory_version
 from rag import ask as rag_ask
 
 # Database configuration
@@ -379,6 +380,20 @@ class UnifiedMemoryManager:
         self.conversation_id = conversation_id
         self.cache = MemoryCache(ttl_seconds=MEMORY_CACHE_TTL)
 
+    def _safe_bump_memory_version(self) -> None:
+        try:
+            bump_memory_version(self.user_id)
+        except Exception:
+            logger.exception(
+                "Failed to bump memory version",
+                extra={
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id,
+                    "entity_type": self.entity_type,
+                    "entity_id": self.entity_id,
+                },
+            )
+
     @with_transaction
     async def add_memory(self,
                          memory: Union[Memory, str],
@@ -436,6 +451,7 @@ class UnifiedMemoryManager:
 
         if memory.significance >= MemorySignificance.HIGH:
             await self._process_significant_memory(memory, memory_id, conn)
+        self._safe_bump_memory_version()
         return memory_id
 
     async def _process_significant_memory(self,
@@ -752,6 +768,7 @@ class UnifiedMemoryManager:
         memories = [Memory.from_db_row(dict(row)) for row in rows]
         clusters = await self._cluster_memories(memories, min_similarity, min_count)
         consolidated_ids = []
+        made_changes = False
 
         for cluster in clusters:
             if len(cluster) < min_count:
@@ -788,6 +805,7 @@ class UnifiedMemoryManager:
                 consolidated_memory.timestamp, 0, MemoryStatus.ACTIVE.value, False
             )
             consolidated_ids.append(consolidated_id)
+            made_changes = True
             await conn.execute(
                 """
                 UPDATE unified_memories
@@ -798,6 +816,8 @@ class UnifiedMemoryManager:
             )
 
         await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
+        if made_changes:
+            self._safe_bump_memory_version()
         return consolidated_ids
 
     async def _cluster_memories(self,
@@ -895,6 +915,8 @@ class UnifiedMemoryManager:
                 archive_ids
             )
         await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
+        if affected_count > 0 or archive_ids:
+            self._safe_bump_memory_version()
         return affected_count
 
     @with_transaction
@@ -959,6 +981,7 @@ class UnifiedMemoryManager:
             altered_text, json.dumps(metadata), embedding, memory_id
         )
         await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
+        self._safe_bump_memory_version()
         return True
 
     async def _alter_memory_text(self, text: str, alteration_strength: float) -> str:
@@ -1003,6 +1026,8 @@ class UnifiedMemoryManager:
         )
         await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
         affected = int(result.split(" ")[-1]) if " " in result else 0
+        if affected:
+            self._safe_bump_memory_version()
         return affected
 
     @with_transaction
@@ -1064,6 +1089,8 @@ class UnifiedMemoryManager:
                 )
                 memory_ids.append(memory_id)
         await self.cache.delete(f"memories_{self.entity_type}_{self.entity_id}")
+        if memory_ids:
+            self._safe_bump_memory_version()
         return memory_ids
 
     @with_transaction
