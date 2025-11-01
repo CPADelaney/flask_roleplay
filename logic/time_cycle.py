@@ -31,7 +31,9 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 from enum import Enum
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, function_tool
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 from agents.run_context import RunContextWrapper
 
 from db.connection import get_db_connection_context, is_shutting_down
@@ -725,24 +727,36 @@ async def recommend_events(
         if 'trigger_reason' in context:
             prompt += f"\n- Trigger: {context['trigger_reason']}"
         
-        result = await Runner.run(
-            EventContentAgent,
-            messages=[{"role": "user", "content": prompt}],
-            calls=[{
-                "name": "generate_event_content",
-                "kwargs": {
-                    "event_type": event_type,
-                    "context_data_json": json.dumps(event_context)  # <-- correct name + JSON
-                }
-            }]
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=EventContentAgent,
+                prompt=None,
+                runner_kwargs={
+                    "messages": [{"role": "user", "content": prompt}],
+                    "calls": [
+                        {
+                            "name": "generate_event_content",
+                            "kwargs": {
+                                "event_type": event_type,
+                                "context_data_json": json.dumps(event_context)
+                            }
+                        }
+                    ],
+                },
+            )
         )
-        
+
         # Extract generated content (parse JSON string safely)
-        if result.output:
+        raw_result = getattr(result, "raw", None)
+        output_text = ""
+        if raw_result is not None:
+            output_text = getattr(raw_result, "output", None) or getattr(raw_result, "final_output", None) or ""
+        output_text = output_text or result.text or ""
+        if output_text:
             try:
-                gen = json.loads(result.output)
+                gen = json.loads(output_text)
             except Exception:
-                gen = {"event_type": event_type, "content": str(result.output), "metadata": {}}
+                gen = {"event_type": event_type, "content": str(output_text), "metadata": {}}
             return {
                 "event": event_type,
                 "score": score,
@@ -1108,22 +1122,34 @@ async def analyze_action_combined(
         if rng_seed is not None:
             messages.append({"role": "system", "content": f"RNG_SEED={rng_seed}"})
         
-        result = await Runner.run(
-            CombinedAnalyzer,
-            messages=messages,
-            calls=[{
-                "name": "analyze_player_action",
-                "kwargs": {
-                    "sentence": player_input,
-                    "location": location,
-                    "vitals_json": json.dumps(vitals_dict)  # Pass as JSON string
-                }
-            }]
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=CombinedAnalyzer,
+                prompt=None,
+                runner_kwargs={
+                    "messages": messages,
+                    "calls": [
+                        {
+                            "name": "analyze_player_action",
+                            "kwargs": {
+                                "sentence": player_input,
+                                "location": location,
+                                "vitals_json": json.dumps(vitals_dict)
+                            }
+                        }
+                    ],
+                },
+            )
         )
-        
-        if result.output:
+
+        raw_result = getattr(result, "raw", None)
+        output_text = ""
+        if raw_result is not None:
+            output_text = getattr(raw_result, "output", None) or getattr(raw_result, "final_output", None) or ""
+        output_text = output_text or result.text or ""
+        if output_text:
             # Parse JSON string output
-            output_data = json.loads(result.output)
+            output_data = json.loads(output_text)
             return output_data
             
     except Exception as e:
@@ -1243,22 +1269,34 @@ async def classify_activity_with_llm(
             })
         
         # Run the intent classification
-        result = await Runner.run(  # Use run for SDK 0.1.0+
-            PlayerIntentAgent,
-            messages=messages,
-            calls=[{  # Use 'calls' instead of 'tool_calls' for some SDK versions
-                "name": "classify_intent",
-                "kwargs": {
-                    "sentence": player_input,
-                    "location": location
-                }
-            }]
+        result = await llm_gateway.execute(  # Use run for SDK 0.1.0+
+            LLMRequest(
+                agent=PlayerIntentAgent,
+                prompt=None,
+                runner_kwargs={
+                    "messages": messages,
+                    "calls": [
+                        {
+                            "name": "classify_intent",
+                            "kwargs": {
+                                "sentence": player_input,
+                                "location": location
+                            }
+                        }
+                    ],
+                },
+            )
         )
-        
-        if result.output:
+
+        raw_result = getattr(result, "raw", None)
+        output_obj = None
+        if raw_result is not None:
+            output_obj = getattr(raw_result, "output", None) or getattr(raw_result, "final_output", None)
+
+        if output_obj:
             # Extract from Pydantic model
-            activity_type = result.output.activity_type
-            confidence = result.output.confidence
+            activity_type = getattr(output_obj, "activity_type", None)
+            confidence = getattr(output_obj, "confidence", None)
             
             # Validate activity type (case-insensitive)
             if activity_type and activity_type.lower() in [a.lower() for a in ALL_ACTIVITY_TYPES] and confidence >= 0.5:
@@ -1297,25 +1335,39 @@ async def calculate_intensity_with_llm(
         if context.get("mood"):
             context_tags.append(f"mood:{context['mood']}")
             
-        result = await Runner.run(
-            IntensityScorer,
-            messages=[{
-                "role": "user",
-                "content": f"Analyze intensity for: {player_input}"
-            }],
-            calls=[{
-                "name": "score_intensity",
-                "kwargs": {
-                    "sentence": player_input,
-                    "vitals_json": json.dumps(vitals.to_dict()),  # Pass as JSON string
-                    "context_tags": context_tags
-                }
-            }]
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=IntensityScorer,
+                prompt=None,
+                runner_kwargs={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"Analyze intensity for: {player_input}"
+                        }
+                    ],
+                    "calls": [
+                        {
+                            "name": "score_intensity",
+                            "kwargs": {
+                                "sentence": player_input,
+                                "vitals_json": json.dumps(vitals.to_dict()),
+                                "context_tags": context_tags
+                            }
+                        }
+                    ],
+                },
+            )
         )
-        
-        if result.output:
+
+        raw_result = getattr(result, "raw", None)
+        output_text = ""
+        if raw_result is not None:
+            output_text = getattr(raw_result, "output", None) or getattr(raw_result, "final_output", None) or ""
+        output_text = output_text or result.text or ""
+        if output_text:
             # Parse JSON string output
-            return json.loads(result.output)
+            return json.loads(output_text)
             
     except Exception as e:
         logger.warning(f"LLM intensity scoring failed: {e}")
@@ -1440,29 +1492,43 @@ async def select_events_with_director(
             messages.append({"role": "system", "content": f"RNG_SEED={rng_seed}"})
         
         # Call the agent
-        result = await Runner.run(
-            NarrativeDirectorAgent,
-            messages=messages,
-            calls=[{
-                "name": "recommend_events",
-                "kwargs": {
-                    "activity_log_json": json.dumps([al.dict() for al in activity_log_summaries]),
-                    "vitals_json": json.dumps(vitals_summary.dict()),
-                    "plot_flags_json": json.dumps(plot_flags_list),
-                    "relationships_json": json.dumps([rs.dict() for rs in relationship_standings_list])
-                }
-            }]
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=NarrativeDirectorAgent,
+                prompt=None,
+                runner_kwargs={
+                    "messages": messages,
+                    "calls": [
+                        {
+                            "name": "recommend_events",
+                            "kwargs": {
+                                "activity_log_json": json.dumps([al.dict() for al in activity_log_summaries]),
+                                "vitals_json": json.dumps(vitals_summary.dict()),
+                                "plot_flags_json": json.dumps(plot_flags_list),
+                                "relationships_json": json.dumps([rs.dict() for rs in relationship_standings_list])
+                            }
+                        }
+                    ],
+                },
+            )
         )
         
-        if result.output:
+        raw_result = getattr(result, "raw", None)
+        output_payload = None
+        if raw_result is not None:
+            output_payload = getattr(raw_result, "output", None) or getattr(raw_result, "final_output", None)
+        if output_payload is None and result.text:
+            output_payload = result.text
+
+        if output_payload:
             # Normalize to list[dict]
-            if isinstance(result.output, str):
-                recs = json.loads(result.output)
-            elif isinstance(result.output, list):
-                recs = [ (r.dict() if hasattr(r, "dict") else dict(r)) for r in result.output ]
+            if isinstance(output_payload, str):
+                recs = json.loads(output_payload)
+            elif isinstance(output_payload, list):
+                recs = [ (r.dict() if hasattr(r, "dict") else dict(r)) for r in output_payload ]
             else:
                 recs = []
-        
+
             events = []
             for rec in recs:
                 score = float(rec.get("score", 0))
@@ -1637,20 +1703,38 @@ async def narrate_vital_crisis(
         
         npc_context = f"NPC present: {npc['npc_name']}" if npc else "No NPCs nearby"
         
-        result = await Runner.run(
-            VitalsNarrator,
-            messages=[{
-                "role": "user",
-                "content": f"""Generate description for crisis:
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=VitalsNarrator,
+                prompt=None,
+                runner_kwargs={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"""Generate description for crisis:
                 Type: {crisis['type']}
                 Severity: {crisis['severity']}
                 Context: {npc_context}"""
-            }]
+                        }
+                    ],
+                },
+            )
         )
-        
-        # Simplified response handling for SDK 0.1.0+
-        return result.content if isinstance(result.content, str) else result.messages[0].content
-            
+
+        raw_result = getattr(result, "raw", None)
+        if raw_result is not None:
+            content = getattr(raw_result, "content", None)
+            if isinstance(content, str) and content:
+                return content
+            messages = getattr(raw_result, "messages", None)
+            if messages:
+                first = messages[0] if isinstance(messages, (list, tuple)) and messages else None
+                if first and hasattr(first, "content"):
+                    return first.content
+
+        if result.text:
+            return result.text
+
     except Exception as e:
         logger.warning(f"Vitals narration failed: {e}")
     
@@ -1956,23 +2040,35 @@ async def generate_phase_recap_with_agent(
         else:
             phase_events_list = phase_events
         
-        result = await Runner.run(
-            PhaseRecapAgent,
-            messages=[{"role": "user", "content": "Generate phase recap"}],
-            calls=[{
-                "name": "generate_phase_recap",
-                "kwargs": {
-                    "phase_events_json": json.dumps(phase_events_list),
-                    "current_goals_json": json.dumps(current_goals),
-                    "npc_standings_json": json.dumps(npc_standings),  # <-- fix key + JSON
-                    "vitals_json": json.dumps(vitals.to_dict())
-                }
-            }]
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=PhaseRecapAgent,
+                prompt=None,
+                runner_kwargs={
+                    "messages": [{"role": "user", "content": "Generate phase recap"}],
+                    "calls": [
+                        {
+                            "name": "generate_phase_recap",
+                            "kwargs": {
+                                "phase_events_json": json.dumps(phase_events_list),
+                                "current_goals_json": json.dumps(current_goals),
+                                "npc_standings_json": json.dumps(npc_standings),
+                                "vitals_json": json.dumps(vitals.to_dict())
+                            }
+                        }
+                    ],
+                },
+            )
         )
-        
-        if result.output:
+
+        raw_result = getattr(result, "raw", None)
+        output_text = ""
+        if raw_result is not None:
+            output_text = getattr(raw_result, "output", None) or getattr(raw_result, "final_output", None) or ""
+        output_text = output_text or result.text or ""
+        if output_text:
             # Parse JSON string output
-            output_data = json.loads(result.output)
+            output_data = json.loads(output_text)
             return output_data
             
     except Exception as e:

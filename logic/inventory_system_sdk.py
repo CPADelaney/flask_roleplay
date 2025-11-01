@@ -17,7 +17,6 @@ from collections import defaultdict
 from agents import (
     Agent,
     ModelSettings,
-    Runner,
     function_tool,
     RunContextWrapper,
     GuardrailFunctionOutput,
@@ -25,6 +24,8 @@ from agents import (
     trace,
     handoff
 )
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 from pydantic import BaseModel, Field
 
 # DB connection
@@ -1106,8 +1107,40 @@ async def inventory_operation_safety(ctx, agent, input_data):
         model="gpt-5-nano"
     )
     
-    result = await Runner.run(safety_agent, input_data, context=ctx.context)
-    final_output = result.final_output_as(InventorySafety)
+    result = await llm_gateway.execute(
+        LLMRequest(
+            agent=safety_agent,
+            prompt=input_data,
+            context=ctx.context,
+        )
+    )
+
+    raw_result = getattr(result, "raw", None)
+    final_output: InventorySafety | None = None
+    if raw_result is not None:
+        if hasattr(raw_result, "final_output_as"):
+            try:
+                final_output = raw_result.final_output_as(InventorySafety)
+            except Exception as exc:
+                logging.debug("inventory_operation_safety: coercion failed: %s", exc)
+        if final_output is None:
+            payload = getattr(raw_result, "final_output", None)
+            if isinstance(payload, InventorySafety):
+                final_output = payload
+
+    if final_output is None and result.text:
+        try:
+            parsed = json.loads(result.text)
+            final_output = InventorySafety(**parsed)
+        except Exception as exc:
+            logging.debug("inventory_operation_safety: could not parse text output: %s", exc)
+
+    if final_output is None:
+        final_output = InventorySafety(
+            is_appropriate=True,
+            reasoning="Fallback: unable to parse guardrail output; defaulting to safe",
+            suggested_adjustment=None,
+        )
     
     return GuardrailFunctionOutput(
         output_info=final_output,
@@ -1239,26 +1272,31 @@ async def add_item(
         """
         
         # Run the agent
-        result = await Runner.run(
-            inventory_system_agent,
-            prompt,
-            context=inventory_context
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=inventory_system_agent,
+                prompt=prompt,
+                context=inventory_context,
+            )
         )
-    
+
     # Process the result
     operation_result = None
-    
-    for item in result.new_items:
+
+    raw_result = getattr(result, "raw", None)
+    new_items = list(getattr(raw_result, "new_items", []) or [])
+
+    for item in new_items:
         if item.type == "handoff_output_item" and "manage_item" in str(item.raw_item):
             try:
                 operation_result = json.loads(item.raw_item.content)
                 break
             except Exception as e:
                 logging.error(f"Error parsing operation result: {e}")
-    
+
     if not operation_result:
         # Direct tool call
-        for item in result.new_items:
+        for item in new_items:
             if item.type == "tool_call_output_item" and "add_item_to_inventory" in str(item.raw_item):
                 try:
                     operation_result = json.loads(item.output)
@@ -1304,26 +1342,31 @@ async def remove_item(
         """
         
         # Run the agent
-        result = await Runner.run(
-            inventory_system_agent,
-            prompt,
-            context=inventory_context
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=inventory_system_agent,
+                prompt=prompt,
+                context=inventory_context,
+            )
         )
-    
+
     # Process the result
     operation_result = None
-    
-    for item in result.new_items:
+
+    raw_result = getattr(result, "raw", None)
+    new_items = list(getattr(raw_result, "new_items", []) or [])
+
+    for item in new_items:
         if item.type == "handoff_output_item" and "manage_item" in str(item.raw_item):
             try:
                 operation_result = json.loads(item.raw_item.content)
                 break
             except Exception as e:
                 logging.error(f"Error parsing operation result: {e}")
-    
+
     if not operation_result:
         # Direct tool call
-        for item in result.new_items:
+        for item in new_items:
             if item.type == "tool_call_output_item" and "remove_item_from_inventory" in str(item.raw_item):
                 try:
                     operation_result = json.loads(item.output)
@@ -1375,26 +1418,31 @@ async def get_inventory(
         group_id=f"user-{user_id}"
     ):
         prompt = f"Get {player_name}'s current inventory."
-        result = await Runner.run(
-            inventory_system_agent,
-            prompt,
-            context=inventory_context
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=inventory_system_agent,
+                prompt=prompt,
+                context=inventory_context,
+            )
         )
-    
+
     # Process the result
     inventory_data = None
-    
-    for item in result.new_items:
+
+    raw_result = getattr(result, "raw", None)
+    new_items = list(getattr(raw_result, "new_items", []) or [])
+
+    for item in new_items:
         if item.type == "handoff_output_item" and "analyze_inventory" in str(item.raw_item):
             try:
                 inventory_data = json.loads(item.raw_item.content)
                 break
             except Exception as e:
                 logging.error(f"Error parsing inventory data: {e}")
-    
+
     if not inventory_data:
         # Direct tool call
-        for item in result.new_items:
+        for item in new_items:
             if item.type == "tool_call_output_item" and "get_player_inventory" in str(item.raw_item):
                 try:
                     inventory_data = json.loads(item.output)

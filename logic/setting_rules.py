@@ -2,7 +2,10 @@
 import json
 import re
 from typing import Dict, Any, Optional, Tuple
-from agents import Agent, Runner
+
+import nyx.gateway.llm_gateway as llm_gateway
+from agents import Agent
+from nyx.gateway.llm_gateway import LLMRequest
 
 def _norm(text: str) -> str:
     return (text or "").lower()
@@ -256,8 +259,14 @@ async def synthesize_setting_rules(env_desc: str, setting_name: Optional[str] = 
     _, prof = _detect_profile(setting_name, env_desc)
     try:
         llm_in = f"Name: {setting_name or 'Unknown'}\n\nEnvironment:\n{env_desc}"
-        run = await Runner.run(RULES_AGENT, llm_in)
-        text = (getattr(run, "final_output", None) or "{}").strip()
+        run = await llm_gateway.execute(
+            LLMRequest(
+                agent=RULES_AGENT,
+                prompt=llm_in,
+            )
+        )
+        raw_output = getattr(run.raw, "final_output", None)
+        text = (raw_output or run.text or "{}").strip()
         llm_data = json.loads(text)
         merged = _merge_preferring_profile(prof, llm_data)
     except Exception:

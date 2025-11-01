@@ -18,7 +18,8 @@ from .core import (
 )
 from .connection import DBConnectionManager, TransactionContext
 from agents import Agent, ModelSettings                 # already imported earlier?
-from agents import Runner
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger("memory_managers")
 
@@ -564,8 +565,19 @@ class NyxMemoryManager(UnifiedMemoryManager):
     
         # ---------- Call the agent ----------
         try:
-            result = await Runner.run(plot_hook_generator, prompt)
-            hooks_raw = result.output.strip()
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    agent=plot_hook_generator,
+                    prompt=prompt,
+                )
+            )
+            raw_result = getattr(result, "raw", None)
+            hooks_raw = ""
+            if raw_result is not None and hasattr(raw_result, "output"):
+                hooks_raw = getattr(raw_result, "output") or ""
+            if not hooks_raw:
+                hooks_raw = result.text or ""
+            hooks_raw = hooks_raw.strip()
     
             # Make sure we’ve got valid JSON
             hooks: List[Dict[str, Any]] = json.loads(hooks_raw)

@@ -16,11 +16,14 @@ from datetime import datetime
 import random
 import hashlib
 
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
+
 from pydantic import BaseModel, Field
 
 # Type checking imports (these don't actually import at runtime)
 if TYPE_CHECKING:
-    from agents import RunContextWrapper, Agent, Runner
+    from agents import RunContextWrapper, Agent
     from nyx.integrate import CentralGovernance
     from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
     from lore.lore_generator import DynamicLoreGenerator
@@ -314,7 +317,6 @@ class ArtifactManager:
         """
         try:
             # Lazy import dependencies
-            from agents import Runner
             from nyx.nyx_governance import AgentType
             from nyx.governance_helpers import with_governance
             
@@ -353,13 +355,27 @@ class ArtifactManager:
                 """
                 
                 # Use discovery agent to generate artifact
-                result = await Runner.run(
-                    self.discovery_agent,
-                    discovery_prompt,
-                    context=self.agent_context
+                result = await llm_gateway.execute(
+                    LLMRequest(
+                        agent=self.discovery_agent,
+                        prompt=discovery_prompt,
+                        context=self.agent_context,
+                    )
                 )
-                
-                artifact_data = result.final_output_as(GeneratedArtifact)
+
+                raw_result = getattr(result, "raw", None)
+                if raw_result is not None and hasattr(raw_result, "final_output_as"):
+                    artifact_data = raw_result.final_output_as(GeneratedArtifact)
+                else:
+                    payload = getattr(raw_result, "final_output", None) if raw_result is not None else None
+                    if isinstance(payload, GeneratedArtifact):
+                        artifact_data = payload
+                    else:
+                        raw_text = result.text or ""
+                        if not raw_text:
+                            raise ValueError("Discovery agent returned no artifact data")
+                        parsed = json.loads(raw_text)
+                        artifact_data = GeneratedArtifact.model_validate(parsed)
                 
                 # Store in canon system
                 artifact_id = await self._store_artifact_canonically(artifact_data)
@@ -575,9 +591,6 @@ class ArtifactManager:
             Analysis results
         """
         try:
-            # Lazy import
-            from agents import Runner
-            
             artifact = self.active_artifacts.get(artifact_id)
             if not artifact:
                 return {"error": "Artifact not found"}
@@ -599,13 +612,27 @@ class ArtifactManager:
             """
             
             # Run analysis
-            result = await Runner.run(
-                self.analysis_agent,
-                analysis_prompt,
-                context=self.agent_context
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    agent=self.analysis_agent,
+                    prompt=analysis_prompt,
+                    context=self.agent_context,
+                )
             )
-            
-            analysis = result.final_output_as(ArtifactAnalysisResult)
+
+            raw_result = getattr(result, "raw", None)
+            if raw_result is not None and hasattr(raw_result, "final_output_as"):
+                analysis = raw_result.final_output_as(ArtifactAnalysisResult)
+            else:
+                payload = getattr(raw_result, "final_output", None) if raw_result is not None else None
+                if isinstance(payload, ArtifactAnalysisResult):
+                    analysis = payload
+                else:
+                    raw_text = result.text or ""
+                    if not raw_text:
+                        raise ValueError("Analysis agent returned no artifact data")
+                    parsed = json.loads(raw_text)
+                    analysis = ArtifactAnalysisResult.model_validate(parsed)
             
             # Cache analysis
             self.analysis_cache[artifact_id] = analysis.dict()
