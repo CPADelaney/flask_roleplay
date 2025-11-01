@@ -10,7 +10,9 @@ from agents import RunContextWrapper
 from pydantic import BaseModel, Field
 import os, json
 from typing import List, Dict, Any, Optional
-from agents import Agent, Runner, ModelSettings
+from agents import Agent, ModelSettings
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 from db.connection import get_db_connection_context
 
 ################################################################################
@@ -74,12 +76,28 @@ async def suggest_addictions_from_events(
     Player: {player_name}
     """
     # Let LLM agent analyze and propose addictions.
-    result = await Runner.run(
-        emergent_addiction_agent,
-        prompt,
-        context=ctx.context,
+    result = await llm_gateway.execute(
+        LLMRequest(
+            agent=emergent_addiction_agent,
+            prompt=prompt,
+            context=ctx.context,
+        )
     )
-    suggestions: List[AddictionSuggestion] = result.final_output
+
+    raw_result = getattr(result, "raw", None)
+    suggestions_output = None
+    if raw_result is not None:
+        suggestions_output = getattr(raw_result, "final_output", None) or getattr(raw_result, "output", None)
+
+    suggestions: List[AddictionSuggestion] = []
+    if suggestions_output:
+        suggestions = list(suggestions_output)
+    elif result.text:
+        try:
+            parsed = json.loads(result.text)
+            suggestions = [AddictionSuggestion.model_validate(item) for item in parsed]
+        except Exception:
+            suggestions = []
 
     # 1. Dynamically add any new types to the theme messages system.
     thematics = ctx.context.thematic_messages

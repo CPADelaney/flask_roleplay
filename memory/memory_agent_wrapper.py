@@ -15,7 +15,9 @@ from typing import Dict, List, Any, Optional
 import json
 import logging
 
-from agents import Agent, Runner, RunConfig, RunContextWrapper  # type: ignore
+from agents import Agent, RunConfig, RunContextWrapper  # type: ignore
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ class MemoryAgentWrapper:
 
     Behavior:
       1) Tries to execute against MemorySystem directly (fast path).
-      2) If unavailable or failing, falls back to LLM/agent via Runner.run.
+      2) If unavailable or failing, falls back to LLM/agent via llm_gateway.execute.
     """
 
     def __init__(self, agent: Agent, context: Any | None = None):
@@ -84,12 +86,14 @@ class MemoryAgentWrapper:
 
     async def _run(self, input_msg: Dict[str, Any], *, trace_meta: dict[str, Any] | None = None):
         """Thin wrapper around nyx.gateway.llm_gateway.execute(...) that sets trace metadata."""
-        return await Runner.run(
-            self.agent,
-            [input_msg],
+        run_config = RunConfig(trace_metadata=self._sanitize_trace_meta(trace_meta))
+        request = LLMRequest(
+            agent=self.agent,
+            prompt=[input_msg],
             context=self.context,
-            run_config=RunConfig(trace_metadata=self._sanitize_trace_meta(trace_meta)),
+            runner_kwargs={"run_config": run_config},
         )
+        return await llm_gateway.execute(request)
 
     async def _ensure_memory_system(self):
         """
@@ -158,7 +162,7 @@ class MemoryAgentWrapper:
                 "limit": limit,
             }
             result = await self._run(self._build_input("user", "recall", **meta), trace_meta=meta)
-            parsed = _coerce_to_dict(result.final_output)
+            parsed = _coerce_to_dict(_extract_llm_payload(result))
             if "memories" in parsed:
                 # normalize shape
                 parsed["memories"] = _format_memories(parsed.get("memories", []))
@@ -218,7 +222,7 @@ class MemoryAgentWrapper:
                 "tags": tags or [],
             }
             result = await self._run(self._build_input("user", "remember", **meta), trace_meta=meta)
-            return _coerce_to_dict(result.final_output)
+            return _coerce_to_dict(_extract_llm_payload(result))
         except Exception as e:
             logger.error("Error in remember (agent path): %s", e)
             return {"error": str(e), "memory_id": None}
@@ -259,7 +263,7 @@ class MemoryAgentWrapper:
                 "confidence": confidence,
             }
             result = await self._run(self._build_input("user", "create_belief", **meta), trace_meta=meta)
-            return _coerce_to_dict(result.final_output)
+            return _coerce_to_dict(_extract_llm_payload(result))
         except Exception as e:
             logger.error("Error in create_belief (agent path): %s", e)
             return {"error": str(e), "belief_id": None}
@@ -285,7 +289,7 @@ class MemoryAgentWrapper:
         try:
             meta = {"entity_type": entity_type, "entity_id": entity_id, "topic": topic}
             result = await self._run(self._build_input("user", "get_beliefs", **meta), trace_meta=meta)
-            parsed = _coerce_to_dict(result.final_output)
+            parsed = _coerce_to_dict(_extract_llm_payload(result))
             if isinstance(parsed, list):
                 return parsed
             if isinstance(parsed, dict):
@@ -308,7 +312,7 @@ class MemoryAgentWrapper:
         try:
             meta = {"entity_type": entity_type, "entity_id": entity_id}
             result = await self._run(self._build_input("user", "run_maintenance", **meta), trace_meta=meta)
-            return _coerce_to_dict(result.final_output)
+            return _coerce_to_dict(_extract_llm_payload(result))
         except Exception as e:
             logger.error("Error in run_maintenance (agent path): %s", e)
             return {"error": str(e), "success": False}
@@ -326,7 +330,7 @@ class MemoryAgentWrapper:
         try:
             meta = {"entity_type": entity_type, "entity_id": entity_id}
             result = await self._run(self._build_input("user", "analyze_memories", **meta), trace_meta=meta)
-            return _coerce_to_dict(result.final_output)
+            return _coerce_to_dict(_extract_llm_payload(result))
         except Exception as e:
             logger.error("Error in analyze_memories (agent path): %s", e)
             return {"error": str(e), "analysis": None}
@@ -344,7 +348,7 @@ class MemoryAgentWrapper:
         try:
             meta = {"entity_type": entity_type, "entity_id": entity_id}
             result = await self._run(self._build_input("user", "generate_schemas", **meta), trace_meta=meta)
-            return _coerce_to_dict(result.final_output)
+            return _coerce_to_dict(_extract_llm_payload(result))
         except Exception as e:
             logger.error("Error in generate_schemas (agent path): %s", e)
             return {"error": str(e), "schemas": []}
@@ -425,6 +429,32 @@ def _format_memories(memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+def _extract_llm_payload(result: Any) -> Any:
+    """Extract the most useful payload from an LLMResult or raw runner output."""
+    if result is None:
+        return None
+    raw = getattr(result, "raw", None)
+    if raw is None:
+        raw = result
+
+    for attr in ("final_output", "output", "output_text", "completion_text"):
+        if hasattr(raw, attr):
+            value = getattr(raw, attr)
+            if value:
+                return value
+
+    if isinstance(raw, dict):
+        for key in ("final_output", "output", "text"):
+            if key in raw and raw[key]:
+                return raw[key]
+
+    text = getattr(result, "text", None)
+    if text:
+        return text
+
+    return raw
 
 
 def _coerce_to_dict(obj: Any) -> Dict[str, Any]:

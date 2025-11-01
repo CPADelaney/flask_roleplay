@@ -29,7 +29,6 @@ from agents import (
     Agent,
     AgentOutputSchema,
     ModelSettings,
-    Runner,
     function_tool,
     RunContextWrapper,
     GuardrailFunctionOutput,
@@ -37,6 +36,8 @@ from agents import (
     trace,
     handoff,
 )
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 # DB connection
 from db.connection import get_db_connection_context
@@ -868,8 +869,33 @@ async def content_safety_guardrail(ctx, agent, input_data):
             output_type=ContentSafety,
             model='gpt-5-nano',
         )
-        result = await Runner.run(content_moderator, input_data, context=ctx.context)
-        final_output = result.final_output_as(ContentSafety)
+        result = await llm_gateway.execute(
+            LLMRequest(
+                agent=content_moderator,
+                prompt=input_data,
+                context=ctx.context,
+            )
+        )
+        raw_result = getattr(result, "raw", None)
+        final_output = None
+        if raw_result is not None and hasattr(raw_result, "final_output_as"):
+            final_output = raw_result.final_output_as(ContentSafety)
+        if final_output is None and raw_result is not None:
+            payload = getattr(raw_result, "final_output", None)
+            if isinstance(payload, ContentSafety):
+                final_output = payload
+        if final_output is None and result.text:
+            try:
+                parsed = json.loads(result.text)
+                final_output = ContentSafety(**parsed)
+            except Exception as exc:
+                logging.debug("content_safety_guardrail parse failure: %s", exc)
+        if final_output is None:
+            final_output = ContentSafety(
+                is_appropriate=True,
+                reasoning="Fallback: unable to parse content safety output",
+                suggested_adjustment=None,
+            )
         return GuardrailFunctionOutput(
             output_info=final_output,
             tripwire_triggered=not final_output.is_appropriate,
@@ -978,14 +1004,23 @@ NARRATIVE:
 """
         try:
             logger.debug("Running universal updater agent (prompt len=%d)", len(prompt))
-            result = await Runner.run(universal_updater_agent, prompt, context=updater_context)
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    agent=universal_updater_agent,
+                    prompt=prompt,
+                    context=updater_context,
+                )
+            )
 
+            raw_result = getattr(result, "raw", None)
             update_data = None
-            try:
-                update_data = result.final_output_as(UniversalUpdateInput)
-            except Exception as e:
-                logger.debug("Could not coerce to UniversalUpdateInput directly: %s", e)
-                update_data = getattr(result, "final_output", None)
+            if raw_result is not None and hasattr(raw_result, "final_output_as"):
+                try:
+                    update_data = raw_result.final_output_as(UniversalUpdateInput)
+                except Exception as e:
+                    logger.debug("Could not coerce to UniversalUpdateInput directly: %s", e)
+            if update_data is None and raw_result is not None:
+                update_data = getattr(raw_result, "final_output", None)
 
             update_json = None
             if update_data:
@@ -995,12 +1030,15 @@ NARRATIVE:
                     logger.error("Updater output could not be normalized to JSON: %s", e)
 
             if not update_json:
-                raw_txt = (
-                    getattr(result, "output_text", None)
-                    or getattr(result, "completion_text", None)
-                    or (getattr(getattr(result, "response", None), "output_text", None))
-                    or ""
-                )
+                raw_txt = ""
+                if raw_result is not None:
+                    raw_txt = (
+                        getattr(raw_result, "output_text", None)
+                        or getattr(raw_result, "completion_text", None)
+                        or (getattr(getattr(raw_result, "response", None), "output_text", None))
+                        or ""
+                    )
+                raw_txt = raw_txt or result.text or ""
                 raw_txt = _strip_code_fences(raw_txt)
                 if raw_txt:
                     try:

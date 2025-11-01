@@ -10,7 +10,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from openai import AsyncOpenAI
 from openai.types.responses import ResponseFileSearchToolCall
 
-from . import Agent, FileSearchTool, Runner, RunConfig
+import nyx.gateway.llm_gateway as llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
+
+from . import Agent, FileSearchTool, RunConfig
 from .items import ToolCallItem
 
 logger = logging.getLogger(__name__)
@@ -133,10 +136,17 @@ async def run_file_search_tool(
     if metadata:
         run_kwargs["run_config"] = RunConfig(trace_metadata=dict(metadata))
 
-    run = await Runner.run(agent, query, **run_kwargs)
+    run = await llm_gateway.execute(
+        LLMRequest(
+            agent=agent,
+            prompt=query,
+            runner_kwargs=run_kwargs,
+        )
+    )
+    raw_run = getattr(run, "raw", None)
     results: List[FileSearchResult] = []
 
-    for item in getattr(run, "new_items", []):
+    for item in getattr(raw_run, "new_items", []) if raw_run is not None else []:
         raw = getattr(item, "raw_item", None)
         if not isinstance(item, ToolCallItem) or not isinstance(raw, ResponseFileSearchToolCall):
             continue
