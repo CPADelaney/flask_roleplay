@@ -8,11 +8,13 @@ from typing import Any, Dict, List, Optional
 
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from db.connection import get_db_connection_context
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from monitoring.metrics import metrics
 from nyx.tasks.utils import run_coro, with_retry
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +584,14 @@ def create_template_for_category(self, payload: Dict[str, Any]) -> Dict[str, Any
             }}
         }}
         """
-        response = run_coro(Runner.run(agent, prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=agent,
+                )
+            )
+        )
         response_text = extract_runner_response(response).strip()
         if response_text.startswith("```"):
             response_text = response_text.strip("`").lstrip("json").strip()
@@ -660,7 +669,14 @@ def generate_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             "twist_potential": "Unexpected element"
         }}
         """
-        response = run_coro(Runner.run(agent, prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=agent,
+                )
+            )
+        )
         response_text = extract_runner_response(response).strip()
         if response_text.startswith("```"):
             response_text = response_text.strip("`").lstrip("json").strip()
@@ -740,7 +756,14 @@ def adapt_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             "atmospheric_elements": ["mood and tone elements"]
         }}
         """
-        response = run_coro(Runner.run(agent, prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=agent,
+                )
+            )
+        )
         response_text = extract_runner_response(response).strip()
         if response_text.startswith("```"):
             response_text = response_text.strip("`").lstrip("json").strip()
@@ -820,7 +843,14 @@ def add_unique_elements(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             "conversation_piece": "What players will discuss later"
         }}
         """
-        response = run_coro(Runner.run(agent, prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=agent,
+                )
+            )
+        )
         response_text = extract_runner_response(response).strip()
         if response_text.startswith("```"):
             response_text = response_text.strip("`").lstrip("json").strip()
@@ -900,7 +930,14 @@ def generate_hooks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             ]
         }}
         """
-        response = run_coro(Runner.run(agent, prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=agent,
+                )
+            )
+        )
         response_text = extract_runner_response(response).strip()
         if response_text.startswith("```"):
             response_text = response_text.strip("`").lstrip("json").strip()

@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from celery import shared_task
 
-from agents import Agent, Runner
+from agents import Agent
 from logic.conflict_system.integration import IntegrationMode
 from logic.conflict_system.mode_recommendation import (
     MODE_OPTIMIZER_INSTRUCTIONS,
@@ -19,29 +19,36 @@ from logic.conflict_system.mode_recommendation import (
     store_mode_recommendation,
 )
 from nyx.tasks.utils import run_coro
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest, LLMResult
 
 logger = logging.getLogger(__name__)
 
 
 def _extract_mode_name(response: Any) -> Optional[str]:
-    """Attempt to extract a raw mode name string from a Runner response."""
+    """Attempt to extract a raw mode name string from an LLM execution result."""
 
-    if response is None:
+    if isinstance(response, LLMResult):
+        payload = response.raw
+    else:
+        payload = response
+
+    if payload is None:
         return None
 
     candidates = []
     for attr in ("output", "final_output", "output_text"):
-        value = getattr(response, attr, None)
+        value = getattr(payload, attr, None)
         if isinstance(value, str) and value.strip():
             candidates.append(value.strip())
-    if not candidates and hasattr(response, "output_json"):
+    if not candidates and hasattr(payload, "output_json"):
         try:
-            candidates.append(json.dumps(response.output_json))
+            candidates.append(json.dumps(payload.output_json))
         except Exception:  # pragma: no cover - defensive
             pass
     if not candidates:
         try:
-            candidates.append(str(response).strip())
+            candidates.append(str(payload).strip())
         except Exception:  # pragma: no cover - defensive
             return None
     raw = candidates[0].splitlines()[0].strip().lower()
@@ -71,7 +78,14 @@ def recommend_mode(
     prompt = build_mode_recommendation_prompt(current_mode, current_quality, context)
 
     try:
-        response = run_coro(Runner.run(agent, prompt))
+        response = run_coro(
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=agent,
+                )
+            )
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Mode recommendation run failed", exc_info=exc)
         raise

@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field, validator
 import random
 from datetime import datetime
 from enum import Enum
-from agents import Agent, ModelSettings, Runner
+from agents import Agent, ModelSettings
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 # Assuming db.connection provides this context manager
 from db.connection import get_db_connection_context
@@ -1878,11 +1880,20 @@ class InteractionGenerator:
                 "scene_context": scene_context
             }, ensure_ascii=False)
 
-            result = await Runner.run(
-                starting_agent=nyx_action_content_generator,
-                input=payload
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=payload,
+                    agent=nyx_action_content_generator,
+                )
             )
-            return json.loads(result.output.strip())["content"]
+            raw_payload = result.raw
+            output = (
+                getattr(raw_payload, "output", None)
+                or getattr(raw_payload, "final_output", None)
+                or result.text
+            )
+            output_str = output if isinstance(output, str) else json.dumps(output or {})
+            return json.loads((output_str or "{}").strip())["content"]
 
         except Exception as e:
             logger.warning(f"LLM content generation failed: {e}")

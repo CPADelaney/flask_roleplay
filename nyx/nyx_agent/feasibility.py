@@ -16,11 +16,13 @@ from copy import deepcopy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from agents import Agent, Runner
+from agents import Agent
 from db.connection import get_db_connection_context
 from logic.action_parser import parse_action_intents
 from logic.aggregator_sdk import fallback_get_context
 from nyx.location.router import resolve_place_or_travel
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 if TYPE_CHECKING:
     from nyx.nyx_agent.context import NyxContext
@@ -3488,13 +3490,22 @@ async def generate_dynamic_rejection(
     }
     
     # Generate unique rejection
-    run = await Runner.run(
-        REJECTION_NARRATOR_AGENT,
-        json.dumps(rejection_context)
+    run = await llm_gateway.execute(
+        LLMRequest(
+            prompt=json.dumps(rejection_context),
+            agent=REJECTION_NARRATOR_AGENT,
+        )
     )
-    
+
     try:
-        result = json.loads(getattr(run, "final_output", "{}"))
+        payload = run.raw
+        serialized = (
+            getattr(payload, "final_output", None)
+            or getattr(payload, "output", None)
+            or run.text
+            or "{}"
+        )
+        result = json.loads(serialized)
         
         # Store this rejection to avoid future repetition
         await _store_rejection(nyx_ctx, result)
@@ -3543,10 +3554,22 @@ async def _generate_contextual_alternatives(
     }
     
     sanitized_context = _context_payload_for_agent(context)
-    run = await Runner.run(ALTERNATIVE_GENERATOR_AGENT, json.dumps(sanitized_context))
-    
+    run = await llm_gateway.execute(
+        LLMRequest(
+            prompt=json.dumps(sanitized_context),
+            agent=ALTERNATIVE_GENERATOR_AGENT,
+        )
+    )
+
     try:
-        alternatives = json.loads(getattr(run, "final_output", "[]"))
+        payload = run.raw
+        serialized = (
+            getattr(payload, "final_output", None)
+            or getattr(payload, "output", None)
+            or run.text
+            or "[]"
+        )
+        alternatives = json.loads(serialized)
         return alternatives[:3]
     except:
         # Dynamic fallback based on actual scene
@@ -3884,10 +3907,22 @@ async def _full_dynamic_assessment(
     }
     
     # Run full assessment
-    run = await Runner.run(FEASIBILITY_AGENT, json.dumps(assessment_context))
-    
+    run = await llm_gateway.execute(
+        LLMRequest(
+            prompt=json.dumps(assessment_context),
+            agent=FEASIBILITY_AGENT,
+        )
+    )
+
     try:
-        result = json.loads(getattr(run, "final_output", "{}"))
+        payload = run.raw
+        serialized = (
+            getattr(payload, "final_output", None)
+            or getattr(payload, "output", None)
+            or run.text
+            or "{}"
+        )
+        result = json.loads(serialized)
         
         # Enhance denied intents with dynamic rejections
         for i, intent_result in enumerate(result.get("per_intent", [])):
@@ -4215,9 +4250,11 @@ async def detect_setting_type(nyx_ctx: NyxContext) -> Dict[str, Any]:
     
     try:
         run = await asyncio.wait_for(
-            Runner.run(
-                SETTING_DETECTIVE_AGENT,
-                json.dumps(_context_payload_for_agent(context)),
+            llm_gateway.execute(
+                LLMRequest(
+                    prompt=json.dumps(_context_payload_for_agent(context)),
+                    agent=SETTING_DETECTIVE_AGENT,
+                )
             ),
             timeout=SETTING_DETECTION_TIMEOUT_SECONDS,
         )
@@ -4236,7 +4273,14 @@ async def detect_setting_type(nyx_ctx: NyxContext) -> Dict[str, Any]:
         return result
 
     try:
-        result = json.loads(getattr(run, "final_output", "{}"))
+        payload = run.raw
+        serialized = (
+            getattr(payload, "final_output", None)
+            or getattr(payload, "output", None)
+            or run.text
+            or "{}"
+        )
+        result = json.loads(serialized)
         if not isinstance(result, dict):
             raise ValueError("unexpected response type")
         if "setting_type" not in result:

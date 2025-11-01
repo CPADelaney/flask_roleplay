@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import json
 
 # Updated imports for Agents SDK
-from agents import Agent, Runner, function_tool
+from agents import Agent, function_tool
 from pydantic import BaseModel, Field
 
 # Import the task agent and recommendation agent
@@ -101,13 +101,15 @@ class NyxTaskIntegration:
                 user_prompt += f", intensity_level={intensity_level}"
             
             # Run the agent to generate a task
-            result = await Runner.run(
-                starting_agent=femdom_task_agent,
-                input=user_prompt
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=user_prompt,
+                    agent=femdom_task_agent,
+                )
             )
-            
+
             # The result.final_output will be a CreativeTask object
-            task = result.final_output
+            task = result.raw.final_output
             
             # Override intensity if specified
             if intensity_level is not None:
@@ -286,13 +288,15 @@ class NyxTaskIntegration:
             full_prompt = f"{user_prompt}\nuser_id={user_id}, conversation_id={conversation_id}"
             
             # Run the agent
-            result = await Runner.run(
-                starting_agent=activity_recommender_agent,
-                input=full_prompt
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=full_prompt,
+                    agent=activity_recommender_agent,
+                )
             )
-            
+
             # Return the formatted recommendations
-            recommendations = result.final_output
+            recommendations = result.raw.final_output
             return {
                 "success": True,
                 "recommendations": [rec.dict() for rec in recommendations.recommendations]
@@ -332,13 +336,15 @@ class NyxTaskIntegration:
             full_prompt = f"{user_prompt}\nuser_id={user_id}, conversation_id={conversation_id}"
             
             # Run the agent
-            result = await Runner.run(
-                starting_agent=femdom_task_agent,
-                input=full_prompt
+            result = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=full_prompt,
+                    agent=femdom_task_agent,
+                )
             )
-            
+
             # Return the task data
-            task = result.final_output
+            task = result.raw.final_output
             return {
                 "success": True,
                 "task": task.dict()

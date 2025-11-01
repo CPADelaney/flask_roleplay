@@ -5,6 +5,8 @@ import json
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
 from agents import function_tool, RunContextWrapper
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -284,23 +286,28 @@ async def _standard_reasoning_thinking(brain, user_input: str, context: Optional
     """Standard reasoning using reasoning agents"""
     try:
         # Use reasoning triage agent if available
-        from agents import Runner
-        
         # Create a thinking-oriented prompt
         thinking_prompt = f"""I need to carefully think through this query before responding:
-        
+
         {user_input}
-        
+
         Please help me reason step-by-step about how to best answer this query."""
-        
+
         # Run the reasoning agent
-        reasoning_result = await Runner.run(
-            brain.reasoning_core,
-            thinking_prompt
+        reasoning_result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=thinking_prompt,
+                agent=brain.reasoning_core,
+            )
         )
-        
+
         # Extract the output
-        reasoned_output = reasoning_result.final_output
+        raw_payload = reasoning_result.raw
+        reasoned_output = (
+            getattr(raw_payload, "final_output", None)
+            or getattr(raw_payload, "output", None)
+            or reasoning_result.text
+        )
         
         # Create structured thinking steps
         thinking_steps = [
@@ -325,13 +332,11 @@ async def _standard_reasoning_thinking(brain, user_input: str, context: Optional
 async def _deep_reasoning_thinking(brain, user_input: str, context: Optional[ThinkingContext]) -> ThinkingResult:
     """Deep thinking with thorough reasoning"""
     try:
-        from agents import Runner
-        
         # Create a detailed thinking prompt
         thinking_prompt = f"""I need to engage in deep, thorough reasoning about this query:
-        
+
         {user_input}
-        
+
         Please help me analyze this systematically:
         1. What are the explicit and implicit requirements?
         2. What domain knowledge is required?
@@ -341,15 +346,22 @@ async def _deep_reasoning_thinking(brain, user_input: str, context: Optional[Thi
         6. What's the most helpful and accurate way to respond?
         
         Let's think step-by-step to ensure a complete, accurate, and helpful response."""
-        
+
         # Run the reasoning agent
-        reasoning_result = await Runner.run(
-            brain.reasoning_core,
-            thinking_prompt
+        reasoning_result = await llm_gateway.execute(
+            LLMRequest(
+                prompt=thinking_prompt,
+                agent=brain.reasoning_core,
+            )
         )
-        
+
         # Extract the output
-        reasoned_output = reasoning_result.final_output
+        raw_payload = reasoning_result.raw
+        reasoned_output = (
+            getattr(raw_payload, "final_output", None)
+            or getattr(raw_payload, "output", None)
+            or reasoning_result.text
+        )
         
         # Create detailed thinking steps
         thinking_steps = [

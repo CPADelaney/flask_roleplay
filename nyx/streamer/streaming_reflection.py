@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 # Import from OpenAI Agents SDK
 from agents import (
-    Agent, Runner, trace, function_tool, 
+    Agent, trace, function_tool,
     RunContextWrapper, handoff, ModelSettings
 )
+from nyx.gateway import llm_gateway
+from nyx.gateway.llm_gateway import LLMRequest
 
 from nyx.core.nyx_brain import NyxBrain
 from nyx.streamer.nyx_streaming_core import StreamingCore
@@ -718,13 +720,15 @@ class StreamingReflectionEngine:
             
             # Run the experience agent
             with trace(workflow_name="streaming_experience_analysis"):
-                result = await Runner.run(
-                    self.experience_agent,
-                    experience_input.json(),
-                    context={"game_name": game_name, "session_data": session_data}
+                result = await llm_gateway.execute(
+                    LLMRequest(
+                        prompt=experience_input.json(),
+                        agent=self.experience_agent,
+                        context={"game_name": game_name, "session_data": session_data},
+                    )
                 )
-                
-                experience_output = result.final_output_as(StreamingExperienceOutput)
+
+                experience_output = result.raw.final_output_as(StreamingExperienceOutput)
             
             # Store the reflection
             reflection_id = await self.brain.memory_core.add_memory(

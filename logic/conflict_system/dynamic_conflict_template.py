@@ -16,6 +16,7 @@ from dataclasses import dataclass, is_dataclass, asdict
 from datetime import datetime
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from nyx.gateway.llm_gateway import LLMResult
 from celery import current_app
 
 # Import get_db_connection_context with proper error handling
@@ -233,6 +234,9 @@ def extract_runner_response(run_result: Any) -> str:
     """
     Normalize agent execution results into a clean payload.
     """
+    if isinstance(run_result, LLMResult):
+        run_result = run_result.raw
+
     if run_result is None:
         return "{}"
 
