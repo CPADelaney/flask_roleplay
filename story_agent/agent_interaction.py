@@ -14,8 +14,9 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
-from agents import Agent, Runner, trace, handoff
+from agents import Agent, trace, handoff
 from agents.exceptions import AgentsException, ModelBehaviorError
+from nyx.gateway import llm_gateway
 
 from story_agent.world_simulation_models import PowerDynamicType, TimeOfDay, WorldMood, ActivityType
 
@@ -213,12 +214,27 @@ async def orchestrate_daily_scene(
                     Keep it slice-of-life, 1-2 sentences.
                     """
                     
-                    result = await Runner.run(dialogue_agent, prompt)
-                    if result:
+                    request = llm_gateway.LLMRequest(
+                        prompt=prompt,
+                        agent=dialogue_agent,
+                        metadata={
+                            "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                            "stage": "npc_dialogue",
+                        },
+                    )
+                    result_wrapper = await llm_gateway.execute(request)
+                    result = result_wrapper.raw
+                    dialogue_text = None
+                    if result is not None and getattr(result, "final_output", None):
+                        dialogue_text = result.final_output
+                    elif result_wrapper.text:
+                        dialogue_text = result_wrapper.text
+
+                    if dialogue_text:
                         dialogues.append({
                             "npc_id": npc_id,
                             "npc_name": npc['npc_name'],
-                            "dialogue": result.final_output
+                            "dialogue": dialogue_text
                         })
         
         # Check for power dynamics opportunities
@@ -321,7 +337,16 @@ async def process_power_exchange_with_agents(
         
         relationship_result = None
         if relationship_agent:
-            relationship_result = await Runner.run(relationship_agent, relationship_prompt)
+            request = llm_gateway.LLMRequest(
+                prompt=relationship_prompt,
+                agent=relationship_agent,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "relationship_exchange",
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            relationship_result = result_wrapper.raw
         
         # Update relationship in database
         relationship_impacts = await update_relationship_from_exchange(
@@ -337,13 +362,24 @@ async def process_power_exchange_with_agents(
             Analyze this power exchange for narrative significance:
             Type: {exchange.exchange_type.value}
             Response: {response_type}
-            
+
             What patterns or narrative threads emerge?
             """
-            
-            pattern_result = await Runner.run(pattern_agent, pattern_prompt)
-            if pattern_result:
+
+            request = llm_gateway.LLMRequest(
+                prompt=pattern_prompt,
+                agent=pattern_agent,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "power_exchange_pattern",
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            pattern_result = result_wrapper.raw
+            if pattern_result and getattr(pattern_result, "final_output", None):
                 narrative_outcome = pattern_result.final_output
+            elif result_wrapper.text:
+                narrative_outcome = result_wrapper.text
         
         # Adjust world tensions
         await adjust_world_tensions_from_exchange(context, exchange, response_type)
@@ -425,10 +461,24 @@ async def generate_ambient_world_details(
         Include sensory details, background activity, and atmosphere.
         """
         
-        result = await Runner.run(ambient_agent, prompt)
-        
+        request = llm_gateway.LLMRequest(
+            prompt=prompt,
+            agent=ambient_agent,
+            metadata={
+                "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                "stage": "ambient_details",
+            },
+        )
+        result_wrapper = await llm_gateway.execute(request)
+        result = result_wrapper.raw
+        ambient_details = ""
+        if result and getattr(result, "final_output", None):
+            ambient_details = result.final_output
+        elif result_wrapper.text:
+            ambient_details = result_wrapper.text
+
         return {
-            "ambient_details": result.final_output if result else "",
+            "ambient_details": ambient_details,
             "world_mood": mood_value,
             "time_of_day": time_value
         }
@@ -498,13 +548,29 @@ async def coordinate_agent_handoff(
         Please continue with your specialized processing.
         """
         
+        handoff_output = None
         with trace(workflow_name="AgentHandoff", group_id=f"user_{user_id}"):
-            result = await Runner.run(target, handoff_message)
-        
+            request = llm_gateway.LLMRequest(
+                prompt=handoff_message,
+                agent=target,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "agent_handoff",
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            result = result_wrapper.raw
+            if result and getattr(result, "final_output", None):
+                handoff_output = result.final_output
+            elif result_wrapper.text:
+                handoff_output = result_wrapper.text
+
         return {
             "from_agent": from_agent,
             "to_agent": to_agent,
-            "result": result.final_output if result else None,
+            "result": handoff_output,
             "success": True
         }
         
@@ -659,16 +725,44 @@ async def get_agent_analysis(
         agent = context.simulation_agents.get("pattern_recognition")
         if agent:
             prompt = "Analyze current patterns in player behavior and relationships"
-            result = await Runner.run(agent, prompt)
-            results["patterns"] = result.final_output if result else "No patterns detected"
-    
+            request = llm_gateway.LLMRequest(
+                prompt=prompt,
+                agent=agent,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "analysis_patterns",
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            result = result_wrapper.raw
+            output_text = None
+            if result and getattr(result, "final_output", None):
+                output_text = result.final_output
+            elif result_wrapper.text:
+                output_text = result_wrapper.text
+            results["patterns"] = output_text or "No patterns detected"
+
     elif analysis_type == "relationships":
         # Use relationship dynamics agent
         agent = context.simulation_agents.get("relationship_dynamics")
         if agent:
             prompt = "Analyze current relationship dynamics and power structures"
-            result = await Runner.run(agent, prompt)
-            results["relationships"] = result.final_output if result else "No analysis available"
+            request = llm_gateway.LLMRequest(
+                prompt=prompt,
+                agent=agent,
+                metadata={
+                    "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                    "stage": "analysis_relationships",
+                },
+            )
+            result_wrapper = await llm_gateway.execute(request)
+            result = result_wrapper.raw
+            output_text = None
+            if result and getattr(result, "final_output", None):
+                output_text = result.final_output
+            elif result_wrapper.text:
+                output_text = result_wrapper.text
+            results["relationships"] = output_text or "No analysis available"
     
     elif analysis_type == "tensions":
         # Analyze world tensions
@@ -723,15 +817,28 @@ async def simulate_autonomous_world(
                 activity_agent = context.simulation_agents.get("activity_generator")
                 if activity_agent:
                     npc_name = npc.get('npc_name', 'Unknown') if isinstance(npc, dict) else getattr(npc, 'npc_name', 'Unknown')
-                    activity = await Runner.run(
-                        activity_agent,
-                        f"Generate autonomous activity for NPC {npc_name}"
+                    prompt = f"Generate autonomous activity for NPC {npc_name}"
+                    request = llm_gateway.LLMRequest(
+                        prompt=prompt,
+                        agent=activity_agent,
+                        metadata={
+                            "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+                            "stage": "autonomous_activity",
+                            "npc": npc_name,
+                        },
                     )
-                    if activity:
+                    result_wrapper = await llm_gateway.execute(request)
+                    activity = result_wrapper.raw
+                    activity_text = None
+                    if activity and getattr(activity, "final_output", None):
+                        activity_text = activity.final_output
+                    elif result_wrapper.text:
+                        activity_text = result_wrapper.text
+                    if activity_text:
                         events.append({
                             "hour": hour,
                             "npc": npc_name,
-                            "activity": activity.final_output if activity else "Unknown activity"
+                            "activity": activity_text
                         })
     
     # Get final world state safely

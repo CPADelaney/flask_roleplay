@@ -12,12 +12,13 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
-from agents import Agent, Runner, ModelSettings, function_tool
+from agents import Agent, ModelSettings, function_tool
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
 from context.context_service import get_context_service
 from context.memory_manager import get_memory_manager
+from nyx.gateway import llm_gateway
 
 # Import world simulation types
 from story_agent.world_simulation_models import (
@@ -464,13 +465,39 @@ async def recommend_activities(
     Prioritize based on urgency and contextual appropriateness.
     """
     
-    # Run the agent
-    result = await Runner.run(
-        starting_agent=activity_recommender_agent,
-        input=prompt
+    request = llm_gateway.LLMRequest(
+        prompt=prompt,
+        agent=activity_recommender_agent,
+        metadata={
+            "operation": llm_gateway.LLMOperation.ORCHESTRATION.value,
+            "stage": "activity_recommendation",
+        },
     )
-    
-    return result.final_output
+
+    result_wrapper = await llm_gateway.execute(request)
+    raw_result = result_wrapper.raw
+
+    if isinstance(raw_result, ActivityRecommendations):
+        return raw_result
+
+    final_output = getattr(raw_result, "final_output", None)
+    if isinstance(final_output, ActivityRecommendations):
+        return final_output
+    if final_output is not None:
+        return final_output
+
+    data = getattr(raw_result, "data", None)
+    if isinstance(data, ActivityRecommendations):
+        return data
+
+    text_payload = result_wrapper.text or ""
+    if text_payload:
+        try:
+            return ActivityRecommendations.model_validate_json(text_payload)
+        except (TypeError, ValueError):
+            logger.warning("activity recommender returned non-JSON payload")
+
+    return ActivityRecommendations(recommendations=[])
 
 # ===============================================================================
 # Helper Functions
