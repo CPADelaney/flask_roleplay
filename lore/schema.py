@@ -1,7 +1,7 @@
 # lore/schema.py
 
 import logging
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 async def create_lore_tables():
     """

@@ -14,7 +14,7 @@ from datetime import datetime
 from agents import RunContextWrapper
 from lore.core.registry import ManagerRegistry
 from lore.core import canon
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority, NyxUnifiedGovernor
 from nyx.governance_helpers import with_governance
 from datetime import timedelta
@@ -908,7 +908,7 @@ class LoreSystem:
         Canonical state-change helper with proper list comparison and enhanced relationship support.
         """
         from lore.core import canon
-        from db.connection import get_db_connection_context
+        from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
     
         # Helper function to check if a list is a subset of another list (for dicts)
         def _list_is_subset(smaller_list, larger_list):

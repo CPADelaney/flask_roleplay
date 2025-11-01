@@ -3,7 +3,7 @@
 import logging
 import json
 from typing import Dict, Any, List
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 # Import Nyx governance
 from nyx.integrate import get_central_governance

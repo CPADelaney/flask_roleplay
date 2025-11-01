@@ -6,7 +6,7 @@ Hooks into all entity creation paths to ensure reality consistency.
 
 import logging
 from typing import Dict, Any, Optional
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 logger = logging.getLogger(__name__)
 

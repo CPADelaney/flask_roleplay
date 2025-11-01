@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from nyx.tasks.base import NyxTask, app
 
 from db.connection import get_db_connection_context
+from lore.cache_version import bump_lore_version
 from lore.lore_orchestrator import get_lore_orchestrator
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from nyx.nyx_agent.context import (
@@ -158,6 +159,8 @@ async def _refresh_culture_summaries_async(
             """,
             updates,
         )
+
+    bump_lore_version()
 
 
 @app.task(
