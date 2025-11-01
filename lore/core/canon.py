@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 try:  # pragma: no cover - exercised in tests via monkeypatch
     from db.connection import is_shutting_down as _is_shutting_down

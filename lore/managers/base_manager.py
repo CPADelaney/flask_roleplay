@@ -24,7 +24,7 @@ from nyx.governance_helpers import with_governance, with_governance_permission, 
 from nyx.directive_handler import DirectiveHandler
 
 # Database connection
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context
 
 # Embedding service
 from embedding.vector_store import generate_embedding, compute_similarity
@@ -246,7 +246,7 @@ class BaseLoreManager:
     @asynccontextmanager
     async def db_connection(self):
         """Provide a database connection scoped to the calling context."""
-        async with get_db_connection_context() as conn:
+        async with get_lore_db_connection_context() as conn:
             yield conn
 
     async def get_cached_data(self, namespace: str, key: str, fetch_func=None):
@@ -433,7 +433,7 @@ class BaseLoreManager:
         Args:
             table_definitions: Dictionary mapping table names to CREATE TABLE statements
         """
-        async with get_db_connection_context() as conn:
+        async with get_lore_db_connection_context() as conn:
             for table_name, create_statement in table_definitions.items():
                 try:
                     # Check if table exists
@@ -549,7 +549,7 @@ class BaseLoreManager:
                 RETURNING id
             """
 
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 record_id = await conn.fetchval(query, *values)
 
                 # Generate embedding if text data is provided
@@ -590,7 +590,7 @@ class BaseLoreManager:
         self._cache_stats['misses'] += 1
 
         try:
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 record = await conn.fetchrow(f"""
                     SELECT * FROM {table_name}
                     WHERE id = $1
@@ -647,7 +647,7 @@ class BaseLoreManager:
                 WHERE id = ${len(values) + 1}
             """
 
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 result = await conn.execute(query, *values, record_id)
 
                 # Update embedding if text content changed
@@ -688,7 +688,7 @@ class BaseLoreManager:
             True if deletion succeeded, False otherwise
         """
         try:
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 result = await conn.execute(f"""
                     DELETE FROM {table_name}
                     WHERE id = $1
@@ -734,7 +734,7 @@ class BaseLoreManager:
 
             query += f" LIMIT {input_data.limit}"
 
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 records = await conn.fetch(query, *values)
                 return [self._dict_to_table_record(dict(record)) for record in records]
         except Exception as e:
@@ -757,7 +757,7 @@ class BaseLoreManager:
             # Generate embedding for the query text
             embedding = await generate_embedding(text)
 
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 # Check if the table has an embedding column
                 has_embedding = await conn.fetchval(f"""
                     SELECT EXISTS (
@@ -1093,7 +1093,7 @@ class BaseLoreManager:
             List of result dictionaries
         """
         try:
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 records = await conn.fetch(query, *args)
                 return [dict(record) for record in records]
         except Exception as e:
@@ -1115,7 +1115,7 @@ class BaseLoreManager:
             return 0
 
         try:
-            async with get_db_connection_context() as conn:
+            async with get_lore_db_connection_context() as conn:
                 async with conn.transaction():
                     for update in updates:
                         await conn.execute(

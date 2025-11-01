@@ -15,7 +15,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import asyncpg
 from datetime import datetime
 
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 from embedding.vector_store import generate_embedding, compute_similarity
 
 logger = logging.getLogger(__name__)

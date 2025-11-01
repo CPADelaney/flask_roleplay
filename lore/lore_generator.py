@@ -15,7 +15,7 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 # Agents SDK imports
 from agents import Agent, function_tool

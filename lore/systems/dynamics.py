@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from pydantic import BaseModel, Field
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 # Add canon import
 import lore.core.canon as canon

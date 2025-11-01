@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 from lore.managers.base_manager import BaseLoreManager
 from lore.resource_manager import resource_manager
 from nyx.gateway import llm_gateway

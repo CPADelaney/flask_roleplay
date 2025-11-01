@@ -40,7 +40,7 @@ import re
 from agents import InputGuardrailTripwireTriggered
 
 # Core imports
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 
 # Nyx governance
 from nyx.integrate import get_central_governance
@@ -915,7 +915,7 @@ class LoreOrchestrator:
         try:
             if getattr(scope, 'nation_ids', None):
                 # If you later add a real API, swap this block to call it
-                from db.connection import get_db_connection_context
+                from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
                 async with get_db_connection_context() as conn:
                     rows = await conn.fetch("""
                         SELECT id, region1_id, region2_id, dispute_type, severity, status

@@ -23,7 +23,7 @@ from nyx.directive_handler import DirectiveHandler
 # Project imports
 from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
-from db.connection import get_db_connection_context
+from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
 from nyx.gateway import llm_gateway
 from lore.utils.llm_gateway import build_llm_request
 

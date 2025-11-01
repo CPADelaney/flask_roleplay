@@ -69,7 +69,7 @@ class ExistenceGate:
         if self._caps_cache:
             return self._caps_cache
         
-        from db.connection import get_db_connection_context
+        from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
         
         async with get_db_connection_context() as conn:
             # Get physics profile
@@ -159,7 +159,7 @@ class ExistenceGate:
         if self._infra_cache:
             return self._infra_cache
         
-        from db.connection import get_db_connection_context
+        from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
         
         async with get_db_connection_context() as conn:
             # Get technology level
@@ -753,7 +753,7 @@ class ExistenceGate:
     
     async def _check_resource_cost(self, item_data: Dict[str, Any]) -> Dict[str, Any]:
         """Check if player has resources to create item"""
-        from db.connection import get_db_connection_context
+        from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
         
         player = item_data.get('player_name', 'Player')
         cost = item_data.get('resource_cost', {'money': 0, 'supplies': 0})
@@ -929,7 +929,7 @@ class ExistenceGate:
         event_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Check if event violates established timeline"""
-        from db.connection import get_db_connection_context
+        from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
         
         async with get_db_connection_context() as conn:
             # Check for conflicting events - now uses structured data
@@ -999,7 +999,7 @@ class ExistenceGate:
     
     async def _check_event_requirement(self, requirement: str) -> bool:
         """Check if an event requirement is met"""
-        from db.connection import get_db_connection_context
+        from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
         
         async with get_db_connection_context() as conn:
             # Check if requirement exists in canon
