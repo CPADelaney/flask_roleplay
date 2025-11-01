@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, Iterable, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from celery import current_app
 from celery.canvas import Signature
@@ -20,12 +20,19 @@ logger = logging.getLogger(__name__)
 
 TopicHandler = Callable[[OutboxEvent], Signature]
 
-_TOPICS: Dict[str, TopicHandler] = {}
+_TOPICS: Dict[str, List[TopicHandler]] = {}
 
-_DEFAULT_TASKS: Dict[str, str] = {
-    "ConflictRouteRequested": "nyx.tasks.background.conflict.route_subsystems",
-    "ConflictResolutionRequested": "nyx.tasks.background.conflict.start_pipeline",
-    "NPCDecisionNeeded": "nyx.tasks.background.npc.compute_decision",
+_DEFAULT_TASKS: Dict[str, Tuple[str, ...]] = {
+    "ConflictRouteRequested": ("nyx.tasks.background.conflict.route_subsystems",),
+    "ConflictResolutionRequested": ("nyx.tasks.background.conflict.start_pipeline",),
+    "NPCDecisionNeeded": ("nyx.tasks.background.npc.compute_decision",),
+    "ConflictResolved": (
+        "nyx.subscribers.memory.on_conflict_resolved",
+        "nyx.subscribers.npc.on_conflict_resolved",
+        "nyx.subscribers.world.on_conflict_resolved",
+    ),
+    "NPCActionTaken": ("nyx.subscribers.memory.on_npc_action_taken",),
+    "MemoryCreated": ("nyx.subscribers.npc.on_memory_created",),
 }
 
 
@@ -39,9 +46,10 @@ def _celery_signature_factory(task_name: str) -> TopicHandler:
 def register_topic_handler(topic: str, handler: TopicHandler, *, overwrite: bool = True) -> None:
     """Register a handler used to dispatch events for a topic."""
 
-    if not overwrite and topic in _TOPICS:
+    if overwrite or topic not in _TOPICS:
+        _TOPICS[topic] = [handler]
         return
-    _TOPICS[topic] = handler
+    _TOPICS[topic].append(handler)
 
 
 def clear_topic_handlers() -> None:
@@ -53,8 +61,9 @@ def clear_topic_handlers() -> None:
 def register_default_topic_handlers() -> None:
     """Ensure the default topics are present in the registry."""
 
-    for topic, task_name in _DEFAULT_TASKS.items():
-        register_topic_handler(topic, _celery_signature_factory(task_name), overwrite=False)
+    for topic, task_names in _DEFAULT_TASKS.items():
+        for task_name in task_names:
+            register_topic_handler(topic, _celery_signature_factory(task_name), overwrite=False)
 
 
 register_default_topic_handlers()
@@ -114,8 +123,8 @@ def dispatch_once(
         with session.begin():
             events = _select_pending_events(session, limit=limit, now=current_time)
             for event in events:
-                handler = _TOPICS.get(event.topic)
-                if handler is None:
+                handlers = _TOPICS.get(event.topic, [])
+                if not handlers:
                     logger.error("No handler registered for topic %s", event.topic)
                     event.status = OutboxEventStatus.FAILED.value
                     event.last_error = f"No handler for topic {event.topic}"
@@ -123,13 +132,23 @@ def dispatch_once(
                     summary.failed += 1
                     continue
 
-                try:
-                    signature = handler(event)
-                    signature.apply_async(headers={"Idempotency-Key": str(event.id)})
-                except Exception as exc:  # pragma: no cover - network issues
-                    logger.warning("Failed to dispatch outbox event %s: %s", event.id, exc)
+                dispatch_errors: List[str] = []
+                for index, handler in enumerate(handlers):
+                    try:
+                        signature = handler(event)
+                        signature.apply_async(headers={"Idempotency-Key": f"{event.id}:{index}"})
+                    except Exception as exc:  # pragma: no cover - network issues
+                        logger.warning(
+                            "Failed to dispatch outbox event %s via handler %s: %s",
+                            event.id,
+                            handler,
+                            exc,
+                        )
+                        dispatch_errors.append(str(exc))
+
+                if dispatch_errors:
                     event.attempts += 1
-                    event.last_error = str(exc)
+                    event.last_error = "; ".join(dispatch_errors)
                     backoff_seconds = min(2 ** event.attempts, 300)
                     event.available_at = current_time + timedelta(seconds=backoff_seconds)
                     summary.retried += 1

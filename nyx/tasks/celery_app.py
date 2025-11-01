@@ -68,8 +68,19 @@ app.conf.update(
     task_routes=_load_task_routes(),
     task_time_limit=_to_int(os.getenv("CELERY_TASK_TIME_LIMIT"), 120, setting="CELERY_TASK_TIME_LIMIT"),
     task_soft_time_limit=_to_int(os.getenv("CELERY_TASK_SOFT_LIMIT"), 90, setting="CELERY_TASK_SOFT_LIMIT"),
+    imports=(
+        "nyx.tasks.realtime.post_turn",
+        "nyx.tasks.background.conflict_pipeline",
+        "nyx.tasks.background.npc_tasks",
+        "nyx.tasks.background.world_tasks",
+        "nyx.subscribers.memory_subscribers",
+        "nyx.subscribers.npc_subscribers",
+        "nyx.subscribers.world_subscribers",
+    ),
 )
 
 app.conf.beat_schedule = build_beat_schedule()
+
+app.autodiscover_tasks(["nyx.tasks", "nyx.subscribers"])
 
 __all__ = ["app"]

@@ -72,9 +72,9 @@ def test_append_and_dispatch_happy_path(session_factory: sessionmaker):
     assert summary.retried == 0
 
     assert calls["ConflictRouteRequested"][0][0] == {"conversation_id": 42}
-    assert calls["ConflictRouteRequested"][0][1]["Idempotency-Key"] == str(first_id)
+    assert calls["ConflictRouteRequested"][0][1]["Idempotency-Key"] == f"{first_id}:0"
     assert calls["NPCDecisionNeeded"][0][0] == {"npc_id": 7}
-    assert calls["NPCDecisionNeeded"][0][1]["Idempotency-Key"] == str(second_id)
+    assert calls["NPCDecisionNeeded"][0][1]["Idempotency-Key"] == f"{second_id}:0"
 
     with session_factory.begin() as session:
         rows = session.execute(
@@ -152,7 +152,7 @@ def test_backoff_after_dispatch_failure(session_factory: sessionmaker):
     summary = dispatch_once(session_factory, limit=1, now=now)
     assert summary.dispatched == 0
     assert summary.retried == 1
-    assert failure_store[0][1]["Idempotency-Key"] == str(event_id)
+    assert failure_store[0][1]["Idempotency-Key"] == f"{event_id}:0"
 
     with session_factory.begin() as session:
         event = session.get(OutboxEvent, event_id)
