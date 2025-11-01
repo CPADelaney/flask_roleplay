@@ -846,6 +846,21 @@ async def apply_universal_updates_async(
     except Exception:
         logger.debug("Context cache invalidation skipped (no cache or older runtime)")
 
+    if applied_flag and delta.operation_count:
+        try:
+            # Lazy import to avoid module-level circular dependencies
+            from logic.version_registry import bump_world_version  # type: ignore
+        except Exception:
+            logger.debug("World version registry unavailable; skipping bump", exc_info=True)
+        else:
+            try:
+                bump_world_version()
+            except Exception:
+                logger.warning(
+                    "Failed to bump world version after canonical delta apply",
+                    exc_info=True,
+                )
+
     return {
         "success": True,
         "updates_applied": delta.operation_count,
