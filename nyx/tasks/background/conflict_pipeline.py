@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.exc import CompileError, OperationalError
@@ -14,12 +14,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from nyx.conflict.fsm import Status, transition
 from nyx.conflict.models import ConflictResolution, get_session_factory as get_conflict_session_factory
+from nyx.common.evals import load_blocking_flags
 from nyx.common.events import ConflictResolved, publish as publish_event
 from nyx.common.outbox import get_session_factory as get_outbox_session_factory
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
+from nyx.tasks.background import evals as eval_tasks
 from nyx.tasks.base import NyxTask, app, current_trace_id
 from nyx.tasks.utils import run_coro, with_retry
+from nyx.telemetry.metrics import EVAL_SCORE
 from nyx.utils.idempotency import idempotent
 
 logger = logging.getLogger(__name__)
@@ -169,7 +172,9 @@ async def _generate_draft_async(conflict_id: uuid.UUID, payload: Dict[str, Any])
     return prompt
 
 
-async def _evaluate_draft_async(conflict_id: uuid.UUID, draft_text: str, payload: Dict[str, Any]) -> Tuple[float | None, str | None]:
+async def _evaluate_draft_async(
+    conflict_id: uuid.UUID, draft_text: str, payload: Dict[str, Any]
+) -> Tuple[float | None, Dict[str, Any] | None, List[str]]:
     evaluation = payload.get("evaluation") or {}
 
     if "score" in evaluation:
@@ -177,7 +182,27 @@ async def _evaluate_draft_async(conflict_id: uuid.UUID, draft_text: str, payload
             score = float(evaluation.get("score"))
         except (TypeError, ValueError):
             score = None
-        return score, evaluation.get("notes")
+        if score is not None:
+            EVAL_SCORE.labels(kind="conflict").observe(score)
+        raw_notes = evaluation.get("notes")
+        flags_value = evaluation.get("flags")
+        if isinstance(flags_value, (list, tuple, set)):
+            flags = [str(flag) for flag in flags_value]
+        elif isinstance(flags_value, str):
+            flags = [flag.strip() for flag in flags_value.split(",") if flag.strip()]
+        else:
+            flags = []
+
+        if isinstance(raw_notes, dict):
+            note_payload = dict(raw_notes)
+        elif isinstance(raw_notes, str) and raw_notes:
+            note_payload = {"notes": raw_notes}
+        elif raw_notes is None:
+            note_payload = None
+        else:
+            note_payload = {"notes": str(raw_notes)}
+
+        return score, note_payload, flags
 
     request_spec = evaluation.get("request")
     agent = None
@@ -219,15 +244,34 @@ async def _evaluate_draft_async(conflict_id: uuid.UUID, draft_text: str, payload
                 parsed = json.loads(text)
                 score = float(parsed.get("score")) if parsed.get("score") is not None else None
                 notes = parsed.get("notes")
-                return score, notes
+                flags = parsed.get("flags") if isinstance(parsed.get("flags"), list) else []
+                if score is not None:
+                    EVAL_SCORE.labels(kind="conflict").observe(score)
+                if isinstance(notes, dict):
+                    detail_payload = dict(notes)
+                elif isinstance(notes, str) and notes:
+                    detail_payload = {"notes": notes}
+                elif notes is None:
+                    detail_payload = None
+                else:
+                    detail_payload = {"notes": str(notes)}
+                return score, detail_payload, [str(flag) for flag in flags]
             except (TypeError, ValueError, json.JSONDecodeError):
                 try:
-                    return float(text), None
+                    score = float(text)
+                    EVAL_SCORE.labels(kind="conflict").observe(score)
+                    return score, None, []
                 except (TypeError, ValueError):
-                    return None, text
+                    return None, {"notes": text}, []
 
-    # Default heuristic: accept drafts that are non-empty
-    return (1.0 if draft_text else 0.0), "auto-evaluated"
+    # Default heuristic: invoke local evaluators
+    result = eval_tasks.evaluate_text(
+        draft_text,
+        context=evaluation.get("context") if isinstance(evaluation.get("context"), dict) else {},
+        canon_facts=evaluation.get("canon_facts") if isinstance(evaluation.get("canon_facts"), dict) else {},
+        kind="conflict",
+    )
+    return result.get("score"), result, result.get("flags", [])
 
 
 async def _integrate_async(conflict_id: uuid.UUID, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -265,27 +309,63 @@ def _queue_integrate(conflict_id: uuid.UUID, payload: Dict[str, Any]) -> None:
     ).apply_async()
 
 
-def _start_key(payload: Dict[str, Any]) -> str:
+def _coerce_payload(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+    if args:
+        candidate = args[-1]
+        if isinstance(candidate, dict):
+            return candidate
+    if kwargs:
+        return dict(kwargs)
+    return {}
+
+
+def _start_key(*args: Any, **kwargs: Any) -> str:
+    payload = _coerce_payload(*args, **kwargs)
     conflict_id = payload.get("conflict_id")
     return f"conflict:start:{conflict_id}" if conflict_id else ""
 
 
-def _eval_key(payload: Dict[str, Any]) -> str:
+def _eval_key(*args: Any, **kwargs: Any) -> str:
+    payload = _coerce_payload(*args, **kwargs)
     conflict_id = payload.get("conflict_id")
     return f"conflict:eval:{conflict_id}" if conflict_id else ""
 
 
-def _integrate_key(payload: Dict[str, Any]) -> str:
+def _integrate_key(*args: Any, **kwargs: Any) -> str:
+    payload = _coerce_payload(*args, **kwargs)
     conflict_id = payload.get("conflict_id")
     return f"conflict:integrate:{conflict_id}" if conflict_id else ""
 
 
-def _resolve_threshold(payload: Dict[str, Any]) -> float:
-    evaluation = payload.get("evaluation") or {}
+def _default_threshold() -> float:
+    value = os.getenv("NYX_EVAL_MIN_SCORE_DEFAULT")
+    if value is None:
+        return 0.7
     try:
-        return float(evaluation.get("threshold", 0.7))
+        return float(value)
     except (TypeError, ValueError):
         return 0.7
+
+
+def _resolve_threshold(payload: Dict[str, Any]) -> float:
+    evaluation = payload.get("evaluation") or {}
+    if "threshold" in evaluation:
+        try:
+            return float(evaluation.get("threshold"))
+        except (TypeError, ValueError):
+            return _default_threshold()
+    return _default_threshold()
+
+
+def _resolve_blocking_flags(payload: Dict[str, Any]) -> set[str]:
+    evaluation = payload.get("evaluation") or {}
+    flags = set(load_blocking_flags())
+    extra = evaluation.get("blocking_flags")
+    if isinstance(extra, (list, tuple, set)):
+        flags.update(str(flag).strip() for flag in extra if str(flag).strip())
+    elif isinstance(extra, str):
+        flags.update(flag.strip() for flag in extra.split(",") if flag.strip())
+    return flags
 
 
 @app.task(
@@ -388,17 +468,58 @@ def eval_draft(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             if status == Status.EVAL:
                 draft_text = row.draft_text or ""
                 try:
-                    score, notes = run_coro(_evaluate_draft_async(conflict_id, draft_text, payload))
+                    score, details, flags = run_coro(
+                        _evaluate_draft_async(conflict_id, draft_text, payload)
+                    )
                 except Exception as exc:  # pragma: no cover - LLM failure path
                     logger.exception("Draft evaluation failed", extra={"conflict_id": str(conflict_id)})
                     row = transition(session, row, Status.FAILED, eval_notes=f"eval_error: {exc}")
                 else:
                     threshold = _resolve_threshold(payload)
-                    if score is not None and score >= threshold:
-                        row = transition(session, row, Status.CANON, eval_score=score, eval_notes=notes)
+                    blocking_flags = _resolve_blocking_flags(payload)
+                    blocking_hits = sorted({flag for flag in (flags or []) if flag in blocking_flags})
+                    notes_payload: Dict[str, Any] | None
+                    if isinstance(details, dict):
+                        notes_payload = dict(details)
+                    elif isinstance(details, str) and details:
+                        notes_payload = {"notes": details}
+                    elif details is None:
+                        notes_payload = None
+                    else:
+                        notes_payload = {"notes": str(details)}
+
+                    if blocking_hits:
+                        if notes_payload is None:
+                            notes_payload = {}
+                        notes_payload.setdefault("blocking_flags", blocking_hits)
+
+                    if score is not None and score >= threshold and not blocking_hits:
+                        notes_value = json.dumps(notes_payload) if notes_payload else None
+                        row = transition(session, row, Status.CANON, eval_score=score, eval_notes=notes_value)
+                        logger.info(
+                            "Conflict draft evaluation passed",
+                            extra={
+                                "conflict_id": str(conflict_id),
+                                "score": score,
+                                "threshold": threshold,
+                                "flags": flags,
+                                "blocking_flags": blocking_hits,
+                            },
+                        )
                         should_integrate = True
                     else:
-                        row = transition(session, row, Status.FAILED, eval_score=score, eval_notes=notes)
+                        notes_value = json.dumps(notes_payload) if notes_payload else None
+                        row = transition(session, row, Status.FAILED, eval_score=score, eval_notes=notes_value)
+                        logger.info(
+                            "Conflict draft evaluation failed",
+                            extra={
+                                "conflict_id": str(conflict_id),
+                                "score": score,
+                                "threshold": threshold,
+                                "flags": flags,
+                                "blocking_flags": blocking_hits,
+                            },
+                        )
                 result = _serialize_resolution(row)
             elif status in (Status.CANON, Status.INTEGRATING):
                 should_integrate = True
