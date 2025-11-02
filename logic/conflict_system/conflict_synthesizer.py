@@ -42,9 +42,9 @@ from logic.conflict_system.background_processor import (
 
 from logic.conflict_system.integration_hooks import ConflictEventHooks
 from agents import function_tool, RunContextWrapper, Runner
-from logic.conflict_system.conflict_synthesizer_hotpath import (
-    compute_scene_hash as hotpath_compute_scene_hash,
-    route_scene_subsystems,
+from nyx.conflict.hotpath.route import (
+    dispatch_scene_route,
+    get_scene_route_hash as hotpath_scene_route_hash,
 )
 
 if TYPE_CHECKING:
@@ -1824,8 +1824,8 @@ class ConflictSynthesizer:
         """Determine active subsystems for scene processing via hot-path helper."""
 
         fallback = self._heuristic_active_subsystems(scene_context)
-        scene_hash = hotpath_compute_scene_hash(scene_context)
-        return route_scene_subsystems(
+        scene_hash = hotpath_scene_route_hash(scene_context)
+        return dispatch_scene_route(
             scene_context,
             user_id=self.user_id,
             conversation_id=self.conversation_id,

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-CI Guard: Forbid direct Runner.run invocations outside Nyx gateway/core/tests code.
+CI Guard: Forbid direct Runner.run invocations outside Nyx gateway/worker/test code.
 
 The LLM hot-path policy now requires **all** synchronous entrypoints to invoke the
 central `nyx.gateway.llm_gateway.execute(...)` wrapper instead of touching the
 Runner directly. This script scans every Python file in the repository and fails
 the build when it finds a call to `Runner.run` in any path that is not part of the
-Nyx gateway, Nyx core, or tests packages. The goal is to prevent accidental direct
-Runner usage in request handlers, orchestrators, or background tasks that should
-route through the gateway.
+Nyx gateway, worker packages, Nyx core, or tests. The goal is to prevent accidental
+direct Runner usage in request handlers, orchestrators, or background tasks that
+should route through the gateway or dedicated worker modules.
 
 Usage:
     python scripts/ci/forbid_hotpath_llm.py
@@ -36,10 +36,19 @@ ALLOWED_PREFIXES = (
     Path("tests"),
 )
 
+WORKER_SEGMENT = "workers"
+
 
 def is_allowed_path(rel_path: Path) -> bool:
     """Return True if the file is inside an allowed prefix."""
-    return any(rel_path.parts[:len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES)
+
+    if any(rel_path.parts[:len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES):
+        return True
+
+    if rel_path.parts and rel_path.parts[0] == "nyx" and WORKER_SEGMENT in rel_path.parts:
+        return True
+
+    return False
 
 
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
@@ -100,7 +109,8 @@ def main() -> int:
     """Main entry point."""
     repo_root = Path.cwd()
     print(f"🔍 Scanning repository for direct Runner.run calls in {repo_root}")
-    print(f"   Allowed prefixes: {[str(prefix) for prefix in ALLOWED_PREFIXES]}")
+    allowed_prefixes = [str(prefix) for prefix in ALLOWED_PREFIXES]
+    print(f"   Allowed prefixes: {allowed_prefixes} + nyx/**/{WORKER_SEGMENT}/*")
     print()
 
     all_violations = {}

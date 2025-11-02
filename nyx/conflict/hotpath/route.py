@@ -49,7 +49,7 @@ def _stringify(value: Any) -> Any:
     return repr(value)
 
 
-def compute_scene_hash(scene_context: Optional[Dict[str, Any]]) -> str:
+def get_scene_route_hash(scene_context: Optional[Dict[str, Any]]) -> str:
     """Compute a stable hash for a scene context payload."""
 
     normalized = json.dumps(
@@ -103,7 +103,7 @@ def _scene_route_cache_key(
     )
 
 
-def scene_route_key_suffix(versions: Optional[Mapping[str, Any]]) -> Sequence[str]:
+def get_scene_route_key_suffix(versions: Optional[Mapping[str, Any]]) -> Sequence[str]:
     return _version_suffix_parts(versions)
 
 
@@ -204,7 +204,7 @@ def _deserialize_subsystems(names: Sequence[str]) -> Set["SubsystemType"]:
     return resolved
 
 
-def store_scene_route(
+def dispatch_scene_route_cache_update(
     *,
     user_id: int,
     conversation_id: int,
@@ -239,7 +239,7 @@ def store_scene_route(
     )
 
 
-def _queue_background_route(
+def enqueue_scene_route_background(
     *,
     user_id: int,
     conversation_id: int,
@@ -300,7 +300,31 @@ def _queue_background_route(
         logger.warning("Failed to enqueue subsystem routing task: %s", exc)
 
 
-def route_scene_subsystems(
+def get_scene_route_from_cache(
+    *,
+    user_id: int,
+    conversation_id: int,
+    scene_hash: str,
+    versions: Optional[Mapping[str, Any]] = None,
+) -> Optional[Set["SubsystemType"]]:
+    cache_key_value = _scene_route_cache_key(
+        user_id,
+        conversation_id,
+        scene_hash,
+        versions=versions,
+    )
+    cached = get_json(cache_key_value) or {}
+    names = cached.get("subsystems") if isinstance(cached, dict) else None
+
+    if isinstance(names, list):
+        metrics().CACHE_HIT_COUNT.labels(cache_type=_CACHE_TYPE).inc()
+        metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
+        return _deserialize_subsystems(names)
+
+    return None
+
+
+def dispatch_scene_route(
     scene_context: Dict[str, Any],
     *,
     user_id: int,
@@ -314,30 +338,25 @@ def route_scene_subsystems(
 
     from logic.conflict_system.conflict_synthesizer import SubsystemType
 
-    scene_hash = scene_hash or compute_scene_hash(scene_context)
+    scene_hash = scene_hash or get_scene_route_hash(scene_context)
     resolved_versions = get_scene_route_versions(
         user_id,
         conversation_id,
         scene_context=scene_context,
     )
-    cache_key_value = _scene_route_cache_key(
-        user_id,
-        conversation_id,
-        scene_hash,
+    cached = get_scene_route_from_cache(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        scene_hash=scene_hash,
         versions=resolved_versions,
     )
-    cached = get_json(cache_key_value) or {}
-    names = cached.get("subsystems") if isinstance(cached, dict) else None
-
-    if isinstance(names, list):
-        metrics().CACHE_HIT_COUNT.labels(cache_type=_CACHE_TYPE).inc()
-        metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
-        return _deserialize_subsystems(names)
+    if cached is not None:
+        return cached
 
     metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
 
     if orchestrator_available:
-        _queue_background_route(
+        enqueue_scene_route_background(
             user_id=user_id,
             conversation_id=conversation_id,
             scene_context=scene_context,
@@ -355,9 +374,11 @@ def route_scene_subsystems(
 
 
 __all__ = [
-    "compute_scene_hash",
-    "route_scene_subsystems",
-    "store_scene_route",
+    "dispatch_scene_route",
+    "dispatch_scene_route_cache_update",
+    "enqueue_scene_route_background",
+    "get_scene_route_from_cache",
+    "get_scene_route_hash",
     "get_scene_route_versions",
-    "scene_route_key_suffix",
+    "get_scene_route_key_suffix",
 ]
