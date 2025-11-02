@@ -34,14 +34,17 @@ FORBIDDEN_SNIPPET = "Runner.run("
 # Allowed path prefixes (relative to repo root) where Runner.run() is legitimate
 ALLOWED_PREFIXES = (
     Path("nyx/gateway"),
-    Path("nyx/core"),
     Path("tests"),
 )
 
 
 def is_allowed_path(rel_path: Path) -> bool:
     """Return True if the file is inside an allowed prefix."""
-    return any(rel_path.parts[:len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES)
+    if any(rel_path.parts[: len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES):
+        return True
+    if rel_path.parts and rel_path.parts[0] == "nyx" and "workers" in rel_path.parts:
+        return True
+    return False
 
 
 def _collect_docstring_violations(source: str, lines: List[str]) -> List[Tuple[int, str, str]]:
