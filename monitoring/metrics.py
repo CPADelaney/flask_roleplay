@@ -115,6 +115,15 @@ _COLLECTOR_DEFINITIONS: Dict[str, Tuple[Type[CollectorType], Tuple[Any, ...], Di
         ),
         {},
     ),
+    "CONFLICT_EVAL_SCORES": (
+        Histogram,
+        (
+            "conflict_eval_score",
+            "Distribution of conflict draft evaluation scores",
+            [],
+        ),
+        {},
+    ),
     "MODE_RECOMMENDATION_SOURCE": (
         Counter,
         (
