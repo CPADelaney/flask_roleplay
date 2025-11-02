@@ -13,6 +13,7 @@ from typing_extensions import TypedDict
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 typing.TypedDict = TypedDict  # Backport for pydantic v2 on Python 3.11
 
+from nyx.conflict.workers import llm_route_scene_subsystems
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMOperation, LLMRequest
 from nyx.nyx_agent import orchestrator as nyx_orchestrator
@@ -56,8 +57,7 @@ def gateway_stub(monkeypatch: pytest.MonkeyPatch) -> GatewayRecorder:
                 "stage": stage,
                 "prompt": request.prompt,
                 "metadata": metadata,
-                "final_output": {"stage": stage, "prompt": request.prompt},
-                "data": {"stage": stage, "prompt": request.prompt},
+                "data": [f"{stage}_subsystem"],
                 "narrative": f"{stage}:{request.prompt}",
             }
         )
@@ -94,7 +94,7 @@ def gateway_stub(monkeypatch: pytest.MonkeyPatch) -> GatewayRecorder:
     monkeypatch.setattr(llm_gateway, "execute_stream", fake_execute_stream)
     monkeypatch.setattr(nyx_orchestrator, "execute", fake_execute)
     monkeypatch.setattr(story_orchestrator, "execute", fake_execute)
-    monkeypatch.setattr(conflict_tasks, "execute", fake_execute)
+    monkeypatch.setattr("nyx.conflict.workers.compute.execute", fake_execute)
     monkeypatch.setattr(canon_tasks, "execute", fake_execute)
 
     import agents
@@ -199,19 +199,26 @@ def _check_story_orchestrator(data: Dict[str, Any], recorder: GatewayRecorder) -
     calls = recorder.for_stage("daily_task")
     assert len(calls) == 1
     raw = calls[0].result.raw
-    assert data["packet"].daily_task == raw["final_output"]
+    assert data["packet"].daily_task == raw["data"]
 
 
 async def _run_conflict_orchestrator(_: pytest.MonkeyPatch, __: GatewayRecorder) -> Dict[str, Any]:
-    synthesizer = SimpleNamespace(_orchestrator=SimpleNamespace(name="conflict-route", model=object()))
-    output = await conflict_tasks._run_orchestrator(synthesizer, "route this scene")
-    return {"output": output}
+    synthesizer = SimpleNamespace(
+        _orchestrator=SimpleNamespace(name="conflict-route", model=object()),
+        synthesize_scene_router_prompt=lambda scene_context: "route this scene",
+    )
+    subsystems = await llm_route_scene_subsystems(
+        synthesizer,
+        {"scene": "test"},
+        timeout=1.0,
+    )
+    return {"subsystems": subsystems}
 
 
 def _check_conflict_orchestrator(data: Dict[str, Any], recorder: GatewayRecorder) -> None:
     calls = recorder.for_stage("conflict_route")
     assert len(calls) == 1
-    assert data["output"] is calls[0].result.raw
+    assert data["subsystems"] == ["conflict_route_subsystem"]
 
 
 async def _run_canon_lore(monkeypatch: pytest.MonkeyPatch, _: GatewayRecorder) -> Dict[str, Any]:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from typing import Any, Dict, Optional, Tuple
@@ -12,13 +11,13 @@ from infra.cache import cache_key
 from nyx.tasks.base import NyxTask, app
 
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
-from logic.conflict_system.conflict_synthesizer_hotpath import (
-    compute_scene_hash,
+from nyx.conflict.hotpath.route import (
+    get_scene_route_hash,
+    get_scene_route_key_suffix,
     get_scene_route_versions,
-    scene_route_key_suffix,
-    store_scene_route,
+    update_scene_route_cache,
 )
-from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+from nyx.conflict.workers import llm_route_scene_subsystems
 from monitoring.metrics import metrics
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from nyx.nyx_agent.context import (
@@ -27,7 +26,6 @@ from nyx.nyx_agent.context import (
     persist_canonical_snapshot,
 )
 from nyx.utils.idempotency import idempotent
-from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +61,7 @@ def _routing_key(payload: Dict[str, Any]) -> str:
         )
         conversation_part = str(ids[1])
 
-    suffix = scene_route_key_suffix(versions)
+    suffix = get_scene_route_key_suffix(versions)
     return cache_key("conflict-route", conversation_part, scene_hash, *suffix)
 
 
@@ -134,30 +132,6 @@ def process_events(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     return {"status": "queued", "turn_id": turn_id}
 
 
-def _build_scene_router_prompt(scene_context: Dict[str, Any]) -> str:
-    return (
-        "Analyze this scene context and determine which conflict subsystems should be active:\n"
-        f"{json.dumps(scene_context, indent=2, sort_keys=True)}\n\n"
-        "Available subsystems must be returned as a JSON list of subsystem names."
-    )
-
-
-async def _run_orchestrator(synthesizer, prompt: str):
-    request = LLMRequest(
-        prompt=prompt,
-        agent=synthesizer._orchestrator,
-        metadata={
-            "operation": LLMOperation.ORCHESTRATION.value,
-            "stage": "conflict_route",
-        },
-    )
-    result = await asyncio.wait_for(
-        execute(request),
-        timeout=LLM_ROUTE_TIMEOUT,
-    )
-    return result.raw
-
-
 @app.task(
     bind=True,
     base=NyxTask,
@@ -175,7 +149,7 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     if not isinstance(scene_context, dict):
         scene_context = {}
 
-    scene_hash = payload.get("scene_hash") or compute_scene_hash(scene_context)
+    scene_hash = payload.get("scene_hash") or get_scene_route_hash(scene_context)
 
     conversation_id = str(payload.get("conversation_id", ""))
     user_id = str(payload.get("user_id", ""))
@@ -197,10 +171,14 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         logger.debug("No orchestrator available for routing; skipping cache warm")
         return {"status": "skipped", "reason": "no_orchestrator"}
 
-    prompt = _build_scene_router_prompt(scene_context)
-
     try:
-        response = _run_coro(_run_orchestrator(synthesizer, prompt))
+        subsystem_names = _run_coro(
+            llm_route_scene_subsystems(
+                synthesizer,
+                scene_context,
+                timeout=LLM_ROUTE_TIMEOUT,
+            )
+        )
     except asyncio.TimeoutError:
         logger.warning(
             "Conflict subsystem routing timed out after %ss for scene %s",
@@ -210,28 +188,16 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         metrics().CONFLICT_ROUTER_TIMEOUTS.inc()
         synthesizer._performance_metrics["timeouts_count"] += 1
         return {"status": "timeout", "scene_hash": scene_hash}
+    except ValueError:
+        logger.exception("Conflict subsystem routing returned invalid payload")
+        synthesizer._performance_metrics["failures_count"] += 1
+        return {"status": "error", "scene_hash": scene_hash, "reason": "invalid_response"}
     except Exception:
         logger.exception("Conflict subsystem routing failed")
         synthesizer._performance_metrics["failures_count"] += 1
         return {"status": "error", "scene_hash": scene_hash}
 
-    try:
-        response_text = extract_runner_response(response)
-        subsystem_names = json.loads(response_text)
-    except Exception:
-        logger.exception("Failed to parse orchestrator routing response")
-        synthesizer._performance_metrics["failures_count"] += 1
-        return {"status": "error", "scene_hash": scene_hash, "reason": "parse_error"}
-
-    if not isinstance(subsystem_names, list):
-        logger.warning("Routing response not a list; received %s", type(subsystem_names))
-        return {"status": "error", "scene_hash": scene_hash, "reason": "invalid_response"}
-
-    valid_names = [
-        name
-        for name in subsystem_names
-        if isinstance(name, str)
-    ]
+    valid_names = list(subsystem_names)
 
     cache_ttl = int(payload.get("ttl") or getattr(synthesizer, "_cache_ttl", _ROUTE_CACHE_TTL))
     versions = get_scene_route_versions(
@@ -240,7 +206,7 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         scene_context=scene_context,
         versions=payload.get("versions"),
     )
-    store_scene_route(
+    update_scene_route_cache(
         user_id=ids[0],
         conversation_id=ids[1],
         scene_hash=scene_hash,
