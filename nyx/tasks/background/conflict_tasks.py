@@ -13,10 +13,10 @@ from nyx.tasks.base import NyxTask, app
 
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
 from nyx.conflict.hotpath import (
-    dispatch_store_scene_route,
     get_scene_route_hash_from_cache,
     get_scene_route_suffix_from_cache,
     get_scene_route_versions_from_cache,
+    update_scene_route_cache,
 )
 from nyx.conflict.workers import (
     compute_scene_router_prompt,
@@ -222,7 +222,7 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         scene_context=scene_context,
         versions=payload.get("versions"),
     )
-    dispatch_store_scene_route(
+    update_scene_route_cache(
         user_id=ids[0],
         conversation_id=ids[1],
         scene_hash=scene_hash,

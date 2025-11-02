@@ -275,7 +275,7 @@ def enqueue_scene_route_refresh(
         logger.warning("Failed to enqueue subsystem routing task: %s", exc)
 
 
-def dispatch_store_scene_route(
+def update_scene_route_cache(
     *,
     user_id: int,
     conversation_id: int,
@@ -373,4 +373,5 @@ __all__ = [
     "get_scene_route_hash_from_cache",
     "get_scene_route_suffix_from_cache",
     "get_scene_route_versions_from_cache",
+    "update_scene_route_cache",
 ]
