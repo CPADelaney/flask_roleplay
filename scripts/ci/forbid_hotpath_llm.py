@@ -109,8 +109,9 @@ def main() -> int:
     """Main entry point."""
     repo_root = Path.cwd()
     print(f"🔍 Scanning repository for direct Runner.run calls in {repo_root}")
-    allowed_prefixes = [str(prefix) for prefix in ALLOWED_PREFIXES]
-    print(f"   Allowed prefixes: {allowed_prefixes} + nyx/**/{WORKER_SEGMENT}/*")
+    print(
+        "   Allowed locations: nyx/gateway/**, nyx/core/**, nyx/**/workers/**, and tests/**"
+    )
     print()
 
     all_violations = {}

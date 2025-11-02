@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from typing import Any, Dict, Optional, Tuple
@@ -13,10 +12,10 @@ from nyx.tasks.base import NyxTask, app
 
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
 from nyx.conflict.hotpath.route import (
-    dispatch_scene_route_cache_update,
     get_scene_route_hash,
     get_scene_route_key_suffix,
     get_scene_route_versions,
+    update_scene_route_cache,
 )
 from nyx.conflict.workers import llm_route_scene_subsystems
 from monitoring.metrics import metrics
@@ -133,14 +132,6 @@ def process_events(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     return {"status": "queued", "turn_id": turn_id}
 
 
-def _build_scene_router_prompt(scene_context: Dict[str, Any]) -> str:
-    return (
-        "Analyze this scene context and determine which conflict subsystems should be active:\n"
-        f"{json.dumps(scene_context, indent=2, sort_keys=True)}\n\n"
-        "Available subsystems must be returned as a JSON list of subsystem names."
-    )
-
-
 @app.task(
     bind=True,
     base=NyxTask,
@@ -180,13 +171,11 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         logger.debug("No orchestrator available for routing; skipping cache warm")
         return {"status": "skipped", "reason": "no_orchestrator"}
 
-    prompt = _build_scene_router_prompt(scene_context)
-
     try:
         subsystem_names = _run_coro(
             llm_route_scene_subsystems(
                 synthesizer,
-                prompt,
+                scene_context,
                 timeout=LLM_ROUTE_TIMEOUT,
             )
         )
@@ -217,7 +206,7 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         scene_context=scene_context,
         versions=payload.get("versions"),
     )
-    dispatch_scene_route_cache_update(
+    update_scene_route_cache(
         user_id=ids[0],
         conversation_id=ids[1],
         scene_hash=scene_hash,

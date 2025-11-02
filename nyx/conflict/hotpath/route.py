@@ -204,7 +204,7 @@ def _deserialize_subsystems(names: Sequence[str]) -> Set["SubsystemType"]:
     return resolved
 
 
-def dispatch_scene_route_cache_update(
+def update_scene_route_cache(
     *,
     user_id: int,
     conversation_id: int,
@@ -321,6 +321,7 @@ def get_scene_route_from_cache(
         metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
         return _deserialize_subsystems(names)
 
+    metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
     return None
 
 
@@ -353,8 +354,6 @@ def dispatch_scene_route(
     if cached is not None:
         return cached
 
-    metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
-
     if orchestrator_available:
         enqueue_scene_route_background(
             user_id=user_id,
@@ -375,10 +374,10 @@ def dispatch_scene_route(
 
 __all__ = [
     "dispatch_scene_route",
-    "dispatch_scene_route_cache_update",
     "enqueue_scene_route_background",
     "get_scene_route_from_cache",
     "get_scene_route_hash",
     "get_scene_route_versions",
     "get_scene_route_key_suffix",
+    "update_scene_route_cache",
 ]
