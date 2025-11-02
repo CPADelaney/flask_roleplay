@@ -39,12 +39,23 @@ ALLOWED_PREFIXES = (
 
 
 def is_allowed_path(rel_path: Path) -> bool:
-    """Return True if the file is inside an allowed prefix."""
-    if any(rel_path.parts[: len(prefix.parts)] == prefix.parts for prefix in ALLOWED_PREFIXES):
+    parts = rel_path.parts
+
+    # nyx/gateway/**
+    if parts[:2] == ("nyx", "gateway"):
         return True
-    if rel_path.parts and rel_path.parts[0] == "nyx" and "workers" in rel_path.parts:
+    # nyx/core/**
+    if parts[:2] == ("nyx", "core"):
         return True
+    # tests/**
+    if parts and parts[0] == "tests":
+        return True
+    # any nyx/**/workers/**
+    if "nyx" in parts and "workers" in parts[parts.index("nyx") + 1:]:
+        return True
+
     return False
+
 
 
 def _collect_docstring_violations(source: str, lines: List[str]) -> List[Tuple[int, str, str]]:
@@ -231,3 +242,4 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(2)
+
