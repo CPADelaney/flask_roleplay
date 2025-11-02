@@ -368,7 +368,6 @@ def _deserialize_subsystems(names: Sequence[str]) -> Set["SubsystemType"]:
 
 __all__ = [
     "dispatch_scene_route",
-    "dispatch_store_scene_route",
     "enqueue_scene_route_refresh",
     "get_scene_route_from_cache",
     "get_scene_route_hash_from_cache",
