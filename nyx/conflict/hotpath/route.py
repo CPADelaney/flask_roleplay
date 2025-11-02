@@ -1,4 +1,4 @@
-"""Hot-path helpers for conflict subsystem routing."""
+"""Cache-first dispatch helpers for conflict subsystem routing."""
 
 from __future__ import annotations
 
@@ -10,14 +10,13 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Set
 
 from infra.cache import cache_key, get_json, redis_lock, set_json
 from monitoring.metrics import metrics
-from nyx.telemetry.metrics import CACHE_HIT, CACHE_MISS
 from nyx.common.outbox import DuplicateEventError, append_event, get_session_factory
 from nyx.conversation.version_registry import version_registry
+from nyx.telemetry.metrics import CACHE_HIT, CACHE_MISS
 from sqlalchemy.orm import sessionmaker
 
 logger = logging.getLogger(__name__)
 
-# Cache bookkeeping
 _CACHE_TYPE = "conflict_subsystem_routing"
 _DEFAULT_CACHE_TTL = 300
 
@@ -37,8 +36,6 @@ def _get_outbox_session_factory() -> Optional[sessionmaker]:
 
 
 def _stringify(value: Any) -> Any:
-    """Best-effort serializer for hashing scene context."""
-
     if isinstance(value, (str, int, float)) or value is None:
         return value
     if isinstance(value, bool):
@@ -50,9 +47,7 @@ def _stringify(value: Any) -> Any:
     return repr(value)
 
 
-def compute_scene_hash(scene_context: Optional[Dict[str, Any]]) -> str:
-    """Compute a stable hash for a scene context payload."""
-
+def _compute_scene_hash(scene_context: Optional[Dict[str, Any]]) -> str:
     normalized = json.dumps(
         _stringify(scene_context or {}),
         sort_keys=True,
@@ -102,10 +97,6 @@ def _scene_route_cache_key(
         scene_hash,
         *_version_suffix_parts(versions),
     )
-
-
-def scene_route_key_suffix(versions: Optional[Mapping[str, Any]]) -> Sequence[str]:
-    return _version_suffix_parts(versions)
 
 
 def _scene_route_lock_key(
@@ -162,7 +153,13 @@ def _extract_conflict_id(scene_context: Optional[Dict[str, Any]]) -> Optional[st
     return None
 
 
-def get_scene_route_versions(
+def get_scene_route_hash_from_cache(scene_context: Optional[Dict[str, Any]]) -> str:
+    """Return a stable hash representing the provided scene context."""
+
+    return _compute_scene_hash(scene_context)
+
+
+def get_scene_route_versions_from_cache(
     user_id: int,
     conversation_id: int,
     *,
@@ -193,19 +190,92 @@ def get_scene_route_versions(
     return normalized
 
 
-def _deserialize_subsystems(names: Sequence[str]) -> Set["SubsystemType"]:
-    from logic.conflict_system.conflict_synthesizer import SubsystemType
-
-    resolved: Set[SubsystemType] = set()
-    for name in names:
-        try:
-            resolved.add(SubsystemType(name))
-        except ValueError:
-            logger.debug("Ignoring unknown subsystem returned by router: %s", name)
-    return resolved
+def get_scene_route_suffix_from_cache(versions: Optional[Mapping[str, Any]]) -> Sequence[str]:
+    return _version_suffix_parts(versions)
 
 
-def store_scene_route(
+def get_scene_route_from_cache(
+    *,
+    user_id: int,
+    conversation_id: int,
+    scene_hash: str,
+    versions: Mapping[str, Any],
+) -> Optional[Set["SubsystemType"]]:
+    cache_key_value = _scene_route_cache_key(
+        user_id,
+        conversation_id,
+        scene_hash,
+        versions=versions,
+    )
+    cached = get_json(cache_key_value) or {}
+    names = cached.get("subsystems") if isinstance(cached, dict) else None
+
+    if isinstance(names, list):
+        metrics().CACHE_HIT_COUNT.labels(cache_type=_CACHE_TYPE).inc()
+        CACHE_HIT.labels(section="conflict_scene_route").inc()
+        metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
+        return _deserialize_subsystems(names)
+
+    metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
+    CACHE_MISS.labels(section="conflict_scene_route").inc()
+    return None
+
+
+def enqueue_scene_route_refresh(
+    *,
+    user_id: int,
+    conversation_id: int,
+    scene_context: Dict[str, Any],
+    scene_hash: str,
+    cache_ttl: int,
+    versions: Mapping[str, Any],
+) -> None:
+    lock_name = _scene_route_lock_key(
+        user_id,
+        conversation_id,
+        scene_hash,
+        versions=versions,
+    )
+    try:
+        with redis_lock(lock_name, ttl=15):
+            session_factory = _get_outbox_session_factory()
+            if session_factory is None:
+                return
+            session = session_factory()
+            payload = {
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "scene_context": scene_context,
+                "scene_hash": scene_hash,
+                "ttl": cache_ttl,
+                "versions": versions,
+            }
+            try:
+                with session.begin():
+                    append_event(
+                        session,
+                        topic="ConflictRouteRequested",
+                        payload=payload,
+                        dedupe_key=_scene_route_cache_key(
+                            user_id,
+                            conversation_id,
+                            scene_hash,
+                            versions=versions,
+                        ),
+                    )
+            except DuplicateEventError:
+                logger.debug("Route event already enqueued for scene hash %s", scene_hash)
+            except Exception:  # pragma: no cover - database availability issues
+                logger.exception("Failed to persist conflict route outbox event")
+            finally:
+                session.close()
+    except RuntimeError:
+        logger.debug("Route task already queued for scene hash %s", scene_hash)
+    except Exception as exc:  # pragma: no cover - network failures
+        logger.warning("Failed to enqueue subsystem routing task: %s", exc)
+
+
+def dispatch_store_scene_route(
     *,
     user_id: int,
     conversation_id: int,
@@ -215,9 +285,7 @@ def store_scene_route(
     scene_context: Optional[Dict[str, Any]] = None,
     versions: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    """Persist background routing results for hot-path reuse."""
-
-    resolved_versions = get_scene_route_versions(
+    resolved_versions = get_scene_route_versions_from_cache(
         user_id,
         conversation_id,
         scene_context=scene_context,
@@ -240,68 +308,7 @@ def store_scene_route(
     )
 
 
-def _queue_background_route(
-    *,
-    user_id: int,
-    conversation_id: int,
-    scene_context: Dict[str, Any],
-    scene_hash: str,
-    cache_ttl: int,
-    versions: Optional[Mapping[str, Any]] = None,
-) -> None:
-    resolved_versions = get_scene_route_versions(
-        user_id,
-        conversation_id,
-        scene_context=scene_context,
-        versions=versions,
-    )
-    lock_name = _scene_route_lock_key(
-        user_id,
-        conversation_id,
-        scene_hash,
-        versions=resolved_versions,
-    )
-    try:
-        with redis_lock(lock_name, ttl=15):
-            session_factory = _get_outbox_session_factory()
-            if session_factory is None:
-                return
-            session = session_factory()
-            payload = {
-                "user_id": user_id,
-                "conversation_id": conversation_id,
-                "scene_context": scene_context,
-                "scene_hash": scene_hash,
-                "ttl": cache_ttl,
-                "versions": resolved_versions,
-            }
-            try:
-                with session.begin():
-                    append_event(
-                        session,
-                        topic="ConflictRouteRequested",
-                        payload=payload,
-                        dedupe_key=_scene_route_cache_key(
-                            user_id,
-                            conversation_id,
-                            scene_hash,
-                            versions=resolved_versions,
-                        ),
-                    )
-            except DuplicateEventError:
-                logger.debug("Route event already enqueued for scene hash %s", scene_hash)
-            except Exception:  # pragma: no cover - database availability issues
-                logger.exception("Failed to persist conflict route outbox event")
-            finally:
-                session.close()
-    except RuntimeError:
-        # Another worker already queued this scene routing job.
-        logger.debug("Route task already queued for scene hash %s", scene_hash)
-    except Exception as exc:  # pragma: no cover - network failures
-        logger.warning("Failed to enqueue subsystem routing task: %s", exc)
-
-
-def route_scene_subsystems(
+def dispatch_scene_route(
     scene_context: Dict[str, Any],
     *,
     user_id: int,
@@ -311,36 +318,26 @@ def route_scene_subsystems(
     cache_ttl: int = _DEFAULT_CACHE_TTL,
     scene_hash: Optional[str] = None,
 ) -> Set["SubsystemType"]:
-    """Return subsystems for scene processing via cache-first routing."""
-
     from logic.conflict_system.conflict_synthesizer import SubsystemType
 
-    scene_hash = scene_hash or compute_scene_hash(scene_context)
-    resolved_versions = get_scene_route_versions(
+    scene_hash = scene_hash or get_scene_route_hash_from_cache(scene_context)
+    resolved_versions = get_scene_route_versions_from_cache(
         user_id,
         conversation_id,
         scene_context=scene_context,
     )
-    cache_key_value = _scene_route_cache_key(
-        user_id,
-        conversation_id,
-        scene_hash,
+
+    cached = get_scene_route_from_cache(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        scene_hash=scene_hash,
         versions=resolved_versions,
     )
-    cached = get_json(cache_key_value) or {}
-    names = cached.get("subsystems") if isinstance(cached, dict) else None
-
-    if isinstance(names, list):
-        metrics().CACHE_HIT_COUNT.labels(cache_type=_CACHE_TYPE).inc()
-        CACHE_HIT.labels(section="conflict_scene_route").inc()
-        metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
-        return _deserialize_subsystems(names)
-
-    metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
-    CACHE_MISS.labels(section="conflict_scene_route").inc()
+    if cached is not None:
+        return cached
 
     if orchestrator_available:
-        _queue_background_route(
+        enqueue_scene_route_refresh(
             user_id=user_id,
             conversation_id=conversation_id,
             scene_context=scene_context,
@@ -357,10 +354,24 @@ def route_scene_subsystems(
     return fallback
 
 
+def _deserialize_subsystems(names: Sequence[str]) -> Set["SubsystemType"]:
+    from logic.conflict_system.conflict_synthesizer import SubsystemType
+
+    resolved: Set[SubsystemType] = set()
+    for name in names:
+        try:
+            resolved.add(SubsystemType(name))
+        except ValueError:
+            logger.debug("Ignoring unknown subsystem returned by router: %s", name)
+    return resolved
+
+
 __all__ = [
-    "compute_scene_hash",
-    "route_scene_subsystems",
-    "store_scene_route",
-    "get_scene_route_versions",
-    "scene_route_key_suffix",
+    "dispatch_scene_route",
+    "dispatch_store_scene_route",
+    "enqueue_scene_route_refresh",
+    "get_scene_route_from_cache",
+    "get_scene_route_hash_from_cache",
+    "get_scene_route_suffix_from_cache",
+    "get_scene_route_versions_from_cache",
 ]
