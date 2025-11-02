@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from agents import Agent, RunConfig, RunContextWrapper, ModelSettings
 from db.connection import get_db_connection_context
@@ -29,6 +30,7 @@ from nyx.telemetry.metrics import (
 )
 from nyx.telemetry.tracing import trace_step
 from .config import Config
+from nyx.config import flags
 
 if TYPE_CHECKING:
     from nyx.nyx_agent_sdk import NyxSDKConfig
@@ -124,7 +126,7 @@ async def _generate_defer_taunt(
             runner_kwargs=run_kwargs or None,
         )
         result_wrapper = await asyncio.wait_for(
-            execute(request),
+            _execute_llm(request),
             timeout=remaining if remaining is not None else get_defer_run_timeout_seconds(),
         )
         result = result_wrapper.raw
@@ -227,6 +229,46 @@ def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any
     return normalized
 
 
+async def _execute_llm(request: LLMRequest):
+    """Execute an LLM request honouring the rollout flag."""
+
+    if flags.llm_gateway_enabled():
+        return await execute(request)
+
+    from agents import Runner  # local import to avoid circular dependency at import time
+
+    runner_kwargs = dict(request.runner_kwargs or {})
+    raw_result = await Runner.run(
+        request.agent,
+        request.prompt,
+        context=request.context,
+        **runner_kwargs,
+    )
+
+    agent_name: Optional[str] = None
+    agent_spec = request.agent
+    if hasattr(agent_spec, "name"):
+        agent_name = getattr(agent_spec, "name")
+    elif isinstance(agent_spec, str):
+        agent_name = agent_spec
+
+    text = (
+        getattr(raw_result, "final_output", None)
+        or getattr(raw_result, "output_text", None)
+        or ""
+    )
+
+    return SimpleNamespace(
+        text=text,
+        raw=raw_result,
+        agent_name=agent_name,
+        metadata=dict(request.metadata or {}),
+        attempts=1,
+        used_fallback=False,
+        duration=None,
+    )
+
+
 def _preserve_hydrated_location(target: Dict[str, Any], location: Any) -> None:
     """Ensure hydrated location metadata survives context merges."""
 
@@ -274,7 +316,7 @@ async def run_agent_safely(
             metadata={"operation": LLMOperation.ORCHESTRATION.value},
             runner_kwargs=base_runner_kwargs,
         )
-        result_wrapper = await execute(request)
+        result_wrapper = await _execute_llm(request)
         return result_wrapper.raw
     except Exception as e:
         error_msg = str(e).lower()
@@ -303,7 +345,7 @@ async def run_agent_safely(
                     },
                     runner_kwargs=fallback_runner_kwargs,
                 )
-                fallback_result = await execute(fallback_request)
+                fallback_result = await _execute_llm(fallback_request)
                 return fallback_result.raw
             except Exception as e2:
                 logger.error(f"Fallback agent also failed: {e2}")
@@ -572,7 +614,7 @@ async def process_user_input(
                 },
             )
             result = await asyncio.wait_for(
-                execute(request),
+                _execute_llm(request),
                 timeout=time_left()
             )
 

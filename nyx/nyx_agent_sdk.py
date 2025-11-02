@@ -23,6 +23,7 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # ── Core modern orchestrator
@@ -63,6 +64,7 @@ from nyx.telemetry.metrics import (
     record_queue_delay_from_context,
 )
 from nyx.telemetry.tracing import trace_step
+from nyx.config import flags
 
 try:
     import openai
@@ -267,6 +269,56 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
     if not ss.get("location_slug"):
         ss["location_slug"] = slug
 
+
+async def _execute_llm(request: LLMRequest):
+    """Execute an LLM request respecting rollout flags."""
+
+    if flags.llm_gateway_enabled():
+        return await execute(request)
+
+    from agents import Runner  # local import to avoid optional dependency issues at import time
+
+    runner_kwargs = dict(request.runner_kwargs or {})
+    raw_result = await Runner.run(
+        request.agent,
+        request.prompt,
+        context=request.context,
+        **runner_kwargs,
+    )
+
+    agent_spec = request.agent
+    agent_name: Optional[str] = None
+    if hasattr(agent_spec, "name"):
+        agent_name = getattr(agent_spec, "name")
+    elif isinstance(agent_spec, str):
+        agent_name = agent_spec
+
+    text = (
+        getattr(raw_result, "final_output", None)
+        or getattr(raw_result, "output_text", None)
+        or ""
+    )
+
+    return SimpleNamespace(
+        text=text,
+        raw=raw_result,
+        agent_name=agent_name,
+        metadata=dict(request.metadata or {}),
+        attempts=1,
+        used_fallback=False,
+        duration=None,
+    )
+
+
+_LEGACY_SIDE_EFFECT_TASKS: Dict[str, Dict[str, Any]] = {
+    "world": {"task": "nyx.tasks.background.world_tasks.apply_universal", "queue": "background"},
+    "memory": {"task": "nyx.tasks.heavy.memory_tasks.add_and_embed", "queue": "heavy"},
+    "conflict": {"task": "nyx.tasks.background.conflict_tasks.process_events", "queue": "background"},
+    "npc": {"task": "nyx.tasks.background.npc_tasks.run_adaptation_cycle", "queue": "background"},
+    "lore": {"task": "nyx.tasks.background.lore_tasks.precompute_scene_bundle", "queue": "background"},
+}
+
+
 def _invalidate_context_cache_safe(user_id: str | int, conversation_id: str | int) -> None:
     """
     Invalidate unified context cache (L1/L2) for this (user, conversation).
@@ -390,7 +442,8 @@ class NyxAgentSDK:
         self._filter_class = ResponseFilter if (ResponseFilter and self.config.enable_response_filter) else None
         # optional per-conversation context kept only when explicitly warmed
         self._warm_contexts: Dict[str, NyxContext] = {}
-        self._snapshot_store = ConversationSnapshotStore()
+        self._snapshot_store = ConversationSnapshotStore() if flags.versioned_cache_enabled() else None
+        self._legacy_snapshots: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     async def _generate_defer_narrative(
         self,
@@ -423,7 +476,7 @@ class NyxAgentSDK:
                     runner_kwargs={"max_turns": 2},
                 )
                 result_wrapper = await asyncio.wait_for(
-                    execute(request),
+                    _execute_llm(request),
                     timeout=max(0.25, effective_timeout),
                 )
                 result = result_wrapper.raw
@@ -853,6 +906,10 @@ class NyxAgentSDK:
                 self._write_cache(cache_key, resp)
                 return resp
 
+            except Exception:
+                logger.exception(f"[SDK-{trace_id}] Fallback path failed", exc_info=True)
+                raise
+
         except Exception as e:
             logger.error(f"[SDK-{trace_id}] Process failed", exc_info=True)
             TASK_FAILURES.labels(task="nyx_sdk", reason=type(e).__name__).inc()
@@ -1143,7 +1200,7 @@ class NyxAgentSDK:
                     runner_kwargs=runner_kwargs,
                 )
                 result_wrapper = await asyncio.wait_for(
-                    execute(request),
+                    _execute_llm(request),
                     timeout=max(0.5, _left() - safety_margin)
                 )
                 result = result_wrapper.raw
@@ -1246,6 +1303,7 @@ class NyxAgentSDK:
         metadata = resp.metadata or {}
         user_key = str(user_id)
         conversation_key = str(conversation_id)
+        snapshot_key = (user_key, conversation_key)
 
         # Normalize once more for safety
         try:
@@ -1256,8 +1314,18 @@ class NyxAgentSDK:
         turn_id = metadata.get("turn_id") or f"{trace_id}-{int(time.time() * 1000)}"
         metadata["turn_id"] = turn_id
 
-        snapshot = self._snapshot_store.get(user_key, conversation_key)
-        current_world_version = int(snapshot.get("world_version", 0))
+        if flags.versioned_cache_enabled() and self._snapshot_store is not None:
+            snapshot = self._snapshot_store.get(user_key, conversation_key)
+        else:
+            snapshot = dict(self._legacy_snapshots.get(snapshot_key, {}))
+
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+
+        try:
+            current_world_version = int(snapshot.get("world_version", 0) or 0)
+        except (TypeError, ValueError):
+            current_world_version = 0
 
         # Prefer scene_scope; fill it from locationInfo if missing
         scene_scope = metadata.get("scene_scope") or {}
@@ -1307,32 +1375,6 @@ class NyxAgentSDK:
         next_world_version = current_world_version + 1 if world_state else current_world_version
 
         events: List[SideEffect] = []
-        if resp.narrative:
-            events.append(
-                MemoryEvent(
-                    turn_id=turn_id,
-                    user_id=user_key,
-                    conversation_id=conversation_key,
-                    text=resp.narrative,
-                    refs={
-                        "scene_id": scene_id,
-                        "region_id": region_id,
-                        "trace_id": trace_id,
-                    },
-                )
-            )
-
-        if world_state:
-            events.append(
-                WorldDelta(
-                    turn_id=turn_id,
-                    user_id=user_key,
-                    conversation_id=conversation_key,
-                    deltas=world_state,
-                    incoming_world_version=next_world_version,
-                    metadata={"trace_id": trace_id},
-                )
-            )
 
         conflict_meta = (
             metadata.get("conflict_event")
@@ -1348,53 +1390,87 @@ class NyxAgentSDK:
                 or conflict_meta.get("is_active")
                 or conflict_meta.get("ongoing")
             )
-            events.append(
-                ConflictEvent(
-                    turn_id=turn_id,
-                    user_id=user_key,
-                    conversation_id=conversation_key,
-                    conflict_id=str(conflict_id) if conflict_id is not None else None,
-                    payload=conflict_meta,
-                )
-            )
 
-        if participants:
-            events.append(
-                NPCStimulus(
-                    turn_id=turn_id,
-                    user_id=user_key,
-                    conversation_id=conversation_key,
-                    npcs=participants,
-                    payload={"trace_id": trace_id},
+        if flags.domain_events_enabled():
+            if resp.narrative:
+                events.append(
+                    MemoryEvent(
+                        turn_id=turn_id,
+                        user_id=user_key,
+                        conversation_id=conversation_key,
+                        text=resp.narrative,
+                        refs={
+                            "scene_id": scene_id,
+                            "region_id": region_id,
+                            "trace_id": trace_id,
+                        },
+                    )
                 )
-            )
 
-        if scene_id is not None or region_id is not None:
-            hint_payload: Dict[str, Any] = {"trace_id": trace_id}
-            if isinstance(scene_scope, dict):
-                scope_nation_ids = scene_scope.get("nation_ids")
-                normalized_nation_ids: List[int] = []
-                if isinstance(scope_nation_ids, (list, tuple, set)):
-                    for raw in scope_nation_ids:
-                        try:
-                            normalized = int(raw)
-                        except (TypeError, ValueError):
-                            continue
-                        normalized_nation_ids.append(normalized)
-                elif isinstance(scope_nation_ids, int):
-                    normalized_nation_ids.append(scope_nation_ids)
-                if normalized_nation_ids:
-                    hint_payload["nation_ids"] = sorted(set(normalized_nation_ids))[:5]
-            events.append(
-                LoreHint(
-                    turn_id=turn_id,
-                    user_id=user_key,
-                    conversation_id=conversation_key,
-                    scene_id=str(scene_id) if scene_id is not None else None,
-                    region_id=str(region_id) if region_id is not None else None,
-                    payload=hint_payload,
+            if world_state:
+                events.append(
+                    WorldDelta(
+                        turn_id=turn_id,
+                        user_id=user_key,
+                        conversation_id=conversation_key,
+                        deltas=world_state,
+                        incoming_world_version=next_world_version,
+                        metadata={"trace_id": trace_id},
+                    )
                 )
-            )
+
+            if (
+                flags.conflict_fsm_enabled()
+                and isinstance(conflict_meta, dict)
+                and conflict_meta
+            ):
+                events.append(
+                    ConflictEvent(
+                        turn_id=turn_id,
+                        user_id=user_key,
+                        conversation_id=conversation_key,
+                        conflict_id=str(conflict_id) if conflict_id is not None else None,
+                        payload=conflict_meta,
+                    )
+                )
+
+            if participants:
+                events.append(
+                    NPCStimulus(
+                        turn_id=turn_id,
+                        user_id=user_key,
+                        conversation_id=conversation_key,
+                        npcs=participants,
+                        payload={"trace_id": trace_id},
+                    )
+                )
+
+            if scene_id is not None or region_id is not None:
+                hint_payload: Dict[str, Any] = {"trace_id": trace_id}
+                if isinstance(scene_scope, dict):
+                    scope_nation_ids = scene_scope.get("nation_ids")
+                    normalized_nation_ids: List[int] = []
+                    if isinstance(scope_nation_ids, (list, tuple, set)):
+                        for raw in scope_nation_ids:
+                            try:
+                                normalized = int(raw)
+                            except (TypeError, ValueError):
+                                continue
+                            normalized_nation_ids.append(normalized)
+                    elif isinstance(scope_nation_ids, int):
+                        normalized_nation_ids.append(scope_nation_ids)
+                    if normalized_nation_ids:
+                        hint_payload["nation_ids"] = sorted(set(normalized_nation_ids))[:5]
+                events.append(
+                    LoreHint(
+                        turn_id=turn_id,
+                        user_id=user_key,
+                        conversation_id=conversation_key,
+                        scene_id=str(scene_id) if scene_id is not None else None,
+                        region_id=str(region_id) if region_id is not None else None,
+                        payload=hint_payload,
+                    )
+                )
 
         # Build updated snapshot – prefer locationInfo-backed data
         updated_snapshot = dict(snapshot)
@@ -1418,11 +1494,20 @@ class NyxAgentSDK:
             updated_snapshot["conflict_active"] = conflict_active
         updated_snapshot["updated_at"] = datetime.utcnow().isoformat()
 
-        self._snapshot_store.put(user_key, conversation_key, updated_snapshot)
+        if flags.versioned_cache_enabled() and self._snapshot_store is not None:
+            self._snapshot_store.put(user_key, conversation_key, updated_snapshot)
+        else:
+            self._legacy_snapshots[snapshot_key] = dict(updated_snapshot)
 
-        canonical_payload = build_canonical_snapshot_payload(updated_snapshot)
-        if canonical_payload and user_id_int is not None and conversation_id_int is not None:
-            await persist_canonical_snapshot(user_id_int, conversation_id_int, canonical_payload)
+        if (
+            flags.versioned_cache_enabled()
+            and self._snapshot_store is not None
+            and user_id_int is not None
+            and conversation_id_int is not None
+        ):
+            canonical_payload = build_canonical_snapshot_payload(updated_snapshot)
+            if canonical_payload:
+                await persist_canonical_snapshot(user_id_int, conversation_id_int, canonical_payload)
 
         grouped = group_side_effects(events)
         return turn_id, grouped
@@ -1434,8 +1519,7 @@ class NyxAgentSDK:
         conversation_id: str,
         trace_id: str,
     ) -> None:
-        if post_turn_dispatch is None:
-            return
+        use_outbox = flags.outbox_enabled() and post_turn_dispatch is not None
         user_id_text = str(user_id)
         conversation_id_text = str(conversation_id)
         user_id_int: Optional[int]
@@ -1475,24 +1559,28 @@ class NyxAgentSDK:
             "side_effects": grouped,
         }
 
-        def _enqueue() -> None:
-            try:
-                post_turn_dispatch.apply_async(kwargs={"payload": payload}, queue="realtime", priority=0)
-            except Exception:  # pragma: no cover
-                logger.exception("[SDK-%s] Failed to enqueue TurnPostProcessor", trace_id)
-
         start = time.perf_counter()
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, _enqueue)
-        except RuntimeError:
-            _enqueue()
-        finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            resp.metadata.setdefault("telemetry", {}).setdefault("post_turn", {})[
-                "enqueue_ms"
-            ] = round(elapsed_ms, 2)
-            resp.metadata.setdefault("post_turn", {})["turn_id"] = turn_id
+
+        if use_outbox:
+            def _enqueue() -> None:
+                try:
+                    post_turn_dispatch.apply_async(kwargs={"payload": payload}, queue="realtime", priority=0)
+                except Exception:  # pragma: no cover
+                    logger.exception("[SDK-%s] Failed to enqueue TurnPostProcessor", trace_id)
+
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _enqueue)
+            except RuntimeError:
+                _enqueue()
+        else:
+            self._dispatch_side_effects_legacy(payload, trace_id)
+
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        resp.metadata.setdefault("telemetry", {}).setdefault("post_turn", {})[
+            "enqueue_ms"
+        ] = round(elapsed_ms, 2)
+        resp.metadata.setdefault("post_turn", {})["turn_id"] = turn_id
 
     def _blocked_response(self, safe_text: str, trace_id: str, t0: float, stage: str, details: Optional[Dict[str, Any]]) -> NyxResponse:
         return NyxResponse(
@@ -1502,6 +1590,37 @@ class NyxAgentSDK:
             trace_id=trace_id,
             processing_time=(time.time() - t0),
         )
+
+    def _dispatch_side_effects_legacy(self, payload: Dict[str, Any], trace_id: str) -> None:
+        side_effects = payload.get("side_effects") or {}
+        if not side_effects:
+            return
+
+        try:
+            from nyx.tasks.base import app as celery_app
+        except Exception:  # pragma: no cover - legacy path best effort
+            logger.warning("[SDK-%s] Celery app unavailable; skipping legacy fanout", trace_id)
+            return
+
+        for key, effect_payload in side_effects.items():
+            if not effect_payload:
+                continue
+            config = _LEGACY_SIDE_EFFECT_TASKS.get(key)
+            if not config:
+                continue
+            options: Dict[str, Any] = {}
+            queue = config.get("queue")
+            if queue:
+                options.setdefault("queue", queue)
+                options.setdefault("routing_key", queue)
+            try:
+                celery_app.send_task(config["task"], kwargs={"payload": effect_payload}, **options)
+            except Exception:
+                logger.exception(
+                    "[SDK-%s] Failed to send %s side-effect via legacy path",
+                    trace_id,
+                    key,
+                )
 
     def _error_response(self, error_message: str, trace_id: str, t0: float) -> NyxResponse:
         return NyxResponse(
