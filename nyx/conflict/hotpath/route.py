@@ -211,12 +211,10 @@ def get_scene_route_from_cache(
     names = cached.get("subsystems") if isinstance(cached, dict) else None
 
     if isinstance(names, list):
-        metrics().CACHE_HIT_COUNT.labels(cache_type=_CACHE_TYPE).inc()
         CACHE_HIT.labels(section="conflict_scene_route").inc()
         metrics().CONFLICT_ROUTER_DECISIONS.labels(source="background").inc()
         return _deserialize_subsystems(names)
 
-    metrics().CACHE_MISS_COUNT.labels(cache_type=_CACHE_TYPE).inc()
     CACHE_MISS.labels(section="conflict_scene_route").inc()
     return None
 
