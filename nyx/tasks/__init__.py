@@ -33,6 +33,7 @@ for _module in (
     "lore_tasks",
     "canon_tasks",
     "integration_tasks",
+    "evals",
 ):
     try:  # pragma: no cover - defensive import
         __import__(f"nyx.tasks.background.{_module}")

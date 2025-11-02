@@ -69,6 +69,13 @@ LLM_TOKENS_OUT = Counter(
     ["operation"],
 )
 
+EVAL_SCORE = Histogram(
+    "nyx_eval_score",
+    "Distribution of evaluation scores",
+    labelnames=("kind",),
+    buckets=(0.0, 0.25, 0.5, 0.75, 0.9, 1.0),
+)
+
 CACHE_HIT = Counter(
     "nyx_cache_hit_total",
     "Cache hits for Nyx hot-path caches",
@@ -183,6 +190,7 @@ __all__ = [
     "QUEUE_DELAY_SECONDS",
     "LLM_TOKENS_IN",
     "LLM_TOKENS_OUT",
+    "EVAL_SCORE",
     "CACHE_HIT",
     "CACHE_MISS",
     "TASK_FAILURES",
