@@ -29,7 +29,6 @@ from nyx.telemetry.metrics import (
 )
 from nyx.telemetry.tracing import trace_step
 from .config import Config
-from nyx.config import flags
 
 if TYPE_CHECKING:
     from nyx.nyx_agent_sdk import NyxSDKConfig
@@ -229,7 +228,7 @@ def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any
 
 
 async def _execute_llm(request: LLMRequest):
-    """Execute an LLM request honouring the rollout flag."""
+    """Execute an LLM request via the Nyx gateway."""
 
     return await execute(request)
 

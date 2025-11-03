@@ -270,7 +270,7 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
 
 
 async def _execute_llm(request: LLMRequest):
-    """Execute an LLM request respecting rollout flags."""
+    """Execute an LLM request via the Nyx gateway."""
 
     return await execute(request)
 
