@@ -1679,7 +1679,7 @@ def create_quart_app():
             f"style-src 'self' {cdn_styles} 'unsafe-inline'; "
             "img-src 'self' data: https://*; "
             "font-src 'self' https://cdn.jsdelivr.net; "
-            "connect-src 'self' ws://* wss://* https://nyx-m85p.onrender.com; "
+            "connect-src 'self' ws://* wss://* https://nyx-m85p.onrender.com https://cdn.jsdelivr.net; "
             "frame-ancestors 'none'; "
             "object-src 'none'; "
             "base-uri 'self'; "
