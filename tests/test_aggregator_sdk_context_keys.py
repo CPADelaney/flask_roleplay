@@ -93,25 +93,31 @@ def test_get_aggregated_roleplay_context_exposes_both_spellings(monkeypatch):
         aggregator_sdk,
         "get_latest_openai_conversation",
         fake_get_latest_conversation,
+        raising=False,
     )
     monkeypatch.setattr(
         aggregator_sdk,
         "get_latest_chatkit_thread",
         fake_get_latest_chatkit_thread,
+        raising=False,
     )
     monkeypatch.setattr(
         aggregator_sdk,
         "get_openai_active_scene",
         fake_get_active_scene,
+        raising=False,
     )
 
-    async def fake_check_preset_story(conversation_id):
-        return None
+    class _DummyPresetManager:
+        @staticmethod
+        async def check_preset_story(conversation_id):
+            return None
 
     monkeypatch.setattr(
-        aggregator_sdk.PresetStoryManager,
-        "check_preset_story",
-        staticmethod(fake_check_preset_story),
+        aggregator_sdk,
+        "PresetStoryManager",
+        _DummyPresetManager,
+        raising=False,
     )
 
     from openai_integration import conversations as openai_conversations
@@ -154,13 +160,20 @@ def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
         fake_read_scene_context,
     )
 
-    async def fake_check_preset_story(conversation_id):
-        return None
+    class _DummyPresetManager:
+        @staticmethod
+        async def check_preset_story(conversation_id):
+            return None
 
     monkeypatch.setattr(
-        aggregator_sdk.PresetStoryManager,
-        "check_preset_story",
-        staticmethod(fake_check_preset_story),
+        aggregator_sdk,
+        "PresetStoryManager",
+        _DummyPresetManager,
+        raising=False,
+    )
+
+    asyncio.run(
+        aggregator_sdk.context_cache.invalidate_many(["context:1:2"])
     )
 
     metadata = {
@@ -195,6 +208,7 @@ def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
         aggregator_sdk,
         "get_latest_openai_conversation",
         fake_get_latest_conversation,
+        raising=False,
     )
     async def fake_get_latest_chatkit_thread(*args, **kwargs):
         return None
@@ -203,11 +217,13 @@ def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
         aggregator_sdk,
         "get_latest_chatkit_thread",
         fake_get_latest_chatkit_thread,
+        raising=False,
     )
     monkeypatch.setattr(
         aggregator_sdk,
         "get_openai_active_scene",
         fake_get_active_scene,
+        raising=False,
     )
 
     context = asyncio.run(
@@ -227,3 +243,66 @@ def test_parse_scene_projection_row_handles_string_scene_context():
 
     assert projection.current_location() == "Chapel of Thorns"
     assert projection.roleplay_dict()["CurrentLocation"] == "Chapel of Thorns"
+
+
+def test_get_comprehensive_context_wrapper(monkeypatch):
+    calls = {}
+
+    async def fake_get_comprehensive_context(*args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return {"payload": True}
+
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "_service_get_comprehensive_context",
+        fake_get_comprehensive_context,
+    )
+
+    result = asyncio.run(
+        aggregator_sdk.get_comprehensive_context(
+            10,
+            20,
+            input_text="hello",
+            summary_level=2,
+        )
+    )
+
+    assert result == {"payload": True}
+    assert calls["kwargs"]["user_id"] == 10
+    assert calls["kwargs"]["conversation_id"] == 20
+    assert calls["kwargs"]["input_text"] == "hello"
+    assert calls["kwargs"]["summary_level"] == 2
+
+
+def test_fallback_get_context_uses_context_service(monkeypatch):
+    captured = {}
+
+    class DummyService:
+        async def get_context(self, **kwargs):
+            captured.update(kwargs)
+            return {"fallback": True}
+
+    async def fake_get_context_service(user_id, conversation_id):
+        assert user_id == 5
+        assert conversation_id == 7
+        return DummyService()
+
+    monkeypatch.setattr(
+        aggregator_sdk,
+        "_get_context_service",
+        fake_get_context_service,
+    )
+
+    result = asyncio.run(
+        aggregator_sdk.fallback_get_context(
+            5,
+            7,
+            context_budget=123,
+            use_vector_search=False,
+        )
+    )
+
+    assert result == {"fallback": True}
+    assert captured["context_budget"] == 123
+    assert captured["use_vector_search"] is False
