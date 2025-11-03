@@ -1,5 +1,6 @@
 """Integration checks for Celery queue routing."""
 
+import importlib
 import pathlib
 import sys
 
@@ -39,3 +40,27 @@ def test_new_game_tasks_use_registered_queues():
     for task_name in tasks_to_verify:
         queue = _get_queue(routes[task_name])
         assert queue in known_queues, f"{task_name} routed to unknown queue '{queue}'"
+
+
+def test_background_chat_task_is_registered(monkeypatch):
+    """Celery should load the legacy top-level tasks module."""
+    assert "tasks" in app.conf.imports
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    try:
+        from pydantic._internal import _generate_schema as _pydantic_generate_schema
+
+        monkeypatch.setattr(
+            _pydantic_generate_schema, "_SUPPORTS_TYPEDDICT", True, raising=False
+        )
+    except ImportError:  # pragma: no cover
+        pass
+    importlib.import_module("tasks")
+
+    task_name = "tasks.background_chat_task_with_memory"
+    assert task_name in app.tasks, f"{task_name} not registered with Celery"
+
+    queue = _get_queue(app.conf.task_routes.get(task_name))
+    assert (
+        queue == "realtime"
+    ), f"{task_name} expected to route to realtime queue, got {queue!r}"

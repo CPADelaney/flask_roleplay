@@ -76,6 +76,7 @@ app.conf.update(
         "nyx.subscribers.memory_subscribers",
         "nyx.subscribers.npc_subscribers",
         "nyx.subscribers.world_subscribers",
+        "tasks",
     ),
 )
 
