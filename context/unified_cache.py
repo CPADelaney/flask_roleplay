@@ -7,12 +7,12 @@ This module provides a flexible, multi-level caching system that can be used
 across all context-related components. Refactored to integrate with the OpenAI Agents SDK.
 """
 
-import time
-import logging
-import json
 import asyncio
 import hashlib
-from typing import Dict, Any, Optional, Callable, List, Union
+import json
+import logging
+import time
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 # Agent SDK imports
 from agents import Agent, function_tool, RunContextWrapper, trace, custom_span
@@ -151,15 +151,29 @@ class UnifiedCache:
         self.cleanup_interval = 300  # 5 minutes
         
         # Cleanup task
-        self._cleanup_task = None
+        self._cleanup_task: Optional[asyncio.Task[None]] = None
+
+        # Metrics not exposed publicly but useful for instrumentation hooks.
+        self._invalidate_count = 0
     
-    async def start_background_cleanup(self):
+    async def start_background_cleanup(self) -> None:
         """Explicitly start the background cleanup task once an event loop is running."""
-        if self._cleanup_task is None or self._cleanup_task.done():
-            logger.debug("Starting background cleanup task for UnifiedCache.")
-            self._cleanup_task = asyncio.create_task(self._background_cleanup())
-        else:
+
+        if self._cleanup_task is not None and not self._cleanup_task.done():
             logger.debug("Background cleanup task is already running.")
+            return
+
+        async def _runner() -> None:
+            try:
+                await self._background_cleanup()
+            except asyncio.CancelledError:  # pragma: no cover - cooperative shutdown
+                logger.debug("Cache cleanup task cancelled")
+                raise
+            except Exception:  # pragma: no cover - defensive guard
+                logger.exception("UnifiedCache background cleanup crashed")
+
+        logger.debug("Starting background cleanup task for UnifiedCache.")
+        self._cleanup_task = asyncio.create_task(_runner())
     
     async def _background_cleanup(self):
         """Run cleanup periodically in the background."""
@@ -234,13 +248,22 @@ class UnifiedCache:
         importance: float = 0.5,
         ttl_override: Optional[int] = None
     ) -> bool:
-        """Set an item in the cache."""
+        """Set an item in the cache using a simple key."""
         request = CacheOperationRequest(
             key=key,
             cache_level=cache_level,
             importance=importance,
             ttl_override=ttl_override
         )
+        return await self._set_item(request, value)
+
+    async def set_request(
+        self,
+        request: CacheOperationRequest,
+        value: Any,
+    ) -> bool:
+        """Set an item in the cache using a pre-built request object."""
+
         return await self._set_item(request, value)
     
     async def delete(
@@ -407,26 +430,44 @@ class UnifiedCache:
             self._check_size_limit(cache_level)
             return True
 
+    def _invalidate_prefixes(self, prefixes: Sequence[str] | None) -> int:
+        if not prefixes:
+            total = len(self.l1_cache) + len(self.l2_cache) + len(self.l3_cache)
+            self.l1_cache.clear()
+            self.l2_cache.clear()
+            self.l3_cache.clear()
+            return total
+
+        count = 0
+        for cache_dict in (self.l1_cache, self.l2_cache, self.l3_cache):
+            keys_to_remove = [
+                key
+                for key in cache_dict
+                if any(key.startswith(prefix) for prefix in prefixes)
+            ]
+            for key in keys_to_remove:
+                cache_dict.pop(key, None)
+            count += len(keys_to_remove)
+        return count
+
     async def _invalidate(
         self,
         request: CacheInvalidateRequest
     ) -> int:
         """Internal method to invalidate cache entries (no run_context)."""
         with custom_span("cache_invalidate"):
-            count = 0
-            
-            for cache_dict in [self.l1_cache, self.l2_cache, self.l3_cache]:
-                if request.key_prefix is None:
-                    # Invalidate all
-                    count += len(cache_dict)
-                    cache_dict.clear()
-                else:
-                    # Invalidate by prefix
-                    keys_to_remove = [k for k in cache_dict if k.startswith(request.key_prefix)]
-                    for key in keys_to_remove:
-                        del cache_dict[key]
-                    count += len(keys_to_remove)
-            
+            prefixes = None if request.key_prefix is None else [request.key_prefix]
+            count = self._invalidate_prefixes(prefixes)
+            self._invalidate_count += count
+            return count
+
+    async def invalidate_many(self, prefixes: Iterable[str]) -> int:
+        """Invalidate multiple key prefixes as a single operation."""
+
+        prefix_list = list(prefixes)
+        with custom_span("cache_invalidate_many"):
+            count = self._invalidate_prefixes(prefix_list)
+            self._invalidate_count += count
             return count
 
     async def _get_stats(self) -> CacheStatsModel:
@@ -471,7 +512,7 @@ async def set_item_tool(
     """
     Tool: set an item in the cache.
     """
-    return await context_cache._set_item(request, value)
+    return await context_cache.set_request(request, value)
 
 
 @function_tool
@@ -483,6 +524,12 @@ async def invalidate_tool(
     Tool: invalidate cache entries by key prefix.
     """
     return await context_cache._invalidate(request)
+
+
+async def invalidate_prefixes(prefixes: Iterable[str]) -> int:
+    """Convenience helper for invalidating multiple prefixes from application code."""
+
+    return await context_cache.invalidate_many(prefixes)
 
 
 @function_tool

@@ -52,6 +52,8 @@ def evaluate_text(
     base=NyxTask,
     name="nyx.tasks.background.eval_text",
     acks_late=True,
+    queue="realtime",
+    priority=0,
 )
 def eval_text(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Celery task wrapper for :func:`evaluate_text`."""

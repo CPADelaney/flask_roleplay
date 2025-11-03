@@ -57,6 +57,24 @@ def output_evals_enabled() -> bool:
     return _flag("NYX_FLAG_OUTPUT_EVALS", "on")
 
 
+def context_parallel_init_enabled() -> bool:
+    """Return True when context services should initialize subsystems in parallel."""
+
+    return _flag("NYX_FLAG_CONTEXT_PARALLEL_INIT", "on")
+
+
+def context_parallel_fetch_enabled() -> bool:
+    """Return True when per-request context assembly can fan out concurrently."""
+
+    return _flag("NYX_FLAG_CONTEXT_PARALLEL_FETCH", "on")
+
+
+def context_warmers_enabled() -> bool:
+    """Return True when cache warmers/invalidation hooks should execute."""
+
+    return _flag("NYX_FLAG_CONTEXT_WARMERS", "on")
+
+
 __all__ = [
     "llm_gateway_enabled",
     "outbox_enabled",
@@ -64,4 +82,7 @@ __all__ = [
     "conflict_fsm_enabled",
     "domain_events_enabled",
     "output_evals_enabled",
+    "context_parallel_init_enabled",
+    "context_parallel_fetch_enabled",
+    "context_warmers_enabled",
 ]

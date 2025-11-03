@@ -10,6 +10,7 @@ from typing import Any, Dict
 from celery import Celery
 
 from .beat import build_beat_schedule
+from .queues import QUEUES, ROUTES as DEFAULT_ROUTES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,29 +33,32 @@ def _to_int(value: str | None, fallback: int, *, setting: str) -> int:
 
 
 def _load_task_routes() -> Dict[str, Dict[str, Any]]:
-    base_routes: Dict[str, Dict[str, Any]] = {
+    routes: Dict[str, Dict[str, Any]] = dict(DEFAULT_ROUTES)
+
+    legacy_routes: Dict[str, Dict[str, Any]] = {
         "nyx.tasks.background.conflict.*": {"queue": "nyx-conflict"},
         "nyx.tasks.background.npc.*": {"queue": "nyx-npc"},
         "nyx.tasks.background.lore.*": {"queue": "nyx-lore"},
     }
 
+    routes.update(legacy_routes)
+
     raw = os.getenv("CELERY_TASK_ROUTES")
     if not raw:
-        return base_routes
+        return routes
 
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         _LOGGER.warning("Failed to parse CELERY_TASK_ROUTES JSON: %s", exc)
-        return base_routes
+        return routes
 
     if not isinstance(parsed, dict):
         _LOGGER.warning("CELERY_TASK_ROUTES must be a JSON object, got %r", type(parsed))
-        return base_routes
+        return routes
 
-    merged = base_routes.copy()
-    merged.update(parsed)
-    return merged
+    routes.update(parsed)
+    return routes
 
 
 app = Celery("nyx")
@@ -64,7 +68,8 @@ app.conf.update(
     result_backend=_get_env("CELERY_RESULT_BACKEND", "rpc://"),
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    task_default_queue="nyx-default",
+    task_default_queue="realtime",
+    task_queues=QUEUES,
     task_routes=_load_task_routes(),
     task_time_limit=_to_int(os.getenv("CELERY_TASK_TIME_LIMIT"), 120, setting="CELERY_TASK_TIME_LIMIT"),
     task_soft_time_limit=_to_int(os.getenv("CELERY_TASK_SOFT_LIMIT"), 90, setting="CELERY_TASK_SOFT_LIMIT"),

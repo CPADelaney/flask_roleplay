@@ -7,8 +7,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from nyx.tasks.base import NyxTask, app
-
+from context.unified_cache import CacheOperationRequest, context_cache
 from db.connection import get_db_connection_context
 from lore.cache_version import bump_lore_version
 from lore.lore_orchestrator import get_lore_orchestrator
@@ -18,6 +17,8 @@ from nyx.nyx_agent.context import (
     fetch_canonical_snapshot,
     persist_canonical_snapshot,
 )
+from nyx.config.flags import context_warmers_enabled
+from nyx.tasks.base import NyxTask, app
 from nyx.utils.idempotency import idempotent
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,8 @@ async def _refresh_culture_summaries_async(
     base=NyxTask,
     name="nyx.tasks.background.lore_tasks.precompute_scene_bundle",
     acks_late=True,
+    queue="background",
+    priority=6,
 )
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
 def precompute_scene_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -227,6 +230,30 @@ def precompute_scene_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any] | N
                 logger.debug(
                     "Failed to refresh culture summaries for turn=%s", turn_id,
                     exc_info=True,
+                )
+
+        if context_warmers_enabled():
+            cache_key = f"context:lore:{ids[0]}:{ids[1]}:{turn_id}"
+            bundle = {
+                "turn_id": turn_id,
+                "scene_id": payload.get("scene_id"),
+                "region_id": payload.get("region_id"),
+                "payload": payload,
+            }
+            try:
+                _run_coro(
+                    context_cache.set_request(
+                        CacheOperationRequest(
+                            key=cache_key,
+                            cache_level=2,
+                            importance=0.4,
+                        ),
+                        bundle,
+                    )
+                )
+            except Exception:  # pragma: no cover - cache warm best effort
+                logger.debug(
+                    "Failed to warm lore context cache for key=%s", cache_key, exc_info=True
                 )
 
     logger.debug(

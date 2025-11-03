@@ -38,7 +38,14 @@ async def read_scene_context(
 ) -> List[Dict[str, Any]]:
     params: List[Any] = [user_id, conversation_id]
     query = (
-        "SELECT user_id, conversation_id, scene_context "
+        "SELECT "
+        "    user_id, "
+        "    conversation_id, "
+        "    scene_context->'current_roleplay' AS current_roleplay, "
+        "    scene_context->'player_stats' AS player_stats, "
+        "    scene_context->'npcs_present' AS npcs_present, "
+        "    scene_context->'events' AS events, "
+        "    scene_context->'quests' AS quests "
         "FROM public.v_scene_context "
         "WHERE user_id = $1 AND conversation_id = $2"
     )
@@ -46,7 +53,16 @@ async def read_scene_context(
         clamped_limit = max(1, min(limit, 200))
         params.append(clamped_limit)
         query += " LIMIT $3"
-    return await _fetch(query, params)
+    rows = await _fetch(query, params)
+    for row in rows:
+        row["scene_context"] = {
+            "current_roleplay": row.pop("current_roleplay", {}) or {},
+            "player_stats": row.pop("player_stats", {}) or {},
+            "npcs_present": row.pop("npcs_present", []) or [],
+            "events": row.pop("events", []) or [],
+            "quests": row.pop("quests", []) or [],
+        }
+    return rows
 
 
 async def _read_entity_cards_with_embedding(
@@ -61,8 +77,6 @@ async def _read_entity_cards_with_embedding(
         SELECT
             entity_type,
             entity_id,
-            user_id,
-            conversation_id,
             card,
             updated_at,
             CASE
@@ -98,8 +112,6 @@ async def _read_entity_cards_simple(
         SELECT
             entity_type,
             entity_id,
-            user_id,
-            conversation_id,
             card,
             updated_at,
             NULL::float8 AS vector_score,

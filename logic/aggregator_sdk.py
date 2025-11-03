@@ -20,11 +20,13 @@ Then use:
 """
 
 import asyncio
-import logging
 import json
+import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 
+from context import unified_cache as _unified_cache
 from context.context_service import (
     get_context_service,
     get_comprehensive_context,
@@ -51,6 +53,14 @@ from logic.dynamic_relationships import (
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ReadinessState:
+    event: asyncio.Event
+
+
+_READINESS: Optional[_ReadinessState] = None
 
 # --- Location normalization helpers ------------------------------------------
 
@@ -175,47 +185,54 @@ def _get_cache_key(user_id: int, conversation_id: int) -> str:
     return f"context:{user_id}:{conversation_id}"
 
 
+if TYPE_CHECKING:  # pragma: no cover - typing support only
+    from context.unified_cache import UnifiedCache
+
+
 ###############################################################################
-# Global Singletons: Will be set by init_singletons()
+# Global Singletons / Handles
 ###############################################################################
-context_cache: Optional["OptimizedContextCache"] = None
-incremental_context_manager: Optional["OptimizedIncrementalContextManager"] = None
+context_cache: "UnifiedCache" = _unified_cache.context_cache
+incremental_context_manager = None
 
 
 ###############################################################################
 # Public Initialization
 ###############################################################################
 async def init_singletons() -> None:
-    """
-    Initialize global singletons in aggregator_sdk. Must be called once in an async context.
-    For example, in main.py after creating your Flask app, do:
+    """Lightweight initializer that marks readiness and ensures cleanup is active."""
 
-        import asyncio
-        from logic.aggregator_sdk import init_singletons
+    global _READINESS
 
-        async def startup():
-            await init_singletons()
+    if _READINESS is None:
+        _READINESS = _ReadinessState(event=asyncio.Event())
 
-        if __name__ == "__main__":
-            asyncio.run(startup())
-            # Then run your Flask/Quart server
+    try:
+        await context_cache.start_background_cleanup()
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning("Failed to start unified cache cleanup", exc_info=True)
 
-    or, if you're using an async framework's startup event (FastAPI, etc.):
+    _READINESS.event.set()
+    logger.info("Aggregator SDK singletons marked ready.")
 
-        @app.on_event("startup")
-        async def startup():
-            await init_singletons()
 
-    After calling init_singletons(), you can safely access context_cache or
-    incremental_context_manager in aggregator_sdk.
-    """
-    global context_cache, incremental_context_manager
-    logger.info("Initializing aggregator_sdk singletons...")
+def is_context_ready() -> bool:
+    """Return True when init_singletons has completed successfully."""
 
-    context_cache = await OptimizedContextCache.create()
-    incremental_context_manager = await OptimizedIncrementalContextManager.create()
+    return _READINESS.event.is_set() if _READINESS else False
 
-    logger.info("Aggregator SDK singletons initialized successfully.")
+
+async def wait_for_context_ready(timeout: Optional[float] = None) -> bool:
+    """Block until the context layer finished initializing."""
+
+    if _READINESS is None:
+        return False
+
+    try:
+        await asyncio.wait_for(_READINESS.event.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    return True
 
 
 ###############################################################################
