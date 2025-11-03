@@ -117,15 +117,6 @@ def _collect_fstring_violations(source: str, lines: List[str]) -> List[Tuple[int
 
 
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
-    """Scan a file for forbidden direct Runner invocations.
-
-    The scanner tokenizes the file so that string literals and comments are
-    ignored. Only actual code tokens (NAME/OP) are considered when detecting the
-    pattern of accessing Runner followed by its run method call.
-
-    Returns:
-        List of (line_number, pattern_name, line_content) tuples
-    """
     violations: List[Tuple[int, str, str]] = []
     try:
         source = file_path.read_text(encoding="utf-8")
