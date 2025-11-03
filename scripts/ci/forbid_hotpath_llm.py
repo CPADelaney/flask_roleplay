@@ -117,11 +117,11 @@ def _collect_fstring_violations(source: str, lines: List[str]) -> List[Tuple[int
 
 
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
-    """Scan a file for forbidden Runner.run() usages.
+    """Scan a file for forbidden Runner.run usages.
 
     The scanner tokenizes the file so that string literals and comments are
     ignored. Only actual code tokens (NAME/OP) are considered when detecting the
-    `Runner.run(` call pattern.
+    `Runner.run` call pattern.
 
     Returns:
         List of (line_number, pattern_name, line_content) tuples
