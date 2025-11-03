@@ -8,7 +8,6 @@ import time
 import uuid
 from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 
 from agents import Agent, RunConfig, RunContextWrapper, ModelSettings
 from db.connection import get_db_connection_context
@@ -232,41 +231,7 @@ def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any
 async def _execute_llm(request: LLMRequest):
     """Execute an LLM request honouring the rollout flag."""
 
-    if flags.llm_gateway_enabled():
-        return await execute(request)
-
-    from agents import Runner  # local import to avoid circular dependency at import time
-
-    runner_kwargs = dict(request.runner_kwargs or {})
-    raw_result = await Runner.run(
-        request.agent,
-        request.prompt,
-        context=request.context,
-        **runner_kwargs,
-    )
-
-    agent_name: Optional[str] = None
-    agent_spec = request.agent
-    if hasattr(agent_spec, "name"):
-        agent_name = getattr(agent_spec, "name")
-    elif isinstance(agent_spec, str):
-        agent_name = agent_spec
-
-    text = (
-        getattr(raw_result, "final_output", None)
-        or getattr(raw_result, "output_text", None)
-        or ""
-    )
-
-    return SimpleNamespace(
-        text=text,
-        raw=raw_result,
-        agent_name=agent_name,
-        metadata=dict(request.metadata or {}),
-        attempts=1,
-        used_fallback=False,
-        duration=None,
-    )
+    return await execute(request)
 
 
 def _preserve_hydrated_location(target: Dict[str, Any], location: Any) -> None:

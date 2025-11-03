@@ -23,7 +23,6 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # ── Core modern orchestrator
@@ -273,41 +272,7 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
 async def _execute_llm(request: LLMRequest):
     """Execute an LLM request respecting rollout flags."""
 
-    if flags.llm_gateway_enabled():
-        return await execute(request)
-
-    from agents import Runner  # local import to avoid optional dependency issues at import time
-
-    runner_kwargs = dict(request.runner_kwargs or {})
-    raw_result = await Runner.run(
-        request.agent,
-        request.prompt,
-        context=request.context,
-        **runner_kwargs,
-    )
-
-    agent_spec = request.agent
-    agent_name: Optional[str] = None
-    if hasattr(agent_spec, "name"):
-        agent_name = getattr(agent_spec, "name")
-    elif isinstance(agent_spec, str):
-        agent_name = agent_spec
-
-    text = (
-        getattr(raw_result, "final_output", None)
-        or getattr(raw_result, "output_text", None)
-        or ""
-    )
-
-    return SimpleNamespace(
-        text=text,
-        raw=raw_result,
-        agent_name=agent_name,
-        metadata=dict(request.metadata or {}),
-        attempts=1,
-        used_fallback=False,
-        duration=None,
-    )
+    return await execute(request)
 
 
 _LEGACY_SIDE_EFFECT_TASKS: Dict[str, Dict[str, Any]] = {
