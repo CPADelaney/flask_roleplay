@@ -855,12 +855,36 @@ class OptimizedContextCache:
             ttl_override=ttl
         )
 
-    def invalidate(self, key_prefix: str) -> None:
-        """
-        Invalidate cache entries that match a given prefix.
-        """
+    async def invalidate(self, key_prefix: str) -> None:
+        """Invalidate cache entries that match a given prefix."""
+
         from context.unified_cache import context_cache
-        context_cache.invalidate(key_prefix)
+
+        if not key_prefix:
+            return
+
+        delete_fn = getattr(context_cache, "delete", None)
+        if callable(delete_fn):
+            result = delete_fn(key_prefix=key_prefix)
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        invalidate_many_fn = getattr(context_cache, "invalidate_many", None)
+        if callable(invalidate_many_fn):
+            result = invalidate_many_fn([key_prefix])
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        legacy_fn = getattr(context_cache, "invalidate", None)
+        if callable(legacy_fn):  # pragma: no cover - legacy shim
+            result = legacy_fn(key_prefix)
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        logger.debug("UnifiedCache has no invalidation API; skipping prefix=%s", key_prefix)
 
 
 ###############################################################################

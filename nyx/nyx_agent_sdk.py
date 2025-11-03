@@ -284,19 +284,42 @@ _LEGACY_SIDE_EFFECT_TASKS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _invalidate_context_cache_safe(user_id: str | int, conversation_id: str | int) -> None:
-    """
-    Invalidate unified context cache (L1/L2) for this (user, conversation).
-    Safe no-op if cache layer not available.
-    """
+async def _invalidate_context_cache_safe(user_id: str | int, conversation_id: str | int) -> None:
+    """Invalidate unified context cache for this (user, conversation)."""
+
     try:
         from logic.aggregator_sdk import context_cache  # late import to avoid cycles
-        if context_cache:
-            key_prefix = f"context:{int(user_id)}:{int(conversation_id)}"
-            context_cache.invalidate(key_prefix)
     except Exception:
-        # Cache not present or not initialized; ignore.
-        pass
+        return
+
+    if not context_cache:
+        return
+
+    key_prefix = f"context:{int(user_id)}:{int(conversation_id)}"
+
+    try:
+        delete_fn = getattr(context_cache, "delete", None)
+        if callable(delete_fn):
+            result = delete_fn(key_prefix=key_prefix)
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        invalidate_many_fn = getattr(context_cache, "invalidate_many", None)
+        if callable(invalidate_many_fn):
+            result = invalidate_many_fn([key_prefix])
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        legacy_fn = getattr(context_cache, "invalidate", None)
+        if callable(legacy_fn):  # pragma: no cover - compatibility shim
+            result = legacy_fn(key_prefix)
+            if asyncio.iscoroutine(result):
+                await result
+            return
+    except Exception:
+        logger.debug("Context cache invalidation failed softly", exc_info=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -798,7 +821,7 @@ class NyxAgentSDK:
                     or bool(resp.metadata.get("canon_event_applied")) \
                     or bool(resp.metadata.get("action_deferred"))  # scene sealing etc can alter context
                 if world_changed:
-                    _invalidate_context_cache_safe(user_id, conversation_id)
+                    await _invalidate_context_cache_safe(user_id, conversation_id)
                     # also clear our tiny per-conversation memoization window
                     self._clear_result_cache_for_conversation(conversation_id)
             except Exception:
@@ -863,7 +886,7 @@ class NyxAgentSDK:
                     _normalize_location_meta_inplace(resp.metadata)
                     world_changed = bool(resp.world_state) or bool(resp.metadata.get("universal_updates"))
                     if world_changed:
-                        _invalidate_context_cache_safe(user_id, conversation_id)
+                        await _invalidate_context_cache_safe(user_id, conversation_id)
                         self._clear_result_cache_for_conversation(conversation_id)
                 except Exception:
                     logger.debug(f"[SDK-{trace_id}] fallback post steps failed softly", exc_info=True)
