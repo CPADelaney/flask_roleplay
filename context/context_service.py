@@ -18,13 +18,14 @@ from agents import (
 from pydantic import BaseModel, Field
 
 from context.context_config import get_config
-from context.unified_cache import context_cache
+from context.unified_cache import CacheOperationRequest, context_cache
 from context.vector_service import get_vector_service
 from context.memory_manager import get_memory_manager, get_memory_agent
 from context.context_manager import get_context_manager, get_context_manager_agent
 from context.projection_helpers import SceneProjection, parse_scene_projection_row
 
 from db.read import read_scene_context, read_entity_cards
+from nyx.config.flags import context_parallel_fetch_enabled, context_parallel_init_enabled
 from context.models import (
     ContextRequest, ContextOutput, TokenUsage, 
     NPCData, Memory, QuestData, LocationData,
@@ -266,42 +267,82 @@ class ContextService:
         self.agent_context = {"user_id": user_id, "conversation_id": conversation_id}
         self._scene_projection: Optional[SceneProjection] = None
         self._projection_lock = asyncio.Lock()
-    
-    async def initialize(self):
-        """Initialize the context service"""
+        self._init_lock = asyncio.Lock()
+        self._init_task: Optional[asyncio.Task[None]] = None
+
+    async def initialize(self) -> None:
+        """Initialize the context service exactly once (concurrency-safe)."""
         if self.initialized:
             return
-        
-        # Get configuration
-        self.config = await get_config()
-        
-        # Get or create the core components
-        self.context_manager = get_context_manager()
-        self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-        
-        # Initialize vector service if enabled
-        if self.config.is_enabled("use_vector_search"):
-            self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-        
-        # Initialize narrative manager if available
+
+        if self._init_task:
+            await self._init_task
+            return
+
+        async with self._init_lock:
+            if self.initialized:
+                return
+            if not self._init_task:
+                self._init_task = asyncio.create_task(self._perform_initialization())
+
         try:
-            from story_agent.progressive_summarization import RPGNarrativeManager
-            from db.connection import get_db_connection_context
-            self.narrative_manager = RPGNarrativeManager(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                db_connection_string=get_db_connection_context()
-            )
-            await self.narrative_manager.initialize()
-        except ImportError:
-            logger.info("Progressive summarization not available - narrative manager not initialized")
-            self.narrative_manager = None
-        
-        # Initialize specialized agents
+            await self._init_task
+        finally:
+            if self._init_task and self._init_task.done():
+                self._init_task = None
+
+    async def _perform_initialization(self) -> None:
+        async def _load_config() -> None:
+            self.config = await get_config()
+
+        async def _load_managers() -> None:
+            self.context_manager = get_context_manager()
+            self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+
+        init_tasks = [_load_config(), _load_managers()]
+        if context_parallel_init_enabled():
+            await asyncio.gather(*init_tasks)
+        else:
+            for step in init_tasks:
+                await step
+
+        async def _load_vector() -> None:
+            if self.config and self.config.is_enabled("use_vector_search"):
+                self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+
+        async def _load_narrative() -> None:
+            try:
+                from story_agent.progressive_summarization import RPGNarrativeManager
+                from db.connection import get_db_connection_context
+
+                manager = RPGNarrativeManager(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                    db_connection_string=get_db_connection_context()
+                )
+                await manager.initialize()
+                self.narrative_manager = manager
+            except ImportError:
+                logger.info(
+                    "Progressive summarization not available - narrative manager not initialized"
+                )
+                self.narrative_manager = None
+
+        optional_tasks = [_load_vector(), _load_narrative()]
+        if context_parallel_init_enabled():
+            await asyncio.gather(*optional_tasks)
+        else:
+            for step in optional_tasks:
+                await step
+
         await self._initialize_agents()
-        
+
         self.initialized = True
-        logger.info(f"Initialized context service for user {self.user_id}, conversation {self.conversation_id}")
+        logger.info(
+            "Initialized context service for user %s, conversation %s",
+            self.user_id,
+            self.conversation_id,
+        )
     
     async def _initialize_agents(self):
         """Initialize the specialized agents for context, memory, etc."""
@@ -1083,22 +1124,45 @@ class ContextService:
         if resolved_location and resolved_location.strip().lower() == "unknown":
             resolved_location = None
         
-        # Possibly get relevant NPCs
+        fetch_plan: List[Tuple[str, Any]] = []
         if include_npcs:
-            npcs = await self._get_relevant_npcs(
-                input_text=input_text,
-                location=resolved_location,
+            fetch_plan.append(
+                (
+                    "npcs",
+                    self._get_relevant_npcs(
+                        input_text=input_text,
+                        location=resolved_location,
+                    ),
+                )
             )
+        if include_location:
+            fetch_plan.append(("location", self._get_location_details(resolved_location)))
+        if include_quests:
+            fetch_plan.append(("quests", self._get_quest_information()))
+
+        fetched_results: Dict[str, Any] = {}
+        if fetch_plan:
+            coroutines = [coro for _, coro in fetch_plan]
+            if context_parallel_fetch_enabled():
+                results = await asyncio.gather(*coroutines)
+            else:
+                results = []
+                for coro in coroutines:
+                    results.append(await coro)
+            for (name, _), value in zip(fetch_plan, results):
+                fetched_results[name] = value
+
+        if include_npcs:
+            npcs = fetched_results.get("npcs", [])
             context["npcs"] = [npc.dict() for npc in npcs]
 
-        # Possibly get location details
         if include_location:
-            loc_data = await self._get_location_details(resolved_location)
-            context["location_details"] = loc_data.dict()
-        
-        # Possibly get quest info
+            loc_data = fetched_results.get("location")
+            if loc_data is not None:
+                context["location_details"] = loc_data.dict()
+
         if include_quests:
-            quests = await self._get_quest_information()
+            quests = fetched_results.get("quests", [])
             context["quests"] = [q.dict() for q in quests]
         
         # Possibly get memories from memory manager
@@ -1129,8 +1193,41 @@ class ContextService:
         
         # Trim to budget
         final_context = await self._trim_to_budget(context, context_budget)
-        
-        # Return final
+
+        cache_key_components = [
+            "context",
+            str(self.user_id),
+            str(self.conversation_id),
+            f"delta:{int(use_delta)}",
+            f"npcs:{int(include_npcs)}",
+            f"location:{int(include_location)}",
+            f"quests:{int(include_quests)}",
+            f"memories:{int(include_memories)}",
+            f"version:{source_version or 0}",
+            f"budget:{context_budget}",
+        ]
+
+        if resolved_location:
+            location_hash = hashlib.md5(resolved_location.encode("utf-8")).hexdigest()
+            cache_key_components.append(f"loc:{location_hash}")
+        if input_text:
+            input_hash = hashlib.md5(input_text.encode("utf-8")).hexdigest()
+            cache_key_components.append(f"input:{input_hash}")
+
+        cache_key = ":".join(cache_key_components)
+
+        try:
+            await context_cache.set_request(
+                CacheOperationRequest(
+                    key=cache_key,
+                    cache_level=1,
+                    importance=0.7,
+                ),
+                final_context,
+            )
+        except Exception:  # pragma: no cover - cache is best-effort
+            logger.debug("Failed to cache context bundle key=%s", cache_key, exc_info=True)
+
         return final_context
     
     async def get_summarized_context(

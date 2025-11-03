@@ -17,11 +17,31 @@ logger = logging.getLogger(__name__)
 # --- Configuration Constants ---
 
 _OUTBOX_SIDE_EFFECTS: Mapping[str, Dict[str, Any]] = {
-    "world": {"task": "nyx.tasks.background.world_tasks.apply_universal", "queue": "background"},
-    "memory": {"task": "nyx.tasks.heavy.memory_tasks.add_and_embed", "queue": "heavy"},
-    "conflict": {"task": "nyx.tasks.background.conflict_tasks.process_events", "queue": "background"},
-    "npc": {"task": "nyx.tasks.background.npc_tasks.run_adaptation_cycle", "queue": "background"},
-    "lore": {"task": "nyx.tasks.background.lore_tasks.precompute_scene_bundle", "queue": "background"},
+    "world": {
+        "task": "nyx.tasks.background.world_tasks.apply_universal",
+        "queue": "background",
+        "priority": 3,
+    },
+    "memory": {
+        "task": "nyx.tasks.heavy.memory_tasks.add_and_embed",
+        "queue": "heavy",
+        "priority": 6,
+    },
+    "conflict": {
+        "task": "nyx.tasks.background.conflict_tasks.process_events",
+        "queue": "background",
+        "priority": 4,
+    },
+    "npc": {
+        "task": "nyx.tasks.background.npc_tasks.run_adaptation_cycle",
+        "queue": "background",
+        "priority": 4,
+    },
+    "lore": {
+        "task": "nyx.tasks.background.lore_tasks.precompute_scene_bundle",
+        "queue": "background",
+        "priority": 6,
+    },
 }
 
 _MAX_ATTEMPTS = 5

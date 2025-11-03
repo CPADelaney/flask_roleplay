@@ -6,30 +6,34 @@ from kombu import Exchange, Queue
 
 EXCHANGE = Exchange("nyx", type="direct")
 
+_PRIORITY_ARGS = {"x-max-priority": 10}
+
 QUEUES = (
-    Queue("realtime", EXCHANGE, routing_key="realtime"),
-    Queue("background", EXCHANGE, routing_key="background"),
-    Queue("heavy", EXCHANGE, routing_key="heavy"),
+    Queue("realtime", EXCHANGE, routing_key="realtime", queue_arguments=_PRIORITY_ARGS),
+    Queue("background", EXCHANGE, routing_key="background", queue_arguments=_PRIORITY_ARGS),
+    Queue("heavy", EXCHANGE, routing_key="heavy", queue_arguments=_PRIORITY_ARGS),
 )
 
 ROUTES = {
-    "nyx.tasks.realtime.post_turn.dispatch": {"queue": "realtime", "routing_key": "realtime"},
-    "nyx.tasks.realtime.post_turn.drain_outbox": {"queue": "realtime", "routing_key": "realtime"},
-    "nyx.tasks.background.world_tasks.apply_universal": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict.start_pipeline": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict.eval_draft": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict.integrate_canon": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_tasks.process_events": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_template_tasks.create_template_for_category": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_template_tasks.generate_variation": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_template_tasks.adapt_variation": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_template_tasks.add_unique_elements": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_template_tasks.generate_hooks": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.conflict_template_tasks.warm_template_cache": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.npc_tasks.run_adaptation_cycle": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.background.lore_tasks.precompute_scene_bundle": {"queue": "background", "routing_key": "background"},
-    "nyx.tasks.heavy.memory_tasks.add_and_embed": {"queue": "heavy", "routing_key": "heavy"},
-    "nyx.tasks.heavy.memory_tasks.consolidate_decay": {"queue": "heavy", "routing_key": "heavy"},
+    "nyx.tasks.realtime.post_turn.dispatch": {"queue": "realtime", "routing_key": "realtime", "priority": 0},
+    "nyx.tasks.realtime.post_turn.drain_outbox": {"queue": "realtime", "routing_key": "realtime", "priority": 0},
+    "nyx.tasks.background.world_tasks.apply_universal": {"queue": "background", "routing_key": "background", "priority": 3},
+    "nyx.tasks.background.conflict.start_pipeline": {"queue": "background", "routing_key": "background", "priority": 5},
+    "nyx.tasks.background.conflict.eval_draft": {"queue": "background", "routing_key": "background", "priority": 5},
+    "nyx.tasks.background.conflict.integrate_canon": {"queue": "background", "routing_key": "background", "priority": 5},
+    "nyx.tasks.background.conflict_tasks.process_events": {"queue": "background", "routing_key": "background", "priority": 4},
+    "nyx.tasks.background.conflict_template_tasks.create_template_for_category": {"queue": "background", "routing_key": "background", "priority": 7},
+    "nyx.tasks.background.conflict_template_tasks.generate_variation": {"queue": "background", "routing_key": "background", "priority": 7},
+    "nyx.tasks.background.conflict_template_tasks.adapt_variation": {"queue": "background", "routing_key": "background", "priority": 7},
+    "nyx.tasks.background.conflict_template_tasks.add_unique_elements": {"queue": "background", "routing_key": "background", "priority": 7},
+    "nyx.tasks.background.conflict_template_tasks.generate_hooks": {"queue": "background", "routing_key": "background", "priority": 7},
+    "nyx.tasks.background.conflict_template_tasks.warm_template_cache": {"queue": "background", "routing_key": "background", "priority": 7},
+    "nyx.tasks.background.npc_tasks.run_adaptation_cycle": {"queue": "background", "routing_key": "background", "priority": 4},
+    "nyx.tasks.background.lore_tasks.precompute_scene_bundle": {"queue": "background", "routing_key": "background", "priority": 6},
+    "nyx.tasks.background.eval_text": {"queue": "realtime", "routing_key": "realtime", "priority": 0},
+    "tasks.background_chat_task_with_memory": {"queue": "realtime", "routing_key": "realtime", "priority": 0},
+    "nyx.tasks.heavy.memory_tasks.add_and_embed": {"queue": "heavy", "routing_key": "heavy", "priority": 6},
+    "nyx.tasks.heavy.memory_tasks.consolidate_decay": {"queue": "heavy", "routing_key": "heavy", "priority": 7},
 }
 
 __all__ = ["EXCHANGE", "QUEUES", "ROUTES"]

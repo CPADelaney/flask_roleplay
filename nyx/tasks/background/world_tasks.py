@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional, Tuple
 
+from context.unified_cache import invalidate_prefixes
 from db.connection import get_db_connection_context
 from logic.universal_updater_agent import (
     UniversalUpdaterContext,
@@ -18,8 +19,9 @@ from nyx.nyx_agent.context import (
     fetch_canonical_snapshot,
     persist_canonical_snapshot,
 )
-from nyx.utils.idempotency import idempotent
+from nyx.config.flags import context_warmers_enabled
 from nyx.tasks.base import NyxTask, app
+from nyx.utils.idempotency import idempotent
 from nyx.utils.versioning import reject_if_stale
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,8 @@ async def _apply_world_deltas_async(
     base=NyxTask,
     name="nyx.tasks.background.world_tasks.apply_universal",
     acks_late=True,
+    queue="background",
+    priority=3,
 )
 @idempotent(key_fn=lambda payload: _idempotency_key(payload))
 def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -111,6 +115,8 @@ def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     turn_id = payload.get("turn_id")
     incoming_world_version = payload.get("incoming_world_version", 0)
     deltas = payload.get("deltas") or {}
+
+    ids = _coerce_ids(user_id, conversation_id)
 
     snapshot = _hydrate_snapshot(user_id, conversation_id)
     current_version = snapshot.get("world_version", 0)
@@ -135,7 +141,6 @@ def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
             conversation_id,
             list(deltas.keys()),
         )
-        ids = _coerce_ids(user_id, conversation_id)
         if not ids:
             raise RuntimeError("Cannot apply world deltas without numeric identifiers")
         try:
@@ -170,6 +175,19 @@ def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     response: Dict[str, Any] = {"status": "applied" if apply_result else "noop", "version": incoming_world_version}
     if apply_result is not None:
         response["result"] = apply_result
+
+    if context_warmers_enabled() and ids:
+        prefixes = [
+            f"context:{ids[0]}:{ids[1]}",
+            f"context:lore:{ids[0]}:{ids[1]}",
+        ]
+        try:
+            _run_coro(invalidate_prefixes(prefixes))
+        except Exception:  # pragma: no cover - invalidation is best-effort
+            logger.debug(
+                "Context cache invalidation failed for prefixes=%s", prefixes, exc_info=True
+            )
+
     return response
 
 
