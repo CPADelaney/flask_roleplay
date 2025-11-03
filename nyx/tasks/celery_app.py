@@ -83,4 +83,9 @@ app.conf.beat_schedule = build_beat_schedule()
 
 app.autodiscover_tasks(["nyx.tasks", "nyx.subscribers"])
 
+try:  # pragma: no cover - optional legacy shim
+    import celery_config  # noqa: F401  # side-effect import to merge legacy task routes
+except ImportError:  # pragma: no cover - environments without shim
+    pass
+
 __all__ = ["app"]
