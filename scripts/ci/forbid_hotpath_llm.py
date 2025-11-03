@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-CI Guard: Forbid direct Runner.run invocations outside Nyx gateway/core/tests code.
+CI Guard: Forbid direct invocations of Runner's run method outside Nyx gateway/core/tests code.
 
 The LLM hot-path policy now requires **all** synchronous entrypoints to invoke the
 central `nyx.gateway.llm_gateway.execute(...)` wrapper instead of touching the
 Runner directly. This script scans every Python file in the repository and fails
-the build when it finds a call to `Runner.run` in any path that is not part of the
+the build when it finds a call to the run method on Runner in any path that is not part of the
 Nyx gateway, Nyx core, or tests packages. The goal is to prevent accidental direct
 Runner usage in request handlers, orchestrators, or background tasks that should
 route through the gateway.
@@ -117,15 +117,6 @@ def _collect_fstring_violations(source: str, lines: List[str]) -> List[Tuple[int
 
 
 def scan_file(file_path: Path) -> List[Tuple[int, str, str]]:
-    """Scan a file for forbidden Runner.run usages.
-
-    The scanner tokenizes the file so that string literals and comments are
-    ignored. Only actual code tokens (NAME/OP) are considered when detecting the
-    `Runner.run` call pattern.
-
-    Returns:
-        List of (line_number, pattern_name, line_content) tuples
-    """
     violations: List[Tuple[int, str, str]] = []
     try:
         source = file_path.read_text(encoding="utf-8")
