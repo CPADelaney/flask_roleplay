@@ -108,3 +108,46 @@ async def test_pool_from_dead_loop_is_terminated(monkeypatch, caplog, anyio_back
         "Non-thread-safe operation" in record.getMessage()
         for record in caplog.records
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_close_existing_pool_handles_terminate_runtime_error(monkeypatch, anyio_backend):
+    """close_existing_pool treats RuntimeError("Event loop is closed") from terminate as graceful."""
+
+    isolated_state = db_connection.GlobalPoolState()
+    monkeypatch.setattr(db_connection, "_state", isolated_state)
+
+    class _TerminateRuntimePool:
+        def __init__(self, loop: asyncio.AbstractEventLoop):
+            self._loop = loop
+            self._closed = False
+            self.close_calls = 0
+            self.terminate_calls = 0
+
+        def get_size(self):
+            return 1
+
+        def get_idle_size(self):
+            return 1
+
+        async def close(self):
+            self.close_calls += 1
+            raise RuntimeError("Event loop is closed")
+
+        def terminate(self):
+            self.terminate_calls += 1
+            raise RuntimeError("Event loop is closed")
+
+    loop = asyncio.get_running_loop()
+    failing_pool = _TerminateRuntimePool(loop)
+    isolated_state.pool = failing_pool
+    isolated_state.pool_loop = loop
+    isolated_state.pool_state = db_connection.PoolState.HEALTHY
+    isolated_state.metrics.pool_state = db_connection.PoolState.HEALTHY
+
+    await db_connection.close_existing_pool()
+
+    assert isolated_state.pool is None
+    assert failing_pool.terminate_calls == 1
+    assert failing_pool._closed is True

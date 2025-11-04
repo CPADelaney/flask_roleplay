@@ -910,6 +910,20 @@ async def close_existing_pool(pool: Optional[asyncpg.Pool] = None) -> None:
             if hasattr(pool_to_close, "_closed"):
                 pool_to_close._closed = True
             logger.info("Pool terminated successfully after owning loop shutdown")
+        except RuntimeError as terminate_error:
+            if "Event loop is closed" in str(terminate_error):
+                logger.info(
+                    "Pool terminate raised RuntimeError due to closed loop; treating as closed"
+                )
+                shutdown_succeeded = True
+                if hasattr(pool_to_close, "_closed"):
+                    pool_to_close._closed = True
+            else:
+                logger.error(
+                    "Pool terminate failed after loop shutdown: %s",
+                    terminate_error,
+                    exc_info=True
+                )
         except Exception as terminate_error:
             logger.error(
                 "Pool terminate failed after loop shutdown: %s",
@@ -944,7 +958,23 @@ async def close_existing_pool(pool: Optional[asyncpg.Pool] = None) -> None:
             try:
                 pool_to_close.terminate()
                 shutdown_succeeded = True
+                if hasattr(pool_to_close, "_closed"):
+                    pool_to_close._closed = True
                 logger.info("Pool terminated successfully after loop closure")
+            except RuntimeError as terminate_error:
+                if "Event loop is closed" in str(terminate_error):
+                    logger.info(
+                        "Pool terminate raised RuntimeError due to closed loop; treating as closed"
+                    )
+                    shutdown_succeeded = True
+                    if hasattr(pool_to_close, "_closed"):
+                        pool_to_close._closed = True
+                else:
+                    logger.error(
+                        "Pool terminate failed after loop closure: %s",
+                        terminate_error,
+                        exc_info=True
+                    )
             except Exception as terminate_error:
                 logger.error(
                     "Pool terminate failed after loop closure: %s",
