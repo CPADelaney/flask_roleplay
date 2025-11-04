@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
+from nyx.gateway.llm_gateway import LLMRequest, LLMOperation, execute
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from db.connection import get_db_connection_context
 from logic.conflict_system.conflict_synthesizer import (
     ConflictSubsystem, SubsystemType, EventType,
@@ -861,10 +863,20 @@ class SocialCircleManager:
         Format as JSON.
         """
 
-        response = await self.gossip_generator.run(prompt)
+        result = await execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=self.gossip_generator,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "gossip_generation",
+                },
+            )
+        )
 
         try:
-            result = json.loads(response.content)
+            payload = extract_runner_response(result.raw)
+            result_json = json.loads(payload)
 
             async with get_db_connection_context() as conn:
                 gossip_id = await conn.fetchval(
@@ -876,21 +888,21 @@ class SocialCircleManager:
                     """,
                     self.user_id,
                     self.conversation_id,
-                    result['content'],
-                    result.get('truthfulness', 0.5),
+                    result_json['content'],
+                    result_json.get('truthfulness', 0.5),
                 )
 
             return GossipItem(
                 gossip_id=gossip_id,
-                gossip_type=GossipType[result.get('type', 'RUMOR').upper()],
-                content=result['content'],
+                gossip_type=GossipType[result_json.get('type', 'RUMOR').upper()],
+                content=result_json['content'],
                 about=target_npcs or [],
                 spreaders=set(),
                 believers=set(),
                 deniers=set(),
-                spread_rate=result.get('spread_rate', 0.5),
-                truthfulness=result.get('truthfulness', 0.5),
-                impact=result.get('impact', {}),
+                spread_rate=result_json.get('spread_rate', 0.5),
+                truthfulness=result_json.get('truthfulness', 0.5),
+                impact=result_json.get('impact', {}),
             )
 
         except (json.JSONDecodeError, KeyError) as e:
@@ -929,15 +941,25 @@ class SocialCircleManager:
         Format as JSON with explanations.
         """
 
-        response = await self.social_analyzer.run(prompt)
+        result = await execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=self.social_analyzer,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "reputation_scoring",
+                },
+            )
+        )
 
         try:
-            result = json.loads(response.content)
+            payload = extract_runner_response(result.raw)
+            result_json = json.loads(payload)
 
             reputation: Dict[ReputationType, float] = {}
             for rep_type in ReputationType:
-                if rep_type.value in result:
-                    reputation[rep_type] = float(result[rep_type.value])
+                if rep_type.value in result_json:
+                    reputation[rep_type] = float(result_json[rep_type.value])
                 else:
                     reputation[rep_type] = 0.3
 
@@ -975,11 +997,21 @@ class SocialCircleManager:
         Format as JSON array.
         """
         
-        response = await self.social_analyzer.run(prompt)
-        
+        result = await execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=self.social_analyzer,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "gossip_reaction",
+                },
+            )
+        )
+
         try:
-            reactions = json.loads(response.content)
-            
+            payload = extract_runner_response(result.raw)
+            reactions = json.loads(payload)
+
             spread_results = {
                 'new_believers': [],
                 'new_deniers': [],
@@ -1052,8 +1084,18 @@ class SocialCircleManager:
         Keep it slice-of-life and realistic.
         """
         
-        response = await self.reputation_narrator.run(prompt)
-        return response.content.strip()
+        result = await execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=self.reputation_narrator,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "reputation_narration",
+                },
+            )
+        )
+        payload = extract_runner_response(result.raw)
+        return payload.strip()
     
     async def form_alliance(
         self,
@@ -1081,33 +1123,43 @@ class SocialCircleManager:
         Format as JSON.
         """
         
-        response = await self.alliance_strategist.run(prompt)
-        
+        result = await execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=self.alliance_strategist,
+                metadata={
+                    "operation": LLMOperation.ORCHESTRATION.value,
+                    "stage": "alliance_formation",
+                },
+            )
+        )
+
         try:
-            result = json.loads(response.content)
-            
+            payload = extract_runner_response(result.raw)
+            result_json = json.loads(payload)
+
             async with get_db_connection_context() as conn:
                 alliance_id = await conn.fetchval("""
                     INSERT INTO social_alliances
-                    (user_id, conversation_id, party1_id, party2_id, 
+                    (user_id, conversation_id, party1_id, party2_id,
                      alliance_type, terms, is_secret)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     RETURNING alliance_id
                 """, self.user_id, self.conversation_id,
                 initiator_id, target_id,
-                result.get('type', 'cooperation'),
-                json.dumps(result.get('terms', {})),
-                result.get('secret', False))
-            
+                result_json.get('type', 'cooperation'),
+                json.dumps(result_json.get('terms', {})),
+                result_json.get('secret', False))
+
             return {
                 'alliance_id': alliance_id,
-                'type': result.get('type'),
-                'terms': result.get('terms'),
-                'duration': result.get('duration'),
-                'is_secret': result.get('secret', False),
-                'weak_points': result.get('weak_points', [])
+                'type': result_json.get('type'),
+                'terms': result_json.get('terms'),
+                'duration': result_json.get('duration'),
+                'is_secret': result_json.get('secret', False),
+                'weak_points': result_json.get('weak_points', [])
             }
-            
+
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to form alliance: {e}")
             return {'error': 'Failed to form alliance'}
