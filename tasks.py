@@ -1523,7 +1523,12 @@ def update_scene_conflict_context(self, user_id: int, conversation_id: int, scen
         logger.info(f"Starting background conflict context generation for key: {cache_key}")
 
         async def _generate_context():
-            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            from logic.conflict_system.conflict_synthesizer import (
+                EventType,
+                SubsystemType,
+                SystemEvent,
+                get_synthesizer,
+            )
             synthesizer = await get_synthesizer(user_id, conversation_id)
 
             event = SystemEvent(
