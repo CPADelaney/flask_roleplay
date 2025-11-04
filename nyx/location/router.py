@@ -9,6 +9,8 @@ import re
 import unicodedata
 from typing import Any, Dict, Optional
 
+from db.connection import get_db_connection_context
+
 from .anchors import derive_geo_anchor
 from .fictional_resolver import resolve_fictional
 from .gemini_maps_adapter import resolve_location_with_gemini
@@ -25,6 +27,8 @@ from .types import (
     STATUS_ASK,
     STATUS_NOT_FOUND,
 )
+
+from nyx.location.hierarchy import get_or_create_location
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 
 logger = logging.getLogger(__name__)
@@ -857,6 +861,61 @@ async def resolve_place_or_travel(
         top_candidate = res.candidates[0]
         location_name = top_candidate.place.name
         location_type = top_candidate.place.meta.get("location_type") or top_candidate.place.level
+
+        # Only persist canonical locations for real-world scopes.
+        scope_value = res.scope or anchor.scope
+        if scope_value == "real":
+            try:
+                uid = int(user_id)
+                cid = int(conversation_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[ROUTER] Unable to persist location for non-integer identifiers: user_id=%r conversation_id=%r",
+                    user_id,
+                    conversation_id,
+                )
+            else:
+                try:
+                    async with get_db_connection_context() as conn:
+                        location_record = await get_or_create_location(
+                            conn,
+                            user_id=uid,
+                            conversation_id=cid,
+                            candidate=top_candidate,
+                            scope=scope_value,
+                            anchor=anchor,
+                        )
+
+                    # Mirror the persisted identifier on the candidate metadata.
+                    top_candidate.place.meta = dict(top_candidate.place.meta or {})
+                    top_candidate.place.meta["location_id"] = location_record.id
+
+                    if location_record.id is not None:
+                        if isinstance(res.metadata, dict):
+                            res.metadata.setdefault("location_id", location_record.id)
+                        elif res.metadata is None:
+                            res.metadata = {"location_id": location_record.id}
+
+                    # Seed the snapshot store so downstream turns stay in sync.
+                    if store is not None and location_record.id is not None:
+                        try:
+                            snapshot = store.get(user_id, conversation_id)
+                            if snapshot.get("location_id") != location_record.id:
+                                snapshot = dict(snapshot)
+                                snapshot["location_id"] = location_record.id
+                                snapshot.setdefault("location_name", location_record.location_name)
+                                store.put(user_id, conversation_id, snapshot)
+                        except Exception:
+                            logger.warning(
+                                "[ROUTER] Failed to seed conversation snapshot with location",
+                                exc_info=True,
+                            )
+
+                except Exception:
+                    logger.warning(
+                        "[ROUTER] Failed to persist real-world location for conversation",
+                        exc_info=True,
+                    )
 
         # Track movement asynchronously (don't block on failure)
         asyncio.create_task(
