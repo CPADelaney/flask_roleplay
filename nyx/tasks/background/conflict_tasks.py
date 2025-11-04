@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from infra.cache import cache_key
 from nyx.tasks.base import NyxTask, app
+from nyx.tasks.utils import run_coro
 
 from logic.conflict_system.conflict_synthesizer import LLM_ROUTE_TIMEOUT
 from nyx.conflict.hotpath import (
@@ -70,14 +71,6 @@ def _routing_key(payload: Dict[str, Any]) -> str:
     return cache_key("conflict-route", conversation_part, scene_hash, *suffix)
 
 
-def _run_coro(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
 def _coerce_ids(user_id: str, conversation_id: str) -> Optional[Tuple[int, int]]:
     try:
         return int(user_id), int(conversation_id)
@@ -92,7 +85,7 @@ def _hydrate_snapshot(user_id: str, conversation_id: str) -> Dict[str, Any]:
     ids = _coerce_ids(user_id, conversation_id)
     if not ids:
         return snapshot
-    canonical = _run_coro(fetch_canonical_snapshot(*ids))
+    canonical = run_coro(fetch_canonical_snapshot(*ids))
     if canonical:
         hydrated = dict(canonical)
         _SNAPSHOTS.put(user_id, conversation_id, hydrated)
@@ -107,7 +100,7 @@ def _persist_snapshot(user_id: str, conversation_id: str, snapshot: Dict[str, An
     payload = build_canonical_snapshot_payload(snapshot)
     if not payload:
         return
-    _run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
+    run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
 
 
 @app.task(
@@ -169,7 +162,7 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     try:
         from logic.conflict_system.conflict_synthesizer import get_synthesizer
 
-        synthesizer = _run_coro(get_synthesizer(*ids))
+        synthesizer = run_coro(get_synthesizer(*ids))
     except Exception:
         logger.exception("Failed to load conflict synthesizer for routing")
         return {"status": "error", "reason": "synth_load_failed"}
@@ -182,7 +175,7 @@ def route_subsystems(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
     prompt = compute_scene_router_prompt(scene_context)
 
     try:
-        response = _run_coro(llm_run_conflict_orchestrator(synthesizer, prompt))
+        response = run_coro(llm_run_conflict_orchestrator(synthesizer, prompt))
     except asyncio.TimeoutError:
         logger.warning(
             "Conflict subsystem routing timed out after %ss for scene %s",

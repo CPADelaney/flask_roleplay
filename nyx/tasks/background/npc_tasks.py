@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Dict, Optional, Tuple
 
 from nyx.tasks.base import NyxTask, app
+from nyx.tasks.utils import run_coro
 
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from nyx.nyx_agent.context import (
@@ -26,14 +26,6 @@ def _idempotency_key(payload: Dict[str, Any]) -> str:
     return f"npc:{payload.get('conversation_id')}:{payload.get('turn_id')}"
 
 
-def _run_coro(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
 def _coerce_ids(user_id: str, conversation_id: str) -> Optional[Tuple[int, int]]:
     try:
         return int(user_id), int(conversation_id)
@@ -48,7 +40,7 @@ def _hydrate_snapshot(user_id: str, conversation_id: str) -> Dict[str, Any]:
     ids = _coerce_ids(user_id, conversation_id)
     if not ids:
         return snapshot
-    canonical = _run_coro(fetch_canonical_snapshot(*ids))
+    canonical = run_coro(fetch_canonical_snapshot(*ids))
     if canonical:
         hydrated = dict(canonical)
         _SNAPSHOTS.put(user_id, conversation_id, hydrated)
@@ -63,7 +55,7 @@ def _persist_snapshot(user_id: str, conversation_id: str, snapshot: Dict[str, An
     payload = build_canonical_snapshot_payload(snapshot)
     if not payload:
         return
-    _run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
+    run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
 
 
 async def _execute_adaptation_async(
@@ -133,7 +125,7 @@ def run_adaptation_cycle(self, payload: Dict[str, Any]) -> Dict[str, Any] | None
         if not ids:
             raise RuntimeError("Cannot run NPC adaptation without numeric identifiers")
         try:
-            adaptation_result = _run_coro(
+            adaptation_result = run_coro(
                 _execute_adaptation_async(ids[0], ids[1], normalized_npc_ids, payload)
             )
         except Exception:

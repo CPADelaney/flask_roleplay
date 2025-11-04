@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -19,6 +18,7 @@ from nyx.nyx_agent.context import (
 )
 from nyx.config.flags import context_warmers_enabled
 from nyx.tasks.base import NyxTask, app
+from nyx.tasks.utils import run_coro
 from nyx.utils.idempotency import idempotent
 
 logger = logging.getLogger(__name__)
@@ -32,14 +32,6 @@ _MAX_SUMMARY_REFRESH = 3
 
 def _idempotency_key(payload: Dict[str, Any]) -> str:
     return f"lore:{payload.get('scene_id')}:{payload.get('region_id')}:{payload.get('turn_id')}"
-
-
-def _run_coro(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 def _coerce_ids(user_id: str, conversation_id: str) -> Optional[Tuple[int, int]]:
@@ -56,7 +48,7 @@ def _hydrate_snapshot(user_id: str, conversation_id: str) -> Dict[str, Any]:
     ids = _coerce_ids(user_id, conversation_id)
     if not ids:
         return snapshot
-    canonical = _run_coro(fetch_canonical_snapshot(*ids))
+    canonical = run_coro(fetch_canonical_snapshot(*ids))
     if canonical:
         hydrated = dict(canonical)
         _SNAPSHOTS.put(user_id, conversation_id, hydrated)
@@ -71,7 +63,7 @@ def _persist_snapshot(user_id: str, conversation_id: str, snapshot: Dict[str, An
     payload = build_canonical_snapshot_payload(snapshot)
     if not payload:
         return
-    _run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
+    run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
 
 
 async def _load_existing_culture_summaries(nation_ids: Sequence[int]) -> Dict[int, Dict[str, Any]]:
@@ -219,7 +211,7 @@ def precompute_scene_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any] | N
             nation_candidates = list(dict.fromkeys(nation_candidates))
         if nation_candidates:
             try:
-                _run_coro(
+                run_coro(
                     _refresh_culture_summaries_async(
                         ids[0],
                         ids[1],
@@ -241,7 +233,7 @@ def precompute_scene_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any] | N
                 "payload": payload,
             }
             try:
-                _run_coro(
+                run_coro(
                     context_cache.set_request(
                         CacheOperationRequest(
                             key=cache_key,
