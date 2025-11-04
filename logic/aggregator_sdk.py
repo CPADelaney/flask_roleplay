@@ -160,7 +160,6 @@ async def get_aggregated_roleplay_context(
         try:
             latest_thread = await get_latest_chatkit_thread(
                 conversation_id=conversation_id,
-                user_id=user_id,
             )
         except Exception:  # pragma: no cover - defensive logging
             logger.exception("Failed to fetch latest ChatKit thread")
