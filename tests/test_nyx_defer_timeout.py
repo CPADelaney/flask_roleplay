@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 import types
 import importlib
 import importlib.util
@@ -131,7 +132,13 @@ snapshot_store_module = types.ModuleType("nyx.conversation.snapshot_store")
 
 class _StubSnapshotStore:
     def __init__(self, *_: object, **__: object) -> None:
-        pass
+        self._store: dict[tuple[str, str], dict[str, object]] = {}
+
+    def get(self, user_id: str, conversation_id: str) -> dict[str, object]:
+        return dict(self._store.get((user_id, conversation_id), {}))
+
+    def put(self, user_id: str, conversation_id: str, snapshot: dict[str, object]) -> None:
+        self._store[(user_id, conversation_id)] = dict(snapshot)
 
 
 snapshot_store_module.ConversationSnapshotStore = _StubSnapshotStore
@@ -141,7 +148,8 @@ side_effects_module = types.ModuleType("nyx.core.side_effects")
 
 
 class _StubSideEffect:
-    pass
+    def __init__(self, *_: object, **__: object) -> None:
+        return None
 
 
 side_effects_module.SideEffect = _StubSideEffect
@@ -285,6 +293,10 @@ def test_defer_narrative_respects_configured_timeout(monkeypatch):
         runner_stub = types.SimpleNamespace(run=fake_run)
         defer_agent = object()
 
+        async def fake_execute(*_args, **_kwargs):
+            await asyncio.sleep(0.06)
+            return types.SimpleNamespace(raw={"final_output": "Deferred guidance."})
+
         monkeypatch.setattr(sdk_module, "Runner", runner_stub, raising=False)
         monkeypatch.setattr(sdk_module, "nyx_defer_agent", defer_agent, raising=False)
         monkeypatch.setattr(
@@ -296,6 +308,7 @@ def test_defer_narrative_respects_configured_timeout(monkeypatch):
         monkeypatch.setattr(
             sdk_module._orchestrator, "DEFER_RUN_TIMEOUT_SECONDS", 0.05, raising=False
         )
+        monkeypatch.setattr(sdk_module, "_execute_llm", fake_execute, raising=False)
 
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -305,5 +318,47 @@ def test_defer_narrative_respects_configured_timeout(monkeypatch):
         assert result == "Deferred guidance."
         assert elapsed >= 0.06
         assert elapsed < 0.5
+
+    asyncio.run(_run())
+
+
+def test_timeout_profile_extends_deadline(monkeypatch):
+    """A grounding timeout profile should expand the orchestrator budget to the configured window."""
+
+    async def _run() -> None:
+        sdk = sdk_module.NyxAgentSDK(
+            sdk_module.NyxSDKConfig(
+                request_timeout_seconds=1.0,
+                timeout_profiles={"grounding": 120.0},
+            )
+        )
+
+        captured: dict[str, float] = {}
+
+        async def fake_orchestrator(*_, **kwargs):
+            context = kwargs.get("context_data", {})
+            captured["deadline"] = context.get("_deadline")
+            captured["budget"] = (context.get("_deadline") or 0.0) - time.monotonic()
+            return {
+                "success": True,
+                "response": "Grounding complete.",
+                "metadata": {},
+                "trace_id": "fake",
+                "processing_time": 0.0,
+            }
+
+        monkeypatch.setattr(sdk_module, "_orchestrator_process", fake_orchestrator)
+
+        resp = await sdk.process_user_input(
+            "Run the Gemini resolver",
+            "42",
+            "7",
+            {"timeout_profile": "grounding"},
+        )
+
+        assert resp.narrative == "Grounding complete."
+        assert captured.get("deadline") is not None
+        # Allow a small scheduling delta before the orchestrator stub inspects the deadline.
+        assert captured.get("budget", 0.0) >= 110.0
 
     asyncio.run(_run())

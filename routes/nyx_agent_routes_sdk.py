@@ -106,9 +106,10 @@ def get_sdk() -> NyxAgentSDK:
             post_moderate_output=_route_config.enable_moderation,
             enable_telemetry=_route_config.enable_telemetry,
             streaming_chunk_size=320,
-            request_timeout_seconds=45.0,
+            request_timeout_seconds=120.0,
             retry_on_failure=True,
-            result_cache_ttl_seconds=10  # Short idempotency window
+            result_cache_ttl_seconds=10,  # Short idempotency window
+            timeout_profiles={"grounding": 120.0},
         )
         _sdk_instance = NyxAgentSDK(sdk_config)
         logger.info("NyxAgentSDK initialized with config: %s", sdk_config)
@@ -165,11 +166,19 @@ async def nyx_response():
             "timestamp": time.time()
         }
         metadata["recent_turns"] = await fetch_recent_turns(user_id, conversation_id_int)
-        
+
         # Merge any additional context
         if data.get("additional_context"):
             metadata.update(data["additional_context"])
-        
+
+        timeout_profile = data.get("timeout_profile")
+        if isinstance(timeout_profile, str) and timeout_profile.strip():
+            metadata["timeout_profile"] = timeout_profile.strip()
+
+        timeout_override = data.get("timeout_override_seconds")
+        if timeout_override is not None:
+            metadata["timeout_override_seconds"] = timeout_override
+
         # Add reflection flag if enabled
         if data.get('reflection_enabled'):
             metadata['enable_reflection'] = True
