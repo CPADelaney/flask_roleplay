@@ -11,6 +11,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from nyx.tasks.base import NyxTask, app
+from agents import trace
 
 from infra.cache import cache_key, get_json, set_json
 from nyx.tasks.utils import with_retry, run_coro
@@ -119,62 +120,70 @@ def generate_social_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     target_npcs = payload.get("target_npcs") or scene_context.get("participants", [])
     reputation_targets = payload.get("reputation_targets") or target_npcs
 
-    logger.info(
-        "Generating social bundle for scene %s (targets=%s)",
-        scene_hash,
-        target_npcs,
-    )
-
-    gossip_item = run_coro(
-        _generate_gossip_async(user_id, conversation_id, scene_context, target_npcs)
-    )
-
-    reputations: Dict[int, Dict[str, float]] = {}
-    for npc_id in reputation_targets or []:
-        rep_scores = run_coro(
-            _calculate_reputation_async(
-                user_id,
-                conversation_id,
-                npc_id,
-                scene_context=scene_context,
-            )
+    with trace(
+        workflow_name="social.generate_bundle",
+        metadata={
+            "scene_hash": scene_hash,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+        },
+    ):
+        logger.info(
+            "Generating social bundle for scene %s (targets=%s)",
+            scene_hash,
+            target_npcs,
         )
-        reputations[npc_id] = rep_scores
 
-    bundle = {
-        "gossip": [gossip_item] if gossip_item else [],
-        "reputations": reputations,
-        "scene_hash": scene_hash,
-    }
+        gossip_item = run_coro(
+            _generate_gossip_async(user_id, conversation_id, scene_context, target_npcs)
+        )
 
-    bundle_key = cache_key("social_bundle", scene_hash)
-    set_json(bundle_key, bundle, ex=ttl)
+        reputations: Dict[int, Dict[str, float]] = {}
+        for npc_id in reputation_targets or []:
+            rep_scores = run_coro(
+                _calculate_reputation_async(
+                    user_id,
+                    conversation_id,
+                    npc_id,
+                    scene_context=scene_context,
+                )
+            )
+            reputations[npc_id] = rep_scores
 
-    gossip_key = cache_key("gossip", scene_hash)
-    existing_gossip = get_json(gossip_key, default=[])
-    if isinstance(existing_gossip, list):
-        existing_gossip.append(gossip_item)
-        existing_gossip = existing_gossip[-10:]
-        set_json(gossip_key, existing_gossip, ex=ttl)
+        bundle = {
+            "gossip": [gossip_item] if gossip_item else [],
+            "reputations": reputations,
+            "scene_hash": scene_hash,
+        }
 
-    for npc_id, scores in reputations.items():
-        for rep_name, score in scores.items():
-            set_json(cache_key("reputation", npc_id, rep_name), score, ex=ttl)
+        bundle_key = cache_key("social_bundle", scene_hash)
+        set_json(bundle_key, bundle, ex=ttl)
 
-    logger.info(
-        "Cached social bundle at %s (gossip=%s, reputation_targets=%s)",
-        bundle_key,
-        len(bundle["gossip"]),
-        len(reputations),
-    )
+        gossip_key = cache_key("gossip", scene_hash)
+        existing_gossip = get_json(gossip_key, default=[])
+        if isinstance(existing_gossip, list):
+            existing_gossip.append(gossip_item)
+            existing_gossip = existing_gossip[-10:]
+            set_json(gossip_key, existing_gossip, ex=ttl)
 
-    return {
-        "status": "generated",
-        "scene_hash": scene_hash,
-        "cache_key": bundle_key,
-        "gossip_count": len(bundle["gossip"]),
-        "reputation_count": len(reputations),
-    }
+        for npc_id, scores in reputations.items():
+            for rep_name, score in scores.items():
+                set_json(cache_key("reputation", npc_id, rep_name), score, ex=ttl)
+
+        logger.info(
+            "Cached social bundle at %s (gossip=%s, reputation_targets=%s)",
+            bundle_key,
+            len(bundle["gossip"]),
+            len(reputations),
+        )
+
+        return {
+            "status": "generated",
+            "scene_hash": scene_hash,
+            "cache_key": bundle_key,
+            "gossip_count": len(bundle["gossip"]),
+            "reputation_count": len(reputations),
+        }
 
 
 def _idempotency_key_gossip(payload: Dict[str, Any]) -> str:
@@ -261,27 +270,35 @@ def generate_gossip(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             "gossip_id": None,
         }
 
-    logger.info("Generating gossip for scene %s", scene_hash)
+    with trace(
+        workflow_name="social.generate_gossip",
+        metadata={
+            "scene_hash": scene_hash,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+        },
+    ):
+        logger.info("Generating gossip for scene %s", scene_hash)
 
-    gossip_item = run_coro(
-        _generate_gossip_async(user_id, conversation_id, scene_context, target_npcs)
-    )
+        gossip_item = run_coro(
+            _generate_gossip_async(user_id, conversation_id, scene_context, target_npcs)
+        )
 
-    key = cache_key("gossip", scene_hash)
-    existing_gossip = get_json(key, default=[])
-    if isinstance(existing_gossip, list):
-        existing_gossip.append(gossip_item)
-        existing_gossip = existing_gossip[-10:]
-        set_json(key, existing_gossip, ex=ttl)
+        key = cache_key("gossip", scene_hash)
+        existing_gossip = get_json(key, default=[])
+        if isinstance(existing_gossip, list):
+            existing_gossip.append(gossip_item)
+            existing_gossip = existing_gossip[-10:]
+            set_json(key, existing_gossip, ex=ttl)
 
-    logger.info("Cached gossip at %s", key)
+        logger.info("Cached gossip at %s", key)
 
-    return {
-        "status": "generated",
-        "scene_hash": scene_hash,
-        "cache_key": key,
-        "gossip_id": gossip_item.get("gossip_id"),
-    }
+        return {
+            "status": "generated",
+            "scene_hash": scene_hash,
+            "cache_key": key,
+            "gossip_id": gossip_item.get("gossip_id"),
+        }
 
 
 @app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.calculate_reputation",
@@ -303,30 +320,38 @@ def calculate_reputation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not (user_id and conversation_id and target_id):
         raise ValueError("user_id, conversation_id, and target_id are required")
 
-    reputation = run_coro(
-        _calculate_reputation_async(
-            user_id,
-            conversation_id,
-            target_id,
-            social_circle=social_circle,
-            scene_context=scene_context,
+    with trace(
+        workflow_name="social.calculate_reputation",
+        metadata={
+            "target_id": target_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+        },
+    ):
+        reputation = run_coro(
+            _calculate_reputation_async(
+                user_id,
+                conversation_id,
+                target_id,
+                social_circle=social_circle,
+                scene_context=scene_context,
+            )
         )
-    )
 
-    for rep_name, score in reputation.items():
-        set_json(cache_key("reputation", target_id, rep_name), score, ex=ttl)
+        for rep_name, score in reputation.items():
+            set_json(cache_key("reputation", target_id, rep_name), score, ex=ttl)
 
-    logger.info(
-        "Cached reputation for npc=%s (%s traits)",
-        target_id,
-        len(reputation),
-    )
+        logger.info(
+            "Cached reputation for npc=%s (%s traits)",
+            target_id,
+            len(reputation),
+        )
 
-    return {
-        "status": "calculated",
-        "target_id": target_id,
-        "reputation_count": len(reputation),
-    }
+        return {
+            "status": "calculated",
+            "target_id": target_id,
+            "reputation_count": len(reputation),
+        }
 
 
 @app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.narrate_reputation_change",
@@ -358,31 +383,43 @@ def narrate_reputation_change(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not (npc_id and user_id and conversation_id):
         raise ValueError("npc_id, user_id, and conversation_id are required")
 
-    logger.info(f"Generating reputation narration for NPC {npc_id}")
+    with trace(
+        workflow_name="social.narrate_reputation_change",
+        metadata={
+            "npc_id": npc_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+        },
+    ):
+        logger.info(f"Generating reputation narration for NPC {npc_id}")
 
-    # Run the slow LLM call
-    narration = run_coro(
-        _narrate_reputation_change_async(
-            user_id,
-            conversation_id,
-            npc_id,
-            old_reputation,
-            new_reputation,
+        # Run the slow LLM call
+        narration = run_coro(
+            _narrate_reputation_change_async(
+                user_id,
+                conversation_id,
+                npc_id,
+                old_reputation,
+                new_reputation,
+            )
         )
-    )
 
-    # Cache the narration
-    key = cache_key("reputation", "narration", npc_id)
-    set_json(key, {"text": narration, "timestamp": payload.get("timestamp")}, ex=ttl)
+        # Cache the narration
+        key = cache_key("reputation", "narration", npc_id)
+        set_json(
+            key,
+            {"text": narration, "timestamp": payload.get("timestamp")},
+            ex=ttl,
+        )
 
-    logger.info(f"Cached reputation narration at {key}")
+        logger.info(f"Cached reputation narration at {key}")
 
-    return {
-        "status": "narrated",
-        "npc_id": npc_id,
-        "cache_key": key,
-        "narration_length": len(narration),
-    }
+        return {
+            "status": "narrated",
+            "npc_id": npc_id,
+            "cache_key": key,
+            "narration_length": len(narration),
+        }
 
 
 @app.task(base=NyxTask, name="nyx.tasks.background.social_tasks.form_alliance",
@@ -412,30 +449,39 @@ def form_alliance(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not (initiator_id and target_id and user_id and conversation_id):
         raise ValueError("initiator_id, target_id, user_id, and conversation_id are required")
 
-    logger.info(f"Forming alliance: {initiator_id} -> {target_id}")
+    with trace(
+        workflow_name="social.form_alliance",
+        metadata={
+            "initiator_id": initiator_id,
+            "target_id": target_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+        },
+    ):
+        logger.info(f"Forming alliance: {initiator_id} -> {target_id}")
 
-    # Run the slow LLM call
-    alliance_data = run_coro(
-        _form_alliance_async(
-            user_id,
-            conversation_id,
-            initiator_id,
-            target_id,
-            reason,
+        # Run the slow LLM call
+        alliance_data = run_coro(
+            _form_alliance_async(
+                user_id,
+                conversation_id,
+                initiator_id,
+                target_id,
+                reason,
+            )
         )
-    )
 
-    logger.info(
-        f"Formed alliance {alliance_data.get('alliance_id')} "
-        f"between {initiator_id} and {target_id}"
-    )
+        logger.info(
+            f"Formed alliance {alliance_data.get('alliance_id')} "
+            f"between {initiator_id} and {target_id}"
+        )
 
-    return {
-        "status": "formed",
-        "alliance_id": alliance_data.get("alliance_id"),
-        "initiator_id": initiator_id,
-        "target_id": target_id,
-    }
+        return {
+            "status": "formed",
+            "alliance_id": alliance_data.get("alliance_id"),
+            "initiator_id": initiator_id,
+            "target_id": target_id,
+        }
 
 
 __all__ = [
