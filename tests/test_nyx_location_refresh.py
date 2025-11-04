@@ -612,6 +612,94 @@ def test_collect_updates_uses_last_user_input_for_movement():
     assert scene_payload["location"]["id"] == "Radiant Bazaar"
 
 
+def test_location_router_skips_maps_for_anchor_match(monkeypatch):
+    import nyx.location.router as location_router
+    import nyx.location.search as location_search
+
+    class _StubSnapshotStore:
+        def __init__(self):
+            self.payload = {
+                "location_name": "Old Port",
+                "scene_id": "old_port",
+                "lat": 42.0,
+                "lon": -71.0,
+            }
+
+        def get(self, user_id, conversation_id):  # pragma: no cover - simple stub
+            return dict(self.payload)
+
+        def put(self, user_id, conversation_id, snapshot):  # pragma: no cover - simple stub
+            self.payload = dict(snapshot)
+
+    store = _StubSnapshotStore()
+
+    router_calls = {"gemini": 0}
+    search_calls = {"gemini": 0}
+
+    async def fail_router(*_args, **_kwargs):
+        router_calls["gemini"] += 1
+        raise AssertionError("resolve_location_with_gemini should not be called when anchor matches")
+
+    async def fail_search(*_args, **_kwargs):
+        search_calls["gemini"] += 1
+        raise AssertionError("search.resolve_location_with_gemini should not run on anchor skip")
+
+    monkeypatch.setattr(location_router, "resolve_location_with_gemini", fail_router)
+    monkeypatch.setattr(location_search, "resolve_location_with_gemini", fail_search)
+
+    class _CounterStub:
+        def __init__(self):
+            self.labels_args = []
+            self.incremented = False
+
+        def labels(self, **labels):
+            self.labels_args.append(labels)
+            return self
+
+        def inc(self):
+            self.incremented = True
+            return None
+
+    counter_stub = _CounterStub()
+    monkeypatch.setattr(
+        location_router,
+        "metrics",
+        lambda: types.SimpleNamespace(LOCATION_ROUTER_DECISIONS=counter_stub),
+    )
+
+    async def noop_track(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(location_router, "_track_player_movement", noop_track)
+
+    meta = {
+        "world": {"type": "real", "primary_city": "Old Port"},
+        "currentRoleplay": {"CurrentLocation": {"id": "old_port", "name": "Old Port"}},
+        "location_name": "Old Port",
+        "location_id": "old_port",
+        "locationInfo": {"geo": {"lat": 42.0, "lon": -71.0}},
+    }
+
+    result = asyncio.run(
+        location_router.resolve_place_or_travel(
+            "Old Port",
+            meta,
+            store,
+            user_id="101",
+            conversation_id="202",
+        )
+    )
+
+    assert result.status == "exact"
+    assert result.candidates
+    assert result.candidates[0].place.name == "Old Port"
+    router_meta = getattr(result, "metadata", {})
+    assert router_meta.get("router", {}).get("skipped_maps") is True
+    assert router_calls["gemini"] == 0
+    assert search_calls["gemini"] == 0
+    assert counter_stub.incremented is True
+
+
 def test_process_user_input_persists_location(monkeypatch):
     from nyx.nyx_agent import context as context_module
     import nyx.nyx_agent.orchestrator as orchestrator_module

@@ -142,6 +142,15 @@ _COLLECTOR_DEFINITIONS: Dict[str, Tuple[Type[CollectorType], Tuple[Any, ...], Di
         ),
         {},
     ),
+    "LOCATION_ROUTER_DECISIONS": (
+        Counter,
+        (
+            "location_router_decisions_total",
+            "Location router decision outcomes",
+            ["outcome"],
+        ),
+        {},
+    ),
 }
 
 

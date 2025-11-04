@@ -271,7 +271,13 @@ def _merge_dedupe(anchor: GeoAnchor, a: List[Candidate], b: List[Candidate]) -> 
 
 # ---------- Main entry ----------
 
-async def resolve_real(query: PlaceQuery, anchor: Anchor, meta: Dict[str, Any]) -> ResolveResult:
+async def resolve_real(
+    query: PlaceQuery,
+    anchor: Anchor,
+    meta: Dict[str, Any],
+    *,
+    skip_gemini: bool = False,
+) -> ResolveResult:
     """
     Multistep resolution:
       1) Travel plans handled first.
@@ -341,10 +347,12 @@ async def resolve_real(query: PlaceQuery, anchor: Anchor, meta: Dict[str, Any]) 
             scope=anchor.scope,
         )
 
-    try:
-        gemini_result = await resolve_location_with_gemini(query, anchor)
-    except Exception:
-        gemini_result = None
+    gemini_result: Optional[ResolveResult] = None
+    if not skip_gemini:
+        try:
+            gemini_result = await resolve_location_with_gemini(query, anchor)
+        except Exception:
+            gemini_result = None
 
     if gemini_result and (
         (gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE})
