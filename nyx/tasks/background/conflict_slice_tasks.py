@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from nyx.tasks.base import NyxTask, app
 
@@ -185,6 +185,33 @@ async def _upsert_time(
     )
 
 
+def _enum_to_string(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    attr = getattr(value, "value", None)
+    if attr is not None:
+        value = attr
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _serialize_tensions_for_cache(
+    tensions: Optional[Sequence[Any]],
+) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    if not tensions:
+        return serialized
+    for item in tensions:
+        if not isinstance(item, Mapping):
+            continue
+        tension = dict(item)
+        tension["type"] = _enum_to_string(tension.get("type"), "subtle_rivalry")
+        tension["intensity"] = _enum_to_string(tension.get("intensity"), "tension")
+        serialized.append(tension)
+    return serialized
+
+
 def _tension_key(payload: Dict[str, Any]) -> str:
     return f"slice_tension:{payload.get('user_id')}:{payload.get('conversation_id')}"
 
@@ -231,12 +258,17 @@ def refresh_tension_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             tensions = run_coro(
                 detector._analyze_patterns_with_llm(memories, relationships)
             )
-        run_coro(_upsert_tension(user_id, conversation_id, "ready", tensions, None))
+        serialized_tensions = _serialize_tensions_for_cache(tensions)
+        run_coro(
+            _upsert_tension(
+                user_id, conversation_id, "ready", serialized_tensions, None
+            )
+        )
         return {
             "status": "ready",
             "user_id": int(user_id),
             "conversation_id": int(conversation_id),
-            "items": len(tensions or []),
+            "items": len(serialized_tensions),
         }
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception(
