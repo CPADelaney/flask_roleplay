@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Dict, Optional, Tuple
 
@@ -21,6 +20,7 @@ from nyx.nyx_agent.context import (
 )
 from nyx.config.flags import context_warmers_enabled
 from nyx.tasks.base import NyxTask, app
+from nyx.tasks.utils import run_coro
 from nyx.utils.idempotency import idempotent
 from nyx.utils.versioning import reject_if_stale
 
@@ -31,14 +31,6 @@ _SNAPSHOTS = ConversationSnapshotStore()
 
 def _idempotency_key(payload: Dict[str, Any]) -> str:
     return f"world:{payload.get('conversation_id')}:{payload.get('turn_id')}"
-
-
-def _run_coro(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 def _coerce_ids(user_id: str, conversation_id: str) -> Optional[Tuple[int, int]]:
@@ -55,7 +47,7 @@ def _hydrate_snapshot(user_id: str, conversation_id: str) -> Dict[str, Any]:
     ids = _coerce_ids(user_id, conversation_id)
     if not ids:
         return snapshot
-    canonical = _run_coro(fetch_canonical_snapshot(*ids))
+    canonical = run_coro(fetch_canonical_snapshot(*ids))
     if canonical:
         hydrated = dict(canonical)
         _SNAPSHOTS.put(user_id, conversation_id, hydrated)
@@ -70,7 +62,7 @@ def _persist_snapshot(user_id: str, conversation_id: str, snapshot: Dict[str, An
     payload = build_canonical_snapshot_payload(snapshot)
     if not payload:
         return
-    _run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
+    run_coro(persist_canonical_snapshot(ids[0], ids[1], payload))
 
 
 async def _apply_world_deltas_async(
@@ -144,7 +136,7 @@ def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
         if not ids:
             raise RuntimeError("Cannot apply world deltas without numeric identifiers")
         try:
-            apply_result = _run_coro(_apply_world_deltas_async(ids[0], ids[1], deltas))
+            apply_result = run_coro(_apply_world_deltas_async(ids[0], ids[1], deltas))
         except Exception:
             logger.exception(
                 "Universal updater failed turn=%s conversation=%s", turn_id, conversation_id
@@ -182,7 +174,7 @@ def apply_universal(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
             f"context:lore:{ids[0]}:{ids[1]}",
         ]
         try:
-            _run_coro(invalidate_prefixes(prefixes))
+            run_coro(invalidate_prefixes(prefixes))
         except Exception:  # pragma: no cover - invalidation is best-effort
             logger.debug(
                 "Context cache invalidation failed for prefixes=%s", prefixes, exc_info=True

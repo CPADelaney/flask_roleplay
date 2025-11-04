@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import logging
 from typing import Any, Callable
+
+from db.connection import run_async_in_worker_loop
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,6 @@ def with_retry(func: Callable) -> Callable:
 
 
 def run_coro(coro) -> Any:
-    """Run an async coroutine in a new event loop (blocking).
+    """Run an async coroutine on the worker's persistent event loop."""
 
-    Use this to call async functions from Celery tasks (which are synchronous).
-    """
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    return run_async_in_worker_loop(coro)
