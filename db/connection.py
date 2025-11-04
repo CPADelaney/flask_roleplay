@@ -837,36 +837,74 @@ async def create_pool_with_retry(
 async def close_existing_pool(pool: Optional[asyncpg.Pool] = None) -> None:
     """
     Close an existing connection pool safely.
-    
+
     Args:
         pool: Pool to close. If None, closes the global pool.
     """
     pool_to_close = pool or _state.pool
-    
-    # IMPROVEMENT: Safer attribute check
-    if pool_to_close and not getattr(pool_to_close, "_closed", True):
-        try:
-            # Log connection usage before closing
-            size = pool_to_close.get_size()
-            idle = pool_to_close.get_idle_size()
-            in_use = size - idle
-            
-            if in_use > 0:
-                logger.warning(
-                    f"Closing pool with {in_use}/{size} connections still in use "
-                    f"in process {os.getpid()}"
+
+    if pool_to_close is None:
+        return
+
+    if getattr(pool_to_close, "_closed", False):
+        if pool_to_close is _state.pool:
+            _state.pool = None
+            _state.pool_loop = None
+            _state.pool_state = PoolState.CLOSED
+            _state.metrics.pool_state = PoolState.CLOSED
+            _state.metrics.total_connections = 0
+            _state.metrics.idle_connections = 0
+        return
+
+    shutdown_succeeded = False
+
+    try:
+        # Log connection usage before closing
+        size = pool_to_close.get_size()
+        idle = pool_to_close.get_idle_size()
+        in_use = size - idle
+
+        if in_use > 0:
+            logger.warning(
+                f"Closing pool with {in_use}/{size} connections still in use "
+                f"in process {os.getpid()}"
+            )
+
+        logger.info(f"Closing existing pool in process {os.getpid()}")
+        await pool_to_close.close()
+        logger.info(f"Pool closed successfully in process {os.getpid()}")
+        shutdown_succeeded = True
+    except RuntimeError as e:
+        if "Event loop is closed" in str(e):
+            logger.warning(
+                "Pool close failed because event loop is closed; attempting terminate"
+            )
+            try:
+                pool_to_close.terminate()
+                shutdown_succeeded = True
+                logger.info("Pool terminated successfully after loop closure")
+            except Exception as terminate_error:
+                logger.error(
+                    "Pool terminate failed after loop closure: %s",
+                    terminate_error,
+                    exc_info=True
                 )
-            
-            logger.info(f"Closing existing pool in process {os.getpid()}")
-            await pool_to_close.close()
-            logger.info(f"Pool closed successfully in process {os.getpid()}")
-        except Exception as e:
+        else:
             logger.error(f"Error closing existing pool: {e}", exc_info=True)
-        finally:
-            if pool_to_close is _state.pool:
-                _state.pool = None
-                _state.pool_loop = None
-                _state.pool_state = PoolState.CLOSED
+    except Exception as e:
+        logger.error(f"Error closing existing pool: {e}", exc_info=True)
+
+    if shutdown_succeeded and pool_to_close is _state.pool:
+        _state.pool = None
+        _state.pool_loop = None
+        _state.pool_state = PoolState.CLOSED
+        _state.metrics.pool_state = PoolState.CLOSED
+        _state.metrics.total_connections = 0
+        _state.metrics.idle_connections = 0
+    elif not shutdown_succeeded and pool_to_close is _state.pool:
+        logger.warning(
+            "Pool shutdown did not complete successfully; retaining global reference"
+        )
 
 
 async def initialize_connection_pool(
@@ -1171,9 +1209,41 @@ async def get_db_connection_context(
     
     # Verify pool is for current loop
     if _state.pool and _state.pool_loop != current_loop:
-        logger.warning("DB pool was created for different event loop, reinitializing")
-        await close_existing_pool()
-    
+        owning_loop = _state.pool_loop
+        pool_ref = _state.pool
+        logger.warning(
+            "DB pool was created for different event loop (current=%s, pool=%s); delegating shutdown",
+            id(current_loop),
+            id(owning_loop) if owning_loop else None
+        )
+
+        delegated_close = False
+
+        if owning_loop and not owning_loop.is_closed():
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    close_existing_pool(pool_ref),
+                    owning_loop
+                )
+                await asyncio.wait_for(
+                    asyncio.wrap_future(future, loop=current_loop),
+                    timeout=10.0
+                )
+                delegated_close = True
+            except (RuntimeError, asyncio.TimeoutError) as delegate_error:
+                logger.warning(
+                    "Delegating pool close to owning loop failed: %s", delegate_error
+                )
+            except Exception as delegate_error:
+                logger.error(
+                    "Unexpected error delegating pool close to owning loop: %s",
+                    delegate_error,
+                    exc_info=True
+                )
+
+        if not delegated_close:
+            await close_existing_pool(pool_ref)
+
     # Determine which pool to use
     current_pool_to_use: Optional[asyncpg.Pool] = None
     
