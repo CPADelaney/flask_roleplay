@@ -30,7 +30,14 @@ def _compute_scene_hash(scene_context: Dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
-def get_scene_bundle(scene_hash: str) -> Dict[str, Any]:
+def get_scene_bundle(
+    scene_hash: str,
+    *,
+    scene_context: Optional[Dict[str, Any]] = None,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
+    target_npcs: Optional[List[int]] = None,
+) -> Dict[str, Any]:
     """Get cached social bundle for a scene (hot path).
 
     Returns cached gossip, reputation status, and alliance info.
@@ -55,7 +62,20 @@ def get_scene_bundle(scene_hash: str) -> Dict[str, Any]:
         with redis_lock(lock_key, ttl=15, blocking=False):
             from nyx.tasks.background.social_tasks import generate_social_bundle
 
-            generate_social_bundle.delay({"scene_hash": scene_hash})
+            context_payload = dict(scene_context or {})
+            payload: Dict[str, Any] = {
+                "scene_hash": scene_hash,
+                "scene_context": context_payload,
+                "user_id": user_id
+                if user_id is not None
+                else context_payload.get("user_id"),
+                "conversation_id": conversation_id
+                if conversation_id is not None
+                else context_payload.get("conversation_id"),
+                "target_npcs": list(target_npcs) if target_npcs is not None else list(context_payload.get("target_npcs", [])),
+            }
+
+            generate_social_bundle.delay(payload)
             logger.debug(f"Queued social bundle generation for scene {scene_hash}")
     except RuntimeError:
         # Lock already held, another request is generating
