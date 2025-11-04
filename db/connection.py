@@ -222,6 +222,11 @@ class GlobalPoolState:
 # Global state singleton
 _state = GlobalPoolState()
 
+# Single persistent event loop for Celery worker processes. We pin all
+# database work to this loop to avoid pool thrashing caused by cross-loop
+# access patterns inside prefork workers.
+WORKER_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
 # ============================================================================
 # Configuration Management
 # ============================================================================
@@ -355,38 +360,42 @@ def mark_shutting_down() -> None:
 # ============================================================================
 
 def get_or_create_event_loop() -> asyncio.AbstractEventLoop:
-    """
-    Get the current event loop or create one if needed (thread-safe).
-    
-    Returns:
-        The current or newly created event loop
-        
-    Note:
-        This function is thread-safe and handles per-thread event loop storage.
-    """
+    """Get the current event loop, preferring the persistent worker loop."""
+    global WORKER_LOOP
+
+    # If we've already created a worker loop for this process, always reuse it.
+    if WORKER_LOOP and not WORKER_LOOP.is_closed():
+        asyncio.set_event_loop(WORKER_LOOP)
+        return WORKER_LOOP
+
+    # Otherwise try to reuse the currently running loop if one exists.
     try:
-        # Try to get currently running loop first
         loop = asyncio.get_running_loop()
-        return loop
     except RuntimeError:
-        # No running loop, need to get or create one
-        with _state.thread_local_lock:
-            # Double-check pattern for thread safety
-            if hasattr(_state.thread_local, 'event_loop') and \
-               _state.thread_local.event_loop is not None and \
-               not _state.thread_local.event_loop.is_closed():
-                asyncio.set_event_loop(_state.thread_local.event_loop)
-                return _state.thread_local.event_loop
-            
-            # Create new loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            _state.thread_local.event_loop = loop
-            logger.debug(
-                f"Created new event loop {id(loop)} for thread "
-                f"{threading.current_thread().name}"
-            )
-            return loop
+        loop = None
+
+    if loop and not loop.is_closed():
+        WORKER_LOOP = loop
+        asyncio.set_event_loop(WORKER_LOOP)
+        return WORKER_LOOP
+
+    # Create a new persistent worker loop and remember it.
+    with _state.thread_local_lock:
+        if WORKER_LOOP and not WORKER_LOOP.is_closed():
+            asyncio.set_event_loop(WORKER_LOOP)
+            return WORKER_LOOP
+
+        loop = asyncio.new_event_loop()
+        WORKER_LOOP = loop
+        asyncio.set_event_loop(WORKER_LOOP)
+        _state.thread_local.event_loop = WORKER_LOOP
+        _state.reset_locks()
+        logger.debug(
+            "Created WORKER_LOOP %s for thread %s",
+            id(WORKER_LOOP),
+            threading.current_thread().name,
+        )
+        return WORKER_LOOP
 
 
 def run_async_in_worker_loop(coro):
@@ -758,7 +767,6 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
 async def create_pool_with_retry(
     dsn: str,
     config: Dict[str, int],
-    current_loop: asyncio.AbstractEventLoop,
     max_retries: int = 3
 ) -> asyncpg.Pool:
     """
@@ -767,7 +775,6 @@ async def create_pool_with_retry(
     Args:
         dsn: Database connection string
         config: Pool configuration dictionary
-        current_loop: Event loop to bind pool to
         max_retries: Maximum number of retry attempts
         
     Returns:
@@ -802,7 +809,6 @@ async def create_pool_with_retry(
                     command_timeout=config['command_timeout'],
                     max_queries=config['max_queries'],
                     setup=setup_connection,
-                    loop=current_loop,
                     server_settings=server_settings
                 ),
                 timeout=30.0
@@ -1025,8 +1031,13 @@ async def initialize_connection_pool(
         )
         return False
     
+    # Always bind DB work to the worker loop
     current_loop = get_or_create_event_loop()
-    
+
+    if _state.pool and _state.pool_loop and _state.pool_loop is not current_loop:
+        asyncio.set_event_loop(_state.pool_loop)
+        current_loop = _state.pool_loop
+
     # Quick check without lock (first check in double-checked locking)
     if not force_new and \
        _state.pool is not None and \
@@ -1068,13 +1079,17 @@ async def initialize_connection_pool(
                 logger.warning("Pool failed health check after lock, will recreate")
                 await close_existing_pool()
         
-        # Check if pool exists for different event loop
-        if _state.pool is not None and _state.pool_loop != current_loop:
+        # Check if pool exists for different event loop. Prefer reusing the
+        # worker loop rather than tearing the pool down.
+        if _state.pool is not None and _state.pool_loop is not current_loop:
             logger.warning(
-                f"Pool exists for different event loop "
-                f"(current={id(current_loop)}, pool={id(_state.pool_loop)}), closing it"
+                "Pool exists for different event loop (current=%s, pool=%s); switching to worker loop",
+                id(current_loop),
+                id(_state.pool_loop),
             )
-            await close_existing_pool()
+            if _state.pool_loop and not _state.pool_loop.is_closed():
+                asyncio.set_event_loop(_state.pool_loop)
+                current_loop = _state.pool_loop
         
         # Force new pool if requested
         if force_new:
@@ -1107,7 +1122,7 @@ async def initialize_connection_pool(
             )
             
             _state.pool_state = PoolState.INITIALIZING
-            local_pool = await create_pool_with_retry(dsn, config, current_loop)
+            local_pool = await create_pool_with_retry(dsn, config)
             
             _state.pool = local_pool
             _state.pool_loop = current_loop
@@ -1223,7 +1238,11 @@ async def get_db_connection_pool() -> asyncpg.Pool:
         )
     
     current_loop = get_or_create_event_loop()
-    
+
+    if _state.pool and _state.pool_loop and _state.pool_loop is not current_loop:
+        asyncio.set_event_loop(_state.pool_loop)
+        current_loop = _state.pool_loop
+
     # Check if pool needs initialization
     if _state.pool is None or \
        _state.pool._closed or \
@@ -1295,23 +1314,9 @@ async def get_db_connection_context(
     connection_already_released = False  # Track if we manually released the connection
     
     # Verify pool is for current loop
-    if _state.pool and _state.pool_loop != current_loop:
-        owning_loop = _state.pool_loop
-        pool_ref = _state.pool
-        logger.warning(
-            "DB pool was created for different event loop (current=%s, pool=%s); recycling via cross-loop close",
-            id(current_loop),
-            id(owning_loop) if owning_loop else None
-        )
-
-        try:
-            await close_existing_pool(pool_ref)
-        except Exception as close_error:
-            logger.error(
-                "Error closing pool from different event loop: %s",
-                close_error,
-                exc_info=True
-            )
+    if _state.pool and _state.pool_loop and _state.pool_loop is not current_loop:
+        asyncio.set_event_loop(_state.pool_loop)
+        current_loop = _state.pool_loop
 
     # Determine which pool to use
     current_pool_to_use: Optional[asyncpg.Pool] = None
@@ -1342,10 +1347,22 @@ async def get_db_connection_context(
     
     try:
         logger.debug(f"Acquiring connection from pool (timeout={timeout}s)")
-        conn = await asyncio.wait_for(
-            current_pool_to_use.acquire(),
-            timeout=timeout
-        )
+        try:
+            conn = await asyncio.wait_for(
+                current_pool_to_use.acquire(),
+                timeout=timeout
+            )
+        except asyncpg.exceptions.InterfaceError as iface_err:
+            if "pool is closing" in str(iface_err).lower():
+                logger.warning("Pool was closing during acquire; reinitializing and retrying once")
+                await initialize_connection_pool(force_new=True)
+                current_pool_to_use = _state.pool
+                conn = await asyncio.wait_for(
+                    current_pool_to_use.acquire(),
+                    timeout=timeout
+                )
+            else:
+                raise
         
         # Re-check shutdown status after acquiring (race condition protection)
         if is_shutting_down():
@@ -1704,8 +1721,15 @@ def init_celery_worker() -> None:
     os.environ['SERVER_SOFTWARE'] = 'celery'
     
     try:
-        run_async_in_worker_loop(initialize_connection_pool(force_new=True))
-        loop = get_or_create_event_loop()
+        # Pin a single persistent loop for the worker
+        global WORKER_LOOP
+        if WORKER_LOOP is None or WORKER_LOOP.is_closed():
+            WORKER_LOOP = asyncio.new_event_loop()
+        asyncio.set_event_loop(WORKER_LOOP)
+        _state.reset_locks()
+        _state.pool_loop = WORKER_LOOP
+        WORKER_LOOP.run_until_complete(initialize_connection_pool(force_new=True))
+        loop = WORKER_LOOP
         logger.info(
             f"Celery worker {pid} database pool initialized successfully with "
             f"event loop {id(loop)}"
@@ -1745,6 +1769,7 @@ def close_worker_pool(**kwargs) -> None:
     Args:
         **kwargs: Signal arguments (unused)
     """
+    global WORKER_LOOP
     pid = os.getpid()
     
     # Mark as shutting down FIRST to prevent new operations
@@ -1790,12 +1815,13 @@ def close_worker_pool(**kwargs) -> None:
     # Execute graceful shutdown
     if _state.pool_loop and not _state.pool_loop.is_closed():
         try:
-            if not _state.pool_loop.is_running():
-                _state.pool_loop.run_until_complete(_graceful_shutdown())
+            # Always run shutdown on the worker loop we created.
+            loop = _state.pool_loop
+            if not loop.is_running():
+                loop.run_until_complete(_graceful_shutdown())
             else:
                 future = asyncio.run_coroutine_threadsafe(
-                    _graceful_shutdown(),
-                    _state.pool_loop
+                    _graceful_shutdown(), loop
                 )
                 future.result(timeout=45)  # Total timeout for shutdown
             logger.info(f"Process {pid}: Graceful shutdown completed")
@@ -1825,6 +1851,8 @@ def close_worker_pool(**kwargs) -> None:
                 logger.info(f"Worker {pid} event loop closed")
         except Exception:
             pass
+
+    WORKER_LOOP = None
     
     # Clear shutdown state for this PID
     _state.shutdown_state.clear_pid(pid)
