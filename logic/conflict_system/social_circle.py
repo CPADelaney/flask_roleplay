@@ -248,7 +248,13 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         scene_context['scene_hash'] = scene_hash
 
         # Get cached social bundle (fast)
-        social_bundle = get_scene_bundle(scene_hash)
+        social_bundle = get_scene_bundle(
+            scene_hash,
+            scene_context=scene_context,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            target_npcs=present_npcs if present_npcs else None,
+        )
 
         side_effects = []
 
