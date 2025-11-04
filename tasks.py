@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from nyx.tasks.celery_app import app as celery_app
 from celery.signals import task_revoked
 from celery import shared_task
+from billiard.exceptions import SoftTimeLimitExceeded
 from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
 from infra.cache import get_redis_client
@@ -438,11 +439,19 @@ def test_task():
 
 # === Background chat (uses new NyxAgentSDK) ====================================
 
-@celery_app.task
+@celery_app.task(
+    bind=True,
+    name="tasks.background_chat_task_with_memory",
+    # Give the task more headroom. Soft limit gets a graceful TimeoutError we can handle.
+    soft_time_limit=180,
+    time_limit=210,
+    acks_late=True,
+)
 def background_chat_task_with_memory(
-    conversation_id: int, 
-    user_input: str, 
-    user_id: int, 
+    self,
+    conversation_id: int,
+    user_input: str,
+    user_id: int,
     universal_update: Optional[Dict[str, Any]] = None,
     request_id: Optional[str] = None
 ):
@@ -458,10 +467,30 @@ def background_chat_task_with_memory(
         with trace(workflow_name="background_chat_task_celery"):
             logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}, request_id={request_id}")
             try:
+                # === Step-level timeout budget ===
+                # Keep a little buffer under the Celery soft limit so we can publish a result.
+                SOFT_BUDGET = 170.0  # seconds (soft_limit=180 -> leave ~10s for publishing/cleanup)
+                STEP_MAX = {
+                    "agg": 20.0,
+                    "updates": 20.0,
+                    "mem": 25.0,
+                    "sdk": 80.0,
+                }
+                t0 = time.time()
+
+                def time_left() -> float:
+                    return max(5.0, SOFT_BUDGET - (time.time() - t0))
+
                 # 1) Build aggregator context
                 from logic.aggregator_sdk import get_aggregated_roleplay_context
-                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
-                recent_turns = await fetch_recent_turns(user_id, conversation_id)
+                aggregator_data = await asyncio.wait_for(
+                    get_aggregated_roleplay_context(user_id, conversation_id, "Chase"),
+                    timeout=min(STEP_MAX["agg"], time_left()),
+                )
+                recent_turns = await asyncio.wait_for(
+                    fetch_recent_turns(user_id, conversation_id),
+                    timeout=min(8.0, time_left()),
+                )
 
                 context = {
                     "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
@@ -482,21 +511,33 @@ def background_chat_task_with_memory(
                         )
 
                         updater_context = UniversalUpdaterContext(user_id, conversation_id)
-                        await updater_context.initialize()
+                        await asyncio.wait_for(
+                            updater_context.initialize(),
+                            timeout=min(5.0, time_left()),
+                        )
 
                         async with get_db_connection_context() as conn:
-                            await apply_universal_updates_async(
-                                updater_context,
-                                user_id=user_id,
-                                conversation_id=conversation_id,
-                                updates=universal_update,
-                                conn=conn,
+                            await asyncio.wait_for(
+                                apply_universal_updates_async(
+                                    updater_context,
+                                    user_id=user_id,
+                                    conversation_id=conversation_id,
+                                    updates=universal_update,
+                                    conn=conn,
+                                ),
+                                timeout=min(STEP_MAX["updates"], time_left()),
                             )
                         logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
                         # Refresh context after updates
-                        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+                        aggregator_data = await asyncio.wait_for(
+                            get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"]),
+                            timeout=min(10.0, time_left()),
+                        )
                         context["aggregator_data"] = aggregator_data
-                        context["recent_turns"] = await fetch_recent_turns(user_id, conversation_id)
+                        context["recent_turns"] = await asyncio.wait_for(
+                            fetch_recent_turns(user_id, conversation_id),
+                            timeout=min(6.0, time_left()),
+                        )
                     except Exception as update_err:
                         # Log and raise to be caught by the main exception handler
                         logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
@@ -506,11 +547,14 @@ def background_chat_task_with_memory(
                 try:
                     from memory.memory_integration import enrich_context_with_memories
                     logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
-                    context = await enrich_context_with_memories(
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        user_input=user_input,
-                        context=context
+                    context = await asyncio.wait_for(
+                        enrich_context_with_memories(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
+                            user_input=user_input,
+                            context=context
+                        ),
+                        timeout=min(STEP_MAX["mem"], time_left()),
                     )
                     logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
                 except Exception as memory_err:
@@ -520,11 +564,14 @@ def background_chat_task_with_memory(
                 # 4) Invoke Nyx SDK for the main response
                 sdk = await _get_nyx_sdk()
                 logger.info(f"[BG Task {conversation_id}] Processing input with Nyx SDK...")
-                nyx_resp = await sdk.process_user_input(
-                    message=user_input,
-                    conversation_id=str(conversation_id),
-                    user_id=str(user_id),
-                    metadata=context
+                nyx_resp = await asyncio.wait_for(
+                    sdk.process_user_input(
+                        message=user_input,
+                        conversation_id=str(conversation_id),
+                        user_id=str(user_id),
+                        metadata=context
+                    ),
+                    timeout=min(STEP_MAX["sdk"], time_left()),
                 )
                 logger.info(f"[BG Task {conversation_id}] Nyx SDK processing complete.")
 
@@ -567,7 +614,25 @@ def background_chat_task_with_memory(
                     logger.critical("[BG Task] Redis publisher is not available. Cannot publish task result.")
 
     # Execute the async function within the Celery worker's event loop
-    return run_async_in_worker_loop(run_chat_and_publish())
+    try:
+        return run_async_in_worker_loop(run_chat_and_publish())
+    except SoftTimeLimitExceeded:
+        # Publish a graceful timeout to the client so the UI never hangs on a dead task.
+        if redis_publisher:
+            try:
+                payload = {
+                    "conversation_id": conversation_id,
+                    "request_id": request_id,
+                    "success": False,
+                    "error": "The server is still crunching. I hit a time limit in the background; please retry.",
+                    "error_type": "SoftTimeLimitExceeded",
+                }
+                redis_publisher.publish("chat-responses", json.dumps(payload))
+                logger.warning("[BG Task %s] SoftTimeLimitExceeded – published timeout notice", conversation_id)
+            except Exception:
+                logger.exception("[BG Task %s] Failed to publish timeout notice", conversation_id)
+        # Re-raise so Celery records the timeout
+        raise
 
 
 # === Memory embed/retrieval/analyze ============================================
