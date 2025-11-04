@@ -20,6 +20,7 @@ from celery.signals import task_revoked
 from celery import shared_task
 from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
+from infra.cache import set_json
 
 # --- DB utils (async loop + connection mgmt) ---
 from db.connection import (
@@ -1556,7 +1557,7 @@ def update_scene_conflict_context(self, user_id: int, conversation_id: int, scen
 
         full_context = asyncio.run(_generate_context())
 
-        redis_client.set(cache_key, json.dumps(full_context), ex=600)
+        set_json(cache_key, full_context, ex=600)
         logger.info(f"Successfully cached full conflict context for key: {cache_key}")
 
     except Exception as exc:
