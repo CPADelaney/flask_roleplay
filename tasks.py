@@ -1620,7 +1620,7 @@ def update_scene_conflict_context(self, user_id: int, conversation_id: int, scen
             
             return context
 
-        full_context = asyncio.run(_generate_context())
+        full_context = run_async_in_worker_loop(_generate_context())
 
         try:
             client = get_redis_client()
@@ -2351,7 +2351,9 @@ def generate_and_cache_mpf_lore(
     logger.info("Starting MPF lore generation for user=%s convo=%s", user_id, conversation_id)
 
     try:
-        principles, expressions, constraints, transformed_fields = asyncio.run(_generate_async())
+        principles, expressions, constraints, transformed_fields = run_async_in_worker_loop(
+            _generate_async()
+        )
 
         if not principles and not expressions and not constraints:
             _store_status_sync("retrying", transformed_fields=transformed_fields)
