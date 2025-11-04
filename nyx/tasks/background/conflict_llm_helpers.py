@@ -135,8 +135,8 @@ Return a JSON array (1-3 items). Each item:
         evidence = item.get("evidence")
         results.append(
             {
-                "type": conflict_type,
-                "intensity": intensity,
+                "type": conflict_type.value,
+                "intensity": intensity.value,
                 "description": item.get(
                     "description", "A subtle tension emerges during daily routines."
                 ),

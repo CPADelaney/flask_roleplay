@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -9,8 +10,19 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from nyx.utils.idempotency import clear_cache
 
+def _load_clear_cache():
+    repo_root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "nyx_utils_idempotency", repo_root / "nyx" / "utils" / "idempotency.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module.clear_cache
+
+
+clear_cache = _load_clear_cache()
 
 class DummyTask:
     def __init__(self) -> None:
@@ -20,6 +32,14 @@ class DummyTask:
 def _load_conflict_slice_tasks(monkeypatch: pytest.MonkeyPatch):
     repo_root = Path(__file__).resolve().parents[2]
     module_path = repo_root / "nyx" / "tasks" / "background" / "conflict_slice_tasks.py"
+
+    stub_nyx = types.ModuleType("nyx")
+    stub_nyx.__path__ = [str(repo_root / "nyx")]
+    monkeypatch.setitem(sys.modules, "nyx", stub_nyx)
+
+    stub_nyx_utils = types.ModuleType("nyx.utils")
+    stub_nyx_utils.__path__ = [str(repo_root / "nyx" / "utils")]
+    monkeypatch.setitem(sys.modules, "nyx.utils", stub_nyx_utils)
 
     # Create lightweight stubs for the Celery task package to avoid expensive imports.
     stub_tasks = types.ModuleType("nyx.tasks")
@@ -63,8 +83,25 @@ def _load_conflict_slice_tasks(monkeypatch: pytest.MonkeyPatch):
 
     stub_conflict_llm = types.ModuleType("nyx.tasks.background.conflict_llm_helpers")
 
-    async def fake_analyze_patterns_async(memories: List[str], relationships: List[str]) -> List[Dict[str, Any]]:
-        return [{"memories": memories, "relationships": relationships}]
+    class _FakeEnum:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def __str__(self) -> str:  # pragma: no cover - debug friendly
+            return f"FakeEnum({self.value})"
+
+    async def fake_analyze_patterns_async(
+        memories: List[str], relationships: List[str]
+    ) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": _FakeEnum("subtle_rivalry"),
+                "intensity": _FakeEnum("tension"),
+                "description": "A simmering everyday disagreement.",
+                "evidence": [*memories, *relationships],
+                "tension_level": 0.42,
+            }
+        ]
 
     stub_conflict_llm.analyze_patterns_async = fake_analyze_patterns_async  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nyx.tasks.background.conflict_llm_helpers", stub_conflict_llm)
@@ -143,5 +180,12 @@ def test_refresh_tension_cache_accepts_celery_self(monkeypatch: pytest.MonkeyPat
         "items": 1,
     }
     assert len(calls["upserts"]) == 2
+
+    ready_payload = calls["upserts"][1][0][3]
+    assert isinstance(ready_payload, list)
+    assert ready_payload[0]["type"] == "subtle_rivalry"
+    assert ready_payload[0]["intensity"] == "tension"
+    # Ensure the payload mirrors the real upsert behavior of json.dumps(...)
+    json.dumps(ready_payload)
 
     clear_cache()
