@@ -335,11 +335,12 @@ class NyxSDKConfig:
     redact_on_moderation_block: bool = True
 
     # Timeouts & retry
-    request_timeout_seconds: float = 45.0
+    request_timeout_seconds: float = 120.0
     safety_margin_seconds: float = 1.0      # leave a little time for cleanup/logging
     min_step_seconds: float = 0.25          # never schedule sub-250ms timeouts
     retry_on_failure: bool = True
     retry_delay_seconds: float = 0.75
+    timeout_profiles: Dict[str, float] = field(default_factory=dict)
 
     # Concurrency & caching
     rate_limit_per_conversation: bool = True
@@ -432,6 +433,18 @@ class NyxAgentSDK:
         self._warm_contexts: Dict[str, NyxContext] = {}
         self._snapshot_store = ConversationSnapshotStore() if flags.versioned_cache_enabled() else None
         self._legacy_snapshots: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        raw_profiles = getattr(self.config, "timeout_profiles", {}) or {}
+        self._timeout_profiles: Dict[str, float] = {}
+        for key, value in raw_profiles.items():
+            try:
+                budget = float(value)
+            except (TypeError, ValueError):
+                logger.debug("Ignoring invalid timeout profile %r=%r", key, value)
+                continue
+            normalized_key = str(key).strip().lower()
+            if not normalized_key:
+                continue
+            self._timeout_profiles[normalized_key] = budget
 
     async def _generate_defer_narrative(
         self,
@@ -452,7 +465,7 @@ class NyxAgentSDK:
         effective_timeout = timeout
         if effective_timeout is None:
             try:
-                effective_timeout = float(getattr(self.config, "request_timeout_seconds", 45.0)) / 3.0
+                effective_timeout = self._resolve_timeout_budget({}) / 3.0
             except Exception:
                 effective_timeout = 10.0
         try:
@@ -549,6 +562,28 @@ class NyxAgentSDK:
         """Allow other Nyx modules to enrich/transform the final response."""
         self._post_hooks.append(hook)
 
+    def _resolve_timeout_budget(self, meta: Dict[str, Any]) -> float:
+        """Resolve the timeout budget for a request based on metadata and profiles."""
+        min_step = float(getattr(self.config, "min_step_seconds", 0.25))
+        budget = float(getattr(self.config, "request_timeout_seconds", 120.0))
+
+        override = meta.get("timeout_override_seconds") if isinstance(meta, dict) else None
+        if override is not None:
+            try:
+                return max(min_step, float(override))
+            except (TypeError, ValueError):
+                logger.debug("Invalid timeout_override_seconds=%r; falling back to default", override)
+
+        profile = meta.get("timeout_profile") if isinstance(meta, dict) else None
+        if isinstance(profile, str):
+            profile_key = profile.strip().lower()
+            if profile_key:
+                profile_budget = self._timeout_profiles.get(profile_key)
+                if profile_budget is not None:
+                    return max(min_step, float(profile_budget))
+
+        return max(min_step, budget)
+
     # ── main entrypoints ------------------------------------------------------
 
     async def process_user_input(
@@ -565,8 +600,13 @@ class NyxAgentSDK:
 
         logger.info(f"[SDK-{trace_id}] Processing input: {message[:120]}")
         # Compute a single absolute deadline and pass it downstream.
-        deadline = time.monotonic() + float(self.config.request_timeout_seconds)
+        timeout_budget = self._resolve_timeout_budget(meta)
+        deadline = time.monotonic() + timeout_budget
         meta["_deadline"] = deadline
+        if meta.get("timeout_profile"):
+            logger.debug(
+                "[SDK-%s] Timeout profile %r resolved to %.2fs", trace_id, meta.get("timeout_profile"), timeout_budget
+            )
         safety_margin = float(getattr(self.config, "safety_margin_seconds", 1.0))
         min_step = float(getattr(self.config, "min_step_seconds", 0.25))
         def _time_left() -> float:
@@ -965,7 +1005,7 @@ class NyxAgentSDK:
         Still retry once if there's meaningful time left.
         """
         if deadline is None:
-            deadline = meta.get("_deadline") or (time.monotonic() + float(self.config.request_timeout_seconds))
+            deadline = meta.get("_deadline") or (time.monotonic() + self._resolve_timeout_budget(meta))
         def _left() -> float:
             return max(float(getattr(self.config, "min_step_seconds", 0.25)), deadline - time.monotonic())
         record_queue_delay_from_context(meta, queue="sdk")
@@ -1035,7 +1075,9 @@ class NyxAgentSDK:
         _preserve_hydrated_location(ctx.current_context, ctx.current_location)
         # Adopt absolute deadline if present
         import time as _time_mod
-        deadline = (metadata or {}).get("_deadline") or (_time_mod.monotonic() + float(self.config.request_timeout_seconds))
+        deadline = (metadata or {}).get("_deadline") or (
+            _time_mod.monotonic() + self._resolve_timeout_budget(metadata or {})
+        )
         min_step = float(getattr(self.config, "min_step_seconds", 0.25))
         safety_margin = float(getattr(self.config, "safety_margin_seconds", 1.0))
         def _left() -> float:

@@ -70,9 +70,10 @@ _sdk_config = NyxSDKConfig(
     post_moderate_output=False,
     enable_telemetry=True,
     streaming_chunk_size=320,
-    request_timeout_seconds=45.0,
+    request_timeout_seconds=120.0,
     retry_on_failure=True,
-    result_cache_ttl_seconds=10
+    result_cache_ttl_seconds=10,
+    timeout_profiles={"grounding": 120.0},
 )
 
 def get_sdk() -> NyxAgentSDK:

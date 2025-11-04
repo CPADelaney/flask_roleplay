@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import copy
 import logging
 import math
 import re
+import time
 import unicodedata
 from typing import Any, Dict, Optional
+
+from db.connection import get_db_connection_context
 
 from .anchors import derive_geo_anchor
 from .fictional_resolver import resolve_fictional
@@ -27,10 +31,18 @@ from .types import (
     STATUS_ASK,
     STATUS_NOT_FOUND,
 )
+
+from nyx.location.hierarchy import get_or_create_location
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from monitoring.metrics import metrics
+from utils.cache_manager import CacheManager
 
 logger = logging.getLogger(__name__)
+
+
+LOCATION_RESOLUTION_CACHE = CacheManager(
+    name="location_resolution_cache", max_size=200, ttl=120
+)
 
 async def _track_player_movement(
     user_id: str,
@@ -868,9 +880,47 @@ async def resolve_place_or_travel(
         f"is_travel={q.is_travel}, anchor_city={anchor.primary_city}"
     )
 
-    res: ResolveResult
-    
-    if anchor.scope == "real":
+    res: Optional[ResolveResult] = None
+    used_cache = False
+    cache_key = f"{user_id}:{conversation_id}:{q.normalized}"
+    normalized_anchor_city = _normalize_city_name(anchor.primary_city)
+
+    if not q.is_travel:
+        cached_payload = await LOCATION_RESOLUTION_CACHE.get(cache_key)
+        if cached_payload:
+            cached_confidence = float(cached_payload.get("confidence") or 0.0)
+            cached_anchor_city = cached_payload.get("anchor_city")
+            cached_anchor_normalized = _normalize_city_name(cached_anchor_city)
+
+            if cached_confidence < 0.6:
+                logger.debug(
+                    "[ROUTER] Cache entry for %s skipped due to low confidence %.2f",
+                    cache_key,
+                    cached_confidence,
+                )
+            elif normalized_anchor_city != cached_anchor_normalized:
+                logger.debug(
+                    "[ROUTER] Cache entry for %s skipped due to anchor city change (%s -> %s)",
+                    cache_key,
+                    cached_anchor_city,
+                    anchor.primary_city,
+                )
+            else:
+                cached_result = cached_payload.get("result")
+                if cached_result:
+                    res = copy.deepcopy(cached_result)
+                    used_cache = True
+                    logger.info(
+                        "[ROUTER] Using cached resolution for '%s' (age=%.1fs)",
+                        q.target,
+                        max(
+                            0.0,
+                            time.time()
+                            - float(cached_payload.get("cached_at") or time.time()),
+                        ),
+                    )
+
+    if res is None and anchor.scope == "real":
         # ============================================================
         # REAL WORLD RESOLUTION CHAIN
         # ============================================================
@@ -1137,12 +1187,19 @@ async def resolve_place_or_travel(
         else:
             res.message = travel_msg
 
-        res.operations.append({
+        travel_operation = {
             "op": "travel.prompt",
             "from_city": anchor_city,
             "to_city": city_context["candidate_city"],
             "distance_km": distance_km,
-        })
+        }
+        if not any(
+            op.get("op") == "travel.prompt"
+            and op.get("from_city") == travel_operation["from_city"]
+            and op.get("to_city") == travel_operation["to_city"]
+            for op in res.operations
+        ):
+            res.operations.append(travel_operation)
 
     if not hasattr(res, "metadata"):
         res.metadata = metadata if isinstance(metadata, dict) else {}
@@ -1152,6 +1209,61 @@ async def resolve_place_or_travel(
         top_candidate = res.candidates[0]
         location_name = top_candidate.place.name
         location_type = top_candidate.place.meta.get("location_type") or top_candidate.place.level
+
+        # Only persist canonical locations for real-world scopes.
+        scope_value = res.scope or anchor.scope
+        if scope_value == "real":
+            try:
+                uid = int(user_id)
+                cid = int(conversation_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[ROUTER] Unable to persist location for non-integer identifiers: user_id=%r conversation_id=%r",
+                    user_id,
+                    conversation_id,
+                )
+            else:
+                try:
+                    async with get_db_connection_context() as conn:
+                        location_record = await get_or_create_location(
+                            conn,
+                            user_id=uid,
+                            conversation_id=cid,
+                            candidate=top_candidate,
+                            scope=scope_value,
+                            anchor=anchor,
+                        )
+
+                    # Mirror the persisted identifier on the candidate metadata.
+                    top_candidate.place.meta = dict(top_candidate.place.meta or {})
+                    top_candidate.place.meta["location_id"] = location_record.id
+
+                    if location_record.id is not None:
+                        if isinstance(res.metadata, dict):
+                            res.metadata.setdefault("location_id", location_record.id)
+                        elif res.metadata is None:
+                            res.metadata = {"location_id": location_record.id}
+
+                    # Seed the snapshot store so downstream turns stay in sync.
+                    if store is not None and location_record.id is not None:
+                        try:
+                            snapshot = store.get(user_id, conversation_id)
+                            if snapshot.get("location_id") != location_record.id:
+                                snapshot = dict(snapshot)
+                                snapshot["location_id"] = location_record.id
+                                snapshot.setdefault("location_name", location_record.location_name)
+                                store.put(user_id, conversation_id, snapshot)
+                        except Exception:
+                            logger.warning(
+                                "[ROUTER] Failed to seed conversation snapshot with location",
+                                exc_info=True,
+                            )
+
+                except Exception:
+                    logger.warning(
+                        "[ROUTER] Failed to persist real-world location for conversation",
+                        exc_info=True,
+                    )
 
         # Track movement asynchronously (don't block on failure)
         asyncio.create_task(
@@ -1180,10 +1292,34 @@ async def resolve_place_or_travel(
                 city=location_city,
             )
         )
-    
+
+    if (
+        not used_cache
+        and not q.is_travel
+        and cache_key
+        and res.status in {STATUS_EXACT, STATUS_MULTIPLE}
+        and res.candidates
+    ):
+        top_confidence = float(res.candidates[0].confidence or 0.0)
+        if top_confidence >= 0.6:
+            metadata_dict = res.metadata if isinstance(res.metadata, dict) else {}
+            cache_payload = {
+                "result": copy.deepcopy(res),
+                "anchor_city": anchor.primary_city,
+                "confidence": top_confidence,
+                "cached_at": time.time(),
+                "requires_travel": bool(metadata_dict.get("requires_travel")),
+            }
+            await LOCATION_RESOLUTION_CACHE.set(cache_key, cache_payload)
+            logger.debug(
+                "[ROUTER] Cached resolution for %s with confidence %.2f",
+                cache_key,
+                top_confidence,
+            )
+
     logger.info(
         f"[ROUTER] Final result: status={res.status}, scope={res.scope}, "
         f"candidates={len(res.candidates)}, mixed_world={res.metadata.get('mixed_world') if res.metadata else False}"
     )
-        
+
     return res
