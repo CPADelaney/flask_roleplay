@@ -2869,13 +2869,24 @@ class MemoryOrchestrator:
             Status of maintenance tasks
         """
         if background:
-            # Enqueue to background worker
+            # Enqueue to Nyx heavy memory maintenance task
             from celery import current_app
+
+            if operations:
+                logger.debug(
+                    "run_maintenance(background=True) ignoring explicit operations=%s;"
+                    " consolidate/decay handled by heavy task",
+                    operations,
+                )
+
             task = current_app.send_task(
-                'memory.tasks.run_memory_maintenance',
-                args=[self.user_id, self.conversation_id, operations]
+                "nyx.tasks.heavy.memory_tasks.consolidate_decay",
             )
-            return {"status": "queued", "task_id": task.id}
+            return {
+                "status": "queued",
+                "task_id": task.id,
+                "task_name": "nyx.tasks.heavy.memory_tasks.consolidate_decay",
+            }
         
         # Run inline (for backward compatibility)
         results = {}
