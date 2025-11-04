@@ -37,7 +37,10 @@ def idempotent(key_fn: Callable[..., str], ttl_sec: int = 3600) -> Callable[[Cal
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            key = key_fn(*args, **kwargs)
+            key_args = args
+            if args and hasattr(args[0], "request"):
+                key_args = args[1:]
+            key = key_fn(*key_args, **kwargs)
             if not key:
                 return func(*args, **kwargs)
 
