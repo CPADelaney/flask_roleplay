@@ -237,8 +237,9 @@ DEFAULT_MAX_CONNECTIONS = 100
 DEFAULT_CONNECTION_LIFETIME = 300  # seconds
 DEFAULT_COMMAND_TIMEOUT = 120  # seconds
 DEFAULT_MAX_QUERIES = 50000
+# Lower default so we fail fast; env DB_SETUP_TIMEOUT can override
 DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
-DEFAULT_SETUP_TIMEOUT = 30.0  # Timeout for connection setup (pgvector registration)
+DEFAULT_SETUP_TIMEOUT = 10.0  # Timeout for connection setup (pgvector registration)
 DEFAULT_ACQUIRE_TIMEOUT = 60.0  # Timeout for acquiring connection from pool
 
 
@@ -1138,6 +1139,30 @@ async def initialize_connection_pool(
                 logger.info(f"Process {os.getpid()}: DB_POOL stored on app.db_pool")
             
             logger.info(f"Process {os.getpid()}: Asyncpg pool initialized successfully")
+
+            # Optional eager warm-up after init (pre-creates connections & runs pgvector registration)
+            try:
+                warm_at_init = os.getenv("DB_POOL_WARM_AT_INIT", "true").strip().lower() in {"1", "true", "yes", "on"}
+                if warm_at_init and _state.pool and not getattr(_state.pool, "_closed", False):
+                    # Default to a small-but-useful warm size; clamp to pool max
+                    try:
+                        max_size = _state.pool.get_max_size() if hasattr(_state.pool, "get_max_size") else get_pool_config()["max_size"]
+                    except Exception:
+                        max_size = get_pool_config()["max_size"]
+                    try:
+                        warm_size = int(os.getenv("DB_POOL_WARM_SIZE", "8"))
+                    except Exception:
+                        warm_size = 8
+                    warm_size = max(1, min(warm_size, max_size))
+                    # Use a conservative per-connection timeout; pgvector setup timeout is handled inside setup_connection
+                    logger.info(f"Process {os.getpid()}: Warming DB pool (test_count={warm_size})")
+                    try:
+                        await warm_connection_pool(test_count=warm_size, timeout=10.0)
+                    except Exception as warm_err:
+                        logger.warning(f"Pool warm-up skipped due to error: {warm_err}")
+            except Exception as warm_wrap_err:
+                logger.debug(f"Warm-up guard swallowed error: {warm_wrap_err}")
+
             return True
             
         except Exception as e:
@@ -1734,6 +1759,17 @@ def init_celery_worker() -> None:
             f"Celery worker {pid} database pool initialized successfully with "
             f"event loop {id(loop)}"
         )
+        # Proactively warm a few connections so pgvector registration never lands on the hot path
+        try:
+            warm_at_init = os.getenv("DB_POOL_WARM_AT_INIT", "true").strip().lower() in {"1", "true", "yes", "on"}
+            if warm_at_init:
+                warm_size = int(os.getenv("DB_POOL_WARM_SIZE", "8"))
+                warm_size = max(1, warm_size)
+                WORKER_LOOP.run_until_complete(
+                    warm_connection_pool(test_count=warm_size, timeout=10.0)
+                )
+        except Exception as warm_err:
+            logger.warning(f"Pool warm-up at worker init failed (continuing): {warm_err}")
     except Exception as e:
         logger.error(
             f"Failed to initialize Celery worker database pool: {e}",
