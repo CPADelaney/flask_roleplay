@@ -204,6 +204,27 @@ def stub_world_director_dependencies():
     nyx_governance.DirectiveType = type("DirectiveType", (), {})
     nyx_governance.DirectivePriority = type("DirectivePriority", (), {})
 
+    nyx_governance_ids = create_module("nyx.governance.ids")
+    nyx_governance_ids.format_agent_id = lambda *args, **kwargs: "agent"
+
+    nyx_gateway = create_module("nyx.gateway")
+
+    class _LLMRequest:  # pragma: no cover - helper
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _LLMOperation(enum.Enum):  # pragma: no cover - helper
+        ORCHESTRATION = "orchestration"
+
+    async def _execute(_request, **_kwargs):  # pragma: no cover - helper
+        return types.SimpleNamespace(raw=None, text="")
+
+    nyx_gateway.llm_gateway = types.SimpleNamespace(
+        LLMRequest=_LLMRequest,
+        LLMOperation=_LLMOperation,
+        execute=_execute,
+    )
+
     nyx_integrate = create_module("nyx.integrate")
     nyx_integrate.get_central_governance = async_noop
 
@@ -412,3 +433,44 @@ async def test_check_all_emergent_patterns_normalizes_keyvalues():
     assert result.stat_patterns and result.stat_patterns[0].combination == "Focus & Poise"
     assert any(p.rule == "RespectCurfew" and p.frequency == 2 for p in result.rule_patterns)
     assert result.narrative_analysis == "analysis"
+
+
+def test_warm_initialize_restores_currency_generator(monkeypatch):
+    import asyncio
+    import importlib
+
+    world_director_agent = importlib.import_module("story_agent.world_director_agent")
+
+    creation_calls: list[tuple[int, int]] = []
+
+    class DummyCurrencyGenerator:
+        def __init__(self, user_id: int, conversation_id: int):
+            creation_calls.append((user_id, conversation_id))
+
+        async def get_currency_system(self) -> dict[str, str]:
+            return {"name": "tokens"}
+
+    monkeypatch.setattr(world_director_agent, "CurrencyGenerator", DummyCurrencyGenerator)
+    monkeypatch.setattr(world_director_agent, "create_complete_world_director", lambda: object())
+
+    async def exercise():
+        director = world_director_agent.CompleteWorldDirector(user_id=7, conversation_id=9)
+        director.context = world_director_agent.CompleteWorldDirectorContext(
+            user_id=7,
+            conversation_id=9,
+        )
+        director.context.currency_generator = None
+
+        await director.initialize(warmed=True)
+
+        assert isinstance(director.context.currency_generator, DummyCurrencyGenerator)
+        assert creation_calls == [(7, 9)]
+
+        director.context.currency_generator = None
+        currency_system = await director.context._safe_get_currency_system()
+
+        assert currency_system == {"name": "tokens"}
+        assert creation_calls == [(7, 9), (7, 9)]
+        assert isinstance(director.context.currency_generator, DummyCurrencyGenerator)
+
+    asyncio.run(exercise())
