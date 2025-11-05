@@ -959,12 +959,16 @@ class CompleteWorldDirectorContext:
         # ---- (re)build bundle ----
         start = time.time()
     
-        # world_state: reuse if fast, else fully rebuild
-        if fast and self.current_world_state:
-            world_state = self.current_world_state
+        # world_state: if fast and no cached state, build a shallow snapshot instead of full synthesis
+        if fast:
+            if self.current_world_state:
+                world_state = self.current_world_state
+            else:
+                world_state = await self._build_shallow_world_state()
+                self.current_world_state = world_state
         else:
             world_state = await self._build_complete_world_state()
-            self.current_world_state = world_state  # keep your normal flow
+            self.current_world_state = world_state
     
         # conflict state (optional; best-effort)
         conflict_state = {}
@@ -1061,8 +1065,73 @@ class CompleteWorldDirectorContext:
             pass
     
         return bundle
-    
-    
+
+
+    async def _build_shallow_world_state(self) -> CompleteWorldState:
+        """
+        Shallow snapshot for cold-start: DB/time/vitals only, no LLM synthesis,
+        no cross-system heavy calls. ~100–500ms.
+        """
+        try:
+            # Time (cheap)
+            ct = await get_current_time_model(self.user_id, self.conversation_id)
+            if hasattr(ct, "time_of_day") and isinstance(ct.time_of_day, str):
+                ct.time_of_day = ct.time_of_day.lower()
+
+            # Vitals (cheap)
+            vitals = await get_current_vitals(self.user_id, self.conversation_id)
+
+            # Visible stats (cheap)
+            visible_stats = await get_player_visible_stats(
+                self.user_id,
+                self.conversation_id,
+                self.player_name,
+            )
+
+            # Location – use CurrentRoleplay snapshot only (no vector/lore)
+            loc_row = None
+            try:
+                async with get_db_connection_context() as conn:
+                    loc_row = await conn.fetchrow(
+                        "SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation' LIMIT 1",
+                        self.user_id,
+                        self.conversation_id,
+                    )
+            except Exception:
+                pass
+            location_str = ""
+            if loc_row:
+                try:
+                    location_str = loc_row["value"] or ""
+                except (KeyError, TypeError):
+                    location_str = ""
+            if location_str and not isinstance(location_str, str):
+                location_str = str(location_str)
+
+            # Very light mood heuristic (no conflicts, no addictions)
+            mood = WorldMood.RELAXED
+            if getattr(vitals, "fatigue", 0) > 85:
+                mood = WorldMood.EXHAUSTED
+            elif getattr(vitals, "hunger", 100) < 15 or getattr(vitals, "thirst", 100) < 15:
+                mood = WorldMood.DESPERATE
+
+            # Build minimal state
+            return CompleteWorldState(
+                current_time=_to_model_dict(ct),
+                player_vitals=_to_model_dict(vitals),
+                world_mood=mood,
+                visible_stats=_to_kv(visible_stats or {}),
+                hidden_stats=_to_kv({}),
+                tension_factors=_to_kv({}),
+                location_data=location_str or "",
+                available_activities=_to_kv([]),
+                ongoing_events=_to_kv([]),
+            )
+        except Exception:
+            logger.debug("Shallow world state failed; falling back to minimal", exc_info=True)
+            return self._get_fallback_world_state()
+
+
     async def _handle_world_transition(self, old_scope: Optional[dict], new_scope: dict):
         """
         Hook invoked on day/time-of-day/location/NPC scope change.
