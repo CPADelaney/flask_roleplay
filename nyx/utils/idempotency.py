@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import os
 import threading
+import time
 from typing import Any, Callable
 
 try:  # pragma: no cover - optional dependency during tests
@@ -13,7 +14,15 @@ except Exception:  # pragma: no cover
     redis = None  # type: ignore
 
 _LOCK = threading.Lock()
-_IN_MEMORY_KEYS: set[str] = set()
+_IN_MEMORY_KEYS: dict[str, float] = {}
+
+
+def _prune_expired(now: float) -> None:
+    """Remove expired in-memory idempotency keys."""
+
+    expired_keys = [key for key, expires_at in _IN_MEMORY_KEYS.items() if expires_at <= now]
+    for key in expired_keys:
+        _IN_MEMORY_KEYS.pop(key, None)
 
 
 def _get_client():
@@ -54,14 +63,14 @@ def idempotent(key_fn: Callable[..., str], ttl_sec: int = 3600) -> Callable[[Cal
                 except Exception:
                     pass
 
+            now = time.monotonic()
             with _LOCK:
+                _prune_expired(now)
                 if key in _IN_MEMORY_KEYS:
                     return None
-                _IN_MEMORY_KEYS.add(key)
-            try:
-                return func(*args, **kwargs)
-            finally:
-                pass
+                _IN_MEMORY_KEYS[key] = now + max(float(ttl_sec), 0.0)
+
+            return func(*args, **kwargs)
 
         return wrapper
 

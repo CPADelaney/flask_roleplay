@@ -34,3 +34,33 @@ def test_idempotent_strips_celery_self_for_key_fn() -> None:
     assert calls == [(dummy, "alpha")]
 
     clear_cache()
+
+
+def test_in_memory_idempotency_respects_ttl(monkeypatch) -> None:
+    clear_cache()
+
+    timestamp = {"value": 1000.0}
+
+    def fake_monotonic() -> float:
+        return timestamp["value"]
+
+    monkeypatch.setattr("nyx.utils.idempotency.time.monotonic", fake_monotonic)
+
+    executions: list[str] = []
+
+    @idempotent(lambda value: value, ttl_sec=5)
+    def sample(value: str) -> str:
+        executions.append(value)
+        return value
+
+    assert sample("beta") == "beta"
+    # Within the TTL window the cached key should block re-execution.
+    assert sample("beta") is None
+
+    # Advance time past the TTL window and ensure the entry is pruned.
+    timestamp["value"] += 6
+    assert sample("beta") == "beta"
+
+    assert executions == ["beta", "beta"]
+
+    clear_cache()
