@@ -1157,9 +1157,6 @@ async def resolve_place_or_travel(
                 if gemini_result.errors:
                     logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
 
-                    if gemini_result.errors:
-                        logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
-
                     # Check if we got grounded (verified via Google Maps) results
                     has_grounded = _has_grounded_results(gemini_result)
 
@@ -1211,9 +1208,9 @@ async def resolve_place_or_travel(
                         )
                         gemini_result = None
 
-                except Exception as e:
-                    logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
-                    gemini_result = None
+            except Exception as e:
+                logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
+                gemini_result = None
 
                 # Step 2: If Gemini didn't work, try Overpass/Nominatim
                 if gemini_result is None:
