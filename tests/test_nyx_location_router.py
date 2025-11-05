@@ -7,7 +7,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from nyx.location import router as location_router
-from nyx.location.types import ResolveResult, STATUS_NOT_FOUND
+from nyx.location.types import ResolveResult, STATUS_NOT_FOUND, STATUS_ASK
 
 
 @pytest.fixture
@@ -120,3 +120,70 @@ async def test_resolve_place_or_travel_uses_disneyland_shortcut(monkeypatch):
     assert result.metadata["router"]["disneyland_shortcut"] is True
     assert any(op.get("op") == "poi.navigate" for op in result.operations)
     assert gemini_called is False
+
+
+@pytest.mark.anyio("asyncio")
+async def test_real_chain_preserves_ask_payload(monkeypatch):
+    store = ConversationSnapshotStore()
+    user_id = "101"
+    conversation_id = "202"
+    meta = {"world": {"type": "real"}}
+
+    class DummyGeoAnchor:
+        lat = 37.0
+        lon = -122.0
+        city = "Testville"
+        region = "Test Region"
+        country = "Testland"
+        label = "Testville"
+
+    async def fake_derive_geo_anchor(meta_arg, user_id_arg, conversation_id_arg):
+        return DummyGeoAnchor()
+
+    async def fake_resolve_location_with_gemini(*_args, **_kwargs):
+        return ResolveResult(status=STATUS_NOT_FOUND)
+
+    ask_message = "Need a specific terminal before I can confirm."
+    ask_operations = [{"op": "clarify", "prompt": "Which terminal are you heading to?"}]
+    ask_result = ResolveResult(
+        status=STATUS_ASK,
+        message=ask_message,
+        operations=list(ask_operations),
+        scope="real",
+        anchor=location_router.Anchor(scope="real"),
+    )
+
+    async def fake_resolve_real(*_args, **_kwargs):
+        return ask_result
+
+    enqueue_calls = []
+
+    def fake_enqueue_fictional_fallback(**kwargs):
+        enqueue_calls.append(kwargs)
+
+    monkeypatch.setattr(location_router, "derive_geo_anchor", fake_derive_geo_anchor)
+    monkeypatch.setattr(
+        location_router,
+        "resolve_location_with_gemini",
+        fake_resolve_location_with_gemini,
+    )
+    monkeypatch.setattr(location_router, "resolve_real", fake_resolve_real)
+    monkeypatch.setattr(
+        location_router.place_enrichment,
+        "enqueue_fictional_fallback",
+        fake_enqueue_fictional_fallback,
+    )
+
+    result = await location_router.resolve_place_or_travel(
+        "Head to the international terminal",
+        meta,
+        store,
+        user_id,
+        conversation_id,
+    )
+
+    assert result is ask_result
+    assert result.status == STATUS_ASK
+    assert result.message == ask_message
+    assert result.operations == ask_operations
+    assert enqueue_calls
