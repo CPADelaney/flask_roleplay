@@ -40,10 +40,12 @@ def test_generate_text_completion_fallback(monkeypatch):
             self.text = text
             self.last_input = None
             self.last_instructions = None
+            self.last_max_output_tokens = None
 
         async def create(self, **kwargs):
             self.last_input = kwargs.get("input")
             self.last_instructions = kwargs.get("instructions")
+            self.last_max_output_tokens = kwargs.get("max_output_tokens")
             text_value = SimpleNamespace(value=self.text)
             chunk = SimpleNamespace(
                 text=text_value,
@@ -74,6 +76,43 @@ def test_generate_text_completion_fallback(monkeypatch):
             "content": [{"type": "input_text", "text": "user"}],
         }
     ]
+    assert dummy_client.responses.last_max_output_tokens == 4000
+
+
+def test_generate_text_completion_uses_default_max_tokens(monkeypatch):
+    chatgpt_integration = _load_chatgpt_module(monkeypatch)
+
+    class DummyResponsesClient:
+        def __init__(self):
+            self.last_kwargs = None
+
+        async def create(self, **kwargs):
+            self.last_kwargs = kwargs
+            text_value = SimpleNamespace(value="Default budget")
+            chunk = SimpleNamespace(
+                text=text_value,
+                type="output_text",
+                annotations=[],
+            )
+            content_collection = SimpleNamespace(data=[chunk])
+            message = SimpleNamespace(content=content_collection, role="assistant")
+            output_collection = SimpleNamespace(data=[message])
+            return SimpleNamespace(output_text="", output=output_collection)
+
+    dummy_client = SimpleNamespace(responses=DummyResponsesClient())
+    chatgpt_integration._client_manager._async_client = dummy_client
+    monkeypatch.setattr(chatgpt_integration, "PREPARE_CONTEXT_AVAILABLE", False)
+
+    result = asyncio.run(
+        chatgpt_integration.generate_text_completion(
+            system_prompt="system",
+            user_prompt="user",
+        )
+    )
+
+    assert result == "Default budget"
+    assert dummy_client.responses.last_kwargs is not None
+    assert dummy_client.responses.last_kwargs["max_output_tokens"] == 4000
 
 
 def test_generate_text_completion_retries_when_empty(monkeypatch):

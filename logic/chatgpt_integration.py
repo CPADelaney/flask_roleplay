@@ -1995,7 +1995,7 @@ async def generate_text_completion(
     system_prompt: str,
     user_prompt: str,
     temperature: float | None = None,
-    max_tokens: int = 1000,
+    max_tokens: int = 4000,
     stop_sequences: List[str] | None = None,
     task_type: str = "decision",
     model: str = "gpt-5-nano",  # Added model parameter
