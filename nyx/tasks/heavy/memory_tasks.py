@@ -67,8 +67,18 @@ def consolidate_decay(self) -> str:
     name="nyx.tasks.heavy.memory_tasks.hydrate_local_embeddings",
     acks_late=True,
 )
-def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
+def hydrate_local_embeddings(
+    self,
+    user_id: int,
+    conversation_id: int,
+    *,
+    trace_id: str | None = None,
+) -> str:
     """Warm-load local embedding assets and replay deferred hydration work."""
+
+    # Celery instrumentation may inject tracing kwargs (e.g., trace_id); accept and ignore
+    # them so the task remains compatible with existing producers.
+    _ = trace_id
 
     logger.info(
         "Hydrating local embeddings for user_id=%s conversation_id=%s",
