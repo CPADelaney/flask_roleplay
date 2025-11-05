@@ -5,6 +5,7 @@ import random
 import json
 import asyncio
 import numpy as np
+import os
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 
@@ -37,6 +38,21 @@ except ImportError:
     
     async def track_operation(coro):
         return await coro
+
+
+# ---------------------------------------------------------------------------
+# Timeout knobs for non-critical updates (fail-soft in foreground paths)
+# ---------------------------------------------------------------------------
+def _env_bool(key: str, default: bool) -> bool:
+    v = os.getenv(key)
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+
+EMO_UPDATE_TIMEOUT = float(os.getenv("MEM_EMO_UPDATE_TIMEOUT", "3.0"))
+EMO_UPDATE_SOFT_FAIL = _env_bool("MEM_EMO_UPDATE_SOFT_FAIL", True)
+
 
 logger = logging.getLogger("memory_integrated")
 
@@ -305,12 +321,32 @@ class IntegratedMemorySystem:
                         results["mask_slippage"] = slippage_result
             
             # 6. Update entity emotional state
-            emotion_update = await self.update_emotional_state_from_memory(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                memory_id=memory_id,
-                memory_text=memory_text
-            )
+            emotion_update = {}
+            try:
+                # Prevent a slow DB acquire / pgvector registration from blocking the hot path
+                emotion_update = await asyncio.wait_for(
+                    self.update_emotional_state_from_memory(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        memory_id=memory_id,
+                        memory_text=memory_text
+                    ),
+                    timeout=EMO_UPDATE_TIMEOUT,
+                )
+            except (asyncio.TimeoutError, ConnectionError) as e:
+                if EMO_UPDATE_SOFT_FAIL:
+                    logger.warning(
+                        "Emotional state update skipped (timeout=%ss): %s",
+                        EMO_UPDATE_TIMEOUT,
+                        e,
+                    )
+                    emotion_update = {
+                        "skipped": True,
+                        "reason": "timeout",
+                        "timeout_s": EMO_UPDATE_TIMEOUT,
+                    }
+                else:
+                    raise
             results["emotional_state_update"] = emotion_update
             
             # Record event
