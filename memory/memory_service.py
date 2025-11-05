@@ -415,7 +415,51 @@ class MemoryEmbeddingService:
             await self.vector_db.create_collection(
                 collection_name, self._get_target_dimension()
             )
-    
+
+    async def hydrate_legacy_vector_store(self) -> str:
+        """Ensure the legacy vector store is fully initialised for this session."""
+
+        if self._use_hosted_vector_store:
+            logger.info(
+                "Hosted Agents vector store active; skipping legacy hydration for user_id=%s conversation_id=%s",
+                self.user_id,
+                self.conversation_id,
+            )
+            return "skipped:hosted-vector-store"
+
+        if not self._legacy_vector_store_enabled:
+            logger.info(
+                "Legacy vector store disabled; skipping hydration for user_id=%s conversation_id=%s",
+                self.user_id,
+                self.conversation_id,
+            )
+            return "skipped:legacy-disabled"
+
+        try:
+            await self._setup_embeddings()
+
+            if self.vector_store_type == "chroma":
+                init_chroma_if_present_else_noop(self.persist_directory)
+
+            await self._setup_vector_store()
+
+            self.initialized = True
+
+            logger.info(
+                "Legacy vector store hydrated for user_id=%s conversation_id=%s",
+                self.user_id,
+                self.conversation_id,
+            )
+            return "hydrated"
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error(
+                "Legacy vector store hydration failed for user_id=%s conversation_id=%s: %s",
+                self.user_id,
+                self.conversation_id,
+                exc,
+            )
+            raise
+
     async def generate_embedding(self, text: str) -> List[float]:
         """
         Generate an embedding vector for the given text.

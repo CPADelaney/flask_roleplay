@@ -216,6 +216,52 @@ def test_generate_embedding_uses_agents_dimension(memory_config: Dict[str, Any])
     asyncio.run(_run())
 
 
+def test_hydrate_legacy_vector_store_skips_for_hosted_backend(
+    memory_config: Dict[str, Any]
+) -> None:
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=11,
+            conversation_id=22,
+            vector_store_type="chroma",
+            embedding_model="openai",
+            config=memory_config,
+        )
+
+        result = await service.hydrate_legacy_vector_store()
+        assert result == "skipped:hosted-vector-store"
+
+    asyncio.run(_run())
+
+
+def test_hydrate_legacy_vector_store_initialises_chroma(
+    monkeypatch: pytest.MonkeyPatch, legacy_memory_config: Dict[str, Any]
+) -> None:
+    calls: List[str] = []
+
+    monkeypatch.setattr(
+        "memory.memory_service.init_chroma_if_present_else_noop",
+        lambda path: calls.append(path or ""),
+    )
+
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=33,
+            conversation_id=44,
+            vector_store_type="chroma",
+            embedding_model="openai",
+            config=legacy_memory_config,
+        )
+
+        result = await service.hydrate_legacy_vector_store()
+
+        assert result == "hydrated"
+        assert calls and calls[0] == service.persist_directory
+        assert isinstance(service.vector_db, _StubVectorDatabase)
+
+    asyncio.run(_run())
+
+
 def test_add_and_search_memory_returns_inserted_record(
     legacy_backend: None, legacy_memory_config: Dict[str, Any]
 ) -> None:
@@ -515,15 +561,17 @@ def test_initialize_fast_mode_defers_heavy_setup(
 
         await service.initialize()
 
+        expected_dimension = get_target_embedding_dimension(config=legacy_memory_config)
+
         assert setup_invoked is False
         assert chroma_calls == [service.persist_directory]
         assert delay_calls == [(7, 11)]
-        assert service.embedding_source_dimension == 8
-        assert service.target_embedding_dimension == 8
+        assert service.embedding_source_dimension == expected_dimension
+        assert service.target_embedding_dimension == expected_dimension
         assert calls, "Expected rag.ask.ask to be invoked during initialization"
         first_call = calls[0]
         assert first_call["metadata"].get("operation") == "fast-openai-provider"
-        assert first_call["dimensions"] == 8
+        assert first_call["dimensions"] == expected_dimension
 
     asyncio.run(_run())
 

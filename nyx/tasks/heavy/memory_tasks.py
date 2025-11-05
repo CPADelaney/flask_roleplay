@@ -10,9 +10,18 @@ from typing import Any, Awaitable, Callable, Dict, TypeVar
 from nyx.tasks.base import NyxTask, app
 
 from nyx.utils.idempotency import idempotent
-from rag.vector_store import hosted_vector_store_enabled, legacy_vector_store_enabled
+from rag.vector_store import (
+    get_hosted_vector_store_ids,
+    hosted_vector_store_enabled,
+    legacy_vector_store_enabled,
+)
 
-from nyx.core.memory import embeddings as memory_embeddings
+try:  # pragma: no cover - optional config helper
+    from memory.memory_config import get_memory_config
+except Exception:  # pragma: no cover
+    get_memory_config = None  # type: ignore[assignment]
+
+from memory.memory_service import MemoryEmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +76,22 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
         conversation_id,
     )
 
-    if hosted_vector_store_enabled():
+    def _load_memory_config() -> Dict[str, Any]:
+        if callable(get_memory_config):
+            try:
+                config = get_memory_config() or {}
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning("Failed to load memory config for hydration: %s", exc)
+            else:
+                if isinstance(config, dict):
+                    return config
+        return {}
+
+    config = _load_memory_config()
+
+    hosted_ids = get_hosted_vector_store_ids(config)
+
+    if hosted_vector_store_enabled(hosted_ids, config=config):
         logger.info(
             "Hosted Agents vector store enabled; skipping local hydration for user_id=%s conversation_id=%s",
             user_id,
@@ -75,28 +99,13 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
         )
         return "skipped:hosted-vector-store"
 
-    if not legacy_vector_store_enabled():
+    if not legacy_vector_store_enabled(config):
         logger.info(
             "Legacy vector store disabled; skipping local hydration for user_id=%s conversation_id=%s",
             user_id,
             conversation_id,
         )
         return "skipped:legacy-disabled"
-
-    persist_base = os.getenv("MEMORY_VECTOR_PERSIST_BASE", "./vector_stores")
-    vector_store_type = os.getenv("MEMORY_VECTOR_STORE_TYPE", "chroma")
-    persist_directory = os.path.join(
-        persist_base,
-        vector_store_type,
-        f"{user_id}_{conversation_id}",
-    )
-
-    from memory.chroma_vector_store import (  # lazy import to avoid startup penalties
-        ChromaVectorDatabase,
-        init_chroma_if_present_else_noop,
-    )
-
-    init_chroma_if_present_else_noop(persist_directory)
 
     def _run_coroutine(factory: Callable[[], Awaitable[T]]) -> T:
         try:
@@ -108,36 +117,43 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
             finally:
                 loop.close()
 
-    vector_width: int | None = None
+    vector_config = config.get("vector_store") if isinstance(config, dict) else {}
+    if not isinstance(vector_config, dict):
+        vector_config = {}
 
-    try:
-        probe = _run_coroutine(lambda: memory_embeddings.embed_texts(["dimension-probe"]))
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("Embedding dimension probe failed: %s", exc)
-        probe = None
+    embedding_config = config.get("embedding") if isinstance(config, dict) else {}
+    if not isinstance(embedding_config, dict):
+        embedding_config = {}
 
-    if probe is not None and getattr(probe, "shape", None):
-        try:
-            vector_width = int(probe.shape[1])
-        except (IndexError, TypeError, ValueError):  # pragma: no cover - defensive guard
-            vector_width = None
+    vector_store_type = str(
+        vector_config.get("type")
+        or os.getenv("MEMORY_VECTOR_STORE_TYPE")
+        or "chroma"
+    ).lower()
 
-    async def _initialize_chroma() -> None:
-        vector_db = ChromaVectorDatabase(
-            persist_directory=persist_directory,
-            expected_dimension=vector_width,
-            config={"use_default_embedding_function": False},
-        )
-        await vector_db.initialize()
+    embedding_model = str(
+        embedding_config.get("type")
+        or os.getenv("MEMORY_EMBEDDING_TYPE")
+        or "openai"
+    ).lower()
 
-    _run_coroutine(_initialize_chroma)
+    service = MemoryEmbeddingService(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        vector_store_type=vector_store_type,
+        embedding_model=embedding_model,
+        config=config or None,
+    )
+
+    result = _run_coroutine(service.hydrate_legacy_vector_store)
 
     logger.info(
-        "Queued hydration replay for user_id=%s conversation_id=%s",
+        "Hydration result for user_id=%s conversation_id=%s: %s",
         user_id,
         conversation_id,
+        result,
     )
-    return "hydrated"
+    return result
 
 
 schedule_heavy_hydration = hydrate_local_embeddings
