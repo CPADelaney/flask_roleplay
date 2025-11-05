@@ -84,3 +84,17 @@ def test_hydrate_local_embeddings_invokes_memory_service(monkeypatch: pytest.Mon
             "config": _build_config(legacy=True),
         }
     ]
+
+
+def test_hydrate_local_embeddings_accepts_trace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(memory_tasks, "get_memory_config", lambda: _build_config(legacy=False))
+    monkeypatch.setattr(memory_tasks, "get_hosted_vector_store_ids", lambda config=None: ["vs-1"])
+    monkeypatch.setattr(memory_tasks, "hosted_vector_store_enabled", lambda *_args, **_kwargs: True)
+
+    result = memory_tasks.hydrate_local_embeddings(
+        user_id=7,
+        conversation_id=8,
+        trace_id="trace-123",
+    )
+
+    assert result == "skipped:hosted-vector-store"
