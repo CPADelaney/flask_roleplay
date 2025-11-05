@@ -737,24 +737,26 @@ class NyxUnifiedGovernor(
       9. Temporal consistency enforcement
       10. User preference integration
     """
-    _assistants: Dict[str, ResponsesAgent] = {}
     _openai_client = None  # Cached client instance
-    
+
     def __init__(self, user_id: int, conversation_id: int, player_name: Optional[str] = None):
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.player_name = player_name  # Can be set later via set_player_name()
-    
-        self._discovery_completed: bool = False 
-        
+
+        self._discovery_completed: bool = False
+
         # Will be initialized in _initialize_systems() to avoid circular dependency
         self.lore_system: Optional[Any] = None
-    
+
         # Core systems and state
         self.memory_system = None
         self.game_state = None
         self.registered_agents: Dict[str, Dict[str, Any]] = {}     # {agent_type: {agent_id: instance}}
-    
+
+        # Track Responses-backed agents per conversation to avoid cross-conversation leakage
+        self._responses_agents: Dict[int, Dict[str, ResponsesAgent]] = defaultdict(dict)
+
         # Add this line - Initialize the set for tracking registered agents
         self._registered_agent_keys: Set[Tuple[str, str]] = set()
     
@@ -1431,12 +1433,23 @@ class NyxUnifiedGovernor(
     async def create_agent(self, agent_type: str, agent_id: str, **kwargs) -> Any:
         """Create/register an agent backed by the Responses API only."""
 
-        logger.info(
-            "Creating Responses-backed agent, type=%s, id=%s", agent_type, agent_id
-        )
+        conversation_agents = self._responses_agents.setdefault(self.conversation_id, {})
+        existing_agent = conversation_agents.get(agent_id)
+        if existing_agent is not None:
+            logger.info(
+                "Reusing Responses-backed agent for conversation_id=%s, type=%s, id=%s",
+                self.conversation_id,
+                agent_type,
+                agent_id,
+            )
+            return existing_agent
 
-        if agent_id in getattr(self, "_assistants", {}):
-            return self._assistants[agent_id]
+        logger.info(
+            "Creating Responses-backed agent, conversation_id=%s, type=%s, id=%s",
+            self.conversation_id,
+            agent_type,
+            agent_id,
+        )
 
         sdk_defaults = {
             "name": f"{agent_type}:{agent_id}",
@@ -1468,7 +1481,7 @@ class NyxUnifiedGovernor(
             custom_capabilities=resp_kwargs.get("custom_capabilities", []),
             openai_client_factory=self._get_openai_client,
         )
-        self._assistants[agent_id] = agent
+        conversation_agents[agent_id] = agent
         logger.info(
             "Responses-backed agent created for %s (id=%s, model=%s)",
             agent_id,
@@ -1724,7 +1737,17 @@ class NyxUnifiedGovernor(
         for agent_type in self._agent_counts:
             governor_active_agents.labels(agent_type=agent_type).set(0)
         self._agent_counts.clear()
-        
+
+        # Remove Responses-backed agent registry for this conversation
+        if hasattr(self, "_responses_agents"):
+            removed_agents = self._responses_agents.pop(self.conversation_id, None)
+            if removed_agents:
+                logger.info(
+                    "Cleared %d Responses-backed agents for conversation_id=%s",
+                    len(removed_agents),
+                    self.conversation_id,
+                )
+
         # Any other cleanup...
         logger.info("Governor shutdown complete")
     
