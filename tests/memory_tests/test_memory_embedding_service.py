@@ -399,6 +399,48 @@ def test_add_memory_rejects_invalid_embedding(
     asyncio.run(_run())
 
 
+def test_fast_mode_lazy_hydration_invokes_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_backend: None,
+    legacy_memory_config: Dict[str, Any],
+) -> None:
+    monkeypatch.setenv("MEM_FAST_MODE", "on")
+    monkeypatch.setattr("memory.memory_service._enqueue_heavy_hydration", lambda *_, **__: None)
+
+    original_helper = MemoryEmbeddingService._ensure_legacy_vector_store_ready
+    calls: List[Tuple[int, int]] = []
+
+    async def _wrapped(self: MemoryEmbeddingService) -> None:
+        calls.append((self.user_id, self.conversation_id))
+        await original_helper(self)
+
+    monkeypatch.setattr(
+        MemoryEmbeddingService,
+        "_ensure_legacy_vector_store_ready",
+        _wrapped,
+    )
+
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=77,
+            conversation_id=88,
+            vector_store_type="chroma",
+            embedding_model="openai",
+            config=legacy_memory_config,
+        )
+
+        await service.initialize()
+        assert service.vector_db is None
+
+        memory_id = await service.add_memory("Lazy hydration", {})
+
+        assert memory_id
+        assert calls == [(77, 88)]
+        assert isinstance(service.vector_db, _StubVectorDatabase)
+
+    asyncio.run(_run())
+
+
 def test_legacy_vector_store_enabled_via_env(monkeypatch: pytest.MonkeyPatch, memory_config: Dict[str, Any]) -> None:
     monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: False)
     monkeypatch.setattr("memory.memory_service.get_hosted_vector_store_ids", lambda *_: [])

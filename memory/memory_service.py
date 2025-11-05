@@ -2,6 +2,7 @@
 
 """Memory embedding service for hosted Agents and legacy vector stores."""
 
+import asyncio
 import os
 import logging
 from typing import Awaitable, Callable, Dict, List, Any, Optional, Sequence
@@ -208,6 +209,7 @@ class MemoryEmbeddingService:
             "narrative": "narrative_embeddings"
         }
         self.initialized = False
+        self._legacy_vector_store_ready_lock = asyncio.Lock()
     
     async def initialize(self) -> None:
         """Initialize the embedding service."""
@@ -416,6 +418,21 @@ class MemoryEmbeddingService:
                 collection_name, self._get_target_dimension()
             )
 
+    async def _ensure_legacy_vector_store_ready(self) -> None:
+        """Lazily hydrate the legacy vector store backend when required."""
+
+        if self._use_hosted_vector_store or self.vector_db is not None:
+            return
+
+        async with self._legacy_vector_store_ready_lock:
+            if self.vector_db is not None:
+                return
+
+            if self._fast_mode_enabled and self.vector_store_type == "chroma":
+                await self.hydrate_legacy_vector_store()
+            else:
+                await self._setup_vector_store()
+
     async def hydrate_legacy_vector_store(self) -> str:
         """Ensure the legacy vector store is fully initialised for this session."""
 
@@ -594,6 +611,8 @@ class MemoryEmbeddingService:
             )
             return memory_id
 
+        await self._ensure_legacy_vector_store_ready()
+
         # Generate embedding if not provided
         if embedding is None:
             embedding_vector = await self.generate_embedding(text)
@@ -704,6 +723,8 @@ class MemoryEmbeddingService:
 
             return results
 
+        await self._ensure_legacy_vector_store_ready()
+
         # Generate query embedding
         query_embedding = await self.generate_embedding(query_text)
 
@@ -796,6 +817,8 @@ class MemoryEmbeddingService:
                 memory_data["memory_text"] = record["text"]
 
             return memory_data
+
+        await self._ensure_legacy_vector_store_ready()
 
         if entity_type:
             collection_name = self.collection_mapping.get(entity_type, "memory_embeddings")
