@@ -113,7 +113,7 @@ async def _gpt_json(
     user: str,
     *,
     model: str = "gpt-5-nano",
-    max_output_tokens: int = 640,
+    max_output_tokens: int = 4000,
 ) -> Any:
     """
     Call the ChatGPT integration and return parsed JSON.
@@ -135,9 +135,8 @@ async def _gpt_json(
             raw_text = await generate_text_completion(
                 system_prompt=system,
                 user_prompt=user,
-                temperature=0.3,
                 max_tokens=max_output_tokens,
-                task_type="abstraction"  # Use low temperature for structured output
+                task_type="abstraction"  
             )
 
             # First parse try
