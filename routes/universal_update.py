@@ -34,7 +34,21 @@ async def universal_update():
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid conversation_id format"}), 400
 
-    # 3) Use the async context manager
+    # 3) Prepare universal updater context
+    updater_ctx = None
+    try:
+        updater_ctx = UniversalUpdaterContext(user_id, conversation_id)
+        await updater_ctx.initialize()
+    except Exception as ctx_err:
+        logger.warning(
+            "Failed to initialize UniversalUpdaterContext for user=%s conversation=%s: %s",
+            user_id,
+            conversation_id,
+            ctx_err,
+            exc_info=True,
+        )
+
+    # 4) Use the async context manager
     async with get_db_connection_context() as conn:
         try:
             # 4) Call the updater with all required parameters
