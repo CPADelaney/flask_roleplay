@@ -1137,6 +1137,7 @@ async def resolve_place_or_travel(
         # ============================================================
         logger.info("[ROUTER] Using real-world resolution chain")
 
+        # First, see if we can skip everything via anchor+snapshot tokens
         skip_result = _should_skip_maps(q, anchor, meta, store, user_id, conversation_id)
         if skip_result:
             res = skip_result
@@ -1157,132 +1158,104 @@ async def resolve_place_or_travel(
                 if gemini_result.errors:
                     logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
 
-                    # Check if we got grounded (verified via Google Maps) results
-                    has_grounded = _has_grounded_results(gemini_result)
+                if _has_grounded_results(gemini_result):
+                    logger.info(
+                        f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} Google Maps-grounded results"
+                    )
+                    res = gemini_result
 
-                    if has_grounded:
-                        logger.info(
-                            f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} "
-                            f"Google Maps-grounded results"
-                        )
-                        res = gemini_result
+                elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                    logger.info(
+                        "[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. Attempting verification with Overpass/Nominatim..."
+                    )
 
-                    elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                        # Gemini found something but it's not grounded
-                        # Could be fictional place or Gemini making educated guess
-                        logger.info(
-                            f"[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. "
-                            f"Attempting verification with Overpass/Nominatim..."
-                        )
+                    try:
+                        verified_result = await resolve_real(q, anchor, meta, skip_gemini=True)
 
-                        # Try to verify with traditional geocoding
-                        try:
-                            verified_result = await resolve_real(q, anchor, meta, skip_gemini=True)
-
-                            if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                                logger.info("[ROUTER] ✓ Verified via Overpass/Nominatim")
-                                res = verified_result
-                            else:
-                                # Overpass/Nominatim couldn't verify either
-                                # Use Gemini's best guess but mark confidence as lower
-                                logger.info("[ROUTER] Using Gemini's unverified results")
-                                for candidate in gemini_result.candidates:
-                                    candidate.confidence *= 0.7  # Reduce confidence
-                                    candidate.place.meta["verification_status"] = "unverified"
-                                res = gemini_result
-
-                        except Exception as e:
-                            logger.warning(f"[ROUTER] Verification failed: {e}", exc_info=True)
+                        if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                            logger.info("[ROUTER] ✓ Overpass/Nominatim found results")
+                            res = verified_result
+                        else:
+                            logger.info(
+                                f"[ROUTER] Overpass/Nominatim returned status={verified_result.status}"
+                            )
+                            for candidate in gemini_result.candidates:
+                                candidate.confidence *= 0.7
+                                candidate.place.meta["verification_status"] = "unverified"
                             res = gemini_result
 
-                    elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
-                        # Gemini created a travel plan
-                        logger.info("[ROUTER] ✓ Gemini created travel plan")
+                    except Exception as e:
+                        logger.warning(f"[ROUTER] Verification failed: {e}", exc_info=True)
                         res = gemini_result
 
-                    else:
-                        # Gemini found nothing useful
-                        logger.info(
-                            f"[ROUTER] Gemini returned status={gemini_result.status}, "
-                            f"no useful results"
-                        )
-                        gemini_result = None
+                elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
+                    logger.info("[ROUTER] ✓ Gemini created travel plan")
+                    res = gemini_result
+                else:
+                    logger.info(
+                        f"[ROUTER] Gemini returned status={gemini_result.status}, no useful results"
+                    )
+                    gemini_result = None
 
             except Exception as e:
                 logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
                 gemini_result = None
 
-                # Step 2: If Gemini didn't work, try Overpass/Nominatim
-                if gemini_result is None:
-                    logger.info("[ROUTER] Falling back to Overpass/Nominatim search...")
-                    try:
-                        res = await resolve_real(q, anchor, meta, skip_gemini=True)
+            # Step 2: If Gemini didn't work, try Overpass/Nominatim
+            if res is None:
+                logger.info("[ROUTER] Falling back to Overpass/Nominatim search...")
+                try:
+                    res = await resolve_real(q, anchor, meta, skip_gemini=True)
 
-                        if res.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                            logger.info(
-                                f"[ROUTER] ✓ Overpass/Nominatim found {len(res.candidates)} results"
-                            )
-                        else:
-                            logger.info(
-                                f"[ROUTER] Overpass/Nominatim returned status={res.status}"
-                            )
-
-                    except Exception as e:
-                        logger.error(f"[ROUTER] Overpass/Nominatim failed: {e}", exc_info=True)
-                        res = ResolveResult(
-                            status=STATUS_NOT_FOUND,
-                            message=f"Could not find '{q.target}' in the real world.",
-                            anchor=anchor,
-                            scope="real",
-                            errors=[f"real_world_search_failed: {e}"]
+                    if res.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                        logger.info(
+                            f"[ROUTER] ✓ Overpass/Nominatim found {len(res.candidates)} results"
                         )
-                else:
-                    res = gemini_result
+                    else:
+                        logger.info(
+                            f"[ROUTER] Overpass/Nominatim returned status={res.status}"
+                        )
 
-        # Step 3: If everything failed, try fictional as last resort
-        if res.status in {STATUS_NOT_FOUND, STATUS_ASK} and q.target:
-            logger.info(
-                f"[ROUTER] Real-world search failed for '{q.target}'. "
-                f"Attempting fictional resolver as fallback (mixed world scenario)..."
+                except Exception as e:
+                    logger.error(f"[ROUTER] Overpass/Nominatim failed: {e}", exc_info=True)
+                    target_label = q.target or q.raw_text or q.normalized or "request"
+                    res = ResolveResult(
+                        status=STATUS_NOT_FOUND,
+                        message=f"Could not find '{target_label}' in the real world.",
+                        anchor=anchor,
+                        scope="real",
+                        errors=[f"real_world_search_failed: {e}"]
+                    )
+
+        # Step 3: if real chain fails, enqueue fictional and return ASK quickly
+        if res is None:
+            target_label = q.target or q.raw_text or q.normalized or "request"
+            res = ResolveResult(
+                status=STATUS_NOT_FOUND,
+                message=f"Could not resolve '{target_label}'.",
+                anchor=anchor,
+                scope="real",
             )
 
+        if res.status in {STATUS_NOT_FOUND, STATUS_ASK}:
             try:
-                # Temporarily mark as fictional for the resolver
-                fictional_anchor = Anchor(
-                    scope="fictional",
-                    focus=anchor.focus,
-                    label=anchor.label,
-                    lat=anchor.lat,
-                    lon=anchor.lon,
-                    primary_city=anchor.primary_city,
-                    region=anchor.region,
-                    country=anchor.country,
-                    world_name=anchor.world_name or anchor.primary_city,
-                    hints=anchor.hints,
+                place_enrichment.enqueue_fictional_fallback(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    query=q,
+                    anchor=anchor,
+                    meta=meta,
                 )
-
-                fictional_result = await resolve_fictional(
-                    q, fictional_anchor, meta, store, user_id, conversation_id
+            except Exception:
+                logger.warning(
+                    "[ROUTER] Failed to enqueue fictional fallback", exc_info=True
                 )
-
-                if fictional_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                    logger.info(
-                        f"[ROUTER] ✓ Fictional resolver created '{q.target}' "
-                        f"in mixed real/fictional world"
-                    )
-                    # Mark as mixed world
-                    fictional_result.metadata = fictional_result.metadata or {}
-                    fictional_result.metadata["mixed_world"] = True
-                    fictional_result.metadata["base_scope"] = "real"
-                    fictional_result.metadata["fictional_element"] = q.target
-                    res = fictional_result
-                else:
-                    logger.info(
-                        f"[ROUTER] Fictional resolver also failed: {fictional_result.status}"
-                    )
-
-            except Exception as e:
-                logger.error(f"[ROUTER] Fictional fallback failed: {e}", exc_info=True)
+            return ResolveResult(
+                status=STATUS_ASK,
+                anchor=anchor,
+                scope="real",
+                message="Working on it…",
+            )
 
     else:
         # ============================================================

@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from nyx.conversation.snapshot_store import ConversationSnapshotStore
+from nyx.location.fictional_resolver import resolve_fictional
 from nyx.location.gemini_maps_adapter import resolve_location_with_gemini
 from nyx.location.query import PlaceQuery
 from nyx.location.types import Anchor, Place, ResolveResult
@@ -46,6 +48,34 @@ def _deserialize_query(payload: Dict[str, Any]) -> PlaceQuery:
         target=target,
         transport_hint=payload.get("transport_hint"),
     )
+
+
+def _sanitize_meta(value: Any, *, depth: int = 0, max_depth: int = 5) -> Any:
+    """Produce a JSON-serializable clone of meta payloads for Celery."""
+
+    if depth >= max_depth:
+        return None
+
+    if isinstance(value, dict):
+        sanitized: Dict[str, Any] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= 50:
+                break
+            sanitized[str(key)] = _sanitize_meta(item, depth=depth + 1, max_depth=max_depth)
+        return sanitized
+
+    if isinstance(value, (list, tuple, set)):
+        sanitized_list = []
+        for idx, item in enumerate(value):
+            if idx >= 50:
+                break
+            sanitized_list.append(_sanitize_meta(item, depth=depth + 1, max_depth=max_depth))
+        return sanitized_list
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    return str(value)
 
 
 @app.task(
@@ -122,6 +152,76 @@ def enrich(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "status": result.status,
         "candidate_count": len(result.candidates),
         "event_count": event_count,
+    }
+
+
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.background.place_enrichment.fictional_fallback",
+    queue="background",
+    priority=6,
+    acks_late=True,
+)
+def fictional_fallback(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Resolve fictional locations off-thread when real chains miss."""
+
+    if not payload:
+        return None
+
+    query_payload = payload.get("query")
+    anchor_payload = payload.get("anchor")
+    meta_payload = payload.get("meta")
+
+    if not isinstance(query_payload, dict) or not isinstance(anchor_payload, dict):
+        logger.debug("[place_enrichment] Missing query or anchor payload for fictional fallback")
+        return None
+
+    query = _deserialize_query(query_payload)
+    anchor = _deserialize_anchor(anchor_payload)
+    meta: Dict[str, Any] = dict(meta_payload) if isinstance(meta_payload, dict) else {}
+
+    user_id = str(payload.get("user_id") or "")
+    conversation_id = str(payload.get("conversation_id") or "")
+    store = ConversationSnapshotStore()
+
+    logger.info(
+        "[place_enrichment] Starting fictional fallback for '%s' (user=%s conversation=%s)",
+        query.target or query.raw_text,
+        user_id,
+        conversation_id,
+    )
+
+    try:
+        result = run_coro(
+            resolve_fictional(
+                query,
+                anchor,
+                meta,
+                store,
+                user_id,
+                conversation_id,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "[place_enrichment] Fictional fallback failed for '%s'",
+            query.target or query.raw_text,
+        )
+        raise
+
+    candidate_count = len(result.candidates or [])
+
+    logger.info(
+        "[place_enrichment] Completed fictional fallback for '%s' status=%s candidates=%s",
+        query.target or query.raw_text,
+        result.status,
+        candidate_count,
+    )
+
+    return {
+        "status": result.status,
+        "candidate_count": candidate_count,
     }
 
 
@@ -203,4 +303,35 @@ def enqueue(
         )
 
 
-__all__ = ["enqueue", "enrich"]
+def enqueue_fictional_fallback(
+    *,
+    user_id: str,
+    conversation_id: str,
+    query: PlaceQuery,
+    anchor: Anchor,
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Enqueue a background fictional resolver pass."""
+
+    payload: Dict[str, Any] = {
+        "user_id": str(user_id),
+        "conversation_id": str(conversation_id),
+        "query": _serialize_query(query),
+        "anchor": _serialize_anchor(anchor),
+    }
+
+    sanitized_meta = _sanitize_meta(meta or {})
+    if isinstance(sanitized_meta, dict) and sanitized_meta:
+        payload["meta"] = sanitized_meta
+    elif sanitized_meta not in (None, {}):
+        payload["meta"] = {"value": sanitized_meta}
+
+    try:
+        fictional_fallback.apply_async(kwargs={"payload": payload})
+    except Exception:
+        logger.warning(
+            "[place_enrichment] Failed to enqueue fictional fallback task", exc_info=True
+        )
+
+
+__all__ = ["enqueue", "enqueue_fictional_fallback", "enrich", "fictional_fallback"]
