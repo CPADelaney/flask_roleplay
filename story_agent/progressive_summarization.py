@@ -390,8 +390,10 @@ class ProgressiveNarrativeSummarizer:
         
         # Initialize LoreSystem if we have user_id and conversation_id
         if self.user_id is not None and self.conversation_id is not None:
-            self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
-        
+            self.lore_system = await LoreSystem.get_instance(
+                self.user_id, self.conversation_id
+            )
+
         if self.db_connection_string:
             try:
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables and loading data...")
