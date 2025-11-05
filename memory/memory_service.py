@@ -269,7 +269,7 @@ class MemoryEmbeddingService:
             model_name: str,
             dimensions: Optional[int] = None,
         ) -> List[float]:
-            response = await rag_ask.ask(
+            response = await rag_ask(
                 text,
                 mode="embedding",
                 metadata={

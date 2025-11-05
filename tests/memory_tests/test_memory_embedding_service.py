@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import sys
 import os
-from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -175,7 +174,7 @@ def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "memory.memory_service.rag_ask",
-        SimpleNamespace(ask=_fake_ask),
+        _fake_ask,
     )
 
 
@@ -589,7 +588,7 @@ def test_initialize_fast_mode_defers_heavy_setup(
 
     monkeypatch.setattr(
         "memory.memory_service.rag_ask",
-        SimpleNamespace(ask=_tracking_ask),
+        _tracking_ask,
     )
 
     async def _run() -> None:
@@ -610,7 +609,7 @@ def test_initialize_fast_mode_defers_heavy_setup(
         assert delay_calls == [(7, 11)]
         assert service.embedding_source_dimension == expected_dimension
         assert service.target_embedding_dimension == expected_dimension
-        assert calls, "Expected rag.ask.ask to be invoked during initialization"
+        assert calls, "Expected rag.ask to be invoked during initialization"
         first_call = calls[0]
         assert first_call["metadata"].get("operation") == "fast-openai-provider"
         assert first_call["dimensions"] == expected_dimension
