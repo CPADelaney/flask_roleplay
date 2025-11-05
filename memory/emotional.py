@@ -3,6 +3,7 @@
 import logging
 import json
 import random
+import time
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from textwrap import dedent
@@ -13,6 +14,9 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from .connection import with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
 
+# ---------------------------------------------------------------------------
+# Tunables
+EMO_STATE_CACHE_TTL = float(getenv("MEM_EMO_STATE_CACHE_TTL", "2.0"))  # seconds
 logger = logging.getLogger("memory_emotional")
 
 # ======== Constants ========
@@ -141,6 +145,14 @@ class EmotionalMemoryManager:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        # Tiny in-process cache to avoid repeated DB hits in hot loops
+        # key: (entity_type, entity_id) -> (state_dict, expires_at)
+        self._state_cache: Dict[tuple, tuple] = {}
+
+    def _cache_get_state(self, entity_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+        key = (entity_type, int(entity_id))
+        val = self._state_cache.get(key)
+        return val[0] if val and val[1] > time.time() else None
     
     @with_transaction
     async def add_emotional_memory(self,
@@ -312,6 +324,8 @@ class EmotionalMemoryManager:
                     "Return ONLY the JSON object described—no extra text."
                 ),
                 input=prompt,
+                # stricter server-side JSON shaping to minimize parsing retries
+                response_format={"type": "json_object"},
             )
     
             # Parse and validate with Pydantic
@@ -574,6 +588,12 @@ class EmotionalMemoryManager:
         Returns:
             Current emotional state
         """
+        # Fast path: tiny TTL cache to avoid repeated acquires in a burst
+        cached = self._cache_get_state(entity_type, entity_id)
+        if cached is not None:
+            return cached
+
+        # DB path (decorated with @with_transaction)
         row = await conn.fetchrow("""
             SELECT emotional_state, last_updated
             FROM EntityEmotionalState
@@ -625,6 +645,11 @@ class EmotionalMemoryManager:
                         WHERE user_id = $2 AND conversation_id = $3 AND entity_type = $4 AND entity_id = $5
                     """, json.dumps(emotional_state), self.user_id, self.conversation_id, entity_type, entity_id)
         
+        # Refresh cache
+        try:
+            self._state_cache[(entity_type, int(entity_id))] = (emotional_state, time.time() + EMO_STATE_CACHE_TTL)
+        except Exception:
+            pass
         return emotional_state
     
     @with_transaction
