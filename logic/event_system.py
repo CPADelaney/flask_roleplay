@@ -244,23 +244,47 @@ class EventSystem:
         try:
             governance = await get_central_governance(self.user_id, self.conversation_id)
 
-            self.event_agent = await governance.create_agent(
-                agent_type=AgentType.EVENT_MANAGER,
-                agent_id="event_manager",
-                model="gpt-5-nano",
-            )
+            if governance.is_agent_registered("event_manager", AgentType.EVENT_MANAGER):
+                self.event_agent = governance.registered_agents.get(AgentType.EVENT_MANAGER, {}).get("event_manager")
+            if not self.event_agent:
+                self.event_agent = await governance.create_agent(
+                    agent_type=AgentType.EVENT_MANAGER,
+                    agent_id="event_manager",
+                    model="gpt-5-nano",
+                )
+                await governance.register_agent(
+                    agent_type=AgentType.EVENT_MANAGER,
+                    agent_id="event_manager",
+                    agent_instance=self.event_agent,
+                )
 
-            self.analysis_agent = await governance.create_agent(
-                agent_type=AgentType.EVENT_ANALYZER,
-                agent_id="event_analyzer",
-                model="gpt-5-nano",
-            )
+            if governance.is_agent_registered("event_analyzer", AgentType.EVENT_ANALYZER):
+                self.analysis_agent = governance.registered_agents.get(AgentType.EVENT_ANALYZER, {}).get("event_analyzer")
+            if not self.analysis_agent:
+                self.analysis_agent = await governance.create_agent(
+                    agent_type=AgentType.EVENT_ANALYZER,
+                    agent_id="event_analyzer",
+                    model="gpt-5-nano",
+                )
+                await governance.register_agent(
+                    agent_type=AgentType.EVENT_ANALYZER,
+                    agent_id="event_analyzer",
+                    agent_instance=self.analysis_agent,
+                )
 
-            self.propagation_agent = await governance.create_agent(
-                agent_type=AgentType.EVENT_PROPAGATOR,
-                agent_id="event_propagator",
-                model="gpt-5-nano",
-            )
+            if governance.is_agent_registered("event_propagator", AgentType.EVENT_PROPAGATOR):
+                self.propagation_agent = governance.registered_agents.get(AgentType.EVENT_PROPAGATOR, {}).get("event_propagator")
+            if not self.propagation_agent:
+                self.propagation_agent = await governance.create_agent(
+                    agent_type=AgentType.EVENT_PROPAGATOR,
+                    agent_id="event_propagator",
+                    model="gpt-5-nano",
+                )
+                await governance.register_agent(
+                    agent_type=AgentType.EVENT_PROPAGATOR,
+                    agent_id="event_propagator",
+                    agent_instance=self.propagation_agent,
+                )
 
             self.agent_context = {
                 "user_id": self.user_id,
