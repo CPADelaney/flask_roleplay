@@ -27,6 +27,7 @@ from langchain.prompts import PromptTemplate
 from langchain_community.chat_models import ChatOpenAI
 from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline
 from langchain.output_parsers import PydanticOutputParser
+from langchain_openai import OpenAIEmbeddings
 
 
 # Import vector store implementations - dynamic for flexibility
@@ -46,9 +47,15 @@ from rag.vector_store import (
 from rag import vector_store as rag_vector_store
 
 try:  # pragma: no cover - optional legacy backends
-    from memory.chroma_vector_store import ChromaVectorDatabase  # type: ignore
+    from memory.chroma_vector_store import (  # type: ignore
+        ChromaVectorDatabase,
+        init_chroma_if_present_else_noop,
+    )
 except Exception:  # pragma: no cover
     ChromaVectorDatabase = None  # type: ignore
+
+    def init_chroma_if_present_else_noop(*_args, **_kwargs) -> None:  # type: ignore
+        return None
 
 try:  # pragma: no cover - optional legacy backends
     from memory.faiss_vector_store import FAISSVectorDatabase  # type: ignore
@@ -65,6 +72,27 @@ logger = logging.getLogger(__name__)
 
 _HF_EMBEDDING_CACHE: Dict[str, HuggingFaceEmbeddings] = {}
 _HF_EMBEDDING_CACHE_LOCK = threading.Lock()
+
+
+def _enqueue_heavy_hydration(user_id: int, conversation_id: int) -> None:
+    """Dispatch the deferred hydration task without importing Celery modules eagerly."""
+
+    try:
+        from nyx.tasks.heavy.memory_tasks import schedule_heavy_hydration
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.debug(
+            "Unable to import schedule_heavy_hydration for user_id=%s conversation_id=%s: %s",
+            user_id,
+            conversation_id,
+            exc,
+        )
+        return
+
+    delay = getattr(schedule_heavy_hydration, "delay", None)
+    if callable(delay):
+        delay(user_id, conversation_id)
+    else:  # pragma: no cover - fallback for non-Celery environments
+        schedule_heavy_hydration(user_id, conversation_id)
 
 
 def _extract_configured_dimension(
@@ -166,6 +194,9 @@ class MemoryEmbeddingService:
         self.embedding_model = embedding_model.lower()
         self.config = config or {}
         self._configured_dimension = _extract_configured_dimension(self.config)
+        self._fast_mode_enabled = (
+            os.getenv("MEM_FAST_MODE", "on").strip().lower() not in {"0", "false", "off"}
+        )
 
         self._legacy_vector_store_enabled = legacy_vector_store_enabled(self.config)
         self._hosted_vector_store_ids = get_hosted_vector_store_ids(self.config)
@@ -233,10 +264,17 @@ class MemoryEmbeddingService:
         try:
             # 1. Set up the embedding model
             await self._setup_embeddings()
-            
+
             # 2. Set up the vector store when using the legacy backends
             if not self._use_hosted_vector_store:
-                await self._setup_vector_store()
+                if (
+                    self._fast_mode_enabled
+                    and self.vector_store_type == "chroma"
+                ):
+                    init_chroma_if_present_else_noop(self.persist_directory)
+                    _enqueue_heavy_hydration(self.user_id, self.conversation_id)
+                else:
+                    await self._setup_vector_store()
 
             self.initialized = True
             backend_label = "hosted" if self._use_hosted_vector_store else self.vector_store_type
@@ -260,7 +298,48 @@ class MemoryEmbeddingService:
 
         configured_dimension = self._configured_dimension
 
-        if self.embedding_model == "openai":
+        if self._fast_mode_enabled:
+            model_name = "text-embedding-3-small"
+            if isinstance(embedding_section, dict):
+                candidate = embedding_section.get("openai_model") or embedding_section.get("model_name")
+                if isinstance(candidate, str) and candidate.strip():
+                    model_name = candidate
+            if isinstance(self.config, dict):
+                candidate = self.config.get("openai_model")
+                if isinstance(candidate, str) and candidate.strip():
+                    model_name = candidate
+
+            embeddings = OpenAIEmbeddings(model=model_name)
+
+            async def _fast_openai_provider(
+                text: str,
+                *,
+                _embeddings: OpenAIEmbeddings = embeddings,
+            ) -> Sequence[float]:
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(
+                    None, lambda: _embeddings.embed_query(text)
+                )
+
+            self.embeddings = embeddings
+            self._embedding_provider = _fast_openai_provider
+
+            def _probe_dimension() -> Optional[int]:
+                try:
+                    vector = embeddings.embed_query("embedding-dimension-probe")
+                    return len(list(vector))
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "Unable to probe OpenAI embedding dimension in fast mode; falling back. Error: %s",
+                        exc,
+                    )
+                    return None
+
+            self.embedding_source_dimension = await loop.run_in_executor(
+                None, _probe_dimension
+            )
+
+        elif self.embedding_model == "openai":
             model_name = "text-embedding-3-small"
             if isinstance(embedding_section, dict):
                 candidate = embedding_section.get("openai_model") or embedding_section.get("model_name")

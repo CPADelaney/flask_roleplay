@@ -1,6 +1,6 @@
 from pathlib import Path
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sys
 import os
@@ -207,6 +207,11 @@ def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
         return {"embedding": embedding, "provider": "test"}
 
     monkeypatch.setattr("memory.memory_service.rag_ask", _fake_ask)
+
+
+@pytest.fixture(autouse=True)
+def _default_fast_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MEM_FAST_MODE", "off")
 
 
 def test_generate_embedding_uses_agents_dimension(memory_config: Dict[str, Any]) -> None:
@@ -459,5 +464,109 @@ def test_add_memory_regenerates_on_unusable_embedding(
         assert calls == ["Regenerate vector"]
         stored = service.vector_db.records["memory_embeddings"][memory_id]
         assert stored["vector"][0] == pytest.approx(1.0)
+
+    asyncio.run(_run())
+
+
+def test_initialize_fast_mode_defers_heavy_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_backend: None,
+    legacy_memory_config: Dict[str, Any],
+) -> None:
+    monkeypatch.setenv("MEM_FAST_MODE", "on")
+
+    delay_calls: List[Tuple[int, int]] = []
+
+    def _fake_enqueue(user_id: int, conversation_id: int) -> None:
+        delay_calls.append((user_id, conversation_id))
+
+    monkeypatch.setattr("memory.memory_service._enqueue_heavy_hydration", _fake_enqueue)
+
+    chroma_calls: List[Optional[str]] = []
+    monkeypatch.setattr(
+        "memory.memory_service.init_chroma_if_present_else_noop",
+        lambda path: chroma_calls.append(path),
+    )
+
+    setup_invoked = False
+
+    async def _fake_setup(self) -> None:
+        nonlocal setup_invoked
+        setup_invoked = True
+
+    monkeypatch.setattr(MemoryEmbeddingService, "_setup_vector_store", _fake_setup)
+
+    class _StubOpenAIEmbeddings:
+        def __init__(self, *, model: str):
+            self.model = model
+
+        def embed_query(self, _: str) -> List[float]:
+            return [0.0, 0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("memory.memory_service.OpenAIEmbeddings", _StubOpenAIEmbeddings)
+
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=7,
+            conversation_id=11,
+            vector_store_type="chroma",
+            embedding_model="local",
+            config=legacy_memory_config,
+        )
+
+        await service.initialize()
+
+        assert setup_invoked is False
+        assert chroma_calls == [service.persist_directory]
+        assert delay_calls == [(7, 11)]
+        assert isinstance(service.embeddings, _StubOpenAIEmbeddings)
+        assert service.embedding_source_dimension == 4
+        assert service.target_embedding_dimension == 4
+
+    asyncio.run(_run())
+
+
+def test_initialize_full_mode_runs_vector_store_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_backend: None,
+    legacy_memory_config: Dict[str, Any],
+) -> None:
+    monkeypatch.setenv("MEM_FAST_MODE", "off")
+
+    setup_calls = 0
+
+    async def _fake_setup(self) -> None:
+        nonlocal setup_calls
+        setup_calls += 1
+
+    monkeypatch.setattr(MemoryEmbeddingService, "_setup_vector_store", _fake_setup)
+
+    calls: List[Tuple[int, int]] = []
+
+    def _fake_enqueue(user_id: int, conversation_id: int) -> None:
+        calls.append((user_id, conversation_id))
+
+    monkeypatch.setattr("memory.memory_service._enqueue_heavy_hydration", _fake_enqueue)
+
+    chroma_calls: List[str] = []
+    monkeypatch.setattr(
+        "memory.memory_service.init_chroma_if_present_else_noop",
+        lambda path: chroma_calls.append(path),
+    )
+
+    async def _run() -> None:
+        service = MemoryEmbeddingService(
+            user_id=5,
+            conversation_id=9,
+            vector_store_type="chroma",
+            embedding_model="local",
+            config=legacy_memory_config,
+        )
+
+        await service.initialize()
+
+        assert setup_calls == 1
+        assert calls == []
+        assert chroma_calls == []
 
     asyncio.run(_run())
