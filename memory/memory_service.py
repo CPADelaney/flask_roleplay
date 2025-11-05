@@ -264,7 +264,9 @@ class MemoryEmbeddingService:
         if target_hint > 0:
             dimension_candidates.append(target_hint)
 
-        requested_dimensions = max(dimension_candidates)
+        # Hard clamp: we always embed at 1536 and store 1536-dim vectors.
+        # Ignore higher hints to avoid padding above native OpenAI size.
+        requested_dimensions = DEFAULT_EMBEDDING_DIMENSION
 
         if self._openai_client is None:
             self._openai_client = OpenAI()
