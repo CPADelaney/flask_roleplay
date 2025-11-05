@@ -18,6 +18,7 @@ import logging
 from agents import Agent, RunConfig, RunContextWrapper  # type: ignore
 import nyx.gateway.llm_gateway as llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
+from nyx.utils.tracing import sanitize_trace_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -71,22 +72,9 @@ class MemoryAgentWrapper:
         content = json.dumps({"operation": operation, **fields}, ensure_ascii=False)
         return {"role": role, "content": content}
 
-    def _sanitize_trace_meta(self, meta: Dict[str, Any] | None) -> Dict[str, str]:
-        if not meta:
-            return {}
-        out: Dict[str, str] = {}
-        for k, v in meta.items():
-            if isinstance(v, (int, float, bool)):
-                out[k] = str(v)
-            elif v is None:
-                out[k] = ""
-            else:
-                out[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        return out
-
     async def _run(self, input_msg: Dict[str, Any], *, trace_meta: dict[str, Any] | None = None):
         """Thin wrapper around nyx.gateway.llm_gateway.execute(...) that sets trace metadata."""
-        run_config = RunConfig(trace_metadata=self._sanitize_trace_meta(trace_meta))
+        run_config = RunConfig(trace_metadata=sanitize_trace_metadata(trace_meta))
         request = LLMRequest(
             agent=self.agent,
             prompt=[input_msg],

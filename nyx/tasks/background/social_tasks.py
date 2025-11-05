@@ -16,6 +16,7 @@ from agents import trace
 from infra.cache import cache_key, get_json, set_json
 from nyx.tasks.utils import with_retry, run_coro
 from nyx.utils.idempotency import idempotent
+from nyx.utils.tracing import sanitize_trace_metadata
 
 from logic.conflict_system.social_circle import SocialCircle, SocialCircleManager
 
@@ -122,11 +123,13 @@ def generate_social_bundle(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     with trace(
         workflow_name="social.generate_bundle",
-        metadata={
-            "scene_hash": scene_hash,
-            "conversation_id": conversation_id,
-            "user_id": user_id,
-        },
+        metadata=sanitize_trace_metadata(
+            {
+                "scene_hash": scene_hash,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+            }
+        ),
     ):
         logger.info(
             "Generating social bundle for scene %s (targets=%s)",
