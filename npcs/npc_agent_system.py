@@ -299,7 +299,9 @@ class NPCAgentSystem:
     async def _get_lore_system(self):
         """Lazy-load the lore system."""
         if self._lore_system is None:
-            lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+            lore_system = await LoreSystem.get_instance(
+                self.user_id, self.conversation_id
+            )
             await lore_system.initialize()
             self._lore_system = lore_system
         return self._lore_system

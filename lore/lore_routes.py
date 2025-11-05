@@ -32,7 +32,7 @@ lore_bp = Blueprint('lore', __name__)
 
 async def _get_lore_system(user_id, conversation_id):
     """Get an initialized lore system instance"""
-    lore_system = LoreSystem.get_instance(user_id, int(conversation_id))
+    lore_system = await LoreSystem.get_instance(user_id, int(conversation_id))
     await lore_system.initialize()
     return lore_system
 

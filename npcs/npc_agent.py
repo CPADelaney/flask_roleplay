@@ -492,7 +492,7 @@ class NPCContext:
         Get an initialized instance of the LoreSystem.
         """
         from lore.core.lore_system import LoreSystem
-        lore_system = LoreSystem.get_instance(user_id, conversation_id)
+        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
         await lore_system.initialize()
         return lore_system
         
