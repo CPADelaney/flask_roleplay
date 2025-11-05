@@ -64,6 +64,7 @@ from db.connection import get_db_connection_context
 from agents import Agent, function_tool, trace, ModelSettings, RunContextWrapper
 from nyx.gateway import llm_gateway
 from rag import ask as rag_ask
+from infra.cache import get_redis_client
 
 # ------------------------------------------------------------------------------
 # Function tool invocation helper
@@ -2907,23 +2908,80 @@ class CompleteWorldDirector:
         self.agent: Optional[Agent] = None
         self._initialized = False
     
-    async def initialize(self):
+    async def initialize(self, *, warmed: Optional[bool] = None):
         """Initialize ALL systems with error recovery"""
-        if not self._initialized:
+        if self._initialized:
+            return
+
+        cache_key = f"ctx:warmed:{self.user_id}:{self.conversation_id}"
+        is_warmed = bool(warmed) if warmed is not None else False
+
+        if warmed is None:
+            redis_client = None
             try:
+                redis_client = get_redis_client()
+            except Exception as redis_exc:
+                logger.debug(
+                    "World director warm check failed to get Redis client: %s",
+                    redis_exc,
+                    exc_info=True,
+                )
+
+            if redis_client is not None:
+                try:
+                    is_warmed = bool(await asyncio.to_thread(redis_client.exists, cache_key))
+                except Exception as redis_exc:
+                    logger.debug(
+                        "World director warm check failed for key %s: %s",
+                        cache_key,
+                        redis_exc,
+                        exc_info=True,
+                    )
+
+        if is_warmed:
+            if self.context is None:
                 self.context = CompleteWorldDirectorContext(
                     user_id=self.user_id,
-                    conversation_id=self.conversation_id
+                    conversation_id=self.conversation_id,
                 )
-                await self.context.initialize_everything()
+
+            if getattr(self.context, "canonical_context", None) is None:
+                try:
+                    self.context.canonical_context = ensure_canonical_context(
+                        {"user_id": self.user_id, "conversation_id": self.conversation_id}
+                    )
+                except Exception as canon_exc:
+                    logger.debug(
+                        "World director warm path failed to seed canonical context: %s",
+                        canon_exc,
+                        exc_info=True,
+                    )
+
+            if self.agent is None:
                 self.agent = create_complete_world_director()
-                self._initialized = True
-                logger.info(f"Complete World Director initialized with ALL systems")
-            except Exception as e:
-                logger.error(f"Error initializing World Director: {e}", exc_info=True)
-                # Set up minimal fallback state
-                self._initialized = False
-                raise
+
+            self._initialized = True
+            logger.info(
+                "Complete World Director warm cache hit for user_id=%s conversation_id=%s",
+                self.user_id,
+                self.conversation_id,
+            )
+            return
+
+        try:
+            self.context = CompleteWorldDirectorContext(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            await self.context.initialize_everything()
+            self.agent = create_complete_world_director()
+            self._initialized = True
+            logger.info(f"Complete World Director initialized with ALL systems")
+        except Exception as e:
+            logger.error(f"Error initializing World Director: {e}", exc_info=True)
+            # Set up minimal fallback state
+            self._initialized = False
+            raise
     
     async def generate_next_moment(self) -> Dict[str, Any]:
         """Generate next moment using ALL systems with canonical consistency"""

@@ -53,6 +53,7 @@ from logic.universal_updater_agent import (
     apply_universal_updates_async as _APPLY_UNIVERSAL_UPDATES_ASYNC,
     convert_updates_for_database,
 )
+from infra.cache import get_redis_client
 
 # Try to use faster JSON library
 try:
@@ -3608,13 +3609,44 @@ class NyxContext:
         try:
             from story_agent.world_director_agent import CompleteWorldDirector
             from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-            
+
+            cache_key = f"ctx:warmed:{self.user_id}:{self.conversation_id}"
+            warmed = False
+            redis_client = None
+
+            try:
+                redis_client = get_redis_client()
+            except Exception as redis_exc:
+                logger.debug(
+                    "World system warm check failed to get Redis client: %s",
+                    redis_exc,
+                    exc_info=True,
+                )
+
+            if redis_client is not None:
+                try:
+                    warmed = bool(await asyncio.to_thread(redis_client.exists, cache_key))
+                except Exception as redis_exc:
+                    logger.debug(
+                        "World system warm check failed for key %s: %s",
+                        cache_key,
+                        redis_exc,
+                        exc_info=True,
+                    )
+
+            if warmed:
+                logger.info(
+                    "World systems warm cache hit for user_id=%s conversation_id=%s",
+                    self.user_id,
+                    self.conversation_id,
+                )
+
             self.world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
-            await self.world_director.initialize()
-            
+            await self.world_director.initialize(warmed=warmed)
+
             self.slice_of_life_narrator = SliceOfLifeNarrator(self.user_id, self.conversation_id)
             await self.slice_of_life_narrator.initialize()
-            
+
             logger.info("World systems initialized")
         except Exception as e:
             logger.error(f"Failed to initialize world systems: {e}")
