@@ -170,7 +170,7 @@ class ChromaVectorDatabase(VectorDatabase):
                 self._configured_dimension = self._configured_dimension or 1536
             elif self.embedding_function is None and self._configured_dimension is not None:
                 logger.info(
-                    "Chroma vector store configured for externally supplied embeddings (dimension=%d)",
+                    "Chroma vector store will enforce dimension=%d (upstream embeddings are normalized to this size).",
                     self._configured_dimension,
                 )
 
