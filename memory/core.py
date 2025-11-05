@@ -595,6 +595,7 @@ class UnifiedMemoryManager:
                       AND memory_type = ANY($6)
                       AND significance >= $7
                       AND id != ALL($8)
+                      AND embedding IS NOT NULL
                       AND status != 'deleted'
                     ORDER BY similarity
                     LIMIT $9
