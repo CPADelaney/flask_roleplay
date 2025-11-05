@@ -10,6 +10,7 @@ from typing import Any, Dict
 from nyx.tasks.base import NyxTask, app
 
 from nyx.utils.idempotency import idempotent
+from rag.vector_store import hosted_vector_store_enabled, legacy_vector_store_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,22 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
         conversation_id,
     )
 
+    if hosted_vector_store_enabled():
+        logger.info(
+            "Hosted Agents vector store enabled; skipping local hydration for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
+        return "skipped:hosted-vector-store"
+
+    if not legacy_vector_store_enabled():
+        logger.info(
+            "Legacy vector store disabled; skipping local hydration for user_id=%s conversation_id=%s",
+            user_id,
+            conversation_id,
+        )
+        return "skipped:legacy-disabled"
+
     persist_base = os.getenv("MEMORY_VECTOR_PERSIST_BASE", "./vector_stores")
     vector_store_type = os.getenv("MEMORY_VECTOR_STORE_TYPE", "chroma")
     persist_directory = os.path.join(
@@ -69,12 +86,6 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
         f"{user_id}_{conversation_id}",
     )
 
-    try:
-        from langchain_community.embeddings import HuggingFaceEmbeddings
-    except Exception as exc:  # pragma: no cover - only when dependency missing
-        logger.warning("Unable to import HuggingFace embeddings: %s", exc)
-        return "skipped:hf-missing"
-
     from memory.chroma_vector_store import (  # lazy import to avoid startup penalties
         ChromaVectorDatabase,
         init_chroma_if_present_else_noop,
@@ -82,16 +93,9 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
 
     init_chroma_if_present_else_noop(persist_directory)
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
-
     async def _initialize_chroma() -> None:
         vector_db = ChromaVectorDatabase(
             persist_directory=persist_directory,
-            expected_dimension=len(embeddings.embed_query("dimension-probe")),
             config={"use_default_embedding_function": False},
         )
         await vector_db.initialize()
