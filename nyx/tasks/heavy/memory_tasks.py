@@ -5,14 +5,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Awaitable, Callable, Dict, TypeVar
 
 from nyx.tasks.base import NyxTask, app
 
 from nyx.utils.idempotency import idempotent
 from rag.vector_store import hosted_vector_store_enabled, legacy_vector_store_enabled
 
+from nyx.core.memory import embeddings as memory_embeddings
+
 logger = logging.getLogger(__name__)
+
+
+T = TypeVar("T")
 
 
 def _add_key(payload: Dict[str, Any]) -> str:
@@ -93,21 +98,39 @@ def hydrate_local_embeddings(self, user_id: int, conversation_id: int) -> str:
 
     init_chroma_if_present_else_noop(persist_directory)
 
+    def _run_coroutine(factory: Callable[[], Awaitable[T]]) -> T:
+        try:
+            return asyncio.run(factory())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(factory())
+            finally:
+                loop.close()
+
+    vector_width: int | None = None
+
+    try:
+        probe = _run_coroutine(lambda: memory_embeddings.embed_texts(["dimension-probe"]))
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Embedding dimension probe failed: %s", exc)
+        probe = None
+
+    if probe is not None and getattr(probe, "shape", None):
+        try:
+            vector_width = int(probe.shape[1])
+        except (IndexError, TypeError, ValueError):  # pragma: no cover - defensive guard
+            vector_width = None
+
     async def _initialize_chroma() -> None:
         vector_db = ChromaVectorDatabase(
             persist_directory=persist_directory,
+            expected_dimension=vector_width,
             config={"use_default_embedding_function": False},
         )
         await vector_db.initialize()
 
-    try:
-        asyncio.run(_initialize_chroma())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(_initialize_chroma())
-        finally:
-            loop.close()
+    _run_coroutine(_initialize_chroma)
 
     logger.info(
         "Queued hydration replay for user_id=%s conversation_id=%s",
