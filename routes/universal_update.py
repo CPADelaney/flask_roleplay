@@ -51,7 +51,8 @@ async def universal_update():
     # 4) Use the async context manager
     async with get_db_connection_context() as conn:
         try:
-            # 5) Call the updater with all required parameters
+            # 4) Call the updater with all required parameters
+            updater_ctx = UniversalUpdaterContext(user_id, conversation_id)
             result = await apply_universal_updates_async(
                 updater_ctx,
                 user_id,
