@@ -173,7 +173,7 @@ def test_get_aggregated_roleplay_context_includes_openai_metadata(monkeypatch):
     )
 
     asyncio.run(
-        aggregator_sdk.context_cache.invalidate_many(["context:1:2"])
+        aggregator_sdk.context_cache.invalidate_many(["agg:1:2:0"])
     )
 
     metadata = {
