@@ -843,24 +843,29 @@ async def apply_universal_updates_async(
         from logic.aggregator_sdk import context_cache as _agg_cache
 
         if _agg_cache:
-            key_prefix = f"context:{user_id}:{conversation_id}"
+            key_prefixes = [
+                f"context:{user_id}:{conversation_id}",
+                f"agg:{user_id}:{conversation_id}:",
+            ]
             delete_fn = getattr(_agg_cache, "delete", None)
             if callable(delete_fn):
-                result = delete_fn(key_prefix=key_prefix)
-                if asyncio.iscoroutine(result):
-                    await result
+                for prefix in key_prefixes:
+                    result = delete_fn(key_prefix=prefix)
+                    if asyncio.iscoroutine(result):
+                        await result
             else:
                 invalidate_many_fn = getattr(_agg_cache, "invalidate_many", None)
                 if callable(invalidate_many_fn):
-                    result = invalidate_many_fn([key_prefix])
+                    result = invalidate_many_fn(key_prefixes)
                     if asyncio.iscoroutine(result):
                         await result
                 else:
                     legacy_fn = getattr(_agg_cache, "invalidate", None)
                     if callable(legacy_fn):
-                        result = legacy_fn(key_prefix)
-                        if asyncio.iscoroutine(result):
-                            await result
+                        for prefix in key_prefixes:
+                            result = legacy_fn(prefix)
+                            if asyncio.iscoroutine(result):
+                                await result
     except Exception:
         logger.debug("Context cache invalidation skipped (no cache or older runtime)", exc_info=True)
 

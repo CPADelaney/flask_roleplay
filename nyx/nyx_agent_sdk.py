@@ -295,28 +295,33 @@ async def _invalidate_context_cache_safe(user_id: str | int, conversation_id: st
     if not context_cache:
         return
 
-    key_prefix = f"context:{int(user_id)}:{int(conversation_id)}"
+    key_prefixes = [
+        f"context:{int(user_id)}:{int(conversation_id)}",
+        f"agg:{int(user_id)}:{int(conversation_id)}:",
+    ]
 
     try:
         delete_fn = getattr(context_cache, "delete", None)
         if callable(delete_fn):
-            result = delete_fn(key_prefix=key_prefix)
-            if asyncio.iscoroutine(result):
-                await result
+            for prefix in key_prefixes:
+                result = delete_fn(key_prefix=prefix)
+                if asyncio.iscoroutine(result):
+                    await result
             return
 
         invalidate_many_fn = getattr(context_cache, "invalidate_many", None)
         if callable(invalidate_many_fn):
-            result = invalidate_many_fn([key_prefix])
+            result = invalidate_many_fn(key_prefixes)
             if asyncio.iscoroutine(result):
                 await result
             return
 
         legacy_fn = getattr(context_cache, "invalidate", None)
         if callable(legacy_fn):  # pragma: no cover - compatibility shim
-            result = legacy_fn(key_prefix)
-            if asyncio.iscoroutine(result):
-                await result
+            for prefix in key_prefixes:
+                result = legacy_fn(prefix)
+                if asyncio.iscoroutine(result):
+                    await result
             return
     except Exception:
         logger.debug("Context cache invalidation failed softly", exc_info=True)
