@@ -36,6 +36,45 @@ from context.optimized_db import VectorDatabase
 logger = logging.getLogger(__name__)
 
 
+def init_chroma_if_present_else_noop(persist_directory: Optional[str]) -> None:
+    """Best-effort initialization for existing Chroma persistence directories."""
+
+    if not persist_directory:
+        return
+
+    persistence_path = Path(persist_directory)
+    if not persistence_path.exists():
+        return
+
+    try:
+        client = chromadb.PersistentClient(
+            path=str(persistence_path),
+            settings=Settings(anonymized_telemetry=False),
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.debug(
+            "Skipping Chroma warm-up for %s due to initialization error: %s",
+            persistence_path,
+            exc,
+        )
+        return
+
+    try:  # pragma: no cover - simple readiness check
+        client.list_collections()
+    except Exception as exc:
+        logger.debug(
+            "Chroma warm-up list_collections failed for %s: %s",
+            persistence_path,
+            exc,
+        )
+    finally:
+        try:
+            if hasattr(client, "close"):
+                client.close()
+        except Exception:
+            logger.debug("Ignoring Chroma client close failure", exc_info=True)
+
+
 class ChromaVectorDatabase(VectorDatabase):
     """ChromaDB vector database integration using the new PersistentClient."""
 
@@ -451,3 +490,6 @@ class ChromaVectorDatabase(VectorDatabase):
                     return nested_value
 
         return None
+
+
+__all__ = ["ChromaVectorDatabase", "init_chroma_if_present_else_noop"]
