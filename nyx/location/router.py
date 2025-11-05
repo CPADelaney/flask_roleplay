@@ -40,6 +40,23 @@ from utils.cache_manager import CacheManager
 logger = logging.getLogger(__name__)
 
 
+# Cached metadata for Disneyland Park to allow fast-path resolution when
+# the player is already anchored there and issues another movement request.
+DISNEYLAND_PARK_SHORTCUT = {
+    "name": "Disneyland Park",
+    "aliases": (
+        "Disneyland Park",
+        "Disneyland",
+        "the Disneyland Park",
+    ),
+    "place_id": "ChIJPeY5iQ3t3IARfOMl5TP3f5s",
+    "city": "Anaheim",
+    "region": "California",
+    "country": "United States",
+    "lat": 33.8121,
+    "lon": -117.9190,
+}
+
 LOCATION_RESOLUTION_CACHE = CacheManager(
     name="location_resolution_cache", max_size=200, ttl=120
 )
@@ -103,14 +120,18 @@ def _parse_place_query(text: str) -> PlaceQuery:
     t = (text or "").strip()
     if not t:
         return PlaceQuery(raw_text="", normalized="")
-    
+
     m2 = _FLY_TO_RX.search(t)
     if m2:
         target = m2.group(1).strip().rstrip(".!?")
+        if target.lower().startswith("to "):
+            target = target[3:].lstrip()
         return PlaceQuery(raw_text=t, normalized=target.lower(), is_travel=True, target=target, transport_hint="fly")
-    
+
     m = _GO_TO_RX.search(t)
     target = (m.group(1) if m else t).strip().rstrip(".!?")
+    if target.lower().startswith("to "):
+        target = target[3:].lstrip()
     return PlaceQuery(raw_text=t, normalized=target.lower(), target=target)
 
 
@@ -457,6 +478,16 @@ def _normalize_location_token(value: Any) -> Optional[str]:
     return normalized or None
 
 
+_DISNEYLAND_NORMALIZED_TOKENS = {
+    token
+    for token in (
+        _normalize_location_token(alias)
+        for alias in DISNEYLAND_PARK_SHORTCUT["aliases"]
+    )
+    if token
+}
+
+
 def _extract_current_location_payload(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Return the best-effort current location payload from metadata."""
 
@@ -548,6 +579,173 @@ def _collect_location_tokens(
     return tokens
 
 
+def _get_conversation_snapshot(
+    store: Optional[ConversationSnapshotStore],
+    user_id: str,
+    conversation_id: str,
+) -> Dict[str, Any]:
+    """Fetch the current conversation snapshot if available."""
+
+    if store is None:
+        return {}
+
+    try:
+        payload = store.get(user_id, conversation_id)
+        if isinstance(payload, dict):
+            return dict(payload)
+    except Exception:
+        logger.debug(
+            "[ROUTER] Failed to fetch conversation snapshot for disneyland shortcut",
+            exc_info=True,
+        )
+    return {}
+
+
+_BASIC_MOVE_DISQUALIFIERS = (
+    "ticket",
+    "reservation",
+    "book",
+    "dinner",
+    "restaurant",
+    "parade",
+    "event",
+    "fireworks",
+    "show",
+)
+
+
+def _is_basic_move_intent(user_text: str, query: PlaceQuery) -> bool:
+    """Return True when the utterance expresses a simple movement intent."""
+
+    if not query.target or query.is_travel:
+        return False
+
+    normalized_text = (user_text or "").strip().lower()
+    if not normalized_text:
+        return False
+
+    if any(keyword in normalized_text for keyword in _BASIC_MOVE_DISQUALIFIERS):
+        return False
+
+    if _GO_TO_RX.search(user_text):
+        return True
+
+    for prefix in ("move to ", "proceed to ", "head to "):
+        if normalized_text.startswith(prefix):
+            return True
+
+    return False
+
+
+def _anchor_targets_disneyland(
+    anchor: Anchor,
+    meta: Dict[str, Any],
+    snapshot: Dict[str, Any],
+) -> bool:
+    """Check anchor- and snapshot-derived tokens for Disneyland Park."""
+
+    anchor_label_token = _normalize_location_token(anchor.label)
+    if anchor_label_token and anchor_label_token in _DISNEYLAND_NORMALIZED_TOKENS:
+        return True
+
+    focus = anchor.focus
+    if focus is not None:
+        focus_token = _normalize_location_token(focus.name)
+        if focus_token and focus_token in _DISNEYLAND_NORMALIZED_TOKENS:
+            return True
+        focus_meta = focus.meta or {}
+        focus_place_id = focus_meta.get("place_id") or focus_meta.get("id") or focus.key
+        if focus_place_id and str(focus_place_id) == DISNEYLAND_PARK_SHORTCUT["place_id"]:
+            return True
+
+    tokens = _collect_location_tokens(anchor, meta, snapshot)
+    if any(token in tokens for token in _DISNEYLAND_NORMALIZED_TOKENS):
+        return True
+
+    def _place_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+        for key in ("place_id", "id", "location_id", "slug"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+        return None
+
+    current_location = _extract_current_location_payload(meta)
+    place_id = _place_id_from_payload(current_location)
+    if place_id == DISNEYLAND_PARK_SHORTCUT["place_id"]:
+        return True
+
+    if isinstance(snapshot, dict):
+        snapshot_place_id = _place_id_from_payload(snapshot)
+        if snapshot_place_id == DISNEYLAND_PARK_SHORTCUT["place_id"]:
+            return True
+
+    return False
+
+
+def _build_disneyland_shortcut_result(anchor: Anchor) -> ResolveResult:
+    """Construct a ResolveResult using cached Disneyland Park metadata."""
+
+    place = Place(
+        name=DISNEYLAND_PARK_SHORTCUT["name"],
+        level="venue",
+        key=DISNEYLAND_PARK_SHORTCUT["place_id"],
+        lat=DISNEYLAND_PARK_SHORTCUT["lat"],
+        lon=DISNEYLAND_PARK_SHORTCUT["lon"],
+        address={
+            "city": DISNEYLAND_PARK_SHORTCUT["city"],
+            "region": DISNEYLAND_PARK_SHORTCUT["region"],
+            "country": DISNEYLAND_PARK_SHORTCUT["country"],
+        },
+        meta={
+            "source": "anchor_disneyland_shortcut",
+            "place_id": DISNEYLAND_PARK_SHORTCUT["place_id"],
+        },
+    )
+
+    candidate = Candidate(place=place, confidence=0.99)
+    operations = [
+        {
+            "op": "poi.navigate",
+            "label": place.name,
+            "lat": place.lat,
+            "lon": place.lon,
+            "context_hint": {
+                "use_geo_anchor": True,
+                "source": "anchor_disneyland_shortcut",
+            },
+        }
+    ]
+
+    result = ResolveResult(
+        status=STATUS_EXACT,
+        candidates=[candidate],
+        operations=operations,
+        anchor=anchor,
+        scope=anchor.scope,
+        message=f"Continuing at {place.name}.",
+    )
+
+    result.metadata = {
+        "router": {
+            "disneyland_shortcut": True,
+            "place_id": DISNEYLAND_PARK_SHORTCUT["place_id"],
+            "city": DISNEYLAND_PARK_SHORTCUT["city"],
+        }
+    }
+
+    try:
+        metrics().LOCATION_ROUTER_DECISIONS.labels(outcome="disneyland_anchor_shortcut").inc()
+    except Exception:
+        logger.debug(
+            "[ROUTER] Failed to emit metrics for Disneyland shortcut",
+            exc_info=True,
+        )
+
+    logger.info("[ROUTER] Using Disneyland anchor shortcut for cached metadata")
+
+    return result
+
+
 def _should_skip_maps(
     query: PlaceQuery,
     anchor: Anchor,
@@ -555,6 +753,7 @@ def _should_skip_maps(
     store: ConversationSnapshotStore,
     user_id: str,
     conversation_id: str,
+    snapshot: Optional[Dict[str, Any]] = None,
 ) -> Optional[ResolveResult]:
     """Decide whether Gemini/Maps resolution can be skipped based on anchor data."""
 
@@ -565,13 +764,8 @@ def _should_skip_maps(
     if not normalized_target:
         return None
 
-    snapshot: Dict[str, Any] = {}
-    try:
-        snap_payload = store.get(user_id, conversation_id) if store else {}
-        if isinstance(snap_payload, dict):
-            snapshot = dict(snap_payload)
-    except Exception:
-        snapshot = {}
+    if snapshot is None:
+        snapshot = _get_conversation_snapshot(store, user_id, conversation_id)
 
     tokens = _collect_location_tokens(anchor, meta, snapshot)
     match = tokens.get(normalized_target)
@@ -868,13 +1062,14 @@ async def resolve_place_or_travel(
     """
     if store is None:
         store = ConversationSnapshotStore()
-    
+
     # Enrich metadata based on user text patterns BEFORE building anchor
     _enrich_metadata_with_intent(user_text, meta)
-    
+
     anchor = await _anchor_from_meta(meta, user_id, conversation_id)
     q = _parse_place_query(user_text)
-    
+    snapshot = _get_conversation_snapshot(store, user_id, conversation_id)
+
     logger.info(
         f"[ROUTER] Resolving '{q.target}' with scope={anchor.scope}, "
         f"is_travel={q.is_travel}, anchor_city={anchor.primary_city}"
@@ -885,7 +1080,19 @@ async def resolve_place_or_travel(
     cache_key = f"{user_id}:{conversation_id}:{q.normalized}"
     normalized_anchor_city = _normalize_city_name(anchor.primary_city)
 
-    if not q.is_travel:
+    normalized_target = _normalize_location_token(q.target)
+    if (
+        _is_basic_move_intent(user_text, q)
+        and normalized_target in _DISNEYLAND_NORMALIZED_TOKENS
+        and _anchor_targets_disneyland(anchor, meta, snapshot)
+    ):
+        res = _build_disneyland_shortcut_result(anchor)
+        logger.debug(
+            "[ROUTER] Disney shortcut triggered (intent move, anchor match, target=%s)",
+            q.target,
+        )
+
+    if res is None and not q.is_travel:
         cached_payload = await LOCATION_RESOLUTION_CACHE.get(cache_key)
         if cached_payload:
             cached_confidence = float(cached_payload.get("confidence") or 0.0)
@@ -920,106 +1127,115 @@ async def resolve_place_or_travel(
                         ),
                     )
 
-    if res is None and anchor.scope == "real":
-        # ============================================================
-        # REAL WORLD RESOLUTION CHAIN
-        # ============================================================
-        logger.info("[ROUTER] Using real-world resolution chain")
+    if anchor.scope == "real":
+        if res is None:
+            # ============================================================
+            # REAL WORLD RESOLUTION CHAIN
+            # ============================================================
+            logger.info("[ROUTER] Using real-world resolution chain")
 
-        skip_result = _should_skip_maps(q, anchor, meta, store, user_id, conversation_id)
-        if skip_result:
-            res = skip_result
-        else:
-            # Step 1: Try Gemini with Google Maps grounding first
-            gemini_result: Optional[ResolveResult] = None
-            try:
-                logger.debug("[ROUTER] Attempting Gemini with Maps grounding...")
-                gemini_result = await resolve_location_with_gemini(q, anchor)
+            skip_result = _should_skip_maps(
+                q,
+                anchor,
+                meta,
+                store,
+                user_id,
+                conversation_id,
+                snapshot=snapshot,
+            )
+            if skip_result:
+                res = skip_result
+            else:
+                # Step 1: Try Gemini with Google Maps grounding first
+                gemini_result: Optional[ResolveResult] = None
+                try:
+                    logger.debug("[ROUTER] Attempting Gemini with Maps grounding...")
+                    gemini_result = await resolve_location_with_gemini(q, anchor)
 
-                if gemini_result.errors:
-                    logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
+                    if gemini_result.errors:
+                        logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
 
-                # Check if we got grounded (verified via Google Maps) results
-                has_grounded = _has_grounded_results(gemini_result)
+                    # Check if we got grounded (verified via Google Maps) results
+                    has_grounded = _has_grounded_results(gemini_result)
 
-                if has_grounded:
-                    logger.info(
-                        f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} "
-                        f"Google Maps-grounded results"
-                    )
-                    res = gemini_result
-
-                elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                    # Gemini found something but it's not grounded
-                    # Could be fictional place or Gemini making educated guess
-                    logger.info(
-                        f"[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. "
-                        f"Attempting verification with Overpass/Nominatim..."
-                    )
-
-                    # Try to verify with traditional geocoding
-                    try:
-                        verified_result = await resolve_real(q, anchor, meta, skip_gemini=True)
-
-                        if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                            logger.info("[ROUTER] ✓ Verified via Overpass/Nominatim")
-                            res = verified_result
-                        else:
-                            # Overpass/Nominatim couldn't verify either
-                            # Use Gemini's best guess but mark confidence as lower
-                            logger.info("[ROUTER] Using Gemini's unverified results")
-                            for candidate in gemini_result.candidates:
-                                candidate.confidence *= 0.7  # Reduce confidence
-                                candidate.place.meta["verification_status"] = "unverified"
-                            res = gemini_result
-
-                    except Exception as e:
-                        logger.warning(f"[ROUTER] Verification failed: {e}", exc_info=True)
+                    if has_grounded:
+                        logger.info(
+                            f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} "
+                            f"Google Maps-grounded results"
+                        )
                         res = gemini_result
 
-                elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
-                    # Gemini created a travel plan
-                    logger.info("[ROUTER] ✓ Gemini created travel plan")
-                    res = gemini_result
-
-                else:
-                    # Gemini found nothing useful
-                    logger.info(
-                        f"[ROUTER] Gemini returned status={gemini_result.status}, "
-                        f"no useful results"
-                    )
-                    gemini_result = None
-
-            except Exception as e:
-                logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
-                gemini_result = None
-
-            # Step 2: If Gemini didn't work, try Overpass/Nominatim
-            if gemini_result is None:
-                logger.info("[ROUTER] Falling back to Overpass/Nominatim search...")
-                try:
-                    res = await resolve_real(q, anchor, meta, skip_gemini=True)
-
-                    if res.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                    elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                        # Gemini found something but it's not grounded
+                        # Could be fictional place or Gemini making educated guess
                         logger.info(
-                            f"[ROUTER] ✓ Overpass/Nominatim found {len(res.candidates)} results"
+                            f"[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. "
+                            f"Attempting verification with Overpass/Nominatim..."
                         )
+
+                        # Try to verify with traditional geocoding
+                        try:
+                            verified_result = await resolve_real(q, anchor, meta, skip_gemini=True)
+
+                            if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                                logger.info("[ROUTER] ✓ Verified via Overpass/Nominatim")
+                                res = verified_result
+                            else:
+                                # Overpass/Nominatim couldn't verify either
+                                # Use Gemini's best guess but mark confidence as lower
+                                logger.info("[ROUTER] Using Gemini's unverified results")
+                                for candidate in gemini_result.candidates:
+                                    candidate.confidence *= 0.7  # Reduce confidence
+                                    candidate.place.meta["verification_status"] = "unverified"
+                                res = gemini_result
+
+                        except Exception as e:
+                            logger.warning(f"[ROUTER] Verification failed: {e}", exc_info=True)
+                            res = gemini_result
+
+                    elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
+                        # Gemini created a travel plan
+                        logger.info("[ROUTER] ✓ Gemini created travel plan")
+                        res = gemini_result
+
                     else:
+                        # Gemini found nothing useful
                         logger.info(
-                            f"[ROUTER] Overpass/Nominatim returned status={res.status}"
+                            f"[ROUTER] Gemini returned status={gemini_result.status}, "
+                            f"no useful results"
                         )
+                        gemini_result = None
 
                 except Exception as e:
-                    logger.error(f"[ROUTER] Overpass/Nominatim failed: {e}", exc_info=True)
-                    res = ResolveResult(
-                        status=STATUS_NOT_FOUND,
-                        message=f"Could not find '{q.target}' in the real world.",
-                        anchor=anchor,
-                        scope="real",
-                        errors=[f"real_world_search_failed: {e}"]
-                    )
-            else:
-                res = gemini_result
+                    logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
+                    gemini_result = None
+
+                # Step 2: If Gemini didn't work, try Overpass/Nominatim
+                if gemini_result is None:
+                    logger.info("[ROUTER] Falling back to Overpass/Nominatim search...")
+                    try:
+                        res = await resolve_real(q, anchor, meta, skip_gemini=True)
+
+                        if res.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                            logger.info(
+                                f"[ROUTER] ✓ Overpass/Nominatim found {len(res.candidates)} results"
+                            )
+                        else:
+                            logger.info(
+                                f"[ROUTER] Overpass/Nominatim returned status={res.status}"
+                            )
+
+                    except Exception as e:
+                        logger.error(f"[ROUTER] Overpass/Nominatim failed: {e}", exc_info=True)
+                        res = ResolveResult(
+                            status=STATUS_NOT_FOUND,
+                            message=f"Could not find '{q.target}' in the real world.",
+                            anchor=anchor,
+                            scope="real",
+                            errors=[f"real_world_search_failed: {e}"]
+                        )
+                else:
+                    res = gemini_result
 
         # Step 3: If everything failed, try fictional as last resort
         if res.status in {STATUS_NOT_FOUND, STATUS_ASK} and q.target:
@@ -1027,7 +1243,7 @@ async def resolve_place_or_travel(
                 f"[ROUTER] Real-world search failed for '{q.target}'. "
                 f"Attempting fictional resolver as fallback (mixed world scenario)..."
             )
-            
+
             try:
                 # Temporarily mark as fictional for the resolver
                 fictional_anchor = Anchor(
@@ -1042,11 +1258,11 @@ async def resolve_place_or_travel(
                     world_name=anchor.world_name or anchor.primary_city,
                     hints=anchor.hints,
                 )
-                
+
                 fictional_result = await resolve_fictional(
                     q, fictional_anchor, meta, store, user_id, conversation_id
                 )
-                
+
                 if fictional_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
                     logger.info(
                         f"[ROUTER] ✓ Fictional resolver created '{q.target}' "
@@ -1062,16 +1278,16 @@ async def resolve_place_or_travel(
                     logger.info(
                         f"[ROUTER] Fictional resolver also failed: {fictional_result.status}"
                     )
-                    
+
             except Exception as e:
                 logger.error(f"[ROUTER] Fictional fallback failed: {e}", exc_info=True)
-    
+
     else:
         # ============================================================
         # FICTIONAL RESOLUTION CHAIN
         # ============================================================
         logger.info("[ROUTER] Using fictional resolution chain")
-        
+
         # Try fictional resolver first
         res_fictional = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
 
@@ -1081,7 +1297,7 @@ async def resolve_place_or_travel(
                 f"[ROUTER] Fictional resolve failed for '{q.target}'. "
                 f"Falling back to real-world search (mixed world scenario)..."
             )
-            
+
             # Try real-world search with Gemini first
             try:
                 real_anchor = Anchor(
@@ -1096,9 +1312,9 @@ async def resolve_place_or_travel(
                     world_name=anchor.world_name,
                     hints=anchor.hints,
                 )
-                
+
                 gemini_result = await resolve_location_with_gemini(q, real_anchor)
-                
+
                 if _has_grounded_results(gemini_result):
                     logger.info(
                         f"[ROUTER] ✓ Found real-world match via Gemini Maps for '{q.target}' "
@@ -1112,7 +1328,7 @@ async def resolve_place_or_travel(
                 else:
                     # Try Overpass/Nominatim
                     res_real = await resolve_real(q, real_anchor, meta, skip_gemini=True)
-                    
+
                     if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
                         logger.info(
                             f"[ROUTER] ✓ Found real-world match via Overpass/Nominatim "
@@ -1129,7 +1345,7 @@ async def resolve_place_or_travel(
                             f"[ROUTER] All resolution methods failed for '{q.target}'"
                         )
                         res = res_fictional
-                        
+
             except Exception as e:
                 logger.error(f"[ROUTER] Real-world fallback failed: {e}", exc_info=True)
                 res = res_fictional
