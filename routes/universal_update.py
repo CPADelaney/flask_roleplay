@@ -6,7 +6,10 @@ import asyncpg
 import os
 import logging
 from db.connection import get_db_connection_context
-from logic.universal_updater_agent import apply_universal_updates_async 
+from logic.universal_updater_agent import (
+    UniversalUpdaterContext,
+    apply_universal_updates_async,
+)
 from logic.aggregator_sdk import get_aggregated_roleplay_context
 
 universal_bp = Blueprint("universal_bp", __name__)
@@ -35,7 +38,14 @@ async def universal_update():
     async with get_db_connection_context() as conn:
         try:
             # 4) Call the updater with all required parameters
-            result = await apply_universal_updates_async(user_id, conversation_id, data, conn)
+            updater_ctx = UniversalUpdaterContext(user_id, conversation_id)
+            result = await apply_universal_updates_async(
+                updater_ctx,
+                user_id,
+                conversation_id,
+                data,
+                conn,
+            )
             if "error" in result:
                 return jsonify(result), 500
             else:
