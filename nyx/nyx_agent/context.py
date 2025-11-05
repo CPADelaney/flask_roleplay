@@ -978,6 +978,23 @@ class ContextBroker:
             'narrative': 30.0
         }
 
+        # Canonical fetch method registry + aliases
+        self._section_fetchers: Dict[
+            str, Callable[[SceneScope], Awaitable[BundleSection]]
+        ] = {
+            'npcs': self._fetch_npc_section,
+            'memories': self._fetch_memory_section,
+            'lore': self._fetch_lore_section,
+            'conflicts': self._fetch_conflict_section,
+            'world': self._fetch_world_section,
+            'narrative': self._fetch_narrative_section,
+        }
+        self._section_aliases: Dict[str, str] = {
+            'npc': 'npcs',
+            'memory': 'memories',
+            'conflict': 'conflicts',
+        }
+
         # Optimized conflict components
         self.conflict_synthesizer = None
         self.conflict_scheduler = get_conflict_scheduler()
@@ -1103,11 +1120,10 @@ class ContextBroker:
 
 
     async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:
-        name_map = {'memory': 'memories', 'conflict': 'conflicts'}
-        section = name_map.get(section, section)
-        new_section = await self._fetch_section(section, bundle.scene_scope)
-        setattr(bundle, section, new_section)
-    
+        normalized = self._normalize_section_name(section)
+        new_section = await self._fetch_section(normalized, bundle.scene_scope)
+        setattr(bundle, normalized, new_section)
+        
     async def _try_connect_redis(self):
         """Try to connect to Redis with backoff on failure"""
         if self.redis_client:  # Already connected
@@ -1914,32 +1930,28 @@ class ContextBroker:
     
         return ContextBundle.from_dict(bundle_dict)
     
+    def _normalize_section_name(self, section_name: str) -> str:
+        """Return canonical section name for a given alias."""
+        return self._section_aliases.get(section_name, section_name)
+
     async def _fetch_section(self, section_name: str, scope: SceneScope) -> BundleSection:
         """Fetch a single section by name"""
-        fetch_methods = {
-            'npcs': self._fetch_npc_section,
-            'memories': self._fetch_memory_section,
-            'lore': self._fetch_lore_section,
-            'conflicts': self._fetch_conflict_section,
-            'world': self._fetch_world_section,
-            'narrative': self._fetch_narrative_section
-        }
-        
-        method = fetch_methods.get(section_name)
+        canonical_name = self._normalize_section_name(section_name)
+        method = self._section_fetchers.get(canonical_name)
         if not method:
             logger.warning(f"Unknown section name: {section_name}")
             return BundleSection(data={}, canonical=False, priority=0)
-        
+
         start_time = time.time()
         result = await method(scope)
-        
+
         # Track fetch time
         fetch_time = time.time() - start_time
-        self.metrics['fetch_times'][section_name].append(fetch_time)
-        
+        self.metrics['fetch_times'][canonical_name].append(fetch_time)
+
         # Apply section-specific TTL
-        result.ttl = self.section_ttls.get(section_name, 30.0)
-        
+        result.ttl = self.section_ttls.get(canonical_name, 30.0)
+
         return result
     
     async def fetch_bundle(self, scene_scope: SceneScope) -> ContextBundle:
