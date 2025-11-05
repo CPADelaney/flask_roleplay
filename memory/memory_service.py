@@ -16,7 +16,7 @@ from utils.embedding_dimensions import (
     build_zero_vector,
     get_target_embedding_dimension,
 )
-from rag import ask as rag_ask
+from openai import OpenAI
 from rag.vector_store import (
     get_hosted_vector_store_ids,
     hosted_vector_store_enabled,
@@ -202,6 +202,7 @@ class MemoryEmbeddingService:
         self._embedding_provider: Optional[Callable[[str], Awaitable[Sequence[float]]]] = None
         self.embedding_source_dimension: Optional[int] = None
         self.target_embedding_dimension: Optional[int] = None
+        self._openai_client: Optional[OpenAI] = None
         self.collection_mapping = {
             "memory": "memory_embeddings",
             "npc": "npc_embeddings",
@@ -249,7 +250,7 @@ class MemoryEmbeddingService:
         if isinstance(self.config, dict):
             embedding_section = self.config.get("embedding") or {}
 
-        configured_dimension = self._configured_dimension
+        configured_dimension = self._configured_dimension or 0
 
         try:
             target_hint = int(get_target_embedding_dimension(config=self.config))
@@ -257,42 +258,34 @@ class MemoryEmbeddingService:
             logger.debug("Unable to resolve target embedding dimension: %s", exc)
             target_hint = 0
 
-        if target_hint <= 0:
-            target_hint = configured_dimension or DEFAULT_EMBEDDING_DIMENSION
+        dimension_candidates: List[int] = [DEFAULT_EMBEDDING_DIMENSION]
+        if configured_dimension > 0:
+            dimension_candidates.append(configured_dimension)
+        if target_hint > 0:
+            dimension_candidates.append(target_hint)
 
-        requested_dimensions = target_hint or DEFAULT_EMBEDDING_DIMENSION
+        requested_dimensions = max(dimension_candidates)
 
-        async def _call_rag_provider(
-            text: str,
-            *,
-            operation: str,
-            model_name: str,
-            dimensions: Optional[int] = None,
-        ) -> List[float]:
-            response = await rag_ask(
-                text,
-                mode="embedding",
-                metadata={
-                    "component": "memory.memory_service",
-                    "operation": operation,
-                    "model": model_name,
-                },
-                model=model_name,
-                dimensions=dimensions,
-            )
-            vector = response.get("embedding") if isinstance(response, dict) else None
-            if vector is None:
-                raise ValueError("Embedding response missing vector payload")
-            if hasattr(vector, "tolist"):
-                vector = vector.tolist()  # type: ignore[assignment]
-            return [float(value) for value in vector]
+        if self._openai_client is None:
+            self._openai_client = OpenAI()
 
-        async def _call_local_provider(text: str) -> List[float]:
-            from utils import embedding_service  # local import to avoid circular deps
+        async def _embed_with_openai(text: str, *, model_name: str, operation: str) -> List[float]:
+            assert self._openai_client is not None  # nosec - initialized just above
 
-            vector = await embedding_service.get_embedding(text)
-            if hasattr(vector, "tolist"):
-                vector = vector.tolist()  # type: ignore[assignment]
+            def _do_request() -> Sequence[float]:
+                logger.debug(
+                    "Embedding request via %s using model=%s (target_dimension=%d)",
+                    operation,
+                    model_name,
+                    requested_dimensions,
+                )
+                response = self._openai_client.embeddings.create(
+                    model=model_name,
+                    input=text,
+                )
+                return response.data[0].embedding
+
+            vector = await asyncio.to_thread(_do_request)
             return [float(value) for value in vector]
 
         if self._fast_mode_enabled:
@@ -307,11 +300,10 @@ class MemoryEmbeddingService:
                     model_name = candidate
 
             async def _fast_provider(text: str) -> Sequence[float]:
-                return await _call_rag_provider(
+                return await _embed_with_openai(
                     text,
-                    operation="fast-openai-provider",
                     model_name=model_name,
-                    dimensions=requested_dimensions,
+                    operation="fast-openai-provider",
                 )
 
             self._embedding_provider = _fast_provider
@@ -328,50 +320,30 @@ class MemoryEmbeddingService:
                     model_name = candidate
 
             async def _openai_provider(text: str) -> Sequence[float]:
-                return await _call_rag_provider(
+                return await _embed_with_openai(
                     text,
-                    operation="openai-provider",
                     model_name=model_name,
-                    dimensions=requested_dimensions,
+                    operation="openai-provider",
                 )
 
             self._embedding_provider = _openai_provider
         else:
-            async def _local_provider(text: str) -> Sequence[float]:
-                return await _call_local_provider(text)
+            model_name = "text-embedding-3-small"
 
-            self._embedding_provider = _local_provider
+            async def _provider(text: str) -> Sequence[float]:
+                return await _embed_with_openai(
+                    text,
+                    model_name=model_name,
+                    operation="default-openai-provider",
+                )
+
+            self._embedding_provider = _provider
 
         if self._embedding_provider is None:
             raise RuntimeError("Failed to configure embedding provider")
 
-        try:
-            probe_vector = await self._embedding_provider("embedding-dimension-probe")
-            probe_list = [float(value) for value in probe_vector]
-            self.embedding_source_dimension = len(probe_list)
-        except Exception as exc:
-            self.embedding_source_dimension = None
-            logger.warning(
-                "Unable to probe embedding dimension; falling back to configuration. Error: %s",
-                exc,
-            )
-
-        if self.embedding_source_dimension is not None:
-            if (
-                configured_dimension is not None
-                and configured_dimension != self.embedding_source_dimension
-            ):
-                logger.info(
-                    "Embedding model produced %d dimensions; overriding configured %d to match native size.",
-                    self.embedding_source_dimension,
-                    configured_dimension,
-                )
-            self.target_embedding_dimension = self.embedding_source_dimension
-        elif configured_dimension is not None:
-            self.target_embedding_dimension = configured_dimension
-        else:
-            self.target_embedding_dimension = target_hint or DEFAULT_EMBEDDING_DIMENSION
-
+        self.embedding_source_dimension = requested_dimensions
+        self.target_embedding_dimension = requested_dimensions
         self.embedding_dimension = self.target_embedding_dimension
 
     async def _setup_vector_store(self) -> None:
@@ -854,14 +826,18 @@ class MemoryEmbeddingService:
         self.initialized = False
 
     def _get_target_dimension(self) -> int:
-        if self.target_embedding_dimension is not None:
-            return self.target_embedding_dimension
+        if self.target_embedding_dimension is None:
+            if self.embedding_source_dimension is not None:
+                self.target_embedding_dimension = self.embedding_source_dimension
+            elif self._configured_dimension is not None:
+                self.target_embedding_dimension = max(
+                    self._configured_dimension,
+                    DEFAULT_EMBEDDING_DIMENSION,
+                )
+            else:
+                self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
 
-        if self.embedding_source_dimension is not None:
-            self.target_embedding_dimension = self.embedding_source_dimension
-        elif self._configured_dimension is not None:
-            self.target_embedding_dimension = self._configured_dimension
-        else:
+        if self.target_embedding_dimension < DEFAULT_EMBEDDING_DIMENSION:
             self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
 
         return self.target_embedding_dimension

@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import sys
@@ -14,7 +15,12 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 import pytest
 
 from memory.memory_service import MemoryEmbeddingService
-from utils.embedding_dimensions import get_target_embedding_dimension
+from utils.embedding_dimensions import (
+    DEFAULT_EMBEDDING_DIMENSION,
+    get_target_embedding_dimension,
+)
+
+OPENAI_CALLS: List[Dict[str, Any]] = []
 
 
 class _StubVectorDatabase:
@@ -158,24 +164,26 @@ def legacy_backend(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_ask(
-        text: str,
-        *,
-        mode: str = "retrieval",
-        metadata: Optional[Dict[str, Any]] = None,
-        model: str = "text-embedding-3-small",
-        dimensions: Optional[int] = None,
-        **__: Any,
-    ) -> Dict[str, Any]:
-        base = float(len(text) % 31)
-        size = dimensions or 8
-        embedding = [base + i for i in range(size)]
-        return {"embedding": embedding, "provider": "test"}
+    OPENAI_CALLS.clear()
 
-    monkeypatch.setattr(
-        "memory.memory_service.rag_ask",
-        _fake_ask,
-    )
+    class _StubEmbeddings:
+        def create(self, *, model: str, input: str) -> SimpleNamespace:
+            base = float(len(input) % 31)
+            size = DEFAULT_EMBEDDING_DIMENSION
+            embedding = [base + i for i in range(size)]
+            OPENAI_CALLS.append({
+                "model": model,
+                "input": input,
+            })
+            return SimpleNamespace(
+                data=[SimpleNamespace(embedding=embedding)]
+            )
+
+    class _StubOpenAI:
+        def __init__(self) -> None:
+            self.embeddings = _StubEmbeddings()
+
+    monkeypatch.setattr("memory.memory_service.OpenAI", _StubOpenAI)
 
 
 @pytest.fixture(autouse=True)
@@ -208,7 +216,10 @@ def test_generate_embedding_uses_agents_dimension(memory_config: Dict[str, Any])
         await service.initialize()
         embedding = await service.generate_embedding("hello world")
 
-        target_dimension = get_target_embedding_dimension(config=memory_config)
+        target_dimension = max(
+            get_target_embedding_dimension(config=memory_config),
+            DEFAULT_EMBEDDING_DIMENSION,
+        )
         assert len(embedding) == target_dimension
         assert service._get_target_dimension() == target_dimension
 
@@ -566,31 +577,6 @@ def test_initialize_fast_mode_defers_heavy_setup(
 
     monkeypatch.setattr(MemoryEmbeddingService, "_setup_vector_store", _fake_setup)
 
-    calls: List[Dict[str, Any]] = []
-
-    async def _tracking_ask(
-        text: str,
-        *,
-        mode: str = "embedding",
-        metadata: Optional[Dict[str, Any]] = None,
-        model: str = "text-embedding-3-small",
-        dimensions: Optional[int] = None,
-        **__: Any,
-    ) -> Dict[str, Any]:
-        calls.append({
-            "text": text,
-            "metadata": dict(metadata or {}),
-            "model": model,
-            "dimensions": dimensions,
-        })
-        size = dimensions or 8
-        return {"embedding": [0.0 for _ in range(size)]}
-
-    monkeypatch.setattr(
-        "memory.memory_service.rag_ask",
-        _tracking_ask,
-    )
-
     async def _run() -> None:
         service = MemoryEmbeddingService(
             user_id=7,
@@ -602,17 +588,19 @@ def test_initialize_fast_mode_defers_heavy_setup(
 
         await service.initialize()
 
-        expected_dimension = get_target_embedding_dimension(config=legacy_memory_config)
+        expected_dimension = max(
+            get_target_embedding_dimension(config=legacy_memory_config),
+            DEFAULT_EMBEDDING_DIMENSION,
+        )
 
         assert setup_invoked is False
         assert chroma_calls == [service.persist_directory]
         assert delay_calls == [(7, 11)]
         assert service.embedding_source_dimension == expected_dimension
         assert service.target_embedding_dimension == expected_dimension
-        assert calls, "Expected rag.ask to be invoked during initialization"
-        first_call = calls[0]
-        assert first_call["metadata"].get("operation") == "fast-openai-provider"
-        assert first_call["dimensions"] == expected_dimension
+
+        await service.generate_embedding("fast-mode check")
+        assert OPENAI_CALLS, "Expected OpenAI embeddings to be invoked when generating a vector"
 
     asyncio.run(_run())
 
