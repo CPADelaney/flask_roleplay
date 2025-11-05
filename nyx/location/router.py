@@ -1250,6 +1250,13 @@ async def resolve_place_or_travel(
                 logger.warning(
                     "[ROUTER] Failed to enqueue fictional fallback", exc_info=True
                 )
+
+            if res.status == STATUS_ASK:
+                logger.debug(
+                    "[ROUTER] Real resolver requested clarification; preserving ASK payload"
+                )
+                return res
+
             return ResolveResult(
                 status=STATUS_ASK,
                 anchor=anchor,
