@@ -4,7 +4,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import sys
 import os
-from types import ModuleType
+from types import SimpleNamespace
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -12,33 +14,10 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
-class _PreImportHFEmbeddings:
-    def __init__(self, *_, **__):
-        self._vector = [0.0] * 1536
-
-    def embed_query(self, text: str) -> List[float]:  # pragma: no cover - deterministic stub
-        return list(self._vector)
-
-hf_module = ModuleType("langchain_community.embeddings")
-hf_module.HuggingFaceEmbeddings = _PreImportHFEmbeddings
-sys.modules["langchain_community.embeddings"] = hf_module
-
-
-class _FakeSentenceTransformer:
-    def __init__(self, *_, **__):  # pragma: no cover - deterministic stub
-        pass
-
-    def encode(self, sentences, *_, **__):
-        return [[0.0] * 1536 for _ in sentences]
-
-
-sentence_module = ModuleType("sentence_transformers")
-sentence_module.SentenceTransformer = _FakeSentenceTransformer
-sys.modules["sentence_transformers"] = sentence_module
-
 import pytest
 
 from memory.memory_service import MemoryEmbeddingService
+from utils.embedding_dimensions import get_target_embedding_dimension
 
 
 class _StubVectorDatabase:
@@ -131,17 +110,9 @@ class _StubVectorDatabase:
 
 @pytest.fixture(autouse=True)
 def _patch_vector_backends(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _DummyHFEmbeddings:
-        def __init__(self, *_, **__):
-            self._vector = [0.0] * 1536
-
-        def embed_query(self, text: str) -> List[float]:  # pragma: no cover - deterministic stub
-            return list(self._vector)
-
     monkeypatch.setattr("memory.memory_service.ChromaVectorDatabase", _StubVectorDatabase)
     monkeypatch.setattr("memory.memory_service.FAISSVectorDatabase", _StubVectorDatabase)
     monkeypatch.setattr("memory.memory_service.create_vector_database", lambda _: _StubVectorDatabase())
-    monkeypatch.setattr("memory.memory_service.HuggingFaceEmbeddings", _DummyHFEmbeddings)
     monkeypatch.setattr("memory.memory_service.hosted_vector_store_enabled", lambda *_, **__: True)
     monkeypatch.setattr(
         "memory.memory_service.get_hosted_vector_store_ids",
@@ -149,6 +120,15 @@ def _patch_vector_backends(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("memory.memory_service.search_hosted_vector_store", lambda *_, **__: [])
     monkeypatch.setattr("memory.memory_service.upsert_hosted_vector_documents", lambda *_, **__: None)
+
+    async def _fake_embed_texts(texts):
+        vectors = []
+        for idx, text in enumerate(texts):
+            base = float((len(text) + idx) % 13)
+            vectors.append([base + i for i in range(8)])
+        return np.asarray(vectors, dtype="float32")
+
+    monkeypatch.setattr("nyx.core.memory.embeddings.embed_texts", _fake_embed_texts)
 
 
 @pytest.fixture
@@ -198,15 +178,17 @@ def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
         metadata: Optional[Dict[str, Any]] = None,
         model: str = "text-embedding-3-small",
         dimensions: Optional[int] = None,
-        limit: Optional[int] = None,
-        legacy_fallback=None,
+        **__: Any,
     ) -> Dict[str, Any]:
         base = float(len(text) % 31)
         size = dimensions or 8
         embedding = [base + i for i in range(size)]
         return {"embedding": embedding, "provider": "test"}
 
-    monkeypatch.setattr("memory.memory_service.rag_ask", _fake_ask)
+    monkeypatch.setattr(
+        "memory.memory_service.rag_ask",
+        SimpleNamespace(ask=_fake_ask),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -227,8 +209,9 @@ def test_generate_embedding_uses_agents_dimension(memory_config: Dict[str, Any])
         await service.initialize()
         embedding = await service.generate_embedding("hello world")
 
-        assert len(embedding) == 8
-        assert service._get_target_dimension() == 8
+        target_dimension = get_target_embedding_dimension(config=memory_config)
+        assert len(embedding) == target_dimension
+        assert service._get_target_dimension() == target_dimension
 
     asyncio.run(_run())
 
@@ -496,14 +479,30 @@ def test_initialize_fast_mode_defers_heavy_setup(
 
     monkeypatch.setattr(MemoryEmbeddingService, "_setup_vector_store", _fake_setup)
 
-    class _StubOpenAIEmbeddings:
-        def __init__(self, *, model: str):
-            self.model = model
+    calls: List[Dict[str, Any]] = []
 
-        def embed_query(self, _: str) -> List[float]:
-            return [0.0, 0.1, 0.2, 0.3]
+    async def _tracking_ask(
+        text: str,
+        *,
+        mode: str = "embedding",
+        metadata: Optional[Dict[str, Any]] = None,
+        model: str = "text-embedding-3-small",
+        dimensions: Optional[int] = None,
+        **__: Any,
+    ) -> Dict[str, Any]:
+        calls.append({
+            "text": text,
+            "metadata": dict(metadata or {}),
+            "model": model,
+            "dimensions": dimensions,
+        })
+        size = dimensions or 8
+        return {"embedding": [0.0 for _ in range(size)]}
 
-    monkeypatch.setattr("memory.memory_service.OpenAIEmbeddings", _StubOpenAIEmbeddings)
+    monkeypatch.setattr(
+        "memory.memory_service.rag_ask",
+        SimpleNamespace(ask=_tracking_ask),
+    )
 
     async def _run() -> None:
         service = MemoryEmbeddingService(
@@ -519,9 +518,12 @@ def test_initialize_fast_mode_defers_heavy_setup(
         assert setup_invoked is False
         assert chroma_calls == [service.persist_directory]
         assert delay_calls == [(7, 11)]
-        assert isinstance(service.embeddings, _StubOpenAIEmbeddings)
-        assert service.embedding_source_dimension == 4
-        assert service.target_embedding_dimension == 4
+        assert service.embedding_source_dimension == 8
+        assert service.target_embedding_dimension == 8
+        assert calls, "Expected rag.ask.ask to be invoked during initialization"
+        first_call = calls[0]
+        assert first_call["metadata"].get("operation") == "fast-openai-provider"
+        assert first_call["dimensions"] == 8
 
     asyncio.run(_run())
 

@@ -1,40 +1,19 @@
 # memory/memory_service.py
 
-"""
-Memory Embedding Service using LangChain
-
-This module provides memory embedding and retrieval services using LangChain
-with multiple vector store backends (ChromaDB, FAISS, or Qdrant).
-"""
+"""Memory embedding service for hosted Agents and legacy vector stores."""
 
 import os
 import logging
-import time
-import asyncio
-import threading
 from typing import Awaitable, Callable, Dict, List, Any, Optional, Sequence
 from datetime import datetime
 import uuid
-
-# LangChain imports
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-from langchain_core.vectorstores import VectorStore
-from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatOpenAI
-from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline
-from langchain.output_parsers import PydanticOutputParser
-from langchain_openai import OpenAIEmbeddings
 
 
 # Import vector store implementations - dynamic for flexibility
 from utils.embedding_dimensions import (
     DEFAULT_EMBEDDING_DIMENSION,
     build_zero_vector,
-    measure_embedding_dimension,
+    get_target_embedding_dimension,
 )
 from rag import ask as rag_ask
 from rag.vector_store import (
@@ -69,9 +48,6 @@ except Exception:  # pragma: no cover
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-_HF_EMBEDDING_CACHE: Dict[str, HuggingFaceEmbeddings] = {}
-_HF_EMBEDDING_CACHE_LOCK = threading.Lock()
 
 
 def _enqueue_heavy_hydration(user_id: int, conversation_id: int) -> None:
@@ -143,30 +119,8 @@ def _extract_configured_dimension(
 
     return None
 
-
-def _get_cached_hf_embeddings(
-    model_name: str,
-    model_kwargs: Dict[str, Any],
-    encode_kwargs: Dict[str, Any],
-) -> HuggingFaceEmbeddings:
-    """Return a shared HuggingFace embedding instance for ``model_name``."""
-
-    with _HF_EMBEDDING_CACHE_LOCK:
-        embeddings = _HF_EMBEDDING_CACHE.get(model_name)
-        if embeddings is None:
-            embeddings = HuggingFaceEmbeddings(
-                model_name=model_name,
-                model_kwargs=model_kwargs,
-                encode_kwargs=encode_kwargs,
-            )
-            _HF_EMBEDDING_CACHE[model_name] = embeddings
-    return embeddings
-
 class MemoryEmbeddingService:
-    """
-    Service for embedding and retrieving memories using LangChain with
-    multiple vector store backends.
-    """
+    """Embed and retrieve memories using hosted Agents or local vector stores."""
     
     def __init__(
         self,
@@ -244,7 +198,6 @@ class MemoryEmbeddingService:
         
         # Initialize variables to be set up later
         self.vector_db = None
-        self.embeddings = None
         self._embedding_provider: Optional[Callable[[str], Awaitable[Sequence[float]]]] = None
         self.embedding_source_dimension: Optional[int] = None
         self.target_embedding_dimension: Optional[int] = None
@@ -290,13 +243,63 @@ class MemoryEmbeddingService:
     
     async def _setup_embeddings(self) -> None:
         """Set up the embedding model."""
-        loop = asyncio.get_running_loop()
-
         embedding_section: Dict[str, Any] = {}
         if isinstance(self.config, dict):
             embedding_section = self.config.get("embedding") or {}
 
         configured_dimension = self._configured_dimension
+
+        try:
+            target_hint = int(get_target_embedding_dimension(config=self.config))
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Unable to resolve target embedding dimension: %s", exc)
+            target_hint = 0
+
+        if target_hint <= 0:
+            target_hint = configured_dimension or DEFAULT_EMBEDDING_DIMENSION
+
+        def _normalise_dimensions(values: Sequence[float]) -> List[float]:
+            data = [float(value) for value in values]
+            target = target_hint or configured_dimension or DEFAULT_EMBEDDING_DIMENSION
+            if len(data) == target:
+                return data
+            if len(data) > target:
+                return data[:target]
+            return data + [0.0] * (target - len(data))
+
+        async def _hosted_embedding_provider(
+            text: str,
+            *,
+            _operation: str,
+            _model_name: str,
+        ) -> Sequence[float]:
+            response = await rag_ask.ask(
+                text,
+                mode="embedding",
+                metadata={
+                    "component": "memory.memory_service",
+                    "operation": _operation,
+                    "model": _model_name,
+                },
+                model=_model_name,
+                dimensions=target_hint,
+            )
+            vector = response.get("embedding") if isinstance(response, dict) else None
+            if vector is None:
+                raise ValueError("Embedding response missing vector payload")
+            return _normalise_dimensions(vector)
+
+        async def _offline_embedding_provider(text: str) -> Sequence[float]:
+            from nyx.core.memory.embeddings import embed_texts as nyx_embed_texts  # local import to defer heavy deps
+
+            vectors = await nyx_embed_texts([text])
+            if getattr(vectors, "size", 0) == 0:
+                raise ValueError("Offline embedding pipeline returned no vectors")
+
+            row = vectors[0]
+            if hasattr(row, "tolist"):
+                row = row.tolist()
+            return _normalise_dimensions(row)
 
         if self._fast_mode_enabled:
             model_name = "text-embedding-3-small"
@@ -309,35 +312,14 @@ class MemoryEmbeddingService:
                 if isinstance(candidate, str) and candidate.strip():
                     model_name = candidate
 
-            embeddings = OpenAIEmbeddings(model=model_name)
-
-            async def _fast_openai_provider(
-                text: str,
-                *,
-                _embeddings: OpenAIEmbeddings = embeddings,
-            ) -> Sequence[float]:
-                loop = asyncio.get_running_loop()
-                return await loop.run_in_executor(
-                    None, lambda: _embeddings.embed_query(text)
+            async def _fast_provider(text: str) -> Sequence[float]:
+                return await _hosted_embedding_provider(
+                    text,
+                    _operation="fast-openai-provider",
+                    _model_name=model_name,
                 )
 
-            self.embeddings = embeddings
-            self._embedding_provider = _fast_openai_provider
-
-            def _probe_dimension() -> Optional[int]:
-                try:
-                    vector = embeddings.embed_query("embedding-dimension-probe")
-                    return len(list(vector))
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "Unable to probe OpenAI embedding dimension in fast mode; falling back. Error: %s",
-                        exc,
-                    )
-                    return None
-
-            self.embedding_source_dimension = await loop.run_in_executor(
-                None, _probe_dimension
-            )
+            self._embedding_provider = _fast_provider
 
         elif self.embedding_model == "openai":
             model_name = "text-embedding-3-small"
@@ -350,88 +332,31 @@ class MemoryEmbeddingService:
                 if isinstance(candidate, str) and candidate.strip():
                     model_name = candidate
 
-            async def _openai_provider(text: str, *, _model: str = model_name) -> Sequence[float]:
-                response = await rag_ask(
+            async def _openai_provider(text: str) -> Sequence[float]:
+                return await _hosted_embedding_provider(
                     text,
-                    mode="embedding",
-                    metadata={
-                        "component": "memory.memory_service",
-                        "operation": "openai-provider",
-                        "model": _model,
-                    },
-                    model=_model,
+                    _operation="openai-provider",
+                    _model_name=model_name,
                 )
-                vector = response.get("embedding") if isinstance(response, dict) else None
-                if vector is None:
-                    raise ValueError("Embedding response missing vector")
-                return [float(v) for v in vector]
 
-            self.embeddings = None
             self._embedding_provider = _openai_provider
-
-            try:
-                probe_vector = await self._embedding_provider("embedding-dimension-probe")
-                if hasattr(probe_vector, "tolist"):
-                    probe_vector = probe_vector.tolist()  # type: ignore[assignment]
-                self.embedding_source_dimension = len(list(probe_vector))
-            except Exception as exc:
-                self.embedding_source_dimension = None
-                logger.warning(
-                    "Unable to probe OpenAI embedding dimension; falling back to configuration. Error: %s",
-                    exc,
-                )
         else:
-            model_name = "sentence-transformers/all-mpnet-base-v2"
-            if isinstance(embedding_section, dict):
-                candidate = embedding_section.get("model_name") or embedding_section.get("hf_embedding_model")
-                if isinstance(candidate, str) and candidate.strip():
-                    model_name = candidate
-            if isinstance(self.config, dict):
-                candidate = self.config.get("hf_embedding_model")
-                if isinstance(candidate, str) and candidate.strip():
-                    model_name = candidate
+            async def _local_provider(text: str) -> Sequence[float]:
+                return await _offline_embedding_provider(text)
 
-            model_kwargs: Dict[str, Any] = {"device": "cpu"}
-            encode_kwargs: Dict[str, Any] = {"normalize_embeddings": True}
+            self._embedding_provider = _local_provider
 
-            if isinstance(embedding_section, dict):
-                section_model_kwargs = embedding_section.get("model_kwargs")
-                if isinstance(section_model_kwargs, dict):
-                    model_kwargs.update(section_model_kwargs)
-                section_encode_kwargs = embedding_section.get("encode_kwargs")
-                if isinstance(section_encode_kwargs, dict):
-                    encode_kwargs.update(section_encode_kwargs)
+        if self._embedding_provider is None:
+            raise RuntimeError("Failed to configure embedding provider")
 
-            embeddings = await loop.run_in_executor(
-                None,
-                lambda: _get_cached_hf_embeddings(
-                    model_name,
-                    model_kwargs,
-                    encode_kwargs,
-                ),
-            )
-
-            async def _hf_provider(text: str, *, _embeddings: HuggingFaceEmbeddings = embeddings) -> Sequence[float]:
-                loop = asyncio.get_running_loop()
-                return await loop.run_in_executor(
-                    None, lambda: _embeddings.embed_query(text)
-                )
-
-            self.embeddings = embeddings
-            self._embedding_provider = _hf_provider
-
-            def _probe_dimension() -> Optional[int]:
-                try:
-                    return measure_embedding_dimension(embeddings)
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "Unable to probe HuggingFace embedding dimension; falling back. Error: %s",
-                        exc,
-                    )
-                    return None
-
-            self.embedding_source_dimension = await loop.run_in_executor(
-                None, _probe_dimension
+        try:
+            probe_vector = await self._embedding_provider("embedding-dimension-probe")
+            self.embedding_source_dimension = len(list(probe_vector))
+        except Exception as exc:
+            self.embedding_source_dimension = None
+            logger.warning(
+                "Unable to probe embedding dimension; falling back to configuration. Error: %s",
+                exc,
             )
 
         if self.embedding_source_dimension is not None:
@@ -448,7 +373,7 @@ class MemoryEmbeddingService:
         elif configured_dimension is not None:
             self.target_embedding_dimension = configured_dimension
         else:
-            self.target_embedding_dimension = DEFAULT_EMBEDDING_DIMENSION
+            self.target_embedding_dimension = target_hint or DEFAULT_EMBEDDING_DIMENSION
 
         self.embedding_dimension = self.target_embedding_dimension
 
@@ -521,16 +446,7 @@ class MemoryEmbeddingService:
                 embedding = list(embedding)
             embedding = [float(value) for value in embedding]
 
-            expected_dim = self._get_target_dimension()
-            if len(embedding) != expected_dim:
-                logger.error(
-                    "Embedding dimension mismatch: expected %d values, received %d.",
-                    expected_dim,
-                    len(embedding),
-                )
-                return self._get_empty_embedding()
-
-            return embedding
+            return self._normalise_embedding_length(embedding)
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
             # Return an empty vector as fallback
@@ -539,6 +455,21 @@ class MemoryEmbeddingService:
     def _get_empty_embedding(self) -> List[float]:
         """Get an empty embedding vector with the correct dimension."""
         return build_zero_vector(self._get_target_dimension())
+
+    def _normalise_embedding_length(self, values: Sequence[float]) -> List[float]:
+        target = self._get_target_dimension()
+        data = list(values)
+        if len(data) == target:
+            return data
+        if len(data) > target:
+            logger.debug(
+                "Truncating embedding from %d to %d dimensions", len(data), target
+            )
+            return data[:target]
+        logger.debug(
+            "Padding embedding from %d to %d dimensions", len(data), target
+        )
+        return data + [0.0] * (target - len(data))
     
     def _coerce_embedding_input(
         self,

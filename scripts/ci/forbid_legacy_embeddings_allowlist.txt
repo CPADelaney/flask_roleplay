@@ -1,11 +1,7 @@
 # pattern_name|glob
 # Allow existing HuggingFaceEmbeddings usage in legacy modules slated for migration.
-HUGGINGFACE_EMBEDDINGS|memory/memory_service.py
 HUGGINGFACE_EMBEDDINGS|memory/memory_retriever.py
 HUGGINGFACE_EMBEDDINGS|utils/embedding_dimensions.py
-HUGGINGFACE_EMBEDDINGS|tests/memory_tests/test_memory_embedding_service.py
 # Allow OpenAIEmbeddings references in migration shims.
 OPENAI_EMBEDDINGS|memory/memory_retriever.py
 OPENAI_EMBEDDINGS|utils/embedding_dimensions.py
-OPENAI_EMBEDDINGS|memory/memory_service.py
-OPENAI_EMBEDDINGS|tests/memory_tests/test_memory_embedding_service.py
