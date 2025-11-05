@@ -6,7 +6,10 @@ import asyncpg
 import os
 import logging
 from db.connection import get_db_connection_context
-from logic.universal_updater_agent import apply_universal_updates_async 
+from logic.universal_updater_agent import (
+    UniversalUpdaterContext,
+    apply_universal_updates_async,
+)
 from logic.aggregator_sdk import get_aggregated_roleplay_context
 
 universal_bp = Blueprint("universal_bp", __name__)
@@ -31,11 +34,31 @@ async def universal_update():
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid conversation_id format"}), 400
 
-    # 3) Use the async context manager
+    # 3) Prepare universal updater context
+    updater_ctx = None
+    try:
+        updater_ctx = UniversalUpdaterContext(user_id, conversation_id)
+        await updater_ctx.initialize()
+    except Exception as ctx_err:
+        logger.warning(
+            "Failed to initialize UniversalUpdaterContext for user=%s conversation=%s: %s",
+            user_id,
+            conversation_id,
+            ctx_err,
+            exc_info=True,
+        )
+
+    # 4) Use the async context manager
     async with get_db_connection_context() as conn:
         try:
-            # 4) Call the updater with all required parameters
-            result = await apply_universal_updates_async(user_id, conversation_id, data, conn)
+            # 5) Call the updater with all required parameters
+            result = await apply_universal_updates_async(
+                updater_ctx,
+                user_id,
+                conversation_id,
+                data,
+                conn,
+            )
             if "error" in result:
                 return jsonify(result), 500
             else:
