@@ -50,6 +50,8 @@ CLIENT: Optional[genai.Client] = genai.Client(api_key=_GEMINI_KEY) if _GEMINI_KE
 # Maps grounding requires a 2.5 model (or 2.0 Flash). Default to 2.5 Flash.
 _GEMINI_MODEL_NAME = os.getenv("GOOGLE_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
+GEMINI_EVENTS_TIMEOUT_S = 10
+
 # Routes + Places (v1) endpoints (httpx calls)
 _ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
 _PLACES_BASE = "https://places.googleapis.com/v1"
@@ -328,14 +330,27 @@ async def _schema_only_events(text_source: str) -> List[Dict[str, Any]]:
     )
 
     try:
-        response = await CLIENT.aio.models.generate_content(
-            model=_GEMINI_MODEL_NAME,
-            contents=prompt,
-            config=config,
+        response = await asyncio.wait_for(
+            CLIENT.aio.models.generate_content(
+                model=_GEMINI_MODEL_NAME,
+                contents=prompt,
+                config=config,
+            ),
+            timeout=GEMINI_EVENTS_TIMEOUT_S,
         )
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        return []
+    except genai_errors.APIError as e:
+        LOGGER.warning("Failed to extract structured events: %s", e)
+        return []
+    except Exception as exc:
+        LOGGER.warning("Unexpected error extracting structured events: %s", exc)
+        return []
+
+    try:
         parsed = json.loads(response.text or "{}")
         return parsed.get("events") or []
-    except (json.JSONDecodeError, genai_errors.APIError) as e:
+    except json.JSONDecodeError as e:
         LOGGER.warning("Failed to extract structured events: %s", e)
         return []
 
