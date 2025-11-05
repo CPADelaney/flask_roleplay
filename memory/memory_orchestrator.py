@@ -421,16 +421,15 @@ class MemoryOrchestrator:
                 logger.warning(f"Agent wrapper init failed: {e}")
                 self.memory_agent_wrapper = None
 
-            # --- Retriever (NEW preferred: LangChain MemoryRetrieverAgent) ---
+            # --- Retriever (NEW preferred: OpenAI-native MemoryRetrieverAgent) ---
             # Fallback: legacy memory.retriever_agent.RetrieverAgent
             try:
                 if LC_MemoryRetrieverAgent:
-                    llm_type = (self.memory_config or {}).get("llm", {}).get("type", "openai")
-                    # Adapt config keys expected by the retriever
+                    # Force OpenAI-only path; we no longer support HF/LangChain here.
+                    llm_type = "openai"
                     retriever_cfg = dict(self.memory_config or {})
                     llm_cfg = (self.memory_config or {}).get("llm", {})
                     retriever_cfg["openai_model_name"] = llm_cfg.get("openai_model", "gpt-5-nano")
-                    retriever_cfg["hf_model_name"] = llm_cfg.get("huggingface_model", "mistralai/Mistral-7B-Instruct-v0.2")
                     retriever_cfg["temperature"] = llm_cfg.get("temperature", 0.0)
                     self.retriever_agent = LC_MemoryRetrieverAgent(
                         user_id=self.user_id,
@@ -2506,12 +2505,17 @@ class MemoryOrchestrator:
                     if rr and rr.get("found_memories"):
                         context.setdefault("memory_analysis", {})
                         ma = rr.get("analysis")
-                        if ma and hasattr(ma, "dict"):
-                            ma = ma.dict()
+                        # Prefer direct dict payload; fallback to pydantic-like objects with .dict()
+                        if isinstance(ma, dict):
+                            analysis_payload = ma
+                        elif ma and hasattr(ma, "dict"):
+                            analysis_payload = ma.dict()
+                        else:
+                            analysis_payload = {}
                         context["memory_analysis"].update({
-                            "primary_theme": (ma or {}).get("primary_theme"),
-                            "insights": (ma or {}).get("insights", []),
-                            "suggested_response": (ma or {}).get("suggested_response")
+                            "primary_theme": analysis_payload.get("primary_theme"),
+                            "insights": analysis_payload.get("insights", []),
+                            "suggested_response": analysis_payload.get("suggested_response")
                         })
             except Exception:
                 pass
