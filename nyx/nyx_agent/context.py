@@ -1772,14 +1772,32 @@ class ContextBroker:
                     self.metrics['cache_hits']['bundle'] += 1
                     return refreshed
             
-            # No bundle or all sections stale - fetch everything
+            # No bundle or all sections stale - build shallow bundle fast, then trigger full build
             self.metrics['cache_misses']['bundle'] += 1
-            bundle = await self.fetch_bundle(scene_scope)
-            
-            # Cache it
-            await self._save_cache(scene_key, bundle)
-            
-            return bundle
+
+            cold_budget_ms = int(os.getenv("NYX_COLD_BUNDLE_BUDGET_MS", "2000"))
+            shallow_bundle = await self._build_shallow_bundle(scene_scope, budget_ms=cold_budget_ms)
+
+            # Cache shallow bundle immediately so callers can proceed
+            await self._save_cache(scene_key, shallow_bundle)
+
+            # Fire-and-forget full build so subsequent calls benefit from fresh data
+            background_task = asyncio.create_task(
+                self._background_full_fetch(scene_key, scene_scope)
+            )
+
+            tracker = getattr(self.ctx, "_track_background_task", None)
+            if callable(tracker):
+                tracker(
+                    background_task,
+                    task_name="context_full_bundle_refresh",
+                    task_details={"scene_key": scene_key},
+                )
+
+            self._last_scene_key = scene_key
+            self._last_bundle = shallow_bundle
+
+            return shallow_bundle
     
     async def _refresh_stale_sections(self, bundle: ContextBundle, scope: SceneScope) -> Optional[ContextBundle]:
         """Refresh only stale sections of a bundle, preserving metadata and using orchestrator deltas for conflicts."""
@@ -1925,33 +1943,50 @@ class ContextBroker:
         return result
     
     async def fetch_bundle(self, scene_scope: SceneScope) -> ContextBundle:
-        """Fetch all context sections in parallel"""
+        """Fetch all context sections in parallel (full build)."""
+        return await self.fetch_bundle_full(scene_scope)
+
+    async def _background_full_fetch(self, scene_key: str, scene_scope: SceneScope) -> None:
+        """Build and cache the full bundle without blocking the caller."""
+        try:
+            full_bundle = await self.fetch_bundle_full(scene_scope)
+        except Exception:
+            logger.debug("Background full-bundle fetch failed", exc_info=True)
+            return
+
+        try:
+            await self._save_cache(scene_key, full_bundle)
+        except Exception:
+            logger.debug("Failed to save background bundle to cache", exc_info=True)
+
+        self._last_scene_key = scene_key
+        self._last_bundle = full_bundle
+
+    async def fetch_bundle_full(self, scene_scope: SceneScope) -> ContextBundle:
+        """Full bundle build that fetches all sections in parallel."""
         start_time = time.time()
-        
+
         # Use semaphore to limit parallelism if configured
         max_parallel = self.ctx.max_parallel_tasks
         semaphore = asyncio.Semaphore(max_parallel) if max_parallel > 0 else None
-        
+
         async def fetch_with_semaphore(section_name: str):
             if semaphore:
                 async with semaphore:
                     return await self._fetch_section(section_name, scene_scope)
-            else:
-                return await self._fetch_section(section_name, scene_scope)
-        
-        # Parallel fetch all sections
+            return await self._fetch_section(section_name, scene_scope)
+
         results = await asyncio.gather(
             *[fetch_with_semaphore(name) for name in SECTION_NAMES],
             return_exceptions=True
         )
-        
-        # Handle results
+
         bundle_data = {}
         for section_name, result in zip(SECTION_NAMES, results):
             if isinstance(result, Exception):
                 logger.error(f"Failed to fetch {section_name}: {result}")
                 bundle_data[section_name] = BundleSection(
-                    data={}, 
+                    data={},
                     canonical=False,
                     priority=0,
                     last_changed_at=time.time(),
@@ -1959,19 +1994,186 @@ class ContextBroker:
                 )
             else:
                 bundle_data[section_name] = result
-        
+
         fetch_time = time.time() - start_time
         logger.info(f"Fetched context bundle in {fetch_time:.2f}s")
-        
-        # Add link hints and schema version to metadata
+
         return ContextBundle(
             scene_scope=scene_scope,
             **bundle_data,
             metadata={
                 'fetch_time': fetch_time,
-                'schema_version': SCHEMA_VERSION,  # Use constant
+                'schema_version': SCHEMA_VERSION,
                 'link_hints': scene_scope.link_hints
             }
+        )
+
+    async def _build_shallow_bundle(self, scope: SceneScope, budget_ms: int = 2000) -> ContextBundle:
+        """Build a fast, shallow bundle for cold misses within a tight budget."""
+
+        start = time.time()
+
+        def _remaining_seconds() -> float:
+            elapsed = time.time() - start
+            return max(0.1, budget_ms / 1000.0 - elapsed)
+
+        # WORLD (fast snapshot via world director)
+        world_section = BundleSection(data={}, canonical=False, priority=4,
+                                      last_changed_at=time.time(),
+                                      ttl=self.section_ttls.get('world', 15.0),
+                                      version='world_shallow')
+        try:
+            if self.ctx.world_director and _remaining_seconds() > 0.1:
+                world_bundle = await asyncio.wait_for(
+                    self.ctx.world_director.context.get_world_bundle(fast=True),
+                    timeout=min(1.0, _remaining_seconds()),
+                )
+                summary = world_bundle.get('summary', {}) if isinstance(world_bundle, dict) else {}
+                world_section = BundleSection(
+                    data=summary,
+                    canonical=False,
+                    priority=4,
+                    last_changed_at=time.time(),
+                    ttl=self.section_ttls.get('world', 15.0),
+                    version='world_shallow',
+                )
+        except Exception:
+            logger.debug("Shallow world fetch failed", exc_info=True)
+
+        # Preload comprehensive context (best-effort) for NPCs and metadata
+        aggregated_context: Optional[Dict[str, Any]] = None
+        try:
+            aggregated_context = await asyncio.wait_for(
+                get_comprehensive_context(
+                    user_id=self.ctx.user_id,
+                    conversation_id=self.ctx.conversation_id,
+                    input_text=getattr(self.ctx, 'last_user_input', '') or '',
+                    location=scope.location_id or scope.location_name,
+                    context_budget=1000,
+                    use_delta=True,
+                    summary_level=0,
+                ),
+                timeout=min(0.8, _remaining_seconds()),
+            )
+        except Exception:
+            logger.debug("Shallow aggregated context fetch failed", exc_info=True)
+
+        # NPCs (projection only)
+        npc_data = []
+        if aggregated_context:
+            raw_npcs = aggregated_context.get('npcsPresent') or []
+            for row in raw_npcs[:5]:
+                if not isinstance(row, dict):
+                    continue
+                npc_data.append({
+                    'id': row.get('npc_id') or row.get('id'),
+                    'name': row.get('npc_name') or row.get('name'),
+                    'role': row.get('role'),
+                    'current_location': row.get('current_location') or row.get('location'),
+                    'relationship': {
+                        'trust': row.get('trust'),
+                        'respect': row.get('respect'),
+                        'closeness': row.get('closeness'),
+                    }
+                })
+        else:
+            for npc_id in self.ctx.current_scene_npcs[:5]:
+                snapshot = self.ctx.npc_snapshots.get(npc_id, {})
+                if not isinstance(snapshot, dict):
+                    snapshot = {}
+                npc_data.append({
+                    'id': npc_id,
+                    'name': snapshot.get('name'),
+                    'role': snapshot.get('role'),
+                    'current_location': snapshot.get('current_location'),
+                    'relationship': snapshot.get('relationship', {}),
+                })
+
+        npcs_section = BundleSection(
+            data=NPCSectionData(npcs=npc_data, canonical_count=0),
+            canonical=False,
+            priority=8,
+            last_changed_at=time.time(),
+            ttl=self.section_ttls.get('npcs', 30.0),
+            version='npcs_shallow',
+        )
+
+        # Conflicts (cheap system state only)
+        conflicts_section = BundleSection(
+            data={'active': [], 'tensions': {}, 'opportunities': []},
+            canonical=False,
+            priority=5,
+            last_changed_at=time.time(),
+            ttl=self.section_ttls.get('conflicts', 30.0),
+            version='conflicts_shallow',
+        )
+        if self.conflict_synthesizer and _remaining_seconds() > 0.2:
+            try:
+                state = await asyncio.wait_for(
+                    self.conflict_synthesizer.get_system_state(),
+                    timeout=min(0.7, _remaining_seconds()),
+                )
+            except Exception:
+                logger.debug("Shallow conflict state fetch failed", exc_info=True)
+            else:
+                if isinstance(state, dict):
+                    conflicts_section = BundleSection(
+                        data={
+                            'active': (state.get('active_conflicts') or [])[:2],
+                            'tensions': state.get('metrics') or {},
+                            'opportunities': [],
+                        },
+                        canonical=False,
+                        priority=5,
+                        last_changed_at=time.time(),
+                        ttl=self.section_ttls.get('conflicts', 30.0),
+                        version='conflicts_shallow',
+                    )
+
+        # Lore/Memories/Narrative placeholders
+        lore_section = BundleSection(
+            data=LoreSectionData(location={}, world={}, canonical_rules=[]),
+            canonical=False,
+            priority=6,
+            last_changed_at=time.time(),
+            ttl=self.section_ttls.get('lore', 300.0),
+            version='lore_shallow',
+        )
+        memories_section = BundleSection(
+            data=MemorySectionData(relevant=[], recent=[], patterns=[]),
+            canonical=False,
+            priority=7,
+            last_changed_at=time.time(),
+            ttl=self.section_ttls.get('memories', 120.0),
+            version='mem_shallow',
+        )
+        narrative_section = BundleSection(
+            data={},
+            canonical=False,
+            priority=3,
+            last_changed_at=time.time(),
+            ttl=self.section_ttls.get('narrative', 30.0),
+            version='narr_shallow',
+        )
+
+        metadata = {
+            'schema_version': SCHEMA_VERSION,
+            'link_hints': scope.link_hints,
+            'fetch_time': time.time() - start,
+            'shallow': True,
+        }
+        if aggregated_context:
+            metadata['source'] = 'aggregated_context'
+
+        return ContextBundle(
+            scene_scope=scope,
+            npcs=npcs_section,
+            memories=memories_section,
+            lore=lore_section,
+            conflicts=conflicts_section,
+            world=world_section,
+            narrative=narrative_section,
+            metadata=metadata,
         )
     
     async def _save_cache(self, scene_key: str, bundle: ContextBundle):
