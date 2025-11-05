@@ -36,6 +36,7 @@ from nyx.location.hierarchy import get_or_create_location
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
 from monitoring.metrics import metrics
 from utils.cache_manager import CacheManager
+from nyx.tasks.background import place_enrichment
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,9 @@ DISNEYLAND_PARK_SHORTCUT = {
 LOCATION_RESOLUTION_CACHE = CacheManager(
     name="location_resolution_cache", max_size=200, ttl=120
 )
+
+
+REAL_WORLD_AFC_MAX_CALLS = 3
 
 async def _track_player_movement(
     user_id: str,
@@ -1127,30 +1131,31 @@ async def resolve_place_or_travel(
                         ),
                     )
 
-    if anchor.scope == "real":
-        if res is None:
-            # ============================================================
-            # REAL WORLD RESOLUTION CHAIN
-            # ============================================================
-            logger.info("[ROUTER] Using real-world resolution chain")
+    if res is None and anchor.scope == "real":
+        # ============================================================
+        # REAL WORLD RESOLUTION CHAIN
+        # ============================================================
+        logger.info("[ROUTER] Using real-world resolution chain")
 
-            skip_result = _should_skip_maps(
-                q,
-                anchor,
-                meta,
-                store,
-                user_id,
-                conversation_id,
-                snapshot=snapshot,
-            )
-            if skip_result:
-                res = skip_result
-            else:
-                # Step 1: Try Gemini with Google Maps grounding first
-                gemini_result: Optional[ResolveResult] = None
-                try:
-                    logger.debug("[ROUTER] Attempting Gemini with Maps grounding...")
-                    gemini_result = await resolve_location_with_gemini(q, anchor)
+        skip_result = _should_skip_maps(q, anchor, meta, store, user_id, conversation_id)
+        if skip_result:
+            res = skip_result
+        else:
+            # Step 1: Try Gemini with Google Maps grounding first
+            gemini_result: Optional[ResolveResult] = None
+            try:
+                logger.debug(
+                    "[ROUTER] Attempting Gemini with Maps grounding (afc_max_calls=%s)...",
+                    REAL_WORLD_AFC_MAX_CALLS,
+                )
+                gemini_result = await resolve_location_with_gemini(
+                    q,
+                    anchor,
+                    afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
+                )
+
+                if gemini_result.errors:
+                    logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
 
                     if gemini_result.errors:
                         logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
@@ -1312,9 +1317,13 @@ async def resolve_place_or_travel(
                     world_name=anchor.world_name,
                     hints=anchor.hints,
                 )
-
-                gemini_result = await resolve_location_with_gemini(q, real_anchor)
-
+                
+                gemini_result = await resolve_location_with_gemini(
+                    q,
+                    real_anchor,
+                    afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
+                )
+                
                 if _has_grounded_results(gemini_result):
                     logger.info(
                         f"[ROUTER] ✓ Found real-world match via Gemini Maps for '{q.target}' "
@@ -1537,5 +1546,21 @@ async def resolve_place_or_travel(
         f"[ROUTER] Final result: status={res.status}, scope={res.scope}, "
         f"candidates={len(res.candidates)}, mixed_world={res.metadata.get('mixed_world') if res.metadata else False}"
     )
+
+    enrichment_scope = res.scope or anchor.scope
+    if enrichment_scope == "real":
+        try:
+            place_enrichment.enqueue(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                query=q,
+                anchor=anchor,
+                result=res,
+                afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
+            )
+        except Exception:
+            logger.warning(
+                "[ROUTER] Failed to enqueue place enrichment task", exc_info=True
+            )
 
     return res

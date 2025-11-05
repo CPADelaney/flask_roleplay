@@ -50,6 +50,8 @@ CLIENT: Optional[genai.Client] = genai.Client(api_key=_GEMINI_KEY) if _GEMINI_KE
 # Maps grounding requires a 2.5 model (or 2.0 Flash). Default to 2.5 Flash.
 _GEMINI_MODEL_NAME = os.getenv("GOOGLE_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
+GEMINI_EVENTS_TIMEOUT_S = 10
+
 # Routes + Places (v1) endpoints (httpx calls)
 _ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
 _PLACES_BASE = "https://places.googleapis.com/v1"
@@ -266,7 +268,11 @@ async def _candidates_from_maps_grounding(gm: Any, anchor: Anchor) -> List[Candi
 # Gemini calls (GenAI SDK)
 # ---------------------------------------------------------------------------
 
-async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Optional[Any]]:
+async def _gemini_tools_call(
+    query: PlaceQuery,
+    anchor: Anchor,
+    afc_max_calls: Optional[int] = None,
+) -> Tuple[str, Optional[Any]]:
     """
     Run Gemini with Maps + Search tools ON using the Google GenAI SDK.
     Returns (free_text, grounding_metadata).
@@ -289,10 +295,25 @@ async def _gemini_tools_call(query: PlaceQuery, anchor: Anchor) -> Tuple[str, Op
             )
         )
 
+    afc_config = None
+    if afc_max_calls is not None:
+        try:
+            capped = max(1, int(afc_max_calls))
+        except (TypeError, ValueError):
+            LOGGER.warning(
+                "Invalid afc_max_calls=%r provided; using library default", afc_max_calls
+            )
+        else:
+            afc_config = types.AutomaticFunctionCallingConfig(
+                maximumRemoteCalls=capped
+            )
+            LOGGER.debug("Applying adaptive function-calling cap=%s", capped)
+
     config = types.GenerateContentConfig(
         temperature=0.2,
         tools=tools,
         tool_config=tool_config,
+        automatic_function_calling=afc_config,
     )
 
     try:
@@ -328,14 +349,27 @@ async def _schema_only_events(text_source: str) -> List[Dict[str, Any]]:
     )
 
     try:
-        response = await CLIENT.aio.models.generate_content(
-            model=_GEMINI_MODEL_NAME,
-            contents=prompt,
-            config=config,
+        response = await asyncio.wait_for(
+            CLIENT.aio.models.generate_content(
+                model=_GEMINI_MODEL_NAME,
+                contents=prompt,
+                config=config,
+            ),
+            timeout=GEMINI_EVENTS_TIMEOUT_S,
         )
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        return []
+    except genai_errors.APIError as e:
+        LOGGER.warning("Failed to extract structured events: %s", e)
+        return []
+    except Exception as exc:
+        LOGGER.warning("Unexpected error extracting structured events: %s", exc)
+        return []
+
+    try:
         parsed = json.loads(response.text or "{}")
         return parsed.get("events") or []
-    except (json.JSONDecodeError, genai_errors.APIError) as e:
+    except json.JSONDecodeError as e:
         LOGGER.warning("Failed to extract structured events: %s", e)
         return []
 
@@ -388,7 +422,32 @@ async def _compute_eta(
 # Public API
 # ---------------------------------------------------------------------------
 
-async def resolve_location_with_gemini(query: PlaceQuery, anchor: Anchor) -> ResolveResult:
+async def resolve_location_with_gemini(
+    query: PlaceQuery,
+    anchor: Anchor,
+    *,
+    afc_max_calls: Optional[int] = None,
+    include_events: bool = False,
+) -> ResolveResult:
+    """Resolve a real-world location using Gemini with Maps grounding.
+
+    Parameters
+    ----------
+    query:
+        Parsed user request for a location or travel destination.
+    anchor:
+        Current player context that guides the Maps grounding call.
+    afc_max_calls:
+        Optional cap applied to Gemini's automatic function-calling layer. When
+        provided, the adapter enforces the ceiling via
+        :class:`types.AutomaticFunctionCallingConfig` so the hot path stays
+        predictable.
+    include_events:
+        When ``False`` (the default) the adapter skips the additional structured
+        events/showtimes enrichment to keep request latency low. The
+        ``nyx.tasks.background.place_enrichment`` worker performs that heavier
+        enrichment asynchronously after the primary response is returned.
+    """
     base = ResolveResult(
         status=STATUS_NOT_FOUND,
         anchor=anchor,
@@ -401,7 +460,7 @@ async def resolve_location_with_gemini(query: PlaceQuery, anchor: Anchor) -> Res
         LOGGER.error("GEMINI_API_KEY / GOOGLE_API_KEY missing")
         return base
     try:
-        text, gm = await _gemini_tools_call(query, anchor)
+        text, gm = await _gemini_tools_call(query, anchor, afc_max_calls=afc_max_calls)
     except genai_errors.APIError as exc:
         base.errors.append(f"gemini_api_error:{exc}")
         base.message = "Gemini lookup failed due to an API error."
@@ -423,7 +482,14 @@ async def resolve_location_with_gemini(query: PlaceQuery, anchor: Anchor) -> Res
     else:
         LOGGER.warning("✗ No Maps grounding in response")
 
-    events = await _schema_only_events(text) if text else []
+    events: List[Dict[str, Any]] = []
+    if include_events:
+        events = await _schema_only_events(text) if text else []
+    elif text:
+        LOGGER.debug(
+            "Skipping event enrichment for '%s'; background worker will fetch events",
+            query.target or query.raw_text,
+        )
     if not candidates and not events:
         base.errors.append("gemini_no_results")
         base.message = f"No matches for '{query.target or query.raw_text}'."
@@ -434,11 +500,15 @@ async def resolve_location_with_gemini(query: PlaceQuery, anchor: Anchor) -> Res
         else STATUS_MULTIPLE if len(candidates) > 1
         else STATUS_NOT_FOUND
     )
-    message = (
-        f"Found: {candidates[0].place.name}" if status == STATUS_EXACT
-        else f"Found {len(candidates)} places" if status == STATUS_MULTIPLE
-        else (f"Found {len(events)} event(s)" if events else "No places found")
-    )
+    if status == STATUS_EXACT:
+        message = f"Found: {candidates[0].place.name}"
+    elif status == STATUS_MULTIPLE:
+        message = f"Found {len(candidates)} places"
+    elif include_events and events:
+        message = f"Found {len(events)} event(s)"
+    else:
+        message = "No places found"
+
     operations: List[Dict[str, Any]] = [{"op": "events", "items": events}] if events else []
     return ResolveResult(
         status=status,
