@@ -110,6 +110,66 @@ def test_get_chatgpt_response_nyx_string_narrative(monkeypatch):
     asyncio.run(_run_nyx_string_response_test(monkeypatch))
 
 
+async def _run_force_json_response_headroom_test(monkeypatch):
+    """Forcing JSON responses should expand the output token budget."""
+
+    captured: dict[str, dict] = {}
+    fake_client = object()
+
+    monkeypatch.setattr(chatgpt, "get_db_connection_context", _fake_db_context)
+    async def _fake_check_preset_story(conversation_id):
+        return None
+
+    monkeypatch.setattr(chatgpt, "check_preset_story", _fake_check_preset_story)
+
+    async def _fake_build_message_history(*args, **kwargs):
+        return [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "hi"},
+        ]
+
+    monkeypatch.setattr(chatgpt, "build_message_history", _fake_build_message_history)
+
+    monkeypatch.setattr(
+        chatgpt.OpenAIClientManager,
+        "async_client",
+        property(lambda self: fake_client),
+    )
+
+    async def _fake_responses_create_with_retry(client, params):
+        captured["params"] = params.copy()
+        return types.SimpleNamespace(
+            output=[],
+            output_text="{}",
+            usage=types.SimpleNamespace(input_tokens=100, output_tokens=50),
+        )
+
+    monkeypatch.setattr(
+        chatgpt,
+        "_responses_create_with_retry",
+        _fake_responses_create_with_retry,
+    )
+
+    result = await chatgpt.get_chatgpt_response(
+        conversation_id=1,
+        aggregator_text="context",
+        user_input="hello",
+        reflection_enabled=False,
+        use_nyx_integration=False,
+        force_json_response=True,
+    )
+
+    assert captured["params"]["model"] == "gpt-5-nano"
+    expected_budget = chatgpt._compute_forced_json_max_tokens("gpt-5-nano", 2048)
+    assert captured["params"]["max_output_tokens"] == expected_budget
+    assert "tool_choice" not in captured["params"]
+    assert result["type"] == "input_text"
+
+
+def test_force_json_response_headroom(monkeypatch):
+    asyncio.run(_run_force_json_response_headroom_test(monkeypatch))
+
+
 def test_convert_response_to_array_format_preserves_pre_normalized_lists():
     roleplay_updates = [{"key": "CurrentYear", "value": 2088}]
     chase_schedule = [
