@@ -99,6 +99,43 @@ MODEL_TOKEN_LIMITS = {
     "default": 4096
 }
 
+# When forcing raw JSON output, allow the model more headroom while staying
+# shy of the maximum context window. This prevents premature truncation when
+# the model attempts to serialize large objects.
+FORCED_JSON_SAFETY_MARGIN = 256
+FORCED_JSON_MIN_TOKENS = 3500
+
+
+def _compute_forced_json_max_tokens(
+    model: str | None,
+    current_value: int | None,
+) -> int | None:
+    """Return the adjusted max token budget for forced JSON responses."""
+
+    if not isinstance(current_value, int):
+        return current_value
+
+    limit = MODEL_TOKEN_LIMITS.get(model or "", MODEL_TOKEN_LIMITS["default"])
+    headroom_cap = max(limit - FORCED_JSON_SAFETY_MARGIN, current_value)
+    desired_budget = max(current_value, FORCED_JSON_MIN_TOKENS)
+
+    return min(headroom_cap, desired_budget)
+
+
+def _apply_forced_json_token_headroom(params: dict[str, Any]) -> None:
+    """Mutate request params in-place to expand JSON response headroom."""
+
+    if not isinstance(params, dict):
+        return
+
+    new_budget = _compute_forced_json_max_tokens(
+        params.get("model"),
+        params.get("max_output_tokens"),
+    )
+
+    if isinstance(new_budget, int):
+        params["max_output_tokens"] = new_budget
+
 # Updated schema with arrays instead of object maps
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
@@ -1457,6 +1494,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
         if force_json_response:
             # For world-building: request a direct JSON object.
             logger.debug("Requesting direct JSON object response (force_json_response=True)")
+            _apply_forced_json_token_headroom(params)
         else:
             # For game actions: force the universal update tool.
             tools_payload = ToolSchemaManager.get_all_tools()
@@ -1606,6 +1644,7 @@ DO NOT produce user-facing text here; only the JSON.
         # Apply the same force_json_response logic for reflection path
         if force_json_response:
             logger.debug("Requesting direct JSON object response (force_json_response=True) for reflection final step")
+            _apply_forced_json_token_headroom(final_params)
         else:
             final_tools_payload = ToolSchemaManager.get_all_tools()
             if final_tools_payload:
