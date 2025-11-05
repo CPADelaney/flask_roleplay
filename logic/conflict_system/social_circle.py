@@ -734,16 +734,15 @@ class SocialCircleManager:
                 name="Gossip Generator",
                 instructions="""
                 Generate realistic gossip for a matriarchal society setting.
-                
-                Create gossip that:
-                - Feels organic to the social dynamics
-                - Has varying levels of truth and exaggeration
-                - Reflects power structures and relationships
-                - Creates interesting social consequences
-                - Ranges from mundane to scandalous
-                
-                Consider the personalities of spreaders and targets.
-                Make gossip feel like real social currency.
+
+                Return **only** a single-line minified JSON object with keys:
+                {"type": "rumor|secret|scandal|praise|warning|speculation",
+                 "content": string,
+                 "truthfulness": number,
+                 "spread_rate": number,
+                 "impact": object}
+
+                No markdown, no code fences, no commentary.
                 """,
                 model="gpt-5-nano",
             )
@@ -874,9 +873,66 @@ class SocialCircleManager:
             )
         )
 
+        def _normalize_gossip(obj: Dict[str, Any]) -> Dict[str, Any]:
+            """Tolerant coercion of model output into our schema."""
+            if not isinstance(obj, dict):
+                raise ValueError("gossip payload is not an object")
+
+            inner = obj.get("gossip") if isinstance(obj.get("gossip"), dict) else obj
+
+            content = (
+                inner.get("content")
+                or inner.get("text")
+                or inner.get("message")
+                or (
+                    inner.get("content", {})
+                    if isinstance(inner.get("content"), dict)
+                    else None
+                )
+            )
+
+            if isinstance(content, dict):
+                content = content.get("content") or content.get("text")
+
+            if not isinstance(content, str) or not content.strip():
+                raise KeyError("content")
+
+            gtype = inner.get("type") or inner.get("gossip_type") or "RUMOR"
+            try:
+                gtype_norm = GossipType[str(gtype).upper()]
+            except Exception:
+                gtype_norm = GossipType.RUMOR
+
+            truth = (
+                inner.get("truthfulness")
+                or inner.get("truth")
+                or inner.get("veracity")
+                or 0.5
+            )
+            spread = (
+                inner.get("spread_rate")
+                or inner.get("spreadProbability")
+                or 0.5
+            )
+            impact = inner.get("impact") or {}
+
+            return {
+                "content": content.strip(),
+                "type": gtype_norm,
+                "truthfulness": float(truth),
+                "spread_rate": float(spread),
+                "impact": impact if isinstance(impact, dict) else {},
+            }
+
+        payload: Optional[str] = None
         try:
             payload = extract_runner_response(result.raw)
-            result_json = json.loads(payload)
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                parsed = {"content": payload.strip()}
+
+            normalized = _normalize_gossip(parsed)
 
             async with get_db_connection_context() as conn:
                 gossip_id = await conn.fetchval(
@@ -888,25 +944,32 @@ class SocialCircleManager:
                     """,
                     self.user_id,
                     self.conversation_id,
-                    result_json['content'],
-                    result_json.get('truthfulness', 0.5),
+                    normalized["content"],
+                    normalized["truthfulness"],
                 )
 
             return GossipItem(
                 gossip_id=gossip_id,
-                gossip_type=GossipType[result_json.get('type', 'RUMOR').upper()],
-                content=result_json['content'],
+                gossip_type=normalized["type"],
+                content=normalized["content"],
                 about=target_npcs or [],
                 spreaders=set(),
                 believers=set(),
                 deniers=set(),
-                spread_rate=result_json.get('spread_rate', 0.5),
-                truthfulness=result_json.get('truthfulness', 0.5),
-                impact=result_json.get('impact', {}),
+                spread_rate=normalized["spread_rate"],
+                truthfulness=normalized["truthfulness"],
+                impact=normalized["impact"],
             )
 
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to generate gossip: {e}")
+        except Exception as e:
+            preview = (
+                (payload[:240] + "…")
+                if isinstance(payload, str) and len(payload) > 240
+                else payload
+            )
+            logger.warning(
+                f"Failed to generate gossip (coercion): {e}; payload_preview={preview!r}"
+            )
             return self._create_fallback_gossip(target_npcs)
 
     async def _run_reputation_llm(
