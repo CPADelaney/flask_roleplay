@@ -71,6 +71,9 @@ except Exception as e:
     redis_publisher = None
 
 
+_context_warm_promises: Dict[Tuple[int, int], asyncio.Future] = {}
+
+
 CONFLICT_CACHE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS CulturalConflictAnalysisCache (
     nation1_id INTEGER NOT NULL,
@@ -348,11 +351,46 @@ def warm_user_context_cache_task(user_id: int, conversation_id: int):
     """Warm the Nyx user context cache for a given conversation."""
 
     async def do_warm_up() -> Dict[str, Any]:
+        key = f"ctx:warmed:{user_id}:{conversation_id}"
+        promise_key = (user_id, conversation_id)
         logger.info(
             "Starting context cache warm-up for user_id=%s conversation_id=%s",
             user_id,
             conversation_id,
         )
+        if redis_publisher is not None:
+            try:
+                cached_value = redis_publisher.get(key)
+            except Exception:
+                logger.exception(
+                    "Redis get failed for context warm cache key=%s", key
+                )
+            else:
+                if cached_value:
+                    logger.info(
+                        "Context cache already warmed for user_id=%s conversation_id=%s",
+                        user_id,
+                        conversation_id,
+                    )
+                    return {
+                        "status": "cached",
+                        "user_id": user_id,
+                        "conversation_id": conversation_id,
+                    }
+
+        existing_future = _context_warm_promises.get(promise_key)
+        if existing_future is not None:
+            logger.info(
+                "Awaiting in-flight context warm for user_id=%s conversation_id=%s",
+                user_id,
+                conversation_id,
+            )
+            return await existing_future
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        _context_warm_promises[promise_key] = future
+
         try:
             context = NyxContext(user_id=user_id, conversation_id=conversation_id)
             await context.initialize()
@@ -364,14 +402,35 @@ def warm_user_context_cache_task(user_id: int, conversation_id: int):
                 conversation_id,
                 exc,
             )
+            if not future.done():
+                future.set_exception(exc)
+            if _context_warm_promises.get(promise_key) is future:
+                _context_warm_promises.pop(promise_key, None)
             raise
+
+        result = {
+            "status": "warmed",
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+        }
+        if not future.done():
+            future.set_result(result)
+        if _context_warm_promises.get(promise_key) is future:
+            _context_warm_promises.pop(promise_key, None)
+        if redis_publisher is not None:
+            try:
+                redis_publisher.setex(key, 600, "1")
+            except Exception:
+                logger.exception(
+                    "Redis setex failed for context warm cache key=%s", key
+                )
 
         logger.info(
             "Successfully warmed context cache for user_id=%s conversation_id=%s",
             user_id,
             conversation_id,
         )
-        return {"status": "warmed", "user_id": user_id, "conversation_id": conversation_id}
+        return result
 
     return run_async_in_worker_loop(do_warm_up())
 
