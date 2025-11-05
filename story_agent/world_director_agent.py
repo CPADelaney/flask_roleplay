@@ -1502,6 +1502,11 @@ class CompleteWorldDirectorContext:
     async def _safe_get_currency_system(self) -> Dict[str, Any]:
         """Safely get currency system"""
         try:
+            if self.currency_generator is None:
+                self.currency_generator = CurrencyGenerator(
+                    self.user_id,
+                    self.conversation_id,
+                )
             return await self.currency_generator.get_currency_system()
         except Exception as e:
             logger.error(f"Error getting currency system: {e}")
@@ -2943,6 +2948,12 @@ class CompleteWorldDirector:
                 self.context = CompleteWorldDirectorContext(
                     user_id=self.user_id,
                     conversation_id=self.conversation_id,
+                )
+
+            if getattr(self.context, "currency_generator", None) is None:
+                self.context.currency_generator = CurrencyGenerator(
+                    self.user_id,
+                    self.conversation_id,
                 )
 
             if getattr(self.context, "canonical_context", None) is None:
