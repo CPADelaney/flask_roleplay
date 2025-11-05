@@ -6,8 +6,6 @@ import sys
 import os
 from types import SimpleNamespace
 
-import numpy as np
-
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -121,16 +119,6 @@ def _patch_vector_backends(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("memory.memory_service.search_hosted_vector_store", lambda *_, **__: [])
     monkeypatch.setattr("memory.memory_service.upsert_hosted_vector_documents", lambda *_, **__: None)
 
-    async def _fake_embed_texts(texts):
-        vectors = []
-        for idx, text in enumerate(texts):
-            base = float((len(text) + idx) % 13)
-            vectors.append([base + i for i in range(8)])
-        return np.asarray(vectors, dtype="float32")
-
-    monkeypatch.setattr("nyx.core.memory.embeddings.embed_texts", _fake_embed_texts)
-
-
 @pytest.fixture
 def memory_config() -> Dict[str, Any]:
     return {
@@ -188,6 +176,18 @@ def _patch_openai_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "memory.memory_service.rag_ask",
         SimpleNamespace(ask=_fake_ask),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _patch_local_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_local_embedding(text: str):
+        base = float(len(text) % 17)
+        return [base + idx for idx in range(8)]
+
+    monkeypatch.setattr(
+        "utils.embedding_service.get_embedding",
+        _fake_local_embedding,
     )
 
 

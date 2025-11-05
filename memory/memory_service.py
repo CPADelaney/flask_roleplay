@@ -258,48 +258,40 @@ class MemoryEmbeddingService:
         if target_hint <= 0:
             target_hint = configured_dimension or DEFAULT_EMBEDDING_DIMENSION
 
-        def _normalise_dimensions(values: Sequence[float]) -> List[float]:
-            data = [float(value) for value in values]
-            target = target_hint or configured_dimension or DEFAULT_EMBEDDING_DIMENSION
-            if len(data) == target:
-                return data
-            if len(data) > target:
-                return data[:target]
-            return data + [0.0] * (target - len(data))
+        requested_dimensions = target_hint or DEFAULT_EMBEDDING_DIMENSION
 
-        async def _hosted_embedding_provider(
+        async def _call_rag_provider(
             text: str,
             *,
-            _operation: str,
-            _model_name: str,
-        ) -> Sequence[float]:
+            operation: str,
+            model_name: str,
+            dimensions: Optional[int] = None,
+        ) -> List[float]:
             response = await rag_ask.ask(
                 text,
                 mode="embedding",
                 metadata={
                     "component": "memory.memory_service",
-                    "operation": _operation,
-                    "model": _model_name,
+                    "operation": operation,
+                    "model": model_name,
                 },
-                model=_model_name,
-                dimensions=target_hint,
+                model=model_name,
+                dimensions=dimensions,
             )
             vector = response.get("embedding") if isinstance(response, dict) else None
             if vector is None:
                 raise ValueError("Embedding response missing vector payload")
-            return _normalise_dimensions(vector)
+            if hasattr(vector, "tolist"):
+                vector = vector.tolist()  # type: ignore[assignment]
+            return [float(value) for value in vector]
 
-        async def _offline_embedding_provider(text: str) -> Sequence[float]:
-            from nyx.core.memory.embeddings import embed_texts as nyx_embed_texts  # local import to defer heavy deps
+        async def _call_local_provider(text: str) -> List[float]:
+            from utils import embedding_service  # local import to avoid circular deps
 
-            vectors = await nyx_embed_texts([text])
-            if getattr(vectors, "size", 0) == 0:
-                raise ValueError("Offline embedding pipeline returned no vectors")
-
-            row = vectors[0]
-            if hasattr(row, "tolist"):
-                row = row.tolist()
-            return _normalise_dimensions(row)
+            vector = await embedding_service.get_embedding(text)
+            if hasattr(vector, "tolist"):
+                vector = vector.tolist()  # type: ignore[assignment]
+            return [float(value) for value in vector]
 
         if self._fast_mode_enabled:
             model_name = "text-embedding-3-small"
@@ -313,10 +305,11 @@ class MemoryEmbeddingService:
                     model_name = candidate
 
             async def _fast_provider(text: str) -> Sequence[float]:
-                return await _hosted_embedding_provider(
+                return await _call_rag_provider(
                     text,
-                    _operation="fast-openai-provider",
-                    _model_name=model_name,
+                    operation="fast-openai-provider",
+                    model_name=model_name,
+                    dimensions=requested_dimensions,
                 )
 
             self._embedding_provider = _fast_provider
@@ -333,16 +326,17 @@ class MemoryEmbeddingService:
                     model_name = candidate
 
             async def _openai_provider(text: str) -> Sequence[float]:
-                return await _hosted_embedding_provider(
+                return await _call_rag_provider(
                     text,
-                    _operation="openai-provider",
-                    _model_name=model_name,
+                    operation="openai-provider",
+                    model_name=model_name,
+                    dimensions=requested_dimensions,
                 )
 
             self._embedding_provider = _openai_provider
         else:
             async def _local_provider(text: str) -> Sequence[float]:
-                return await _offline_embedding_provider(text)
+                return await _call_local_provider(text)
 
             self._embedding_provider = _local_provider
 
@@ -351,7 +345,8 @@ class MemoryEmbeddingService:
 
         try:
             probe_vector = await self._embedding_provider("embedding-dimension-probe")
-            self.embedding_source_dimension = len(list(probe_vector))
+            probe_list = [float(value) for value in probe_vector]
+            self.embedding_source_dimension = len(probe_list)
         except Exception as exc:
             self.embedding_source_dimension = None
             logger.warning(
