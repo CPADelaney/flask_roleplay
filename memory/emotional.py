@@ -3,6 +3,7 @@
 import logging
 import json
 import random
+import re
 import time
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -316,7 +317,7 @@ class EmotionalMemoryManager:
                 }}
             """)
     
-            # ---- Responses API call (strict JSON output) ----
+            # ---- Responses API call (no response_format; SDKs differ) ----
             resp = client.responses.create(
                 model=model,
                 instructions=(
@@ -324,12 +325,43 @@ class EmotionalMemoryManager:
                     "Return ONLY the JSON object described—no extra text."
                 ),
                 input=prompt,
-                # stricter server-side JSON shaping to minimize parsing retries
-                response_format={"type": "json_object"},
             )
-    
+
             # Parse and validate with Pydantic
-            data = json.loads(resp.output_text)
+            raw = getattr(resp, "output_text", None) or getattr(resp, "output", None) or ""
+
+            def _best_effort_json(s: str) -> Dict[str, Any]:
+                # 1) direct JSON
+                try:
+                    return json.loads(s)
+                except Exception:
+                    pass
+                # 2) first top-level {...}
+                start = s.find("{")
+                end = s.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        return json.loads(s[start:end+1])
+                    except Exception:
+                        pass
+                # 3) greedy regex fallback
+                m = re.search(r"\{.*\}", s, flags=re.DOTALL)
+                if m:
+                    try:
+                        return json.loads(m.group(0))
+                    except Exception:
+                        pass
+                # 4) safe neutral default
+                return {
+                    "primary_emotion": "neutral",
+                    "intensity": 0.0,
+                    "secondary_emotions": {},
+                    "valence": 0.0,
+                    "arousal": 0.0,
+                    "explanation": "Fallback: non-JSON response"
+                }
+
+            data = _best_effort_json(raw or "")
             parsed = EmotionalAnalysis.model_validate(data)
             return parsed.model_dump(mode="python")
     
