@@ -97,7 +97,7 @@ async def get_memory_service(
 async def get_memory_retriever(
     user_id: int,
     conversation_id: int,
-    llm_type: str = "openai",  # or "huggingface"
+    llm_type: str = "openai",  # OpenAI Responses pipeline only
     vector_store_type: str = "chroma",
     embedding_model: str = "local",
     config: Optional[Dict[str, Any]] = None
@@ -361,7 +361,7 @@ async def enrich_context_with_memories(
         retriever = await get_memory_retriever(
             user_id=user_id,
             conversation_id=conversation_id,
-            llm_type="openai",  # Use "huggingface" if preferred
+            llm_type="openai",  # Only OpenAI is supported after LangChain removal
             vector_store_type="chroma",  # Or "faiss" or "qdrant"
             embedding_model="local",  # Or "openai"
             config=resolved_config,
@@ -388,10 +388,13 @@ async def enrich_context_with_memories(
             if "memory_analysis" not in context:
                 context["memory_analysis"] = {}
             
+            analysis = memory_result.get("analysis") or {}
+            if hasattr(analysis, "dict"):
+                analysis = analysis.dict()
             context["memory_analysis"] = {
-                "primary_theme": memory_result["analysis"].primary_theme,
-                "insights": [insight.dict() for insight in memory_result["analysis"].insights],
-                "suggested_response": memory_result["analysis"].suggested_response
+                "primary_theme": analysis.get("primary_theme"),
+                "insights": analysis.get("insights", []),
+                "suggested_response": analysis.get("suggested_response"),
             }
         
         return context

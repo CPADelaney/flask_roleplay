@@ -1,32 +1,20 @@
 # memory/memory_retriever.py
 
 """
-Memory Retrieval Agent using LangChain
+Memory Retrieval Agent (OpenAI-native)
 
-This module provides a memory retrieval agent that uses LangChain to
-retrieve and synthesize relevant memory snippets for an AI system.
+Removes LangChain/HuggingFace; uses OpenAI Embeddings + Responses.
+Retrieves memories via MemoryEmbeddingService and synthesizes analysis
+with OpenAI Responses API (JSON output).
 """
 
-import os
-import logging
-import time
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple
-from datetime import datetime
+import json
+import logging
+from typing import Any, Dict, List, Optional
 
-# Updated LangChain imports
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI  # Updated import
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-from langchain_core.vectorstores import VectorStore
-from langchain_core.embeddings import Embeddings
-from langchain_core.runnables import RunnablePassthrough  # New import for chain
-from langchain_core.output_parsers import PydanticOutputParser  # Updated import
-from langchain.prompts import PromptTemplate
-from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline
-from pydantic import BaseModel, Field
-from typing import List
+from openai import OpenAI
+from pydantic import BaseModel, Field, ValidationError
 
 # Import our memory service
 from config.pipeline_config import PipelineConfig
@@ -50,10 +38,7 @@ class MemoryAnalysis(BaseModel):
     suggested_response: str = Field(description="Suggested response incorporating the memories")
 
 class MemoryRetrieverAgent:
-    """
-    Agent for retrieving and analyzing memories relevant to a query.
-    Uses LangChain components and LLM to synthesize information.
-    """
+    """Agent for retrieving and analyzing memories relevant to a query using native OpenAI APIs."""
     
     def __init__(
         self,
@@ -69,7 +54,7 @@ class MemoryRetrieverAgent:
         Args:
             user_id: User ID
             conversation_id: Conversation ID
-            llm_type: Type of LLM to use ("openai" or "huggingface")
+            llm_type: Type of LLM to use (only "openai" is supported)
             memory_service: Optional memory service instance
             config: Optional configuration
         """
@@ -82,9 +67,7 @@ class MemoryRetrieverAgent:
         self.memory_service = memory_service
         
         # Initialize variables to be set later
-        self.llm = None
-        self.memory_analysis_chain = None
-        self.memory_analysis_parser = None
+        self._openai: Optional[OpenAI] = None
         self.initialized = False
     
     async def initialize(self) -> None:
@@ -103,98 +86,61 @@ class MemoryRetrieverAgent:
                     config=self.config
                 )
                 await self.memory_service.initialize()
-            
-            # 2. Set up LLM
-            await self._setup_llm()
-            
-            # 3. Set up LangChain components
-            await self._setup_chains()
-            
+
+            if self.llm_type not in ("openai", None):
+                raise ValueError("Only 'openai' llm_type is supported after LangChain removal")
+
+            # 2. Create OpenAI client
+            self._openai = OpenAI()
+
             self.initialized = True
-            logger.info(f"Memory retriever agent initialized with {self.llm_type} LLM")
+            logger.info("Memory retriever agent initialized (OpenAI-native)")
             
         except Exception as e:
             logger.error(f"Error initializing memory retriever agent: {e}")
             raise
     
-    async def _setup_llm(self) -> None:
-        """Set up the LLM component."""
-        # Use asyncio.to_thread for potentially blocking operations
-        loop = asyncio.get_event_loop()
-        
-        if self.llm_type == "openai":
-            # OpenAI API requires an API key
-            openai_api_key = os.getenv("OPENAI_API_KEY")
-            if not openai_api_key:
-                raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI")
-            
-            model_name = self.config.get("openai_model_name", "gpt-5-nano")
-            temp = self.config.get("temperature")
+    async def _analyze_with_openai(self, query: str, formatted_memories: str) -> Dict[str, Any]:
+        """Call the OpenAI Responses API to get structured JSON analysis."""
+        if not self._openai:
+            self._openai = OpenAI()
 
-            # Updated ChatOpenAI import and initialization
-            self.llm = await loop.run_in_executor(
-                None,
-                lambda: ChatOpenAI(
-                    model=model_name,  # Changed from model_name to model
-                    api_key=openai_api_key,  # Changed from openai_api_key to api_key
-                    **({"temperature": temp} if temp is not None else {})
-                )
-            )
-            
-        elif self.llm_type == "huggingface":
-            # HuggingFace Hub requires an API token
-            hf_token = os.getenv("HUGGINGFACE_API_TOKEN")
-            if not hf_token:
-                raise ValueError("HUGGINGFACE_API_TOKEN environment variable is required for HuggingFace")
-            
-            # You can use a remote model on the Hub
-            model_name = self.config.get("hf_model_name", "mistralai/Mistral-7B-Instruct-v0.2")
-            
-            self.llm = await loop.run_in_executor(
-                None,
-                lambda: HuggingFaceHub(
-                    repo_id=model_name,
-                    huggingfacehub_api_token=hf_token,
-                    model_kwargs={"max_length": 512}
-                )
-            )
-            
-        else:
-            raise ValueError(f"Unsupported LLM type: {self.llm_type}")
-    
-    async def _setup_chains(self) -> None:
-        """Set up LangChain components using the new Runnable pattern."""
-        # Define prompt template for memory analysis
-        memory_analysis_template = """
-        You are analyzing a set of memories retrieved for an AI assistant.
-        Based on the query and retrieved memories, identify the main theme, 
-        key insights, and suggest a response that incorporates the relevant information.
-        
-        Query: {query}
-        
-        Retrieved Memories:
-        {memories}
-        
-        Analyze these memories and respond with a structured summary including:
-        1. The primary theme connecting these memories
-        2. Key insights derived from the memories with their relevance scores
-        3. A suggested response for the AI assistant that subtly incorporates the relevant information
-        
-        {format_instructions}
-        """
-        
-        # Output parser for structured output
-        self.memory_analysis_parser = PydanticOutputParser(pydantic_object=MemoryAnalysis)
-        
-        # Create prompt with template and output parser
-        prompt = PromptTemplate(
-            template=memory_analysis_template,
-            input_variables=["query", "memories"],
-            partial_variables={"format_instructions": self.memory_analysis_parser.get_format_instructions()}
+        system_prompt = (
+            "You analyze retrieved memories and respond with JSON containing the keys: "
+            "primary_theme (string), insights (array of objects with insight, relevance, supporting_memory_ids), "
+            "and suggested_response (string). Return JSON only."
         )
-        
-        # Create the chain using the new Runnable pattern (prompt | llm | parser)
-        self.memory_analysis_chain = prompt | self.llm | self.memory_analysis_parser
+        user_prompt = (
+            f"Query:\n{query}\n\nRetrieved Memories:\n{formatted_memories}\n\n"
+            "Respond strictly with valid JSON matching the schema."
+        )
+
+        def _invoke() -> str:
+            response = self._openai.responses.create(
+                model=self.config.get("openai_model_name", "gpt-5-nano"),
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            return response.output_text
+
+        raw_text = await asyncio.to_thread(_invoke)
+        try:
+            payload = json.loads(raw_text)
+            try:
+                validated = MemoryAnalysis.model_validate(payload)
+                payload = validated.model_dump()
+            except ValidationError as exc:
+                logger.warning("OpenAI analysis payload failed validation: %s", exc)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse JSON response from OpenAI; returning fallback payload")
+            payload = {
+                "primary_theme": "analysis",
+                "insights": [],
+                "suggested_response": raw_text.strip(),
+            }
+        return payload
     
     async def retrieve_memories(
         self,
@@ -268,73 +214,25 @@ class MemoryRetrieverAgent:
         self,
         query: str,
         memories: List[Dict[str, Any]]
-    ) -> MemoryAnalysis:
-        """
-        Analyze memories to extract insights and suggested responses.
-        
-        Args:
-            query: Original query
-            memories: List of retrieved memories
-            
-        Returns:
-            MemoryAnalysis object with insights and suggested response
-        """
+    ) -> Dict[str, Any]:
+        """Analyze memories to extract insights and suggested responses (OpenAI-native)."""
         if not self.initialized:
             await self.initialize()
-        
-        # Format memories for the prompt
+
         formatted_memories = ""
-        for i, memory in enumerate(memories):
-            memory_text = memory.get("memory_text", memory.get("metadata", {}).get("content", ""))
-            entity_type = memory.get("metadata", {}).get("entity_type", "unknown")
-            created_at = memory.get("metadata", {}).get("timestamp", "unknown time")
-            relevance = memory.get("relevance", 0.0)
-            
-            formatted_memories += f"Memory {i+1} [ID: {memory['id']}, Type: {entity_type}, Relevance: {relevance:.2f}]:\n"
-            formatted_memories += f"{memory_text}\n\n"
-        
-        # Use the new chain pattern with async invoke
-        try:
-            # Invoke the chain asynchronously
-            result = await self.memory_analysis_chain.ainvoke({
-                "query": query,
-                "memories": formatted_memories
-            })
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error analyzing memories: {e}")
-            # If parsing fails, try to get raw response and parse manually
-            try:
-                # Run without parser to get raw response
-                chain_without_parser = (
-                    PromptTemplate(
-                        template=self.memory_analysis_chain.first.template,
-                        input_variables=["query", "memories"],
-                        partial_variables={"format_instructions": self.memory_analysis_parser.get_format_instructions()}
-                    ) | self.llm
-                )
-                
-                raw_result = await chain_without_parser.ainvoke({
-                    "query": query,
-                    "memories": formatted_memories
-                })
-                
-                # Try to parse the raw result
-                if hasattr(raw_result, 'content'):
-                    return self.memory_analysis_parser.parse(raw_result.content)
-                else:
-                    return self.memory_analysis_parser.parse(str(raw_result))
-                    
-            except Exception as parse_error:
-                logger.error(f"Error parsing memory analysis: {parse_error}")
-                # Return a default analysis if all fails
-                return MemoryAnalysis(
-                    primary_theme="Unable to analyze memories",
-                    insights=[],
-                    suggested_response="I found some relevant memories but encountered an error analyzing them."
-                )
+        for idx, memory in enumerate(memories, start=1):
+            metadata = memory.get("metadata", {})
+            memory_text = memory.get("memory_text", metadata.get("content", ""))
+            entity_type = metadata.get("entity_type", "unknown")
+            created_at = metadata.get("timestamp", "unknown time")
+            relevance = float(memory.get("relevance", 0.0))
+
+            formatted_memories += (
+                f"Memory {idx} [ID: {memory.get('id')}, Type: {entity_type}, "
+                f"Relevance: {relevance:.2f}, Timestamp: {created_at}]:\n{memory_text}\n\n"
+            )
+
+        return await self._analyze_with_openai(query, formatted_memories)
     
     async def retrieve_and_analyze(
         self,
