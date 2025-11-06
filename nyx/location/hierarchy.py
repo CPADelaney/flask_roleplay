@@ -186,6 +186,7 @@ async def _get_or_create_place(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     meta: Optional[Dict[str, Any]] = None,
+    external_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ensure a place row exists and return identifying fields."""
 
@@ -197,7 +198,7 @@ async def _get_or_create_place(
         if val:
             ordered_path.append(f"{lvl}:{val}")
 
-    place_key = _make_id([scope, level, name, *ordered_path])
+    place_key = str(external_key) if external_key else _make_id([scope, level, name, *ordered_path])
     normalized_name = _slugify(name)
 
     serialized_admin_path = _serialize_admin_path(admin_path)
@@ -215,7 +216,7 @@ async def _get_or_create_place(
             admin_path = COALESCE(Places.admin_path, EXCLUDED.admin_path),
             latitude = COALESCE(Places.latitude, EXCLUDED.latitude),
             longitude = COALESCE(Places.longitude, EXCLUDED.longitude),
-            meta = COALESCE(Places.meta, '{}'::jsonb) || EXCLUDED.meta,
+            meta = EXCLUDED.meta,
             updated_at = NOW()
         RETURNING id, place_key
         """,
@@ -355,6 +356,10 @@ async def assign_hierarchy(
     else:
         path_map[place_level] = place_name
 
+    provided_place_key = candidate.place.key or candidate.place.meta.get("place_key")
+    if provided_place_key:
+        candidate.place.meta["place_key"] = provided_place_key
+
     place_node = await _get_or_create_place(
         conn,
         scope=scope,
@@ -364,6 +369,7 @@ async def assign_hierarchy(
         lat=candidate.place.lat,
         lon=candidate.place.lon,
         meta=candidate.place.meta,
+        external_key=provided_place_key,
     )
     chain.append({"level": place_level, "name": place_name, **place_node})
 
@@ -386,8 +392,9 @@ async def assign_hierarchy(
 
     candidate.edges = edges + list(candidate.edges or [])
 
-    candidate.place.meta.setdefault("place_key", place_node["place_key"])
+    candidate.place.meta["place_key"] = place_node["place_key"]
     candidate.place.meta.setdefault("place_id", place_node["id"])
+    candidate.place.key = place_node["place_key"]
 
     return {
         "chain": chain,

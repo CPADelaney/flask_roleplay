@@ -20,6 +20,7 @@ class _FakeConnection:
         self.admin_path_payloads = []
         self.place_meta_payloads = []
         self.edge_meta_payloads = []
+        self.place_key_payloads = []
 
     async def fetchrow(self, query, *args):
         normalized = " ".join(query.split())
@@ -36,6 +37,9 @@ class _FakeConnection:
 
             if not isinstance(meta_arg, str):
                 raise asyncpg.DataError("meta should be serialized as a JSON string")
+
+            place_key_arg = args[1]
+            self.place_key_payloads.append(place_key_arg)
 
             self._place_id += 1
             return {"id": self._place_id, "place_key": args[1]}
@@ -178,6 +182,7 @@ def test_get_or_create_location_serializes_place_and_edge_meta():
         place=Place(
             name="Arcadia Spire",
             level="venue",
+            key="ext-arcadia-spire",
             address={
                 "_normalized_admin_path": {
                     "country": "Arcadia",
@@ -209,7 +214,12 @@ def test_get_or_create_location_serializes_place_and_edge_meta():
     final_meta = parsed_place_meta[-1]
     assert final_meta["world_name"] == "Clockwork Realm"
     assert final_meta["classification"] == {"tier": "prime"}
+    assert final_meta["place_key"] == "ext-arcadia-spire"
 
     assert conn.edge_meta_payloads, "expected edge metadata writes"
     parsed_edge_meta = [json.loads(payload) for payload in conn.edge_meta_payloads]
     assert all(meta_dict.get("scope") == "fictional" for meta_dict in parsed_edge_meta)
+
+    assert conn.place_key_payloads[-1] == "ext-arcadia-spire"
+    assert candidate.place.meta["place_key"] == "ext-arcadia-spire"
+    assert candidate.place.key == "ext-arcadia-spire"
