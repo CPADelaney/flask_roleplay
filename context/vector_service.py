@@ -395,8 +395,9 @@ class VectorService:
                 
                 # Process each item in the batch
                 for item in batch:
+                    fut = item.get("future")
+                    operation = item.get("operation")
                     try:
-                        operation = item["operation"]
                         if operation == "search":
                             result = await self._perform_search(item["data"])
                         elif operation == "add_memory":
@@ -405,11 +406,25 @@ class VectorService:
                             result = await self.add_entity(item["data"])
                         else:
                             result = {"error": f"Unknown operation: {operation}"}
-                        
-                        # Complete future
-                        item["future"].set_result(result)
+
+                        # Complete future if still pending
+                        if fut and not fut.done():
+                            fut.set_result(result)
+                        else:
+                            logger.debug(
+                                "Batch queue future already resolved or cancelled for operation %s",
+                                operation,
+                            )
                     except Exception as e:
-                        item["future"].set_exception(e)
+                        if fut and not fut.done():
+                            fut.set_exception(e)
+                        else:
+                            logger.debug(
+                                "Batch queue future already resolved or cancelled for operation %s "
+                                "while handling exception: %s",
+                                operation,
+                                e,
+                            )
                     finally:
                         self.batch_queue.task_done()
             
