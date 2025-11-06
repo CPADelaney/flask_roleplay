@@ -258,6 +258,8 @@ async def test_district_matches_anchor_gets_seeded_offset(monkeypatch):
         anchor=anchor,
     )
 
+    assert location.location_name == "Downtown Cafe"
+
     normalized_name = location_hierarchy._normalize_location_name(location.location_name)
     rng = random.Random(f"99:{normalized_name}:offset")
     lat_offset = rng.uniform(-0.001, 0.001)
@@ -315,6 +317,8 @@ async def test_new_district_mints_center_from_anchor(monkeypatch):
         scope="real",
         anchor=anchor,
     )
+
+    assert location.location_name == display_name
 
     normalized_district = location_hierarchy._normalize_location_name(district_name)
     center_rng = random.Random(f"200:{normalized_district}:center")

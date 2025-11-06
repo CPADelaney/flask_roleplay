@@ -162,7 +162,7 @@ def test_get_or_create_location_serializes_admin_path():
         )
     )
 
-    assert location.location_name == "crystal garden"
+    assert location.location_name == "Crystal Garden"
 
     # All admin_path payloads should be serialized JSON strings that round-trip cleanly.
     assert conn.admin_path_payloads, "expected at least one place insert"
@@ -207,7 +207,7 @@ def test_get_or_create_location_serializes_place_and_edge_meta():
         )
     )
 
-    assert location.location_name == "arcadia spire"
+    assert location.location_name == "Arcadia Spire"
 
     assert conn.place_meta_payloads, "expected place metadata writes"
     parsed_place_meta = [json.loads(payload) for payload in conn.place_meta_payloads]
