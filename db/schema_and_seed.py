@@ -399,6 +399,7 @@ async def create_all_tables():
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
                     location_name TEXT NOT NULL,
+                    location_name_lc TEXT GENERATED ALWAYS AS (lower(location_name)) STORED,
                     description TEXT,
                     location_type TEXT,
                     parent_location TEXT,
@@ -426,8 +427,8 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_user_conv_lower_name
-                ON Locations (user_id, conversation_id, lower(location_name));
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_user_conv_name_lc
+                ON Locations (user_id, conversation_id, location_name_lc);
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_locations_embedding_hnsw

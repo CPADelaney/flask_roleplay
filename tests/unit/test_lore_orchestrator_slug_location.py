@@ -120,6 +120,7 @@ async def test_scene_brief_handles_slug_location(monkeypatch):
                 "id",
                 "location_id",
                 "location_name",
+                "location_name_lc",
                 "description",
                 "notable_features",
                 "hidden_aspects",
