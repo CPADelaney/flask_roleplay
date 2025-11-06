@@ -26,6 +26,31 @@ except ImportError:
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
+# Shared summarizer tracking keyed by (user_id, conversation_id)
+_summarizer_instances: Dict[Tuple[int, int], "ProgressiveNarrativeSummarizer"] = {}
+_summarizer_initialized: Set[Tuple[int, int]] = set()
+_summarizer_initializing: Set[Tuple[int, int]] = set()
+_summarizer_ref_counts: Dict[Tuple[int, int], int] = {}
+_summarizer_locks: Dict[Tuple[int, int], asyncio.Lock] = {}
+_summarizer_ready_events: Dict[Tuple[int, int], asyncio.Event] = {}
+
+
+def _conversation_key(user_id: int, conversation_id: int) -> Tuple[int, int]:
+    """Helper to create the shared summarizer key."""
+
+    return (user_id, conversation_id)
+
+
+def _get_conversation_lock(key: Tuple[int, int]) -> asyncio.Lock:
+    """Fetch (or create) the asyncio lock for a conversation."""
+
+    lock = _summarizer_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _summarizer_locks[key] = lock
+    return lock
+
 class SummaryLevel:
     """Enumeration of summary levels"""
     DETAILED = 0   # Full details
@@ -1712,7 +1737,8 @@ class RPGNarrativeManager:
     ):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        
+        self._conversation_key = _conversation_key(user_id, conversation_id)
+
         current_openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
 
         if current_openai_api_key and HAVE_OPENAI:
@@ -1721,7 +1747,7 @@ class RPGNarrativeManager:
             if not HAVE_OPENAI: logger.warning("OpenAI library not found. Using rule-based summarizer.")
             if not current_openai_api_key: logger.warning("OpenAI API key not provided. Using rule-based summarizer.")
             summarizer = RuleSummarizer()
-        
+
         # Use the DSN from db.connection if db_connection_string is not provided explicitly
         effective_db_string = db_connection_string
         if db_connection_string is None:
@@ -1734,27 +1760,122 @@ class RPGNarrativeManager:
             except EnvironmentError:
                 logger.info("No global DB DSN configured. RPGNarrativeManager will operate in memory-only unless db_connection_string is explicitly passed.")
 
-        self.narrative = ProgressiveNarrativeSummarizer(
-            summarizer=summarizer,
-            db_connection_string=effective_db_string,
-            user_id=user_id,
-            conversation_id=conversation_id
-        )
+        self._summarizer_impl = summarizer
+        self._db_connection_string = effective_db_string
+        self.narrative: Optional[ProgressiveNarrativeSummarizer] = None
         self.active_arcs: Dict[str, Any] = {}
         logger.info(f"RPGNarrativeManager for user {user_id}, conv {conversation_id} created.")
-    
+
     async def initialize(self) -> None:
         logger.info(f"Initializing RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id}...")
-        await self.narrative.initialize()
-        await self.narrative.start_summary_processor()
-        
-        # Load active arcs
-        active_arcs = await self.narrative.get_active_arcs()
-        self.active_arcs = {arc["arc_id"]: arc for arc in active_arcs}
-    
+        key = self._conversation_key
+        lock = _get_conversation_lock(key)
+        should_initialize = False
+        conversation_event: Optional[asyncio.Event] = None
+        async with lock:
+            narrative = _summarizer_instances.get(key)
+            if narrative is None:
+                narrative = ProgressiveNarrativeSummarizer(
+                    summarizer=self._summarizer_impl,
+                    db_connection_string=self._db_connection_string,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+                _summarizer_instances[key] = narrative
+                _summarizer_ref_counts[key] = 0
+
+            self.narrative = narrative
+
+            conversation_event = _summarizer_ready_events.get(key)
+            if conversation_event is None:
+                conversation_event = asyncio.Event()
+                if key in _summarizer_initialized:
+                    conversation_event.set()
+                _summarizer_ready_events[key] = conversation_event
+
+            if key not in _summarizer_initialized and key not in _summarizer_initializing:
+                should_initialize = True
+                _summarizer_initializing.add(key)
+
+            _summarizer_ref_counts[key] = _summarizer_ref_counts.get(key, 0) + 1
+
+        if should_initialize and self.narrative:
+            init_exception: Optional[BaseException] = None
+            try:
+                await self.narrative.initialize()
+                await self.narrative.start_summary_processor()
+            except BaseException as exc:
+                init_exception = exc
+            finally:
+                async with lock:
+                    _summarizer_initializing.discard(key)
+                    event = _summarizer_ready_events.get(key)
+                    if init_exception is None:
+                        _summarizer_initialized.add(key)
+                        if event:
+                            event.set()
+                    else:
+                        _summarizer_instances.pop(key, None)
+                        _summarizer_ref_counts.pop(key, None)
+                        if event:
+                            event.set()
+                        _summarizer_ready_events.pop(key, None)
+                if init_exception is not None:
+                    self.narrative = None
+                    raise init_exception
+
+        if not should_initialize and conversation_event is not None:
+            await conversation_event.wait()
+            async with lock:
+                refreshed = _summarizer_instances.get(key)
+                if refreshed is None:
+                    raise RuntimeError(
+                        "Shared ProgressiveNarrativeSummarizer failed to initialize for conversation"
+                    )
+                self.narrative = refreshed
+
+        if self.narrative:
+            # Load active arcs after shared initialization
+            active_arcs = await self.narrative.get_active_arcs()
+            self.active_arcs = {arc["arc_id"]: arc for arc in active_arcs}
+
     async def close(self) -> None:
         logger.info(f"Closing RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id}...")
-        await self.narrative.close()
+        key = self._conversation_key
+        narrative_to_close: Optional[ProgressiveNarrativeSummarizer] = None
+        lock = _summarizer_locks.get(key)
+        if lock is None:
+            logger.info(
+                "No shared summarizer state found for user %s, conv %s during close.",
+                self.user_id,
+                self.conversation_id,
+            )
+        else:
+            async with lock:
+                narrative = _summarizer_instances.get(key)
+                if narrative is None:
+                    logger.info(
+                        "Shared summarizer already cleared for user %s, conv %s.",
+                        self.user_id,
+                        self.conversation_id,
+                    )
+                else:
+                    current_refs = _summarizer_ref_counts.get(key, 0) - 1
+                    if current_refs <= 0:
+                        narrative_to_close = narrative
+                        _summarizer_instances.pop(key, None)
+                        _summarizer_ref_counts.pop(key, None)
+                        _summarizer_initialized.discard(key)
+                        _summarizer_initializing.discard(key)
+                        _summarizer_ready_events.pop(key, None)
+                        _summarizer_locks.pop(key, None)
+                    else:
+                        _summarizer_ref_counts[key] = current_refs
+
+        if narrative_to_close is not None:
+            await narrative_to_close.close()
+
+        self.narrative = None
         logger.info(f"RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id} closed.")
     
     # All other methods remain the same as they don't perform direct database writes...

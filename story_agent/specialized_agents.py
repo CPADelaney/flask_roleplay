@@ -9,7 +9,7 @@ import asyncio
 import logging
 import json
 import time
-from typing import Dict, List, Any, Optional, Union, Tuple, Callable
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable, Set
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -23,6 +23,24 @@ from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 
 logger = logging.getLogger(__name__)
+
+# Conversations that have completed registration with governance.
+_registered_conversations: Set[Tuple[int, int]] = set()
+# Guard for creating per-conversation locks and updating registration state.
+_registration_state_lock = asyncio.Lock()
+# Individual locks for each (user_id, conversation_id) pair to avoid duplicate
+# registration work when concurrent calls occur.
+_conversation_registration_locks: Dict[Tuple[int, int], asyncio.Lock] = {}
+
+
+async def _get_conversation_lock(key: Tuple[int, int]) -> asyncio.Lock:
+    """Return (creating if necessary) the lock for a conversation."""
+    async with _registration_state_lock:
+        lock = _conversation_registration_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _conversation_registration_locks[key] = lock
+        return lock
 
 # ----- Configuration -----
 MAX_RETRIES = 3
@@ -616,87 +634,123 @@ async def detect_emergent_stories(
 
 # ----- Governance Integration (Updated for Open World) -----
 async def register_with_governance(user_id: int, conversation_id: int) -> None:
-    """
-    Register specialized agents with Nyx governance for open-world simulation
-    """
-    try:
-        from nyx.integrate import get_central_governance
-        governance = await get_central_governance(user_id, conversation_id)
-        
-        # Create context
-        context = SliceOfLifeAgentContext(user_id, conversation_id)
-        
-        # Initialize agents
-        specialized_agents = initialize_specialized_agents()
-        
-        # Define agent configurations for governance
-        agent_configs = [
-            {
-                "agent_type": OpenWorldAgentType.DAILY_LIFE_COORDINATOR,
-                "agent_id": "daily_life",
-                "agent_instance": specialized_agents["daily_life"],
-                "directive": {
-                    "instruction": "Coordinate daily slice-of-life activities",
-                    "scope": "daily_routines"
-                },
-                "priority": DirectivePriority.HIGH
-            },
-            {
-                "agent_type": OpenWorldAgentType.RELATIONSHIP_ORCHESTRATOR,
-                "agent_id": "relationships",
-                "agent_instance": specialized_agents["relationships"],
-                "directive": {
-                    "instruction": "Manage relationship dynamics and evolution",
-                    "scope": "relationships"
-                },
-                "priority": DirectivePriority.HIGH
-            },
-            {
-                "agent_type": OpenWorldAgentType.EMERGENT_NARRATIVE_DETECTOR,
-                "agent_id": "narrative",
-                "agent_instance": specialized_agents["narrative"],
-                "directive": {
-                    "instruction": "Detect and nurture emerging narratives",
-                    "scope": "narrative"
-                },
-                "priority": DirectivePriority.MEDIUM
-            },
-            {
-                "agent_type": OpenWorldAgentType.POWER_DYNAMICS_WEAVER,
-                "agent_id": "power",
-                "agent_instance": specialized_agents["power"],
-                "directive": {
-                    "instruction": "Weave subtle power dynamics into interactions",
-                    "scope": "power_dynamics"
-                },
-                "priority": DirectivePriority.HIGH
-            }
-        ]
-        
-        # Register each agent
-        for config in agent_configs:
-            await governance.register_agent(
-                agent_type=config["agent_type"],
-                agent_instance=config["agent_instance"],
-                agent_id=config["agent_id"]
+    """Register specialized agents with Nyx governance for open-world simulation."""
+
+    conversation_key = (user_id, conversation_id)
+    conversation_lock = await _get_conversation_lock(conversation_key)
+
+    async with conversation_lock:
+        if conversation_key in _registered_conversations:
+            logger.debug(
+                "Governance registration already completed for user %s, conversation %s",
+                user_id,
+                conversation_id,
             )
-            
-            await governance.issue_directive(
-                agent_type=config["agent_type"],
-                agent_id=config["agent_id"],
-                directive_type=DirectiveType.ACTION,
-                directive_data=config["directive"],
-                priority=config["priority"],
-                duration_minutes=24*60  # 24 hours
+            return
+
+        try:
+            from nyx.integrate import get_central_governance
+
+            governance = await get_central_governance(user_id, conversation_id)
+
+            # Create context
+            context = SliceOfLifeAgentContext(user_id, conversation_id)
+
+            # Initialize agents
+            specialized_agents = initialize_specialized_agents()
+
+            # Define agent configurations for governance
+            agent_configs = [
+                {
+                    "agent_type": OpenWorldAgentType.DAILY_LIFE_COORDINATOR,
+                    "agent_id": "daily_life",
+                    "agent_instance": specialized_agents["daily_life"],
+                    "directive": {
+                        "instruction": "Coordinate daily slice-of-life activities",
+                        "scope": "daily_routines",
+                    },
+                    "priority": DirectivePriority.HIGH,
+                },
+                {
+                    "agent_type": OpenWorldAgentType.RELATIONSHIP_ORCHESTRATOR,
+                    "agent_id": "relationships",
+                    "agent_instance": specialized_agents["relationships"],
+                    "directive": {
+                        "instruction": "Manage relationship dynamics and evolution",
+                        "scope": "relationships",
+                    },
+                    "priority": DirectivePriority.HIGH,
+                },
+                {
+                    "agent_type": OpenWorldAgentType.EMERGENT_NARRATIVE_DETECTOR,
+                    "agent_id": "narrative",
+                    "agent_instance": specialized_agents["narrative"],
+                    "directive": {
+                        "instruction": "Detect and nurture emerging narratives",
+                        "scope": "narrative",
+                    },
+                    "priority": DirectivePriority.MEDIUM,
+                },
+                {
+                    "agent_type": OpenWorldAgentType.POWER_DYNAMICS_WEAVER,
+                    "agent_id": "power",
+                    "agent_instance": specialized_agents["power"],
+                    "directive": {
+                        "instruction": "Weave subtle power dynamics into interactions",
+                        "scope": "power_dynamics",
+                    },
+                    "priority": DirectivePriority.HIGH,
+                },
+            ]
+
+            # Register each agent
+            for config in agent_configs:
+                agent_type = config["agent_type"]
+                agent_id = config["agent_id"]
+
+                already_registered = False
+                if hasattr(governance, "is_agent_registered"):
+                    try:
+                        already_registered = governance.is_agent_registered(agent_id, agent_type)
+                    except Exception as check_error:  # pragma: no cover - defensive logging
+                        logger.warning(
+                            "Failed to verify existing registration for %s/%s: %s",
+                            agent_type,
+                            agent_id,
+                            check_error,
+                        )
+
+                if already_registered:
+                    logger.debug("Agent %s/%s already registered; skipping.", agent_type, agent_id)
+                    continue
+
+                await governance.register_agent(
+                    agent_type=agent_type,
+                    agent_instance=config["agent_instance"],
+                    agent_id=agent_id,
+                )
+
+                await governance.issue_directive(
+                    agent_type=agent_type,
+                    agent_id=agent_id,
+                    directive_type=DirectiveType.ACTION,
+                    directive_data=config["directive"],
+                    priority=config["priority"],
+                    duration_minutes=24 * 60,  # 24 hours
+                )
+
+            _registered_conversations.add(conversation_key)
+
+            logger.info(
+                "Open-world agents registered with Nyx governance for user %s, conversation %s",
+                user_id,
+                conversation_id,
             )
-        
-        logger.info(
-            f"Open-world agents registered with Nyx governance "
-            f"for user {user_id}, conversation {conversation_id}"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error registering agents with governance: {e}")
+
+        except Exception as e:
+            _registered_conversations.discard(conversation_key)
+            logger.error(f"Error registering agents with governance: {e}")
+
 
 # Export main components
 __all__ = [
