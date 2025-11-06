@@ -4,7 +4,7 @@ import json
 import re
 import logging
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from logic.chatgpt_integration import get_chatgpt_response
 
@@ -155,6 +155,65 @@ def _extract_first_json_object(text: str) -> Optional[str]:
                 return candidate
 
     return None
+_DISTRICT_REQUIRED_KEYS: tuple[str, ...] = (
+    "key",
+    "name",
+    "vibe",
+    "layout",
+    "theme",
+    "summary",
+    "features",
+)
+
+
+def _normalize_feature_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        normalized = [str(item).strip() for item in value]
+    else:
+        text = str(value).strip()
+        normalized = [text] if text else []
+    return [item for item in normalized if item]
+
+
+def _coerce_district_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be a JSON object")
+
+    districts = payload.get("districts")
+    if districts is None:
+        return payload
+    if not isinstance(districts, list):
+        raise ValueError("'districts' must be a list")
+    if not (3 <= len(districts) <= 5):
+        raise ValueError("'districts' must contain between 3 and 5 entries")
+
+    cleaned: List[Dict[str, Any]] = []
+    for idx, entry in enumerate(districts):
+        if not isinstance(entry, dict):
+            raise ValueError(f"District at index {idx} must be an object")
+        missing = [key for key in _DISTRICT_REQUIRED_KEYS if key not in entry]
+        if missing:
+            raise ValueError(
+                f"District at index {idx} missing keys: {', '.join(sorted(missing))}"
+            )
+        normalized_entry = {
+            key: entry[key].strip() if isinstance(entry[key], str) else entry[key]
+            for key in _DISTRICT_REQUIRED_KEYS
+            if key != "features"
+        }
+        features = _normalize_feature_list(entry.get("features"))
+        if len(features) < 2:
+            raise ValueError(
+                f"District '{entry.get('name')}' must include at least two features"
+            )
+        normalized_entry["features"] = features
+        cleaned.append(normalized_entry)
+
+    updated = dict(payload)
+    updated["districts"] = cleaned
+    return updated
 
 
 async def call_gpt_json(
@@ -196,13 +255,26 @@ async def call_gpt_json(
 
             parsed_json = parse_json_from_response(raw_text)
             if parsed_json is not None:
-                return parsed_json
+                try:
+                    return _coerce_district_payload(parsed_json)
+                except ValueError as exc:
+                    logging.warning(
+                        "[call_gpt_json] JSON payload failed schema validation: %s", exc
+                    )
+                    return parsed_json
 
             cleaned = _extract_first_json_object(raw_text)
             if cleaned:
                 parsed_json = parse_json_from_response(cleaned)
                 if parsed_json is not None:
-                    return parsed_json
+                    try:
+                        return _coerce_district_payload(parsed_json)
+                    except ValueError as exc:
+                        logging.warning(
+                            "[call_gpt_json] JSON payload failed schema validation after cleanup: %s",
+                            exc,
+                        )
+                        return parsed_json
 
             logging.warning(
                 "[call_gpt_json] Failed to parse valid JSON; returning partial payload with status flag"

@@ -10,10 +10,12 @@ import math
 import re
 import time
 import unicodedata
+from dataclasses import asdict
 from typing import Any, Dict, Optional
 
 from db.connection import get_db_connection_context
 
+from . import gemini_maps_adapter as gmaps
 from .anchors import derive_geo_anchor
 from .fictional_resolver import resolve_fictional
 from .gemini_maps_adapter import resolve_location_with_gemini
@@ -57,6 +59,167 @@ DISNEYLAND_PARK_SHORTCUT = {
     "lat": 33.8121,
     "lon": -117.9190,
 }
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _persist_gmaps_place(
+    user_id: str,
+    conversation_id: str,
+    place: gmaps.PlaceResult,
+) -> None:
+    """Ensure the resolved real-world place and districts exist in Locations."""
+
+    user_key = _coerce_int(user_id)
+    convo_key = _coerce_int(conversation_id)
+    if user_key is None or convo_key is None:
+        return
+
+    try:
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                INSERT INTO Locations (
+                    user_id, conversation_id, location_name, location_type,
+                    city, country, lat, lon, is_fictional
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE)
+                ON CONFLICT (user_id, conversation_id, location_name) DO UPDATE SET
+                    location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
+                    city = COALESCE(EXCLUDED.city, Locations.city),
+                    country = COALESCE(EXCLUDED.country, Locations.country),
+                    lat = COALESCE(EXCLUDED.lat, Locations.lat),
+                    lon = COALESCE(EXCLUDED.lon, Locations.lon),
+                    is_fictional = FALSE
+                """,
+                user_key,
+                convo_key,
+                place.name,
+                "venue" if place.districts else None,
+                place.city,
+                place.country,
+                place.lat,
+                place.lon,
+            )
+
+            for district in place.districts:
+                await conn.execute(
+                    """
+                    INSERT INTO Locations (
+                        user_id, conversation_id, location_name, parent_location,
+                        location_type, city, country, lat, lon, is_fictional
+                    )
+                    VALUES ($1, $2, $3, $4, 'district', $5, $6, $7, $8, FALSE)
+                    ON CONFLICT (user_id, conversation_id, location_name) DO UPDATE SET
+                        parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
+                        city = COALESCE(EXCLUDED.city, Locations.city),
+                        country = COALESCE(EXCLUDED.country, Locations.country),
+                        lat = COALESCE(EXCLUDED.lat, Locations.lat),
+                        lon = COALESCE(EXCLUDED.lon, Locations.lon),
+                        is_fictional = FALSE
+                    """,
+                    user_key,
+                    convo_key,
+                    district.name,
+                    place.name,
+                    place.city,
+                    place.country,
+                    district.lat,
+                    district.lon,
+                )
+    except Exception:
+        logger.debug("[ROUTER] Failed to persist Gemini Maps place", exc_info=True)
+
+
+async def _maybe_resolve_via_gmaps_fastpath(
+    query: PlaceQuery,
+    anchor: Anchor,
+    meta: Dict[str, Any],
+    user_id: str,
+    conversation_id: str,
+) -> Optional[ResolveResult]:
+    """Attempt a lightweight Gemini Maps lookup before the heavy real chain."""
+
+    if not gmaps.is_enabled():
+        return None
+    if query.is_travel:
+        return None
+
+    candidate_query = (
+        query.target
+        or query.raw_text
+        or meta.get("location")
+        or anchor.label
+        or anchor.primary_city
+    )
+    if not candidate_query:
+        return None
+
+    try:
+        place = await gmaps.resolve_place_and_districts(candidate_query)
+    except Exception:
+        logger.debug("[ROUTER] Gemini Maps adapter fast path failed", exc_info=True)
+        return None
+
+    if not place:
+        return None
+
+    await _persist_gmaps_place(user_id, conversation_id, place)
+
+    level = "venue" if place.districts else ("city" if place.city else "unknown")
+    place_meta = {
+        "source": "gemini_maps",
+        "gmaps_place_id": place.place_id,
+    }
+    if place.districts:
+        place_meta["districts"] = [asdict(d) for d in place.districts]
+
+    candidate_place = Place(
+        name=place.name,
+        level=level,
+        key=place.place_id,
+        lat=place.lat,
+        lon=place.lon,
+        address={
+            key: value
+            for key, value in {
+                "city": place.city,
+                "country": place.country,
+            }.items()
+            if value
+        },
+        meta=place_meta,
+    )
+
+    candidate = Candidate(
+        place=candidate_place,
+        confidence=0.92,
+        rationale="Resolved via Gemini Maps adapter",
+    )
+    result = ResolveResult(
+        status=STATUS_EXACT,
+        message=f"Resolved '{candidate_query}' via Gemini Maps adapter",
+        candidates=[candidate],
+        anchor=anchor,
+        scope="real",
+    )
+    result.metadata = {
+        "gmaps": {
+            "place_id": place.place_id,
+            "city": place.city,
+            "country": place.country,
+            "districts": [asdict(d) for d in place.districts],
+        }
+    }
+    logger.info(
+        "[ROUTER] Using Gemini Maps adapter fast path for '%s'", candidate_query
+    )
+    return result
 
 LOCATION_RESOLUTION_CACHE = CacheManager(
     name="location_resolution_cache", max_size=200, ttl=120
@@ -1142,64 +1305,81 @@ async def resolve_place_or_travel(
         if skip_result:
             res = skip_result
         else:
-            # Step 1: Try Gemini with Google Maps grounding first
-            gemini_result: Optional[ResolveResult] = None
-            try:
-                logger.debug(
-                    "[ROUTER] Attempting Gemini with Maps grounding (afc_max_calls=%s)...",
-                    REAL_WORLD_AFC_MAX_CALLS,
-                )
-                gemini_result = await resolve_location_with_gemini(
-                    q,
-                    anchor,
-                    afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
-                )
+            fastpath_result = await _maybe_resolve_via_gmaps_fastpath(
+                q,
+                anchor,
+                meta,
+                user_id,
+                conversation_id,
+            )
+            if fastpath_result is not None:
+                res = fastpath_result
 
-                if gemini_result.errors:
-                    logger.warning(f"[ROUTER] Gemini returned errors: {gemini_result.errors}")
-
-                if _has_grounded_results(gemini_result):
-                    logger.info(
-                        f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} Google Maps-grounded results"
+            if res is None:
+                # Step 1: Try Gemini with Google Maps grounding first
+                gemini_result: Optional[ResolveResult] = None
+                try:
+                    logger.debug(
+                        "[ROUTER] Attempting Gemini with Maps grounding (afc_max_calls=%s)...",
+                        REAL_WORLD_AFC_MAX_CALLS,
                     )
-                    res = gemini_result
-
-                elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                    logger.info(
-                        "[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. Attempting verification with Overpass/Nominatim..."
+                    gemini_result = await resolve_location_with_gemini(
+                        q,
+                        anchor,
+                        afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
                     )
 
-                    try:
-                        verified_result = await resolve_real(q, anchor, meta, skip_gemini=True)
+                    if gemini_result.errors:
+                        logger.warning(
+                            f"[ROUTER] Gemini returned errors: {gemini_result.errors}"
+                        )
 
-                        if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                            logger.info("[ROUTER] ✓ Overpass/Nominatim found results")
-                            res = verified_result
-                        else:
-                            logger.info(
-                                f"[ROUTER] Overpass/Nominatim returned status={verified_result.status}"
-                            )
-                            for candidate in gemini_result.candidates:
-                                candidate.confidence *= 0.7
-                                candidate.place.meta["verification_status"] = "unverified"
-                            res = gemini_result
-
-                    except Exception as e:
-                        logger.warning(f"[ROUTER] Verification failed: {e}", exc_info=True)
+                    if _has_grounded_results(gemini_result):
+                        logger.info(
+                            f"[ROUTER] ✓ Gemini found {len(gemini_result.candidates)} Google Maps-grounded results"
+                        )
                         res = gemini_result
 
-                elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
-                    logger.info("[ROUTER] ✓ Gemini created travel plan")
-                    res = gemini_result
-                else:
-                    logger.info(
-                        f"[ROUTER] Gemini returned status={gemini_result.status}, no useful results"
+                    elif gemini_result.candidates and gemini_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                        logger.info(
+                            "[ROUTER] ⚠ Gemini found results but they're not grounded via Maps. Attempting verification with Overpass/Nominatim..."
+                        )
+
+                        try:
+                            verified_result = await resolve_real(q, anchor, meta, skip_gemini=True)
+
+                            if verified_result.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                                logger.info("[ROUTER] ✓ Overpass/Nominatim found results")
+                                res = verified_result
+                            else:
+                                logger.info(
+                                    f"[ROUTER] Overpass/Nominatim returned status={verified_result.status}"
+                                )
+                                for candidate in gemini_result.candidates:
+                                    candidate.confidence *= 0.7
+                                    candidate.place.meta["verification_status"] = "unverified"
+                                res = gemini_result
+
+                        except Exception as e:
+                            logger.warning(
+                                f"[ROUTER] Verification failed: {e}", exc_info=True
+                            )
+                            res = gemini_result
+
+                    elif gemini_result.status == STATUS_TRAVEL_PLAN and gemini_result.operations:
+                        logger.info("[ROUTER] ✓ Gemini created travel plan")
+                        res = gemini_result
+                    else:
+                        logger.info(
+                            f"[ROUTER] Gemini returned status={gemini_result.status}, no useful results"
+                        )
+                        gemini_result = None
+
+                except Exception as e:
+                    logger.error(
+                        f"[ROUTER] Gemini resolution failed: {e}", exc_info=True
                     )
                     gemini_result = None
-
-            except Exception as e:
-                logger.error(f"[ROUTER] Gemini resolution failed: {e}", exc_info=True)
-                gemini_result = None
 
             # Step 2: If Gemini didn't work, try Overpass/Nominatim
             if res is None:
