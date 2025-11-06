@@ -14,11 +14,14 @@ _canonical_spec = importlib.util.spec_from_file_location(
 )
 assert _canonical_spec and _canonical_spec.loader
 _canonical_module = importlib.util.module_from_spec(_canonical_spec)
-_canonical_spec.loader.exec_module(_canonical_module)
 
-LoreOrchestrator = _canonical_module.LoreOrchestrator
-_lore_module = _canonical_module._lore_module
-OrchestratorConfig = _lore_module.OrchestratorConfig
+_nyx_gateway = ModuleType("nyx.gateway")
+_nyx_gateway.__path__ = []  # type: ignore[attr-defined]
+sys.modules.setdefault("nyx.gateway", _nyx_gateway)
+_nyx_gateway_module = ModuleType("nyx.gateway.llm_gateway")
+_nyx_gateway_module.LLMRequest = object()
+sys.modules.setdefault("nyx.gateway.llm_gateway", _nyx_gateway_module)
+setattr(_nyx_gateway, "llm_gateway", _nyx_gateway_module)
 _nyx_location = ModuleType("nyx.location")
 _nyx_location.__path__ = []  # type: ignore[attr-defined]
 sys.modules.setdefault("nyx.location", _nyx_location)
@@ -33,11 +36,17 @@ _lore_cache_module = sys.modules.setdefault("lore.core.cache", ModuleType("lore.
 _lore_cache_module.LoreCache = type("LoreCache", (), {})
 _lore_cache_module.GLOBAL_LORE_CACHE = {}
 
+_canonical_spec.loader.exec_module(_canonical_module)
+
+LoreOrchestrator = _canonical_module.LoreOrchestrator
+_lore_module = _canonical_module._lore_module
+OrchestratorConfig = _lore_module.OrchestratorConfig
+
 pytestmark = pytest.mark.anyio
 
 
 class _DummyScope:
-    location_id = "central-plaza"
+    location_id = "Central-Plaza"
     npc_ids: set[int] = set()
     lore_tags: set[str] = set()
     topics: set[str] = set()
@@ -143,3 +152,8 @@ async def test_scene_brief_handles_slug_location(monkeypatch):
 
     slug_queries = [param for _, param in captured_queries if param == scope.location_id]
     assert slug_queries, "Expected slug location name to be used in DB lookup"
+
+    lowercase_checks = [
+        query for query, _ in captured_queries if "lower(location_name)" in query.lower()
+    ]
+    assert lowercase_checks, "Expected case-insensitive location lookup for slug reuse"

@@ -844,9 +844,16 @@ async def generate_and_persist_hierarchy(
             planet = COALESCE(EXCLUDED.planet, Locations.planet),
             galaxy = COALESCE(EXCLUDED.galaxy, Locations.galaxy),
             realm = COALESCE(EXCLUDED.realm, Locations.realm),
+            scope = CASE
+                WHEN Locations.scope = 'real' OR EXCLUDED.scope = 'real' THEN 'real'
+                ELSE COALESCE(EXCLUDED.scope, Locations.scope)
+            END,
             lat = COALESCE(EXCLUDED.lat, Locations.lat),
             lon = COALESCE(EXCLUDED.lon, Locations.lon),
-            is_fictional = EXCLUDED.is_fictional,
+            is_fictional = CASE
+                WHEN Locations.scope = 'real' OR EXCLUDED.scope = 'real' THEN FALSE
+                ELSE EXCLUDED.is_fictional
+            END,
             open_hours = COALESCE(EXCLUDED.open_hours, Locations.open_hours),
             controlling_faction = COALESCE(EXCLUDED.controlling_faction, Locations.controlling_faction),
             cultural_significance = COALESCE(EXCLUDED.cultural_significance, Locations.cultural_significance),
@@ -936,7 +943,8 @@ async def get_or_create_location(
         """
         SELECT *
         FROM Locations
-        WHERE user_id = $1 AND conversation_id = $2 AND location_name = $3
+        WHERE user_id = $1 AND conversation_id = $2
+              AND LOWER(location_name) = LOWER($3)
         ORDER BY location_id DESC
         LIMIT 1
         """,
@@ -949,7 +957,8 @@ async def get_or_create_location(
             """
             SELECT *
             FROM Locations
-            WHERE user_id = $1 AND conversation_id = $2 AND location_name = $3
+            WHERE user_id = $1 AND conversation_id = $2
+                  AND LOWER(location_name) = LOWER($3)
             ORDER BY location_id DESC
             LIMIT 1
             """,
