@@ -3592,7 +3592,7 @@ class LoreOrchestrator:
                                     SELECT
                                         {select_clause}
                                     FROM Locations
-                                    WHERE LOWER(location_name) = LOWER($1)
+                                    WHERE location_name_lc = LOWER($1)
                                 """
                                 row = await conn.fetchrow(query, location_lookup_name)
 

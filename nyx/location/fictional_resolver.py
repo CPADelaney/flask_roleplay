@@ -969,7 +969,7 @@ async def _fetch_fictional_venues(
                   AND COALESCE(LOWER(location_type), '') = 'venue'
                   AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
                   AND ($3::TEXT IS NULL OR LOWER(COALESCE(district, parent_location, '')) = LOWER($3))
-                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
+                  AND ($4::TEXT IS NULL OR location_name_lc LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
                 ORDER BY location_id
                 """,
                 user_key,
@@ -987,7 +987,7 @@ async def _fetch_fictional_venues(
                   AND COALESCE(LOWER(location_type), '') = 'venue'
                   AND is_fictional = TRUE
                   AND ($3::TEXT IS NULL OR LOWER(COALESCE(district, parent_location, '')) = LOWER($3))
-                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
+                  AND ($4::TEXT IS NULL OR location_name_lc LIKE $4 OR LOWER(COALESCE(description, '')) LIKE $4)
                 ORDER BY location_id
                 """,
                 user_key,
@@ -1128,7 +1128,7 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
                   AND LOWER(COALESCE(district, parent_location, '')) = LOWER($3)
                   AND COALESCE(LOWER(location_type), '') = 'venue'
                   AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'fictional'
-                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4 OR LOWER(COALESCE(metadata::TEXT, '')) LIKE $4)
+                  AND ($4::TEXT IS NULL OR location_name_lc LIKE $4 OR LOWER(COALESCE(metadata::TEXT, '')) LIKE $4)
                 ORDER BY location_id
                 """,
                 user_id,
@@ -1146,7 +1146,7 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
                   AND LOWER(COALESCE(district, parent_location, '')) = LOWER($3)
                   AND COALESCE(LOWER(location_type), '') = 'venue'
                   AND is_fictional = TRUE
-                  AND ($4::TEXT IS NULL OR LOWER(location_name) LIKE $4)
+                  AND ($4::TEXT IS NULL OR location_name_lc LIKE $4)
                 ORDER BY location_id
                 """,
                 user_id,

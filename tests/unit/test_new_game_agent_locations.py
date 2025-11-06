@@ -210,7 +210,9 @@ def test_create_preset_locations_serializes_open_hours(monkeypatch):
 
     locations = asyncio.run(run_flow())
 
-    assert locations == ["merge plaza"]
+    assert [
+        location_hierarchy._normalize_location_name(name) for name in locations
+    ] == ["merge plaza"]
     assert observed_meta
     meta = observed_meta[0]
     assert isinstance(meta.get("open_hours"), dict)
@@ -297,7 +299,9 @@ def test_create_preset_locations_handles_nested_open_hours(monkeypatch):
 
     locations = asyncio.run(run_flow())
 
-    assert locations == ["aurora observatory"]
+    assert [
+        location_hierarchy._normalize_location_name(name) for name in locations
+    ] == ["aurora observatory"]
     assert fake_conn.insert_args is not None
 
     serialized_open_hours = fake_conn.insert_args[20]
@@ -382,7 +386,9 @@ def test_queen_of_thorns_locations_use_earth_defaults(monkeypatch):
 
     locations = asyncio.run(run_flow())
 
-    assert locations == ["velvet sanctum", "velvet sanctum :: main stage"]
+    assert [
+        location_hierarchy._normalize_location_name(name) for name in locations
+    ] == ["velvet sanctum", "velvet sanctum :: main stage"]
     assert fake_conn.insert_history
 
     base_insert = fake_conn.insert_history[0]
