@@ -1001,7 +1001,7 @@ async def _propagate_event_consequences(
             SELECT COALESCE(id, location_id) AS id, location_name
             FROM Locations
             WHERE user_id=$1 AND conversation_id=$2
-            AND position(LOWER(location_name) in LOWER($3)) > 0
+            AND position(location_name_lc in LOWER($3)) > 0
         """, ctx.user_id, ctx.conversation_id, event_text)
         
         for loc in locations:
@@ -1866,7 +1866,7 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     existing = await conn.fetchrow("""
         SELECT location_id, location_name, description
         FROM Locations
-        WHERE LOWER(location_name) = LOWER($1)
+        WHERE location_name_lc = LOWER($1)
         AND user_id = $2 AND conversation_id = $3
     """, location_name, ctx.user_id, ctx.conversation_id)
     

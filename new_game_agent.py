@@ -2119,7 +2119,7 @@ class NewGameAgent:
                         """
                         SELECT description
                         FROM Locations
-                        WHERE LOWER(location_name) = LOWER($1)
+                        WHERE location_name_lc = LOWER($1)
                           AND user_id = $2 AND conversation_id = $3
                         LIMIT 1
                         """,

@@ -66,7 +66,7 @@ class _DummyConnection:
         param = params[0] if params else None
         self._captured.append((query.strip(), param))
         lowered = query.lower()
-        if "lower(location_name)" in lowered:
+        if "location_name_lc" in lowered:
             return {
                 "location_id": 42,
                 "location_name": "Central Plaza",
@@ -120,6 +120,7 @@ async def test_scene_brief_handles_slug_location(monkeypatch):
                 "id",
                 "location_id",
                 "location_name",
+                "location_name_lc",
                 "description",
                 "notable_features",
                 "hidden_aspects",
@@ -154,6 +155,6 @@ async def test_scene_brief_handles_slug_location(monkeypatch):
     assert slug_queries, "Expected slug location name to be used in DB lookup"
 
     lowercase_checks = [
-        query for query, _ in captured_queries if "lower(location_name)" in query.lower()
+        query for query, _ in captured_queries if "location_name_lc" in query.lower()
     ]
     assert lowercase_checks, "Expected case-insensitive location lookup for slug reuse"

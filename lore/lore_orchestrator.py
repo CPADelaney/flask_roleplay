@@ -3588,12 +3588,20 @@ class LoreOrchestrator:
                                 """
                                 row = await conn.fetchrow(query, resolved_location_id)
                             elif location_lookup_name and "location_name" in location_columns:
-                                query = f"""
-                                    SELECT
-                                        {select_clause}
-                                    FROM Locations
-                                    WHERE LOWER(location_name) = LOWER($1)
-                                """
+                                if "location_name_lc" in location_columns:
+                                    query = f"""
+                                        SELECT
+                                            {select_clause}
+                                        FROM Locations
+                                        WHERE location_name_lc = LOWER($1)
+                                    """
+                                else:
+                                    query = f"""
+                                        SELECT
+                                            {select_clause}
+                                        FROM Locations
+                                        WHERE LOWER(location_name) = LOWER($1)
+                                    """
                                 row = await conn.fetchrow(query, location_lookup_name)
 
                         if row:
