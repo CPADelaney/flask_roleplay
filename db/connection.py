@@ -239,8 +239,9 @@ DEFAULT_COMMAND_TIMEOUT = 120  # seconds
 DEFAULT_MAX_QUERIES = 50000
 # Lower default so we fail fast; env DB_SETUP_TIMEOUT can override
 DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
-DEFAULT_SETUP_TIMEOUT = 10.0  # Timeout for connection setup (pgvector registration)
+DEFAULT_SETUP_TIMEOUT = 5.0  # Timeout for connection setup (pgvector registration)
 DEFAULT_ACQUIRE_TIMEOUT = 60.0  # Timeout for acquiring connection from pool
+DEFAULT_POOL_CREATE_TIMEOUT = 20.0  # Timeout for initial asyncpg.create_pool wait_for
 
 
 def get_db_dsn() -> str:
@@ -306,6 +307,16 @@ def get_setup_timeout() -> float:
         Timeout in seconds
     """
     return float(os.getenv("DB_SETUP_TIMEOUT", str(DEFAULT_SETUP_TIMEOUT)))
+
+
+def get_pool_create_timeout() -> float:
+    """
+    Get timeout for asyncpg.create_pool() gate.
+
+    Returns:
+        Timeout in seconds
+    """
+    return float(os.getenv("DB_POOL_CREATE_TIMEOUT", str(DEFAULT_POOL_CREATE_TIMEOUT)))
 
 
 def get_acquire_timeout() -> float:
@@ -714,6 +725,15 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
     Raises:
         asyncpg.PostgresError: If critical setup fails (not including pgvector)
     """
+    if os.getenv("DB_REGISTER_VECTOR", "1") != "1":
+        try:
+            logger.debug(
+                "Skipping pgvector registration on connection %s (DB_REGISTER_VECTOR!=1)",
+                id(conn)
+            )
+        finally:
+            return
+
     max_retries = 3
     retry_delay = 0.5  # Start with 0.5 seconds
     setup_timeout = get_setup_timeout()
@@ -812,7 +832,7 @@ async def create_pool_with_retry(
                     setup=setup_connection,
                     server_settings=server_settings
                 ),
-                timeout=30.0
+                timeout=get_pool_create_timeout()
             )
             
             # Verify pool with health check
