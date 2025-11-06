@@ -88,14 +88,15 @@ async def _persist_gmaps_place(
                 """
                 INSERT INTO Locations (
                     user_id, conversation_id, location_name, external_place_id,
-                    location_type, city, country, lat, lon, is_fictional
+                    location_type, city, country, lat, lon, scope, is_fictional
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)
-                ON CONFLICT ON CONSTRAINT idx_locations_user_conv_lower_name DO UPDATE SET
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'real', FALSE)
+                ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE SET
                     external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
                     location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
                     city = COALESCE(EXCLUDED.city, Locations.city),
                     country = COALESCE(EXCLUDED.country, Locations.country),
+                    scope = 'real',
                     lat = COALESCE(EXCLUDED.lat, Locations.lat),
                     lon = COALESCE(EXCLUDED.lon, Locations.lon),
                     is_fictional = FALSE
@@ -116,14 +117,15 @@ async def _persist_gmaps_place(
                     """
                     INSERT INTO Locations (
                         user_id, conversation_id, location_name, external_place_id,
-                        parent_location, location_type, city, country, lat, lon, is_fictional
+                        parent_location, location_type, city, country, lat, lon, scope, is_fictional
                     )
-                    VALUES ($1, $2, $3, $4, $5, 'district', $6, $7, $8, $9, FALSE)
-                    ON CONFLICT ON CONSTRAINT idx_locations_user_conv_lower_name DO UPDATE SET
+                    VALUES ($1, $2, $3, $4, $5, 'district', $6, $7, $8, $9, 'real', FALSE)
+                    ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE SET
                         external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
                         parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
                         city = COALESCE(EXCLUDED.city, Locations.city),
                         country = COALESCE(EXCLUDED.country, Locations.country),
+                        scope = 'real',
                         lat = COALESCE(EXCLUDED.lat, Locations.lat),
                         lon = COALESCE(EXCLUDED.lon, Locations.lon),
                         is_fictional = FALSE
@@ -717,63 +719,28 @@ async def _ensure_real_anchor_location(
     try:
         with skip_vector_registration():
             async with get_db_connection_context() as conn:
-                exists = await conn.fetchval(
+                await conn.execute(
                     """
-                    SELECT 1
-                    FROM Locations
-                    WHERE user_id = $1
-                      AND conversation_id = $2
-                      AND LOWER(location_name) = LOWER($3)
-                    LIMIT 1
+                    INSERT INTO public.locations (
+                      user_id, conversation_id, location_name, city, country, scope, is_fictional
+                    ) VALUES ($1,$2,$3,$4,$5,'real',FALSE)
+                    ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE
+                    SET city         = COALESCE(EXCLUDED.city,    locations.city),
+                        country      = COALESCE(EXCLUDED.country, locations.country),
+                        scope        = 'real',
+                        is_fictional = FALSE;
                     """,
                     uid,
                     cid,
                     anchor_name,
+                    city_hint,
+                    country_hint,
                 )
-                if exists:
-                    return
-
-                try:
-                    await conn.execute(
-                        """
-                        INSERT INTO Locations (
-                            user_id,
-                            conversation_id,
-                            location_name,
-                            city,
-                            country,
-                            scope,
-                            is_fictional
-                        )
-                        VALUES ($1, $2, $3, $4, $5, 'real', FALSE)
-                        """,
-                        uid,
-                        cid,
-                        anchor_name,
-                        city_hint,
-                        country_hint,
-                    )
-                except asyncpg.UndefinedColumnError:
-                    await conn.execute(
-                        """
-                        INSERT INTO Locations (
-                            user_id,
-                            conversation_id,
-                            location_name,
-                            city,
-                            country,
-                            is_fictional
-                        )
-                        VALUES ($1, $2, $3, $4, $5, FALSE)
-                        """,
-                        uid,
-                        cid,
-                        anchor_name,
-                        city_hint,
-                        country_hint,
-                    )
-                except asyncpg.UniqueViolationError:
-                    pass
+    except asyncpg.UndefinedColumnError:
+        logger.debug(
+            "[ANCHOR] Failed to upsert anchor location due to missing generated column",
+            exc_info=True,
+        )
     except Exception:
         logger.debug(
             "[ANCHOR] Failed to ensure anchor location '%s' exists", anchor_name,
