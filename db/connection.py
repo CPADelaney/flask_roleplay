@@ -35,7 +35,8 @@ import asyncio
 import asyncpg
 import threading
 import weakref
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from typing import Optional, Dict, Any, Set, List, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass, field
@@ -55,6 +56,22 @@ from celery.signals import worker_process_init, worker_process_shutdown
 logger = logging.getLogger(__name__)
 
 AsyncpgConnection = Union[asyncpg.Connection, '_ResilientConnectionWrapper']
+
+
+_SKIP_VECTOR_REGISTRATION: ContextVar[bool] = ContextVar(
+    "skip_vector_registration",
+    default=False,
+)
+
+
+@contextmanager
+def skip_vector_registration() -> None:
+    """Temporarily defer pgvector registration for new connections."""
+    token = _SKIP_VECTOR_REGISTRATION.set(True)
+    try:
+        yield
+    finally:
+        _SKIP_VECTOR_REGISTRATION.reset(token)
 
 # ============================================================================
 # Type Definitions and Enums
@@ -711,17 +728,92 @@ class _ResilientConnectionWrapper:
 # Connection Pool Setup
 # ============================================================================
 
+async def _register_vector_with_retry(
+    conn: asyncpg.Connection,
+    *,
+    setup_timeout: float,
+    max_retries: int,
+    initial_retry_delay: float,
+) -> None:
+    """Register pgvector with retry logic and timeout protection."""
+    retry_delay = initial_retry_delay
+
+    for attempt in range(max_retries):
+        try:
+            await asyncio.wait_for(
+                pgvector_asyncpg.register_vector(conn),
+                timeout=setup_timeout,
+            )
+            logger.debug(
+                f"Successfully registered pgvector on connection {id(conn)} "
+                f"(attempt {attempt + 1}/{max_retries})"
+            )
+            return
+        except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
+            logger.warning(
+                f"Connection setup failed on attempt {attempt + 1}/{max_retries} "
+                f"({e.__class__.__name__}): {e} (timeout={setup_timeout}s)"
+            )
+            if attempt + 1 == max_retries:
+                logger.error(
+                    f"All {max_retries} attempts to register pgvector failed on "
+                    f"connection {id(conn)}. Connection will be marked as available "
+                    f"but vector operations may not work. Consider increasing "
+                    f"DB_SETUP_TIMEOUT (current: {setup_timeout}s) or checking database load."
+                )
+                return
+
+            await asyncio.sleep(retry_delay)
+            retry_delay *= 2
+        except asyncpg.exceptions.UndefinedFunctionError as e:
+            logger.warning(
+                f"pgvector extension not available: {e}. "
+                f"Connection {id(conn)} will work but vector operations will fail."
+            )
+            return
+        except Exception as e:
+            logger.error(
+                f"Unexpected error setting up connection {id(conn)}: {e}",
+                exc_info=True,
+            )
+            raise
+
+
+async def _defer_vector_registration(
+    conn: asyncpg.Connection,
+    *,
+    setup_timeout: float,
+    max_retries: int,
+    initial_retry_delay: float,
+) -> None:
+    """Background helper to register pgvector without blocking the caller."""
+    try:
+        await _register_vector_with_retry(
+            conn,
+            setup_timeout=setup_timeout,
+            max_retries=max_retries,
+            initial_retry_delay=initial_retry_delay,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Deferred pgvector registration failed on connection %s: %s",
+            id(conn),
+            exc,
+            exc_info=True,
+        )
+
+
 async def setup_connection(conn: asyncpg.Connection) -> None:
     """
     Setup function called for each new connection in the pool.
-    
+
     Registers pgvector extension with retry logic and timeout protection.
     If pgvector registration fails after retries, the connection is still
     considered valid (pgvector is optional for basic DB operations).
-    
+
     Args:
         conn: Connection to set up
-        
+
     Raises:
         asyncpg.PostgresError: If critical setup fails (not including pgvector)
     """
@@ -735,54 +827,31 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
             return
 
     max_retries = 3
-    retry_delay = 0.5  # Start with 0.5 seconds
+    initial_retry_delay = 0.5
     setup_timeout = get_setup_timeout()
-    
-    for attempt in range(max_retries):
-        try:
-            # IMPROVEMENT: Added configurable timeout to prevent indefinite hang
-            await asyncio.wait_for(
-                pgvector_asyncpg.register_vector(conn),
-                timeout=setup_timeout
+
+    if _SKIP_VECTOR_REGISTRATION.get():
+        logger.debug(
+            "Deferring pgvector registration on connection %s (skip flag active)",
+            id(conn),
+        )
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            _defer_vector_registration(
+                conn,
+                setup_timeout=setup_timeout,
+                max_retries=max_retries,
+                initial_retry_delay=initial_retry_delay,
             )
-            logger.debug(
-                f"Successfully registered pgvector on connection {id(conn)} "
-                f"(attempt {attempt + 1}/{max_retries})"
-            )
-            return  # Success
-        except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
-            logger.warning(
-                f"Connection setup failed on attempt {attempt + 1}/{max_retries} "
-                f"({e.__class__.__name__}): {e} (timeout={setup_timeout}s)"
-            )
-            if attempt + 1 == max_retries:
-                # IMPORTANT: Don't fail the connection completely if only pgvector fails
-                # The connection is still usable for non-vector operations
-                logger.error(
-                    f"All {max_retries} attempts to register pgvector failed on "
-                    f"connection {id(conn)}. Connection will be marked as available "
-                    f"but vector operations may not work. Consider increasing "
-                    f"DB_SETUP_TIMEOUT (current: {setup_timeout}s) or checking database load."
-                )
-                # Don't raise - allow connection to be used
-                return
-            
-            await asyncio.sleep(retry_delay)
-            retry_delay *= 2  # Exponential backoff
-        except asyncpg.exceptions.UndefinedFunctionError as e:
-            # pgvector extension might not be installed
-            logger.warning(
-                f"pgvector extension not available: {e}. "
-                f"Connection {id(conn)} will work but vector operations will fail."
-            )
-            return  # Don't fail the connection
-        except Exception as e:
-            logger.error(
-                f"Unexpected error setting up connection {id(conn)}: {e}",
-                exc_info=True
-            )
-            # For truly unexpected errors, we should fail
-            raise
+        )
+        return
+
+    await _register_vector_with_retry(
+        conn,
+        setup_timeout=setup_timeout,
+        max_retries=max_retries,
+        initial_retry_delay=initial_retry_delay,
+    )
 
 
 async def create_pool_with_retry(
