@@ -131,6 +131,13 @@ Refer to [docs/rag_platform_migration.md](docs/rag_platform_migration.md) for in
   value if you routinely run queries that hold onto connections during cleanup, or lower it to recover more aggressively from
   hung sessions.
 
+### NPC memory maintenance scheduling
+
+- `ENABLE_NPC_INPROC_MAINTENANCE` (default: `false`) — when set to `true`, `1`, or `yes`, the NPC agent system will run its
+  periodic memory maintenance loop inside the application process. Leave this disabled when Celery beat already owns the
+  schedule to avoid duplicate maintenance work. When enabled, the loop starts once per `(user_id, conversation_id)` pair within
+  a process to prevent overlapping schedulers.
+
 ## Usage
 
 1. Start the development server:

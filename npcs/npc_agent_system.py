@@ -4,14 +4,16 @@ Main system that integrates NPC agents with the game loop, using OpenAI Agents S
 Updated to use centralized ChatGPT integration & orchestrator wiring fixes.
 """
 
-import logging
 import asyncio
-import random
-from typing import List, Dict, Any, Optional, Set, Tuple, Union
-from dataclasses import dataclass
-from contextlib import asynccontextmanager
 import json
+import logging
+import os
+import random
+import threading
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, Set, Tuple, Union
 
 from pydantic import BaseModel, Field, validator
 
@@ -29,6 +31,12 @@ from npcs.belief_system_integration import enhance_npc_with_belief_system
 from nyx.gateway import llm_gateway
 
 logger = logging.getLogger(__name__)
+
+_maintenance_schedules_started: Set[Tuple[str, str]] = set()
+_maintenance_schedule_lock = threading.Lock()
+_enable_inproc_maintenance = (
+    os.getenv("ENABLE_NPC_INPROC_MAINTENANCE", "false").lower() in {"1", "true", "yes"}
+)
 
 # -- Initialize the centralized model --
 try:
@@ -259,8 +267,35 @@ class NPCAgentSystem:
             "memory_operations": ResourcePool(max_concurrent=20, timeout=20.0)
         }
 
-        # Schedule periodic memory maintenance
-        self._setup_memory_maintenance_schedule()
+        # Schedule periodic memory maintenance (opt-in)
+        if self._should_setup_memory_maintenance():
+            self._setup_memory_maintenance_schedule()
+
+    def _should_setup_memory_maintenance(self) -> bool:
+        """Check if we should start an in-process maintenance loop."""
+        if not _enable_inproc_maintenance:
+            logger.debug(
+                "Skipping in-process memory maintenance: ENABLE_NPC_INPROC_MAINTENANCE not set"
+            )
+            return False
+
+        key = (str(self.user_id), str(self.conversation_id))
+        with _maintenance_schedule_lock:
+            if key in _maintenance_schedules_started:
+                logger.debug(
+                    "In-process memory maintenance already running for user %s conversation %s",
+                    self.user_id,
+                    self.conversation_id,
+                )
+                return False
+
+            _maintenance_schedules_started.add(key)
+            logger.info(
+                "Starting in-process memory maintenance for user %s conversation %s",
+                self.user_id,
+                self.conversation_id,
+            )
+            return True
 
     # --- Uniform connection acquisition (works with or without pool) ---
     @asynccontextmanager
