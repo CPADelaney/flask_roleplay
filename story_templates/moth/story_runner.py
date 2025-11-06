@@ -2527,8 +2527,8 @@ Generate ambient details and Queen echoes."""
                 """
                 SELECT location_name, description, metadata
                 FROM Locations
-                WHERE user_id = $1 AND conversation_id = $2 
-                AND LOWER(location_name) = LOWER($3)
+                WHERE user_id = $1 AND conversation_id = $2
+                AND location_name_lc = LOWER($3)
                 """,
                 self.user_id, self.conversation_id, location_name
             )

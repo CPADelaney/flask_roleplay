@@ -378,7 +378,7 @@ class PresetStoryTracker:
             location = await conn.fetchrow("""
                 SELECT location_name FROM Locations
                 WHERE user_id = $1 AND conversation_id = $2
-                AND LOWER(location_name) LIKE LOWER($3)
+                AND location_name_lc LIKE LOWER($3)
                 LIMIT 1
             """, self.user_id, self.conversation_id, f"%{preset_location.get('name', '')}%")
             

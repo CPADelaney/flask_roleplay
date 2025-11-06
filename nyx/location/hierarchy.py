@@ -944,7 +944,7 @@ async def get_or_create_location(
         SELECT *
         FROM Locations
         WHERE user_id = $1 AND conversation_id = $2
-              AND LOWER(location_name) = LOWER($3)
+              AND location_name_lc = LOWER($3)
         ORDER BY location_id DESC
         LIMIT 1
         """,
@@ -958,7 +958,7 @@ async def get_or_create_location(
             SELECT *
             FROM Locations
             WHERE user_id = $1 AND conversation_id = $2
-                  AND LOWER(location_name) = LOWER($3)
+                  AND location_name_lc = LOWER($3)
             ORDER BY location_id DESC
             LIMIT 1
             """,
