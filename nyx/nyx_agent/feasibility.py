@@ -1912,6 +1912,54 @@ def _normalize_categories(categories: Optional[List[Any]]) -> Set[str]:
     return normalized
 
 
+def _get_allowed_categories(setting_context: Dict[str, Any]) -> Set[str]:
+    """Collect any explicitly allowed categories from the setting context."""
+
+    allowed: Set[str] = set()
+
+    def _extend_from(candidate: Any) -> None:
+        if not candidate:
+            return
+        if isinstance(candidate, dict):
+            _extend_from(candidate.get("allowed_categories"))
+            return
+        if isinstance(candidate, (list, tuple, set)):
+            allowed.update(_normalize_categories(list(candidate)))
+            return
+        allowed.update(_normalize_categories([candidate]))
+
+    # Scene level allowlists or top-level metadata
+    _extend_from(setting_context.get("allowed_categories"))
+    scene = setting_context.get("scene")
+    if isinstance(scene, dict):
+        _extend_from(scene.get("allowed_categories"))
+        _extend_from(scene.get("meta"))
+
+    # Established possibilities may mark categories as allowed
+    for possibility in setting_context.get("established_possibilities", []) or []:
+        if isinstance(possibility, dict):
+            _extend_from(possibility.get("categories"))
+
+    # Conversation/game rules that explicitly allow a category
+    allow_keywords = ("allow", "permitted", "can", "enabled", "allowed")
+    for rule_collection_key in ("hard_rules", "soft_rules", "established_rules"):
+        for rule in setting_context.get(rule_collection_key, []) or []:
+            if not isinstance(rule, dict):
+                continue
+            _extend_from(rule.get("allowed_categories"))
+
+            condition = str(rule.get("condition", "")).strip().lower()
+            effect = str(rule.get("effect", "")).strip().lower()
+            if condition.startswith("category:") and any(
+                keyword in effect for keyword in allow_keywords
+            ):
+                category_name = condition.split(":", 1)[1].strip()
+                if category_name:
+                    allowed.update(_normalize_categories([category_name]))
+
+    return allowed
+
+
 def _log_caps_snapshot(capabilities: Optional[Dict[str, Any]]) -> None:
     if not capabilities:
         return
