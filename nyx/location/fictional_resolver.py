@@ -1247,6 +1247,38 @@ async def get_or_generate_districts(
     except (TypeError, ValueError) as exc:
         raise ValueError("user_id and conversation_id must be convertible to int") from exc
 
+    # Optional: prefer real districts via Gemini Maps if available
+    try_query = query_hint or seed.get("external_id") or seed.get("place_id") or city
+    try:
+        from . import gemini_maps_adapter as gmaps
+    except ImportError:  # pragma: no cover - optional dependency path
+        gmaps = None
+
+    if gmaps and gmaps.is_enabled() and try_query:
+        try:
+            place_result = await gmaps.resolve_place_and_districts(str(try_query))
+        except Exception:  # pragma: no cover - network issues shouldn't fail fictional fallback
+            place_result = None
+
+        if place_result and place_result.districts:
+            return [
+                Location(
+                    user_id=user_key,
+                    conversation_id=conversation_key,
+                    location_name=d.name,
+                    location_type="district",
+                    parent_location=place_result.name,
+                    district=d.name,
+                    city=place_result.city or city,
+                    country=place_result.country,
+                    scope="real",
+                    lat=d.lat,
+                    lon=d.lon,
+                    is_fictional=False,
+                )
+                for d in place_result.districts
+            ]
+
     async with get_db_connection_context() as conn:
         try:
             real_rows = await conn.fetch(
