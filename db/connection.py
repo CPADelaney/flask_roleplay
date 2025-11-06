@@ -139,6 +139,7 @@ class GlobalPoolState:
         self.pool_loop: Optional[asyncio.AbstractEventLoop] = None
         self.pool_state: PoolState = PoolState.UNINITIALIZED
         self.metrics: PoolMetrics = PoolMetrics()
+        self.pool_warmed: bool = False
         
         # Async locks (created on-demand per event loop)
         self._pool_init_lock: Optional[asyncio.Lock] = None
@@ -871,6 +872,7 @@ def _clear_global_pool_reference(pool_to_close: asyncpg.Pool) -> None:
         _state.metrics.total_connections = 0
         _state.metrics.idle_connections = 0
         _state.metrics.active_connections = 0
+        _state.pool_warmed = False
 
 
 async def close_existing_pool(pool: Optional[asyncpg.Pool] = None) -> None:
@@ -1148,7 +1150,8 @@ async def initialize_connection_pool(
             _state.pool = local_pool
             _state.pool_loop = current_loop
             _state.pool_state = PoolState.HEALTHY
-            
+            _state.pool_warmed = False
+
             # Update metrics
             _state.metrics.pool_state = PoolState.HEALTHY
             _state.metrics.total_connections = local_pool.get_size()
@@ -1177,8 +1180,13 @@ async def initialize_connection_pool(
                     # Use a conservative per-connection timeout; pgvector setup timeout is handled inside setup_connection
                     logger.info(f"Process {os.getpid()}: Warming DB pool (test_count={warm_size})")
                     try:
-                        await warm_connection_pool(test_count=warm_size, timeout=10.0)
+                        warm_results = await warm_connection_pool(test_count=warm_size, timeout=10.0)
+                        if warm_results.get("success"):
+                            _state.pool_warmed = True
+                        else:
+                            _state.pool_warmed = False
                     except Exception as warm_err:
+                        _state.pool_warmed = False
                         logger.warning(f"Pool warm-up skipped due to error: {warm_err}")
             except Exception as warm_wrap_err:
                 logger.debug(f"Warm-up guard swallowed error: {warm_wrap_err}")
@@ -1783,13 +1791,18 @@ def init_celery_worker() -> None:
         warm_size = None
         try:
             warm_at_init = os.getenv("DB_POOL_WARM_AT_INIT", "true").strip().lower() in {"1", "true", "yes", "on"}
-            if warm_at_init:
+            if warm_at_init and not getattr(_state, "pool_warmed", False):
                 warm_size = int(os.getenv("DB_POOL_WARM_SIZE", "8"))
                 warm_size = max(1, warm_size)
-                WORKER_LOOP.run_until_complete(
+                warm_results = WORKER_LOOP.run_until_complete(
                     warm_connection_pool(test_count=warm_size, timeout=10.0)
                 )
+                if warm_results.get("success"):
+                    _state.pool_warmed = True
+                else:
+                    _state.pool_warmed = False
         except Exception as warm_err:
+            _state.pool_warmed = False
             logger.warning(f"Pool warm-up at worker init failed (continuing): {warm_err}")
 
         try:
