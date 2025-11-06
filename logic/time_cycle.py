@@ -2514,29 +2514,29 @@ async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str
     try:
         with skip_vector_registration():
             async with get_db_connection_context() as conn:
-                row_year = await conn.fetchval("""
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentYear'
-                """, user_id, conversation_id)
-                year = int(row_year) if row_year else 1
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value
+                    FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key = ANY($3::text[])
+                    """,
+                    user_id,
+                    conversation_id,
+                    ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"],
+                )
 
-                row_month = await conn.fetchval("""
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentMonth'
-                """, user_id, conversation_id)
-                month = int(row_month) if row_month else 1
+                values = {row["key"]: row["value"] for row in rows}
 
-                row_day = await conn.fetchval("""
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
-                """, user_id, conversation_id)
-                day = int(row_day) if row_day else 1
+                def _parse_int(value):
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
 
-                row_tod = await conn.fetchval("""
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
-                """, user_id, conversation_id)
-                tod = row_tod if row_tod else "Morning"
+                year = _parse_int(values.get("CurrentYear")) or 1
+                month = _parse_int(values.get("CurrentMonth")) or 1
+                day = _parse_int(values.get("CurrentDay")) or 1
+                tod = values.get("TimeOfDay") or "Morning"
 
                 return (year, month, day, tod)
             
