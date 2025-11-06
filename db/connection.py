@@ -232,16 +232,16 @@ WORKER_LOOP: Optional[asyncio.AbstractEventLoop] = None
 # ============================================================================
 
 # Default pool configuration
-DEFAULT_MIN_CONNECTIONS = 2
-DEFAULT_MAX_CONNECTIONS = 100
-DEFAULT_CONNECTION_LIFETIME = 300  # seconds
+DEFAULT_MIN_CONNECTIONS = 4
+DEFAULT_MAX_CONNECTIONS = 20
+DEFAULT_CONNECTION_LIFETIME = 900  # seconds
 DEFAULT_COMMAND_TIMEOUT = 120  # seconds
 DEFAULT_MAX_QUERIES = 50000
 # Lower default so we fail fast; env DB_SETUP_TIMEOUT can override
 DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
-DEFAULT_SETUP_TIMEOUT = 5.0  # Timeout for connection setup (pgvector registration)
-DEFAULT_ACQUIRE_TIMEOUT = 60.0  # Timeout for acquiring connection from pool
-DEFAULT_POOL_CREATE_TIMEOUT = 20.0  # Timeout for initial asyncpg.create_pool wait_for
+DEFAULT_SETUP_TIMEOUT = 10.0  # Timeout for connection setup (pgvector registration)
+DEFAULT_ACQUIRE_TIMEOUT = 120.0  # Timeout for acquiring connection from pool
+DEFAULT_POOL_CREATE_TIMEOUT = 30.0  # Timeout for initial asyncpg.create_pool wait_for
 
 
 def get_db_dsn() -> str:
@@ -1329,7 +1329,7 @@ async def get_db_connection_context(
     
     Args:
         timeout: Maximum time to wait for connection acquisition.
-                If None, uses DB_ACQUIRE_TIMEOUT env var (default 60s)
+                If None, uses DB_ACQUIRE_TIMEOUT env var (default 120s)
         app: Optional Quart application for pool access
         
     Yields:
