@@ -683,7 +683,13 @@ class _ResilientConnectionWrapper:
                 method = getattr(self._conn, name)
             except Exception as exc:
                 msg = str(exc).lower()
-                if "unknown protocol state" in msg and attempt < max_attempts - 1:
+                if (
+                    attempt < max_attempts - 1
+                    and (
+                        "unknown protocol state" in msg
+                        or "released back to the pool" in msg
+                    )
+                ):
                     attempt += 1
                     logger.warning(
                         "InternalClientError during %s; refreshing connection and retrying (%d/%d)",
