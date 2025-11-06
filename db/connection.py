@@ -1780,6 +1780,7 @@ def init_celery_worker() -> None:
             f"event loop {id(loop)}"
         )
         # Proactively warm a few connections so pgvector registration never lands on the hot path
+        warm_size = None
         try:
             warm_at_init = os.getenv("DB_POOL_WARM_AT_INIT", "true").strip().lower() in {"1", "true", "yes", "on"}
             if warm_at_init:
@@ -1790,6 +1791,31 @@ def init_celery_worker() -> None:
                 )
         except Exception as warm_err:
             logger.warning(f"Pool warm-up at worker init failed (continuing): {warm_err}")
+
+        try:
+            health_result = WORKER_LOOP.run_until_complete(check_pool_health())
+        except Exception as health_exc:
+            logger.critical(
+                "Fatal error running database pool health check during Celery worker init",
+                exc_info=True,
+            )
+            raise
+
+        status = health_result.get("status")
+        if status != "healthy":
+            warm_context = (
+                f" after warming {warm_size} connections"
+                if warm_size is not None
+                else ""
+            )
+            logger.critical(
+                "Database pool health check failed%s: %s",
+                warm_context,
+                health_result,
+            )
+            raise RuntimeError(
+                "Celery worker database pool health check failed; aborting worker startup"
+            )
     except Exception as e:
         logger.error(
             f"Failed to initialize Celery worker database pool: {e}",
