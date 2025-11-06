@@ -1,5 +1,6 @@
 # memory/emotional.py
 
+import asyncio
 import logging
 import json
 import random
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .connection import with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
+from infra.cache import get_redis_client
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -899,7 +901,18 @@ class EmotionalMemoryManager:
 async def create_emotional_tables():
     """Create the necessary tables for the emotional memory system if they don't exist."""
     from db.connection import get_db_connection_context
-    
+
+    # Memoize table creation for 24h to avoid repeating heavy DDL on warm paths
+    key = "tables_ok:emotional_memory"
+    try:
+        r = get_redis_client()
+        if r:
+            exists = await asyncio.to_thread(r.exists, key)
+            if exists:
+                return
+    except Exception:
+        r = None  # best effort; proceed without cache
+
     async with get_db_connection_context() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS EntityEmotionalState (
@@ -915,6 +928,12 @@ async def create_emotional_tables():
             CREATE INDEX IF NOT EXISTS idx_entity_emotional_state_lookup 
             ON EntityEmotionalState(user_id, conversation_id, entity_type, entity_id);
             
-            CREATE INDEX IF NOT EXISTS idx_entity_emotional_state_updated 
+            CREATE INDEX IF NOT EXISTS idx_entity_emotional_state_updated
             ON EntityEmotionalState(last_updated);
         """)
+
+    if r:
+        try:
+            await asyncio.to_thread(r.setex, key, 86400, "1")
+        except Exception:
+            pass
