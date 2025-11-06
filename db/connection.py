@@ -1476,6 +1476,7 @@ async def get_db_connection_context(
         async with get_db_connection_context() as conn:
             result = await conn.fetchval("SELECT 1")
     """
+    # helper: single acquire with timeout
     # Use configurable default timeout if not specified
     if timeout is None:
         timeout = get_acquire_timeout()
@@ -1523,24 +1524,41 @@ async def get_db_connection_context(
         if current_pool_to_use is None:
             raise ConnectionError("DB pool is None even after lazy init attempt")
     
+    async def _acquire_with_timeout(pool, t: float) -> asyncpg.Connection:
+        return await asyncio.wait_for(pool.acquire(), timeout=t)
+
     try:
         logger.debug(f"Acquiring connection from pool (timeout={timeout}s)")
         try:
-            conn = await asyncio.wait_for(
-                current_pool_to_use.acquire(),
-                timeout=timeout
-            )
+            conn = await _acquire_with_timeout(current_pool_to_use, timeout)
         except asyncpg.exceptions.InterfaceError as iface_err:
             if "pool is closing" in str(iface_err).lower():
                 logger.warning("Pool was closing during acquire; reinitializing and retrying once")
                 await initialize_connection_pool(force_new=True)
                 current_pool_to_use = _state.pool
-                conn = await asyncio.wait_for(
-                    current_pool_to_use.acquire(),
-                    timeout=timeout
-                )
+                conn = await _acquire_with_timeout(current_pool_to_use, timeout)
             else:
                 raise
+        except asyncio.TimeoutError:
+            # Enhanced diagnostics for timeout errors + one-shot recovery
+            pool_size = current_pool_to_use.get_size() if current_pool_to_use else 0
+            pool_free = current_pool_to_use.get_idle_size() if current_pool_to_use else 0
+            pool_used = pool_size - pool_free
+            logger.error(
+                f"Timeout ({timeout}s) acquiring DB connection from pool. "
+                f"Pool stats: size={pool_size}, free={pool_free}, in_use={pool_used}. "
+                f"Attempting one-shot pool expiry and quick retry (5s)…"
+            )
+            try:
+                expire = getattr(current_pool_to_use, "expire_connections", None)
+                if callable(expire):
+                    res = expire()
+                    if asyncio.iscoroutine(res):
+                        await res
+            except Exception as exp_err:
+                logger.warning("expire_connections failed (continuing): %s", exp_err)
+            # quick retry
+            conn = await _acquire_with_timeout(current_pool_to_use, 5.0)
         
         # Re-check shutdown status after acquiring (race condition protection)
         if is_shutting_down():
@@ -1585,20 +1603,10 @@ async def get_db_connection_context(
                 f"Waiting for {len(pending_ops)} pending operations on "
                 f"connection {active_conn_id}"
             )
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*pending_ops, return_exceptions=True),
-                    timeout=5.0
-                )
-                logger.debug(
-                    f"All {len(pending_ops)} pending operations completed on "
-                    f"connection {active_conn_id}"
-                )
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"Timeout waiting for {len(pending_ops)} pending operations on "
-                    f"connection {active_conn_id}"
-                )
+            await asyncio.wait_for(
+                asyncio.gather(*pending_ops, return_exceptions=True),
+                timeout=5.0
+            )
         
     except asyncio.TimeoutError:
         # Enhanced diagnostics for timeout errors
@@ -1615,6 +1623,7 @@ async def get_db_connection_context(
             f"(3) Increasing DB_SETUP_TIMEOUT (current: {get_setup_timeout()}s)"
         )
         _state.metrics.failed_acquisitions += 1
+        # No retry here; one-shot retry already attempted above.
         raise
     except asyncpg.exceptions.PostgresError as pg_err:
         logger.error(f"PostgreSQL error: {pg_err}", exc_info=True)
