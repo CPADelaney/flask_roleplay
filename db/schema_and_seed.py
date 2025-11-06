@@ -426,14 +426,8 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                DO $$
-                BEGIN
-                    ALTER TABLE Locations
-                    ADD CONSTRAINT idx_locations_user_conversation_name
-                    UNIQUE (user_id, conversation_id, location_name);
-                EXCEPTION
-                    WHEN duplicate_object THEN NULL;
-                END $$;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_user_conv_lower_name
+                ON Locations (user_id, conversation_id, lower(location_name));
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_locations_embedding_hnsw
