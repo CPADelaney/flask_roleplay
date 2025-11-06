@@ -2524,20 +2524,20 @@ async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str
                     """,
                     user_id,
                     conversation_id,
-                    KEYS,
+                    ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"],
                 )
+
                 values = {row["key"]: row["value"] for row in rows}
 
-                def parse_int(key: str) -> int:
-                    value = values.get(key)
+                def _parse_int(value):
                     try:
                         return int(value)
                     except (TypeError, ValueError):
-                        return 1
+                        return None
 
-                year = parse_int("CurrentYear")
-                month = parse_int("CurrentMonth")
-                day = parse_int("CurrentDay")
+                year = _parse_int(values.get("CurrentYear")) or 1
+                month = _parse_int(values.get("CurrentMonth")) or 1
+                day = _parse_int(values.get("CurrentDay")) or 1
                 tod = values.get("TimeOfDay") or "Morning"
 
                 return (year, month, day, tod)
