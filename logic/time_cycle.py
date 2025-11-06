@@ -2505,6 +2505,9 @@ def skip_on_shutdown(default_return):
         return wrapper
     return decorator
 
+KEYS = ("CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay")
+
+
 @skip_on_shutdown(default_return=(1, 1, 1, "Morning"))
 async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str]:
     """
@@ -2516,8 +2519,7 @@ async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str
             async with get_db_connection_context() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value
-                    FROM CurrentRoleplay
+                    SELECT key, value FROM CurrentRoleplay
                     WHERE user_id=$1 AND conversation_id=$2 AND key = ANY($3::text[])
                     """,
                     user_id,
