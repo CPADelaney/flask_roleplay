@@ -37,7 +37,7 @@ from nyx.gateway.llm_gateway import LLMRequest
 from agents.run_context import RunContextWrapper
 from nyx.conflict import request_conflict_resolution
 
-from db.connection import get_db_connection_context, is_shutting_down
+from db.connection import get_db_connection_context, is_shutting_down, skip_vector_registration
 import functools
 import asyncpg
 from lore.core import canon
@@ -2512,32 +2512,33 @@ async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str
     Defaults to (1,1,1,'Morning') if not found.
     """
     try:
-        async with get_db_connection_context() as conn:
-            row_year = await conn.fetchval("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentYear'
-            """, user_id, conversation_id)
-            year = int(row_year) if row_year else 1
-            
-            row_month = await conn.fetchval("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentMonth'
-            """, user_id, conversation_id)
-            month = int(row_month) if row_month else 1
-            
-            row_day = await conn.fetchval("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
-            """, user_id, conversation_id)
-            day = int(row_day) if row_day else 1
-            
-            row_tod = await conn.fetchval("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
-            """, user_id, conversation_id)
-            tod = row_tod if row_tod else "Morning"
-            
-            return (year, month, day, tod)
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                row_year = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentYear'
+                """, user_id, conversation_id)
+                year = int(row_year) if row_year else 1
+
+                row_month = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentMonth'
+                """, user_id, conversation_id)
+                month = int(row_month) if row_month else 1
+
+                row_day = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
+                """, user_id, conversation_id)
+                day = int(row_day) if row_day else 1
+
+                row_tod = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
+                """, user_id, conversation_id)
+                tod = row_tod if row_tod else "Morning"
+
+                return (year, month, day, tod)
             
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         logger.error(f"Database error getting current time: {e}")
