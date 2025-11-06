@@ -715,7 +715,7 @@ async def generate_and_persist_hierarchy(
     location_kwargs: Dict[str, Any] = {
         "user_id": user_id,
         "conversation_id": conversation_id,
-        "location_name": normalized_name,
+        "location_name": display_name,
         "description": description,
         "location_type": location_type,
         "parent_location": parent_location,
@@ -915,8 +915,21 @@ async def get_or_create_location(
         """,
         int(user_id),
         int(conversation_id),
-        normalized_name,
+        display_name,
     )
+    if not row:
+        row = await conn.fetchrow(
+            """
+            SELECT *
+            FROM Locations
+            WHERE user_id = $1 AND conversation_id = $2 AND location_name = $3
+            ORDER BY location_id DESC
+            LIMIT 1
+            """,
+            int(user_id),
+            int(conversation_id),
+            normalized_name,
+        )
     if row:
         return Location.from_record(row)
 
