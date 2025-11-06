@@ -1050,47 +1050,51 @@ async def get_all_player_stats(user_id: int, conversation_id: int, player_name: 
         with skip_vector_registration():
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
-                    SELECT * FROM PlayerStats
-                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                    SELECT ps.*, pv.hunger, pv.thirst, pv.fatigue
+                    FROM PlayerStats ps
+                    LEFT JOIN PlayerVitals pv
+                        ON ps.user_id = pv.user_id
+                       AND ps.conversation_id = pv.conversation_id
+                       AND ps.player_name = pv.player_name
+                    WHERE ps.user_id = $1 AND ps.conversation_id = $2 AND ps.player_name = $3
                 """, user_id, conversation_id, player_name)
-            
-            if not row:
-                return {}
-            
-            # Get vitals
-            vitals_row = await conn.fetchrow("""
-                SELECT hunger, thirst, fatigue FROM PlayerVitals
-                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-            """, user_id, conversation_id, player_name)
-            
-            # Organize stats by visibility
-            all_stats = dict(row)
-            stats = {
-                "visible": {},
-                "hidden": {},
-                "vitals": {}
-            }
-            
-            # Categorize stats
-            for stat in VISIBLE_STATS:
-                if stat in all_stats:
-                    stats["visible"][stat] = all_stats[stat]
-                    
-            for stat in HIDDEN_STATS:
-                if stat in all_stats:
-                    stats["hidden"][stat] = all_stats[stat]
-            
-            # Add legacy physical_endurance to hidden
-            if 'physical_endurance' in all_stats:
-                stats["hidden"]['physical_endurance'] = all_stats['physical_endurance']
-            
-            # Add vitals
-            if vitals_row:
-                stats["vitals"] = dict(vitals_row)
-            else:
-                stats["vitals"] = {"hunger": 100, "thirst": 100, "fatigue": 0}
-            
-            return stats
+
+                if not row:
+                    return {}
+
+                # Organize stats by visibility
+                all_stats = dict(row)
+                stats = {
+                    "visible": {},
+                    "hidden": {},
+                    "vitals": {}
+                }
+
+                # Categorize stats
+                for stat in VISIBLE_STATS:
+                    if stat in all_stats:
+                        stats["visible"][stat] = all_stats[stat]
+
+                for stat in HIDDEN_STATS:
+                    if stat in all_stats:
+                        stats["hidden"][stat] = all_stats[stat]
+
+                # Add legacy physical_endurance to hidden
+                if 'physical_endurance' in all_stats:
+                    stats["hidden"]['physical_endurance'] = all_stats['physical_endurance']
+
+                # Add vitals with defaults when not present
+                def _get_vital(key: str, default: int) -> int:
+                    value = all_stats.get(key)
+                    return value if value is not None else default
+
+                stats["vitals"] = {
+                    "hunger": _get_vital("hunger", 100),
+                    "thirst": _get_vital("thirst", 100),
+                    "fatigue": _get_vital("fatigue", 0)
+                }
+
+                return stats
     except Exception as e:
         logger.error(f"Error getting all stats: {e}", exc_info=True)
         return {}
