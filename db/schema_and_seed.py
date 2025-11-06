@@ -719,6 +719,9 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE INDEX IF NOT EXISTS idx_playerstats_user_conv ON PlayerStats (user_id, conversation_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS PlayerInventory (
                     item_id SERIAL PRIMARY KEY,
                     user_id INT NOT NULL,
@@ -766,6 +769,9 @@ async def create_all_tables():
                     last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (user_id, conversation_id, player_name)
                 );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_playervitals_user_conv ON PlayerVitals (user_id, conversation_id);
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS PlayerPerks (
