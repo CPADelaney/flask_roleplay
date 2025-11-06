@@ -1249,6 +1249,42 @@ async def get_or_generate_districts(
 
     async with get_db_connection_context() as conn:
         try:
+            real_rows = await conn.fetch(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1
+                  AND conversation_id = $2
+                  AND LOWER(COALESCE(city, parent_location, '')) = LOWER($3)
+                  AND COALESCE(LOWER(location_type), '') = 'district'
+                  AND LOWER(COALESCE(scope, CASE WHEN is_fictional THEN 'fictional' ELSE 'real' END)) = 'real'
+                ORDER BY location_id
+                """,
+                user_key,
+                conversation_key,
+                city,
+            )
+        except asyncpg.UndefinedColumnError:
+            real_rows = await conn.fetch(
+                """
+                SELECT *
+                FROM Locations
+                WHERE user_id = $1
+                  AND conversation_id = $2
+                  AND LOWER(COALESCE(city, parent_location, '')) = LOWER($3)
+                  AND COALESCE(LOWER(location_type), '') = 'district'
+                  AND COALESCE(is_fictional, FALSE) = FALSE
+                ORDER BY location_id
+                """,
+                user_key,
+                conversation_key,
+                city,
+            )
+
+        if real_rows:
+            return [Location.from_record(row) for row in real_rows]
+
+        try:
             rows = await conn.fetch(
                 """
                 SELECT *
