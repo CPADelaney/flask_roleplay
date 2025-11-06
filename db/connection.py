@@ -35,7 +35,7 @@ import asyncio
 import asyncpg
 import threading
 import weakref
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Optional, Dict, Any, Set, List, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass, field
@@ -239,7 +239,7 @@ DEFAULT_COMMAND_TIMEOUT = 120  # seconds
 DEFAULT_MAX_QUERIES = 50000
 # Lower default so we fail fast; env DB_SETUP_TIMEOUT can override
 DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
-DEFAULT_SETUP_TIMEOUT = 10.0  # Timeout for connection setup (pgvector registration)
+DEFAULT_SETUP_TIMEOUT = 30.0  # Timeout for connection setup (pgvector registration)
 DEFAULT_ACQUIRE_TIMEOUT = 120.0  # Timeout for acquiring connection from pool
 DEFAULT_POOL_CREATE_TIMEOUT = 30.0  # Timeout for initial asyncpg.create_pool wait_for
 
@@ -734,23 +734,81 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         finally:
             return
 
+    async def _close_connection_after_setup_failure(reason: str) -> None:
+        """Best-effort close to keep the pool from reusing poisoned connections."""
+        conn_id = id(conn)
+
+        try:
+            if hasattr(conn, "is_closed") and conn.is_closed():
+                logger.debug(
+                    "Connection %s already closed while handling setup failure (%s)",
+                    conn_id,
+                    reason,
+                )
+                return
+        except Exception:
+            logger.debug(
+                "Could not determine closed state for connection %s during setup failure",
+                conn_id,
+            )
+
+        try:
+            await asyncio.shield(conn.close())
+            logger.debug(
+                "Closed connection %s after setup failure (%s)",
+                conn_id,
+                reason,
+            )
+        except Exception as close_err:
+            logger.warning(
+                "Graceful close failed for connection %s after setup failure (%s): %s; terminating",
+                conn_id,
+                reason,
+                close_err,
+            )
+            with suppress(Exception):
+                conn.terminate()
+
     max_retries = 3
     retry_delay = 0.5  # Start with 0.5 seconds
     setup_timeout = get_setup_timeout()
-    
+
     for attempt in range(max_retries):
         try:
             # IMPROVEMENT: Added configurable timeout to prevent indefinite hang
-            await asyncio.wait_for(
-                pgvector_asyncpg.register_vector(conn),
-                timeout=setup_timeout
-            )
+            try:
+                await asyncio.wait_for(
+                    pgvector_asyncpg.register_vector(conn),
+                    timeout=setup_timeout
+                )
+            except asyncio.CancelledError:
+                await _close_connection_after_setup_failure(
+                    f"attempt {attempt + 1} cancelled"
+                )
+                raise
+            except asyncio.TimeoutError:
+                await _close_connection_after_setup_failure(
+                    f"attempt {attempt + 1} timed out after {setup_timeout}s"
+                )
+                raise
             logger.debug(
                 f"Successfully registered pgvector on connection {id(conn)} "
                 f"(attempt {attempt + 1}/{max_retries})"
             )
             return  # Success
-        except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
+        except asyncio.TimeoutError as e:
+            logger.warning(
+                f"Connection setup timed out on attempt {attempt + 1}/{max_retries} "
+                f"({e.__class__.__name__}): {e} (timeout={setup_timeout}s); connection closed"
+            )
+            if attempt + 1 == max_retries:
+                logger.error(
+                    f"All {max_retries} attempts to register pgvector timed out on connection {id(conn)}. "
+                    f"Connection has been closed and will be replaced. Consider increasing "
+                    f"DB_SETUP_TIMEOUT (current: {setup_timeout}s) or checking database load."
+                )
+            raise
+        except asyncpg.exceptions.ConnectionDoesNotExistError as e:
             logger.warning(
                 f"Connection setup failed on attempt {attempt + 1}/{max_retries} "
                 f"({e.__class__.__name__}): {e} (timeout={setup_timeout}s)"
