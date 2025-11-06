@@ -132,6 +132,31 @@ def parse_json_from_response(raw_text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _extract_first_json_object(text: str) -> Optional[str]:
+    """Extract the first top-level JSON object from text using brace balance scanning."""
+    if not text:
+        return None
+
+    start_idx = text.find("{")
+    if start_idx < 0:
+        return None
+
+    depth = 0
+    for idx in range(start_idx, len(text)):
+        char = text[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = text[start_idx : idx + 1].strip()
+                candidate = re.sub(r",\s*}", "}", candidate)
+                candidate = re.sub(r",\s*]", "]", candidate)
+                return candidate
+
+    return None
+
+
 async def call_gpt_json(
     conversation_id: str,
     context: str,
@@ -162,20 +187,30 @@ async def call_gpt_json(
             )
 
             raw_text = response.get("response", "").strip()
-            
+
             logging.info("RAW RESPONSE FROM GPT: ---BEGIN---\n%s\n---END---", raw_text)
 
             if not raw_text:
                 logging.warning(f"[call_gpt_json] GPT returned an empty response string on attempt {attempt}.")
                 continue
-            
-            # The response should be a clean JSON object now, so direct parsing should work
+
             parsed_json = parse_json_from_response(raw_text)
-            
-            if parsed_json:
+            if parsed_json is not None:
                 return parsed_json
-            else:
-                logging.warning(f"[call_gpt_json] Failed to parse valid JSON on attempt {attempt}.")
+
+            cleaned = _extract_first_json_object(raw_text)
+            if cleaned:
+                parsed_json = parse_json_from_response(cleaned)
+                if parsed_json is not None:
+                    return parsed_json
+
+            logging.warning(
+                "[call_gpt_json] Failed to parse valid JSON; returning partial payload with status flag"
+            )
+            return {
+                "_status": "partial_parse_failed",
+                "_raw": raw_text[:4000],
+            }
 
         except Exception as e:
             logging.error(f"[call_gpt_json] An unexpected error occurred on attempt {attempt}: {e}", exc_info=True)
