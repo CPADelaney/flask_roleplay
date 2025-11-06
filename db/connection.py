@@ -58,15 +58,37 @@ logger = logging.getLogger(__name__)
 AsyncpgConnection = Union[asyncpg.Connection, '_ResilientConnectionWrapper']
 
 
+# Use a single, consistent name for the ContextVar
 _SKIP_VECTOR_REGISTRATION: ContextVar[bool] = ContextVar(
     "skip_vector_registration",
     default=False,
 )
 
+# Truthy/falsey parsing for env var
+_VECTOR_TRUTHY = {"1", "true", "t", "yes", "y", "on", "enable", "enabled"}
+_VECTOR_FALSEY = {"0", "false", "f", "no", "n", "off", "disable", "disabled", ""}
+
+def get_register_vector() -> bool:
+    """
+    Return whether pgvector registration should run for new connections.
+    Defaults to False if DB_REGISTER_VECTOR is unset or unrecognized.
+    """
+    raw_value = os.getenv("DB_REGISTER_VECTOR")
+    if raw_value is None:
+        return False
+    value = raw_value.strip().lower()
+    if value in _VECTOR_TRUTHY:
+        return True
+    if value in _VECTOR_FALSEY:
+        return False
+    logger.warning("Unrecognized DB_REGISTER_VECTOR value '%s'; defaulting to False", raw_value)
+    return False
 
 @contextmanager
 def skip_vector_registration() -> None:
-    """Temporarily defer pgvector registration for new connections."""
+    """
+    Temporarily skip pgvector codec registration for any new connection acquired within this block.
+    """
     token = _SKIP_VECTOR_REGISTRATION.set(True)
     try:
         yield
@@ -729,6 +751,58 @@ class _ResilientConnectionWrapper:
 # Connection Pool Setup
 # ============================================================================
 
+# ============================================================================
+# setup_connection (merged behavior)
+# ============================================================================
+
+async def setup_connection(conn: asyncpg.Connection) -> None:
+    """
+    Per-connection setup invoked by the pool.
+    Honors:
+      - DB_REGISTER_VECTOR env to enable/disable pgvector codec registration
+      - skip_vector_registration() context manager to temporarily suppress it
+      - One-time registration per connection with retry/timeout
+    """
+
+    # Respect global env toggle first
+    if not get_register_vector():
+        logger.debug("Skipping pgvector registration on %s (env disabled)", id(conn))
+        return
+
+    # Respect per-scope override (read-heavy or latency-sensitive paths)
+    if _SKIP_VECTOR_REGISTRATION.get():
+        logger.debug("Skipping pgvector registration on %s (context override)", id(conn))
+        return
+
+    if getattr(conn, "_vector_registered", False):
+        return
+
+    # Pull timeouts/retries from helpers if present; otherwise environment defaults
+    try:
+        setup_timeout = get_setup_timeout()  # existing helper in your module
+    except NameError:
+        setup_timeout = float(os.getenv("DB_SETUP_TIMEOUT", "30"))
+
+    try:
+        max_retries = get_vector_register_retries()
+    except NameError:
+        max_retries = int(os.getenv("DB_VECTOR_REGISTER_RETRIES", "3"))
+
+    try:
+        initial_retry_delay = get_vector_register_retry_delay()
+    except NameError:
+        initial_retry_delay = float(os.getenv("DB_VECTOR_REGISTER_RETRY_DELAY", "0.2"))
+
+    await _register_vector_with_retry(
+        conn,
+        setup_timeout=setup_timeout,
+        max_retries=max_retries,
+        initial_retry_delay=initial_retry_delay,
+    )
+# ============================================================================
+# Retry helper (from main), with small safety polish
+# ============================================================================
+
 async def _register_vector_with_retry(
     conn: asyncpg.Connection,
     *,
@@ -736,8 +810,50 @@ async def _register_vector_with_retry(
     max_retries: int,
     initial_retry_delay: float,
 ) -> None:
-    """Register pgvector with retry logic and timeout protection."""
+    """
+    Register pgvector codec on the given connection with timeout and backoff.
+    Idempotent: if already registered on this connection, it is a no-op.
+    """
+    if getattr(conn, "_vector_registered", False):
+        return
+
     retry_delay = initial_retry_delay
+    for attempt in range(max_retries):
+        try:
+            await asyncio.wait_for(pgvector_asyncpg.register_vector(conn), timeout=setup_timeout)
+            setattr(conn, "_vector_registered", True)
+            logger.debug(
+                "pgvector registered on connection %s (attempt %d/%d)",
+                id(conn), attempt + 1, max_retries
+            )
+            return
+        except asyncio.CancelledError:
+            # Do not leave a half-initialized connection in the pool
+            with contextlib.suppress(Exception):
+                await conn.close()
+            raise
+        except asyncio.TimeoutError as e:
+            logger.warning(
+                "pgvector registration timed out on connection %s (attempt %d/%d, timeout=%.1fs)",
+                id(conn), attempt + 1, max_retries, setup_timeout
+            )
+            if attempt == max_retries - 1:
+                # Close the conn to avoid reusing a poisoned setup
+                with contextlib.suppress(Exception):
+                    await conn.close()
+                raise
+        except Exception as e:
+            logger.warning(
+                "pgvector registration failed on connection %s (attempt %d/%d): %s",
+                id(conn), attempt + 1, max_retries, e
+            )
+            if attempt == max_retries - 1:
+                with contextlib.suppress(Exception):
+                    await conn.close()
+                raise
+        # Linear backoff
+        await asyncio.sleep(retry_delay)
+        retry_delay += initial_retry_delay
 
     for attempt in range(max_retries):
         try:
@@ -749,7 +865,8 @@ async def _register_vector_with_retry(
                 f"Successfully registered pgvector on connection {id(conn)} "
                 f"(attempt {attempt + 1}/{max_retries})"
             )
-            return
+            setattr(conn, "_vector_registered", True)
+            return  # Success
         except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
             logger.warning(
                 f"Connection setup failed on attempt {attempt + 1}/{max_retries} "
@@ -2042,7 +2159,9 @@ __all__ = [
     'get_db_connection_context',
     'close_connection_pool',
     'setup_connection',
-    
+    'skip_vector_registration',
+    'get_register_vector',
+
     # Health & Metrics
     'check_pool_health',
     'get_pool_metrics',

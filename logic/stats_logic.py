@@ -8,7 +8,7 @@ import json
 import random
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, skip_vector_registration
 from quart import Blueprint, request, jsonify, session, redirect, url_for
 from lore.core import canon
 
@@ -965,10 +965,11 @@ async def get_player_visible_stats(user_id: int, conversation_id: int, player_na
     Get only the visible stats for a player.
     """
     try:
-        async with get_db_connection_context() as conn:
-            # Get stat values
-            row = await conn.fetchrow("""
-                SELECT hp, max_hp, strength, endurance, agility, empathy, intelligence
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                # Get stat values
+                row = await conn.fetchrow("""
+                    SELECT hp, max_hp, strength, endurance, agility, empathy, intelligence
                 FROM PlayerStats
                 WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
             """, user_id, conversation_id, player_name)
@@ -1005,10 +1006,11 @@ async def get_player_hidden_stats(user_id: int, conversation_id: int, player_nam
     Get the hidden background stats (for game logic use only).
     """
     try:
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow("""
-                SELECT corruption, confidence, willpower, obedience, 
-                       dependency, lust, mental_resilience
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT corruption, confidence, willpower, obedience,
+                           dependency, lust, mental_resilience
                 FROM PlayerStats
                 WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
             """, user_id, conversation_id, player_name)
@@ -1027,11 +1029,12 @@ async def get_all_player_stats(user_id: int, conversation_id: int, player_name: 
     Used by AI and admin interfaces only.
     """
     try:
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow("""
-                SELECT * FROM PlayerStats
-                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-            """, user_id, conversation_id, player_name)
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT * FROM PlayerStats
+                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                """, user_id, conversation_id, player_name)
             
             if not row:
                 return {}
