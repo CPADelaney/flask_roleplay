@@ -1104,6 +1104,28 @@ class ContextBroker:
 
         try:
             section = await fetcher()
+        except asyncio.TimeoutError:
+            if cached is not None:
+                logger.warning(
+                    "[CONTEXT_BROKER] Fetch for section '%s' timed out; returning stale cache and refreshing in background",
+                    orchestrator_name,
+                )
+                asyncio.create_task(
+                    self._refresh_section_in_background(
+                        orchestrator_name=orchestrator_name,
+                        cache_attribute=cache_attribute,
+                        expires_attribute=expires_attribute,
+                        fetcher=fetcher,
+                        ttl_value=ttl_value,
+                    )
+                )
+                return cached
+
+            logger.exception(
+                "[CONTEXT_BROKER] Fetch for section '%s' timed out with no cached value",
+                orchestrator_name,
+            )
+            return fallback_factory()
         except Exception:
             logger.exception(
                 "[CONTEXT_BROKER] Failed to fetch section '%s'", orchestrator_name
@@ -1117,6 +1139,32 @@ class ContextBroker:
             setattr(self, expires_attribute, 0.0)
 
         return section
+
+    async def _refresh_section_in_background(
+        self,
+        *,
+        orchestrator_name: str,
+        cache_attribute: str,
+        expires_attribute: str,
+        fetcher: Callable[[], Awaitable[BundleSection]],
+        ttl_value: float,
+    ) -> None:
+        """Refresh a cached section in the background without propagating failures."""
+
+        try:
+            section = await fetcher()
+        except Exception:
+            logger.warning(
+                "[CONTEXT_BROKER] Background refresh for section '%s' failed", orchestrator_name,
+                exc_info=True,
+            )
+            return
+
+        setattr(self, cache_attribute, section)
+        if ttl_value > 0:
+            setattr(self, expires_attribute, time.time() + ttl_value)
+        else:
+            setattr(self, expires_attribute, 0.0)
 
 
     async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:

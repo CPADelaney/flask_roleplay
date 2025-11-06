@@ -53,7 +53,7 @@ sys.modules["logic.conflict_system.conflict_synthesizer"] = stub_conflict_synthe
 sys.modules["logic.conflict_system.background_processor"] = stub_conflict_background
 
 
-from nyx.nyx_agent.context import ContextBroker, SceneScope
+from nyx.nyx_agent.context import BundleSection, ContextBroker, SceneScope
 
 
 class _StubConflictSynthesizer:
@@ -108,11 +108,15 @@ async def _run_conflict_section_timeout_check():
         await asyncio.sleep(0.2)
         return {"npc:101|npc:202": 0.95}
 
+    async def _await_orchestrator(_: str) -> bool:
+        return True
+
     ctx = SimpleNamespace(
         conflict_synthesizer=synthesizer,
         calculate_conflict_tensions=calculate_conflict_tensions,
         conflict_state_timeout=0.05,
         conflict_tension_timeout=0.05,
+        await_orchestrator=_await_orchestrator,
     )
 
     broker = ContextBroker.__new__(ContextBroker)
@@ -139,3 +143,110 @@ async def _run_conflict_section_timeout_check():
 
 def test_conflict_section_times_out_slow_calls():
     asyncio.run(_run_conflict_section_timeout_check())
+
+
+async def _run_fetch_returns_stale(monkeypatch):
+    async def _await_orchestrator(_: str) -> bool:
+        return True
+
+    broker = ContextBroker.__new__(ContextBroker)
+    broker.ctx = SimpleNamespace(
+        await_orchestrator=_await_orchestrator,
+        user_id=1,
+        conversation_id=2,
+    )
+    broker.section_ttls = {"test": 0.5}
+
+    stale_section = BundleSection(data={"value": "stale"})
+    setattr(broker, "test_cache", stale_section)
+    setattr(broker, "test_cache_expires_at", time.time() - 10)
+
+    loop = asyncio.get_running_loop()
+    created_tasks = []
+
+    def _capture_task(coro):
+        task = loop.create_task(coro)
+        created_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", _capture_task)
+
+    refresh_event = asyncio.Event()
+    call_counter = 0
+
+    async def _fetcher() -> BundleSection:
+        nonlocal call_counter
+        call_counter += 1
+        if call_counter == 1:
+            raise asyncio.TimeoutError()
+        await asyncio.sleep(0)
+        section = BundleSection(data={"value": "fresh"})
+        refresh_event.set()
+        return section
+
+    def _fallback() -> BundleSection:
+        return BundleSection(data={"value": "fallback"})
+
+    result = await broker.perform_fetch_and_cache(
+        orchestrator_name="test",
+        cache_attribute="test_cache",
+        expires_attribute="test_cache_expires_at",
+        fetcher=_fetcher,
+        fallback_factory=_fallback,
+        ttl=0.5,
+    )
+
+    assert result is stale_section
+    assert len(created_tasks) == 1
+
+    await asyncio.wait_for(refresh_event.wait(), timeout=0.1)
+    await created_tasks[0]
+
+    refreshed_section = getattr(broker, "test_cache")
+    assert refreshed_section.data == {"value": "fresh"}
+    assert getattr(broker, "test_cache_expires_at") > time.time()
+    assert call_counter == 2
+
+
+def test_perform_fetch_returns_stale_on_timeout_and_refreshes_cache(monkeypatch):
+    asyncio.run(_run_fetch_returns_stale(monkeypatch))
+
+
+async def _run_fetch_timeout_without_cache(monkeypatch):
+    async def _await_orchestrator(_: str) -> bool:
+        return True
+
+    broker = ContextBroker.__new__(ContextBroker)
+    broker.ctx = SimpleNamespace(
+        await_orchestrator=_await_orchestrator,
+        user_id=3,
+        conversation_id=4,
+    )
+    broker.section_ttls = {"test": 0.5}
+
+    def _fallback() -> BundleSection:
+        return BundleSection(data={"value": "fallback"})
+
+    async def _fetcher() -> BundleSection:
+        raise asyncio.TimeoutError()
+
+    def _no_task(_: typing.Any) -> None:
+        raise AssertionError("Background refresh should not be scheduled without cache")
+
+    monkeypatch.setattr(asyncio, "create_task", _no_task)
+
+    result = await broker.perform_fetch_and_cache(
+        orchestrator_name="test",
+        cache_attribute="test_cache",
+        expires_attribute="test_cache_expires_at",
+        fetcher=_fetcher,
+        fallback_factory=_fallback,
+        ttl=0.5,
+    )
+
+    assert result.data == {"value": "fallback"}
+    assert getattr(broker, "test_cache", None) is None
+
+
+def test_perform_fetch_timeout_without_cache_returns_fallback(monkeypatch):
+    asyncio.run(_run_fetch_timeout_without_cache(monkeypatch))
