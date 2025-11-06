@@ -1982,11 +1982,31 @@ class ContextBroker:
         max_parallel = self.ctx.max_parallel_tasks
         semaphore = asyncio.Semaphore(max_parallel) if max_parallel > 0 else None
 
+        # Tight budgets per section to avoid long-tail stalls on cold misses
+        SECTION_BUDGETS = {
+            'npcs': 1.5,
+            'memories': 1.5,
+            'lore': 2.0,
+            'conflicts': 1.5,
+            'world': 1.5,
+            'narrative': 1.0,
+        }
+
         async def fetch_with_semaphore(section_name: str):
+            async def _one():
+                return await self._fetch_section(section_name, scene_scope)
+            timeout = SECTION_BUDGETS.get(section_name, 1.5)
             if semaphore:
                 async with semaphore:
-                    return await self._fetch_section(section_name, scene_scope)
-            return await self._fetch_section(section_name, scene_scope)
+                    try:
+                        return await asyncio.wait_for(_one(), timeout=timeout)
+                    except Exception as e:
+                        # Let the gather() path convert to a fallback section
+                        raise e
+            try:
+                return await asyncio.wait_for(_one(), timeout=timeout)
+            except Exception as e:
+                raise e
 
         results = await asyncio.gather(
             *[fetch_with_semaphore(name) for name in SECTION_NAMES],
@@ -2008,7 +2028,7 @@ class ContextBroker:
                 bundle_data[section_name] = result
 
         fetch_time = time.time() - start_time
-        logger.info(f"Fetched context bundle in {fetch_time:.2f}s")
+        logger.debug(f"Fetched context bundle in {fetch_time:.2f}s")
 
         return ContextBundle(
             scene_scope=scene_scope,
