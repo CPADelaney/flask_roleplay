@@ -967,35 +967,53 @@ async def get_player_visible_stats(user_id: int, conversation_id: int, player_na
     try:
         with skip_vector_registration():
             async with get_db_connection_context() as conn:
-                # Get stat values
-                row = await conn.fetchrow("""
-                    SELECT hp, max_hp, strength, endurance, agility, empathy, intelligence
-                FROM PlayerStats
-                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-            """, user_id, conversation_id, player_name)
-            
+                query = """
+                    SELECT
+                        ps.hp,
+                        ps.max_hp,
+                        ps.strength,
+                        ps.endurance,
+                        ps.agility,
+                        ps.empathy,
+                        ps.intelligence,
+                        pv.hunger,
+                        pv.thirst,
+                        pv.fatigue
+                    FROM public.playerstats AS ps
+                    LEFT JOIN public.playervitals AS pv
+                        ON ps.user_id = pv.user_id
+                        AND ps.conversation_id = pv.conversation_id
+                        AND ps.player_name = pv.player_name
+                    WHERE ps.user_id = $1 AND ps.conversation_id = $2
+                """
+
+                params = [user_id, conversation_id]
+                if player_name is not None:
+                    query += " AND ps.player_name = $%d" % (len(params) + 1)
+                    params.append(player_name)
+
+                row = await conn.fetchrow(query, *params)
+
             if not row:
                 return {}
-            
-            # Get hunger from vitals
-            vitals_row = await conn.fetchrow("""
-                SELECT hunger, thirst, fatigue FROM PlayerVitals
-                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-            """, user_id, conversation_id, player_name)
-            
-            stats = dict(row)
-            if vitals_row:
-                stats['hunger'] = vitals_row['hunger']
-                stats['thirst'] = vitals_row.get('thirst', 100)
-                stats['fatigue'] = vitals_row.get('fatigue', 0)
-            else:
-                stats['hunger'] = 100  # Default to full
-                stats['thirst'] = 100
-                stats['fatigue'] = 0
-                
+
+            stats = {
+                'hp': row['hp'],
+                'max_hp': row['max_hp'],
+                'strength': row['strength'],
+                'endurance': row['endurance'],
+                'agility': row['agility'],
+                'empathy': row['empathy'],
+                'intelligence': row['intelligence'],
+            }
+
+            stats['hunger'] = row['hunger'] if row['hunger'] is not None else 100
+            stats['thirst'] = row['thirst'] if row['thirst'] is not None else 100
+            stats['fatigue'] = row['fatigue'] if row['fatigue'] is not None else 0
+
             # Add hunger status
             stats['hunger_status'] = get_hunger_status(stats['hunger'])
-                
+
             return stats
     except Exception as e:
         logger.error(f"Error getting visible stats: {e}", exc_info=True)
