@@ -775,9 +775,6 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         logger.debug("Skipping pgvector registration on %s (context override)", id(conn))
         return
 
-    if getattr(conn, "_vector_registered", False):
-        return
-
     # Pull timeouts/retries from helpers if present; otherwise environment defaults
     try:
         setup_timeout = get_setup_timeout()  # existing helper in your module
@@ -813,11 +810,8 @@ async def _register_vector_with_retry(
 ) -> None:
     """
     Register pgvector codec on the given connection with timeout and backoff.
-    Idempotent: if already registered on this connection, it is a no-op.
+    Idempotent: safe to call multiple times.
     """
-    if getattr(conn, "_vector_registered", False):
-        return
-
     retry_delay = initial_retry_delay
     last_exception: Optional[BaseException] = None
     for attempt in range(1, max_retries + 1):
@@ -826,7 +820,6 @@ async def _register_vector_with_retry(
                 pgvector_asyncpg.register_vector(conn),
                 timeout=setup_timeout,
             )
-            setattr(conn, "_vector_registered", True)
             logger.debug(
                 "pgvector registered on connection %s (attempt %d/%d)",
                 id(conn),
