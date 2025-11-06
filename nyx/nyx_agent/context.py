@@ -2924,7 +2924,7 @@ class ContextBroker:
 
         def _empty_section() -> BundleSection:
             return BundleSection(
-                data={},
+                data={},  # summary-shape placeholder
                 canonical=False,
                 priority=0,
                 last_changed_at=time.time(),
@@ -2935,40 +2935,27 @@ class ContextBroker:
             if not self.ctx.world_director:
                 raise RuntimeError("World director unavailable")
 
-            world_data: Dict[str, Any] = {}
-
+            # Shallow-first: request fast bundle and pull 'summary'
+            world_summary: Dict[str, Any] = {}
             try:
-                if hasattr(self.ctx.world_director, "get_world_state"):
-                    world_state = await self.ctx.world_director.get_world_state()
-                    if world_state:
-                        mood = getattr(world_state, "world_mood", None)
-                        if isinstance(mood, Enum):
-                            mood = mood.value
-
-                        weather = getattr(world_state, "weather", None)
-                        if isinstance(weather, Enum):
-                            weather = weather.value
-
-                        world_data = {
-                            "time": getattr(world_state, "current_time", None),
-                            "mood": mood,
-                            "weather": weather,
-                            "events": getattr(world_state, "active_events", [])[:3],
-                        }
-
-                        vitals = getattr(world_state, "player_vitals", None)
-                        if vitals:
-                            world_data["vitals"] = {
-                                "fatigue": getattr(vitals, "fatigue", 0),
-                                "hunger": getattr(vitals, "hunger", 100),
-                                "thirst": getattr(vitals, "thirst", 100),
-                            }
+                ctx_obj = getattr(self.ctx.world_director, "context", None)
+                if ctx_obj and hasattr(ctx_obj, "get_world_bundle"):
+                    # Use a tight timeout to avoid blocking on cold starts
+                    bundle = await asyncio.wait_for(
+                        ctx_obj.get_world_bundle(fast=True),
+                        timeout=1.0
+                    )
+                    if isinstance(bundle, dict):
+                        world_summary = bundle.get("summary", {}) or {}
+                else:
+                    # Extremely defensive fallback to keep shape stable
+                    world_summary = {}
             except Exception as exc:
                 logger.error("World fetch failed: %s", exc)
                 raise
 
             return BundleSection(
-                data=world_data,
+                data=world_summary,
                 canonical=False,
                 priority=4,
                 last_changed_at=time.time(),
