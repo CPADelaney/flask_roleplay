@@ -23,7 +23,7 @@ from .flashbacks import FlashbackManager
 from .semantic import SemanticMemoryManager
 from .reconsolidation import ReconsolidationManager
 from .masks import ProgressiveRevealManager
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, skip_vector_registration
 from utils.caching import get, set, delete
 
 # Import shutdown protection
@@ -321,28 +321,25 @@ class IntegratedMemorySystem:
                         results["mask_slippage"] = slippage_result
             
             # 6. Update entity emotional state
-            emotion_update = {}
             try:
-                # Prevent a slow DB acquire / pgvector registration from blocking the hot path
-                emotion_update = await asyncio.wait_for(
-                    self.update_emotional_state_from_memory(
+                asyncio.create_task(
+                    self._safe_emotion_update(
                         entity_type=entity_type,
                         entity_id=entity_id,
                         memory_id=memory_id,
-                        memory_text=memory_text
-                    ),
-                    timeout=EMO_UPDATE_TIMEOUT,
+                        memory_text=memory_text,
+                    )
                 )
-            except (asyncio.TimeoutError, ConnectionError) as e:
+                emotion_update = {"scheduled": True, "timeout_s": EMO_UPDATE_TIMEOUT}
+            except RuntimeError as e:
                 if EMO_UPDATE_SOFT_FAIL:
                     logger.warning(
-                        "Emotional state update skipped (timeout=%ss): %s",
-                        EMO_UPDATE_TIMEOUT,
+                        "Emotional state update scheduling skipped: %s",
                         e,
                     )
                     emotion_update = {
                         "skipped": True,
-                        "reason": "timeout",
+                        "reason": "schedule_failed",
                         "timeout_s": EMO_UPDATE_TIMEOUT,
                     }
                 else:
@@ -353,7 +350,7 @@ class IntegratedMemorySystem:
             self._record_memory_event("add", entity_type, entity_id, memory_id, results)
             
             return results
-            
+
         except ConnectionError as e:
             if "shutting down" in str(e).lower():
                 logger.info(f"Memory add gracefully skipped during shutdown")
@@ -363,7 +360,38 @@ class IntegratedMemorySystem:
             logger.error(f"Error in integrated memory add: {e}", exc_info=True)
             results["error"] = str(e)
             return results
-    
+
+    async def _safe_emotion_update(
+        self,
+        entity_type: str,
+        entity_id: int,
+        memory_id: int,
+        memory_text: str,
+    ) -> None:
+        """Best-effort emotional state update that never blocks add_memory."""
+        try:
+            with skip_vector_registration():
+                result = await self.update_emotional_state_from_memory(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    memory_id=memory_id,
+                    memory_text=memory_text,
+                )
+
+            if isinstance(result, dict) and result.get("error"):
+                error_reason = result.get("error")
+                if error_reason != "Worker shutting down":
+                    logger.warning("Emotional state update skipped: %s", error_reason)
+        except asyncio.CancelledError:
+            logger.debug(
+                "Emotional state update task cancelled for %s:%s",
+                entity_type,
+                entity_id,
+            )
+            raise
+        except Exception as e:
+            logger.warning("Emotional state update skipped: %s", e, exc_info=True)
+
     @protect_from_shutdown(return_value={"memories": [], "error": "Worker shutting down"})
     async def retrieve_memories(self,
                              entity_type: str,
