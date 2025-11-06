@@ -86,20 +86,23 @@ async def _persist_gmaps_place(
         async with get_db_connection_context() as conn:
             await conn.execute(
                 """
-                INSERT INTO Locations (
-                    user_id, conversation_id, location_name, external_place_id,
-                    location_type, city, country, lat, lon, scope, is_fictional
+                INSERT INTO public.locations (
+                    user_id, conversation_id, location_name,
+                    external_place_id, location_type, city, country,
+                    lat, lon, scope, is_fictional
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'real', FALSE)
-                ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE SET
-                    external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
-                    location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
-                    city = COALESCE(EXCLUDED.city, Locations.city),
-                    country = COALESCE(EXCLUDED.country, Locations.country),
-                    scope = 'real',
-                    lat = COALESCE(EXCLUDED.lat, Locations.lat),
-                    lon = COALESCE(EXCLUDED.lon, Locations.lon),
-                    is_fictional = FALSE
+                VALUES ($1, $2, $3,
+                        $4, $5, $6, $7,
+                        $8, $9, 'real', FALSE)
+                ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE
+                SET external_place_id = COALESCE(EXCLUDED.external_place_id, public.locations.external_place_id),
+                    location_type     = COALESCE(EXCLUDED.location_type,     public.locations.location_type),
+                    city              = COALESCE(EXCLUDED.city,              public.locations.city),
+                    country           = COALESCE(EXCLUDED.country,           public.locations.country),
+                    scope             = 'real',
+                    lat               = COALESCE(EXCLUDED.lat,               public.locations.lat),
+                    lon               = COALESCE(EXCLUDED.lon,               public.locations.lon),
+                    is_fictional      = FALSE
                 """,
                 user_key,
                 convo_key,
@@ -115,20 +118,23 @@ async def _persist_gmaps_place(
             for district in place.districts:
                 await conn.execute(
                     """
-                    INSERT INTO Locations (
-                        user_id, conversation_id, location_name, external_place_id,
-                        parent_location, location_type, city, country, lat, lon, scope, is_fictional
+                    INSERT INTO public.locations (
+                        user_id, conversation_id, location_name,
+                        external_place_id, parent_location, location_type,
+                        city, country, lat, lon, scope, is_fictional
                     )
-                    VALUES ($1, $2, $3, $4, $5, 'district', $6, $7, $8, $9, 'real', FALSE)
-                    ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE SET
-                        external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
-                        parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
-                        city = COALESCE(EXCLUDED.city, Locations.city),
-                        country = COALESCE(EXCLUDED.country, Locations.country),
-                        scope = 'real',
-                        lat = COALESCE(EXCLUDED.lat, Locations.lat),
-                        lon = COALESCE(EXCLUDED.lon, Locations.lon),
-                        is_fictional = FALSE
+                    VALUES ($1, $2, $3,
+                            $4, $5, 'district',
+                            $6, $7, $8, $9, 'real', FALSE)
+                    ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE
+                    SET external_place_id = COALESCE(EXCLUDED.external_place_id, public.locations.external_place_id),
+                        parent_location   = COALESCE(EXCLUDED.parent_location,   public.locations.parent_location),
+                        city              = COALESCE(EXCLUDED.city,              public.locations.city),
+                        country           = COALESCE(EXCLUDED.country,           public.locations.country),
+                        scope             = 'real',
+                        lat               = COALESCE(EXCLUDED.lat,               public.locations.lat),
+                        lon               = COALESCE(EXCLUDED.lon,               public.locations.lon),
+                        is_fictional      = FALSE
                     """,
                     user_key,
                     convo_key,
@@ -1322,6 +1328,7 @@ async def resolve_place_or_travel(
     )
 
     if anchor.scope == "real":
+        # Pre-persist the anchor so we don't fall back to fictional on a known real venue
         await _ensure_real_anchor_location(anchor, meta, user_id, conversation_id)
 
     res: Optional[ResolveResult] = None
