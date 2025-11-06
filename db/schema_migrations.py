@@ -198,47 +198,51 @@ class SchemaMigrationSystem:
                     migration = self.migrations[version]
                     logger.info(f"Applying migration {version}: {migration['description']} ({migration['filename']})...")
 
-                    # Run migration within a transaction for atomicity per migration file
-                    async with conn.transaction():
-                        try:
-                            # Run the async upgrade function, passing the connection
+                    run_in_transaction = getattr(migration['module'], 'run_in_transaction', True)
+
+                    async def _record_success() -> None:
+                        await conn.execute("""
+                            INSERT INTO schema_migrations (version, description, status, applied_at)
+                            VALUES ($1, $2, 'success', CURRENT_TIMESTAMP)
+                            ON CONFLICT (version) DO UPDATE SET
+                                description = EXCLUDED.description,
+                                status = EXCLUDED.status,
+                                applied_at = CURRENT_TIMESTAMP,
+                                error_message = NULL
+                        """, version, migration['description'])
+
+                    async def _record_failure(err_msg: str) -> None:
+                        await conn.execute("""
+                            INSERT INTO schema_migrations (version, description, status, error_message, applied_at)
+                            VALUES ($1, $2, 'failed', $3, CURRENT_TIMESTAMP)
+                            ON CONFLICT (version) DO UPDATE SET
+                                description = EXCLUDED.description,
+                                status = EXCLUDED.status,
+                                error_message = EXCLUDED.error_message,
+                                applied_at = CURRENT_TIMESTAMP
+                        """, version, migration['description'], err_msg)
+
+                    try:
+                        if run_in_transaction:
+                            async with conn.transaction():
+                                await migration['module'].upgrade(conn)
+                        else:
                             await migration['module'].upgrade(conn)
 
-                            # Record success in the migrations table
-                            await conn.execute("""
-                                INSERT INTO schema_migrations (version, description, status, applied_at)
-                                VALUES ($1, $2, 'success', CURRENT_TIMESTAMP)
-                                ON CONFLICT (version) DO UPDATE SET
-                                    description = EXCLUDED.description,
-                                    status = EXCLUDED.status,
-                                    applied_at = CURRENT_TIMESTAMP,
-                                    error_message = NULL
-                            """, version, migration['description'])
+                        await _record_success()
+                        results.append({'version': version, 'status': 'success', 'description': migration['description']})
+                        applied_version = version # Update successfully applied version
+                        logger.info(f"Successfully applied migration {version}.")
 
-                            results.append({'version': version, 'status': 'success', 'description': migration['description']})
-                            applied_version = version # Update successfully applied version
-                            logger.info(f"Successfully applied migration {version}.")
+                    except Exception as migration_err:
+                        error_msg = f"Migration {version} failed: {migration_err}"
+                        logger.error(error_msg, exc_info=True)
 
-                        except Exception as migration_err:
-                            # Rollback is handled automatically by `conn.transaction()` failing
-                            error_msg = f"Migration {version} failed: {migration_err}"
-                            logger.error(error_msg, exc_info=True)
+                        await _record_failure(str(migration_err))
+                        results.append({'version': version, 'status': 'failed', 'description': migration['description'], 'error': str(migration_err)})
 
-                            # Record failure state
-                            await conn.execute("""
-                                INSERT INTO schema_migrations (version, description, status, error_message, applied_at)
-                                VALUES ($1, $2, 'failed', $3, CURRENT_TIMESTAMP)
-                                ON CONFLICT (version) DO UPDATE SET
-                                    description = EXCLUDED.description,
-                                    status = EXCLUDED.status,
-                                    error_message = EXCLUDED.error_message,
-                                    applied_at = CURRENT_TIMESTAMP
-                            """, version, migration['description'], str(migration_err))
-
-                            results.append({'version': version, 'status': 'failed', 'description': migration['description'], 'error': str(migration_err)})
-
-                            # Stop further migrations on failure
-                            raise MigrationError(error_msg) from migration_err
+                        # Stop further migrations on failure
+                        raise MigrationError(error_msg) from migration_err
 
             self.current_version = applied_version
             logger.info(f"Migrations completed. Current DB version: {self.current_version}")
@@ -287,35 +291,34 @@ class SchemaMigrationSystem:
                          continue # Skip the actual downgrade logic
 
 
-                    # Run downgrade within a transaction
-                    async with conn.transaction():
-                        try:
-                            # Run the async downgrade function
+                    run_in_transaction = getattr(migration['module'], 'run_in_transaction', True)
+
+                    try:
+                        if run_in_transaction:
+                            async with conn.transaction():
+                                await migration['module'].downgrade(conn)
+                        else:
                             await migration['module'].downgrade(conn)
 
-                            # Remove migration record from table
-                            await conn.execute("DELETE FROM schema_migrations WHERE version = $1", version)
+                        await conn.execute("DELETE FROM schema_migrations WHERE version = $1", version)
 
-                            results.append({'version': version, 'status': 'success', 'description': f"Rolled back {migration['description']}"})
-                            rolled_back_to_version = version - 1 # Update successfully rolled back version
-                            logger.info(f"Successfully rolled back migration {version}.")
+                        results.append({'version': version, 'status': 'success', 'description': f"Rolled back {migration['description']}"})
+                        rolled_back_to_version = version - 1 # Update successfully rolled back version
+                        logger.info(f"Successfully rolled back migration {version}.")
 
-                        except Exception as rollback_err:
-                            # Rollback of transaction is automatic on exception
-                            error_msg = f"Rollback of migration {version} failed: {rollback_err}"
-                            logger.error(error_msg, exc_info=True)
+                    except Exception as rollback_err:
+                        error_msg = f"Rollback of migration {version} failed: {rollback_err}"
+                        logger.error(error_msg, exc_info=True)
 
-                            # Update status to 'rollback_failed'? Or leave as 'success'? Difficult choice.
-                            # Let's mark it as failed rollback attempt.
-                            await conn.execute("""
-                                UPDATE schema_migrations SET status = 'rollback_failed', error_message = $2
-                                WHERE version = $1
-                            """, version, str(rollback_err))
+                        await conn.execute("""
+                            UPDATE schema_migrations SET status = 'rollback_failed', error_message = $2
+                            WHERE version = $1
+                        """, version, str(rollback_err))
 
-                            results.append({'version': version, 'status': 'failed', 'description': f"Failed to rollback {migration['description']}", 'error': str(rollback_err)})
+                        results.append({'version': version, 'status': 'failed', 'description': f"Failed to rollback {migration['description']}", 'error': str(rollback_err)})
 
-                            # Stop further rollbacks on failure
-                            raise MigrationError(error_msg) from rollback_err
+                        # Stop further rollbacks on failure
+                        raise MigrationError(error_msg) from rollback_err
 
             self.current_version = rolled_back_to_version
             logger.info(f"Rollback completed. Current DB version is now effectively {self.current_version}")
