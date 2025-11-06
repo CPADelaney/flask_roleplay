@@ -56,14 +56,40 @@ class _DummyPool:
         self._closed = True
 
 
-class _ClosableConnection:
-    def __init__(self):
-        self.closed = False
-        self.close_calls = 0
+class _DeferredPool:
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self._loop = loop
+        self.expire_calls = 0
+        self.acquire_calls = 0
+
+    async def acquire(self):
+        self.acquire_calls += 1
+        return _DeferredConnection(self)
+
+    async def expire_connections(self):
+        self.expire_calls += 1
+
+
+class _PoolHolder:
+    def __init__(self, pool):
+        self._pool = pool
+
+
+class _DeferredConnection:
+    def __init__(self, pool):
+        self._closed = False
+        self._terminated = False
+        self._vector_registered = False
+        self._holder = _PoolHolder(pool)
 
     async def close(self):
-        self.closed = True
-        self.close_calls += 1
+        self._closed = True
+
+    def terminate(self):
+        self._terminated = True
+
+    def is_closed(self):
+        return self._closed
 
 
 @pytest.mark.anyio
@@ -165,33 +191,49 @@ async def test_close_existing_pool_handles_terminate_runtime_error(monkeypatch, 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-@pytest.mark.parametrize(
-    "exception_type",
-    [asyncio.CancelledError, asyncio.TimeoutError],
-)
-async def test_register_vector_retry_closes_connection_on_cancel_or_timeout(
-    monkeypatch, exception_type, anyio_backend
-):
-    """Registration failures from cancellation or timeout should close the connection."""
+async def test_deferred_registration_failure_expires_connection(monkeypatch, anyio_backend):
+    isolated_state = db_connection.GlobalPoolState()
+    monkeypatch.setattr(db_connection, "_state", isolated_state)
 
-    conn = _ClosableConnection()
+    loop = asyncio.get_running_loop()
+    pool = _DeferredPool(loop)
+    isolated_state.pool = pool
+    isolated_state.pool_loop = loop
+    isolated_state.pool_state = db_connection.PoolState.HEALTHY
+    isolated_state.metrics.pool_state = db_connection.PoolState.HEALTHY
 
-    async def failing_register(connection):
-        raise exception_type()
+    register_calls = {"count": 0}
 
-    monkeypatch.setattr(
-        db_connection.pgvector_asyncpg,
-        "register_vector",
-        failing_register,
-    )
+    async def fake_register(
+        conn,
+        *,
+        setup_timeout: float,
+        max_retries: int,
+        initial_retry_delay: float,
+    ) -> None:
+        register_calls["count"] += 1
+        if register_calls["count"] == 1:
+            raise asyncio.TimeoutError
+        conn._vector_registered = True
 
-    with pytest.raises(exception_type):
-        await db_connection._register_vector_with_retry(
-            conn,
-            setup_timeout=0.05,
-            max_retries=3,
-            initial_retry_delay=0.01,
-        )
+    monkeypatch.setattr(db_connection, "_register_vector_with_retry", fake_register)
 
-    assert conn.closed is True
-    assert conn.close_calls == 1
+    first_conn = await pool.acquire()
+
+    with db_connection.skip_vector_registration():
+        await db_connection.setup_connection(first_conn)
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert first_conn._closed is True
+    assert first_conn._terminated is True
+    assert pool.expire_calls == 1
+
+    replacement_conn = await pool.acquire()
+    await db_connection.setup_connection(replacement_conn)
+
+    assert register_calls["count"] == 2
+    assert replacement_conn._vector_registered is True
+    assert replacement_conn._closed is False
+    assert replacement_conn._terminated is False

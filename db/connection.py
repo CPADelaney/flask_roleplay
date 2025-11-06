@@ -880,6 +880,7 @@ async def _defer_vector_registration(
     setup_timeout: float,
     max_retries: int,
     initial_retry_delay: float,
+    pool_hint: Optional[asyncpg.Pool] = None,
 ) -> None:
     """Background helper to register pgvector without blocking the caller."""
     try:
@@ -896,6 +897,60 @@ async def _defer_vector_registration(
             exc,
             exc_info=True,
         )
+
+        pool_owner: Optional[asyncpg.Pool] = pool_hint
+        if pool_owner is None:
+            holder = getattr(conn, "_holder", None)
+            pool_owner = getattr(holder, "_pool", None)
+        if pool_owner is None and getattr(_state, "pool", None) is not None:
+            pool_owner = _state.pool
+
+        closed_gracefully = False
+        close_method = getattr(conn, "close", None)
+        if callable(close_method):
+            try:
+                maybe_coro = close_method()
+                if asyncio.iscoroutine(maybe_coro):
+                    await maybe_coro
+                closed_gracefully = True
+            except Exception:
+                logger.debug(
+                    "Error closing connection %s after deferred pgvector failure", id(conn),
+                    exc_info=True,
+                )
+
+        terminate_method = getattr(conn, "terminate", None)
+        if callable(terminate_method):
+            try:
+                terminate_method()
+            except Exception:
+                logger.debug(
+                    "Error terminating connection %s after deferred pgvector failure",
+                    id(conn),
+                    exc_info=True,
+                )
+
+        if pool_owner is not None:
+            expire_method = getattr(pool_owner, "expire_connections", None)
+            if callable(expire_method):
+                try:
+                    expire_result = expire_method()
+                    if asyncio.iscoroutine(expire_result):
+                        await expire_result
+                    logger.debug(
+                        "Expired pool connections after deferred pgvector failure on %s", id(conn)
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to expire pool connections after deferred pgvector failure on %s",
+                        id(conn),
+                        exc_info=True,
+                    )
+            else:
+                logger.debug(
+                    "Pool %s has no expire_connections method; skipping expiry after failure",
+                    id(pool_owner),
+                )
 
 
 async def setup_connection(conn: asyncpg.Connection) -> None:
@@ -931,12 +986,19 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
             id(conn),
         )
         loop = asyncio.get_running_loop()
+        pool_hint: Optional[asyncpg.Pool] = None
+        holder = getattr(conn, "_holder", None)
+        if holder is not None:
+            pool_hint = getattr(holder, "_pool", None)
+        if pool_hint is None and getattr(_state, "pool", None) is not None:
+            pool_hint = _state.pool
         loop.create_task(
             _defer_vector_registration(
                 conn,
                 setup_timeout=setup_timeout,
                 max_retries=max_retries,
                 initial_retry_delay=initial_retry_delay,
+                pool_hint=pool_hint,
             )
         )
         return
