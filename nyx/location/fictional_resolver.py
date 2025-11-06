@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -10,6 +11,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import asyncpg
+from openai import OpenAI
 
 from db.connection import get_db_connection_context
 from logic.gpt_utils import call_gpt_json
@@ -33,6 +35,97 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
+_openai_client = OpenAI()
+
+_DISTRICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "districts": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "name": {"type": "string"},
+                    "vibe": {"type": "string"},
+                    "layout": {"type": "string"},
+                    "theme": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "features": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                    },
+                },
+                "required": [
+                    "key",
+                    "name",
+                    "vibe",
+                    "layout",
+                    "theme",
+                    "summary",
+                    "features",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["districts"],
+    "additionalProperties": False,
+}
+
+_DISTRICT_TOOLS = [
+    {
+        "type": "function",
+        "name": "emit_districts",
+        "description": "Return ONLY the structured districts payload.",
+        "parameters": _DISTRICT_SCHEMA,
+    }
+]
+
+_DISTRICT_TOOL_CHOICE = {"type": "function", "function": {"name": "emit_districts"}}
+
+
+def _extract_district_tool_args(response: Any) -> Optional[Dict[str, Any]]:
+    output_items = getattr(response, "output", None)
+    if not output_items:
+        return None
+
+    for item in output_items:
+        if getattr(item, "type", None) == "tool_call" and getattr(item, "name", None) == "emit_districts":
+            args = getattr(item, "arguments", None)
+            if isinstance(args, str):
+                try:
+                    return json.loads(args)
+                except json.JSONDecodeError:
+                    return None
+            if isinstance(args, dict):
+                return args
+    return None
+
+
+def _call_structured_districts_sync(prompt: str, model: str) -> Dict[str, Any]:
+    response = _openai_client.responses.create(
+        model=model,
+        input=[{"role": "user", "content": prompt}],
+        tools=_DISTRICT_TOOLS,
+        tool_choice=_DISTRICT_TOOL_CHOICE,
+        max_output_tokens=800,
+        temperature=0.6,
+    )
+
+    args = _extract_district_tool_args(response)
+    if args is None:
+        raise ValueError("Model did not return structured district arguments")
+    return args
+
+
+async def _generate_structured_districts(prompt: str, *, model: str = "gpt-5-nano") -> Dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _call_structured_districts_sync, prompt, model)
 
 _DISTRICT_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -1409,16 +1502,32 @@ async def get_or_generate_districts(
             f"**Now create 3-5 original districts for: {city}**"
         )
 
+    llm_payload: Mapping[str, Any]
     try:
-        llm_payload = await call_gpt_json(
-            conversation_key,
-            context=f"World-building for {context_name}",
-            prompt=prompt,
+        llm_payload = await _generate_structured_districts(
+            prompt,
             model="gpt-5-nano",
         )
     except Exception as exc:
-        logger.warning("Fictional district generation call failed: %s", exc, exc_info=True)
-        llm_payload = {}
+        logger.warning(
+            "Structured fictional district generation failed; falling back to legacy call: %s",
+            exc,
+            exc_info=True,
+        )
+        try:
+            llm_payload = await call_gpt_json(
+                conversation_key,
+                context=f"World-building for {context_name}",
+                prompt=prompt,
+                model="gpt-5-nano",
+            )
+        except Exception as legacy_exc:
+            logger.warning(
+                "Legacy fictional district generation call failed: %s",
+                legacy_exc,
+                exc_info=True,
+            )
+            llm_payload = {}
 
     specs = _normalize_generated_districts(llm_payload if isinstance(llm_payload, Mapping) else {})
     if not specs:

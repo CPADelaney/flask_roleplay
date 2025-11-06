@@ -1105,23 +1105,34 @@ class ContextBroker:
         try:
             section = await fetcher()
         except asyncio.TimeoutError:
+            logger.warning(
+                "[CONTEXT_BROKER] Fetch for section '%s' timed out",
+                orchestrator_name,
+            )
+            asyncio.create_task(
+                self._refresh_section_in_background(
+                    orchestrator_name=orchestrator_name,
+                    cache_attribute=cache_attribute,
+                    expires_attribute=expires_attribute,
+                    fetcher=fetcher,
+                    ttl_value=ttl_value,
+                )
+            )
+
             if cached is not None:
                 logger.warning(
-                    "[CONTEXT_BROKER] Fetch for section '%s' timed out; returning stale cache and refreshing in background",
+                    "[CONTEXT_BROKER] Using stale %s section due to timeout",
                     orchestrator_name,
-                )
-                asyncio.create_task(
-                    self._refresh_section_in_background(
-                        orchestrator_name=orchestrator_name,
-                        cache_attribute=cache_attribute,
-                        expires_attribute=expires_attribute,
-                        fetcher=fetcher,
-                        ttl_value=ttl_value,
-                    )
                 )
                 return cached
 
-            logger.exception(
+            if orchestrator_name == "world":
+                logger.error(
+                    "[CONTEXT_BROKER] World section timed out with no cached value; returning minimal default",
+                )
+                return fallback_factory()
+
+            logger.error(
                 "[CONTEXT_BROKER] Fetch for section '%s' timed out with no cached value",
                 orchestrator_name,
             )
@@ -2992,7 +3003,12 @@ class ContextBroker:
 
         def _empty_section() -> BundleSection:
             return BundleSection(
-                data={},  # summary-shape placeholder
+                data={
+                    "time": {"year": None, "month": None, "day": None, "tod": None},
+                    "locations": [],
+                    "npcs": [],
+                    "facts": {},
+                },
                 canonical=False,
                 priority=0,
                 last_changed_at=time.time(),

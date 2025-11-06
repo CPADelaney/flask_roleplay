@@ -673,7 +673,7 @@ class _ResilientConnectionWrapper:
             except AttributeError as exc:
                 if not _is_asyncpg_waiter_cancel_bug(exc) or attempt >= max_attempts - 1:
                     raise
-                
+
                 attempt += 1
                 logger.warning(
                     f"Detected asyncpg waiter cancellation bug while executing {name}; "
@@ -681,6 +681,20 @@ class _ResilientConnectionWrapper:
                 )
                 await self._refresh_connection()
                 method = getattr(self._conn, name)
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "unknown protocol state" in msg and attempt < max_attempts - 1:
+                    attempt += 1
+                    logger.warning(
+                        "InternalClientError during %s; refreshing connection and retrying (%d/%d)",
+                        name,
+                        attempt,
+                        max_attempts,
+                    )
+                    await self._refresh_connection()
+                    method = getattr(self._conn, name)
+                    continue
+                raise
     
     async def _refresh_connection(self) -> None:
         """
@@ -776,10 +790,7 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         return
 
     # Pull timeouts/retries from helpers if present; otherwise environment defaults
-    try:
-        setup_timeout = get_setup_timeout()  # existing helper in your module
-    except NameError:
-        setup_timeout = float(os.getenv("DB_SETUP_TIMEOUT", "30"))
+    setup_timeout = get_setup_timeout()
 
     try:
         max_retries = get_vector_register_retries()
@@ -892,141 +903,6 @@ async def _register_vector_with_retry(
     raise TimeoutError("pgvector registration failed after retries")
 
 
-async def _defer_vector_registration(
-    conn: asyncpg.Connection,
-    *,
-    setup_timeout: float,
-    max_retries: int,
-    initial_retry_delay: float,
-    pool_hint: Optional[asyncpg.Pool] = None,
-) -> None:
-    """Background helper to register pgvector without blocking the caller."""
-    try:
-        await _register_vector_with_retry(
-            conn,
-            setup_timeout=setup_timeout,
-            max_retries=max_retries,
-            initial_retry_delay=initial_retry_delay,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Deferred pgvector registration failed on connection %s: %s",
-            id(conn),
-            exc,
-            exc_info=True,
-        )
-
-        pool_owner: Optional[asyncpg.Pool] = pool_hint
-        if pool_owner is None:
-            holder = getattr(conn, "_holder", None)
-            pool_owner = getattr(holder, "_pool", None)
-        if pool_owner is None and getattr(_state, "pool", None) is not None:
-            pool_owner = _state.pool
-
-        closed_gracefully = False
-        close_method = getattr(conn, "close", None)
-        if callable(close_method):
-            try:
-                maybe_coro = close_method()
-                if asyncio.iscoroutine(maybe_coro):
-                    await maybe_coro
-                closed_gracefully = True
-            except Exception:
-                logger.debug(
-                    "Error closing connection %s after deferred pgvector failure", id(conn),
-                    exc_info=True,
-                )
-
-        terminate_method = getattr(conn, "terminate", None)
-        if callable(terminate_method):
-            try:
-                terminate_method()
-            except Exception:
-                logger.debug(
-                    "Error terminating connection %s after deferred pgvector failure",
-                    id(conn),
-                    exc_info=True,
-                )
-
-        if pool_owner is not None:
-            expire_method = getattr(pool_owner, "expire_connections", None)
-            if callable(expire_method):
-                try:
-                    expire_result = expire_method()
-                    if asyncio.iscoroutine(expire_result):
-                        await expire_result
-                    logger.debug(
-                        "Expired pool connections after deferred pgvector failure on %s", id(conn)
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to expire pool connections after deferred pgvector failure on %s",
-                        id(conn),
-                        exc_info=True,
-                    )
-            else:
-                logger.debug(
-                    "Pool %s has no expire_connections method; skipping expiry after failure",
-                    id(pool_owner),
-                )
-
-
-async def setup_connection(conn: asyncpg.Connection) -> None:
-    """
-    Setup function called for each new connection in the pool.
-
-    Registers pgvector extension with retry logic and timeout protection.
-    If pgvector registration fails after retries, the connection is still
-    considered valid (pgvector is optional for basic DB operations).
-
-    Args:
-        conn: Connection to set up
-
-    Raises:
-        asyncpg.PostgresError: If critical setup fails (not including pgvector)
-    """
-    if os.getenv("DB_REGISTER_VECTOR", "1") != "1":
-        try:
-            logger.debug(
-                "Skipping pgvector registration on connection %s (DB_REGISTER_VECTOR!=1)",
-                id(conn)
-            )
-        finally:
-            return
-
-    max_retries = 3
-    initial_retry_delay = 0.5
-    setup_timeout = get_setup_timeout()
-
-    if _SKIP_VECTOR_REGISTRATION.get():
-        logger.debug(
-            "Deferring pgvector registration on connection %s (skip flag active)",
-            id(conn),
-        )
-        loop = asyncio.get_running_loop()
-        pool_hint: Optional[asyncpg.Pool] = None
-        holder = getattr(conn, "_holder", None)
-        if holder is not None:
-            pool_hint = getattr(holder, "_pool", None)
-        if pool_hint is None and getattr(_state, "pool", None) is not None:
-            pool_hint = _state.pool
-        loop.create_task(
-            _defer_vector_registration(
-                conn,
-                setup_timeout=setup_timeout,
-                max_retries=max_retries,
-                initial_retry_delay=initial_retry_delay,
-                pool_hint=pool_hint,
-            )
-        )
-        return
-
-    await _register_vector_with_retry(
-        conn,
-        setup_timeout=setup_timeout,
-        max_retries=max_retries,
-        initial_retry_delay=initial_retry_delay,
-    )
 
 
 async def create_pool_with_retry(

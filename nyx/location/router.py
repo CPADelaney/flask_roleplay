@@ -13,7 +13,9 @@ import unicodedata
 from dataclasses import asdict
 from typing import Any, Dict, Optional
 
-from db.connection import get_db_connection_context
+import asyncpg
+
+from db.connection import get_db_connection_context, skip_vector_registration
 
 from . import gemini_maps_adapter as gmaps
 from .anchors import derive_geo_anchor
@@ -669,6 +671,112 @@ def _extract_current_location_payload(meta: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+async def _ensure_real_anchor_location(
+    anchor: Anchor,
+    meta: Dict[str, Any],
+    user_id: str,
+    conversation_id: str,
+) -> None:
+    """Ensure the anchor location has a persisted stub for real-world scopes."""
+
+    anchor_payload = _extract_current_location_payload(meta)
+    anchor_name = (
+        anchor_payload.get("name")
+        or anchor_payload.get("label")
+        or anchor_payload.get("display_name")
+        or anchor_payload.get("location_name")
+        or (anchor.focus.name if anchor.focus else None)
+        or anchor.label
+    )
+
+    if not anchor_name:
+        return
+
+    try:
+        uid = int(user_id)
+        cid = int(conversation_id)
+    except (TypeError, ValueError):
+        logger.debug(
+            "[ANCHOR] Unable to ensure anchor location for non-integer identifiers: user_id=%r conversation_id=%r",
+            user_id,
+            conversation_id,
+        )
+        return
+
+    anchor_name = str(anchor_name).strip()
+    if not anchor_name:
+        return
+
+    city_hint = anchor_payload.get("city") or anchor.primary_city
+    country_hint = anchor_payload.get("country") or anchor.country
+
+    try:
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                exists = await conn.fetchval(
+                    """
+                    SELECT 1
+                    FROM Locations
+                    WHERE user_id = $1
+                      AND conversation_id = $2
+                      AND LOWER(location_name) = LOWER($3)
+                    LIMIT 1
+                    """,
+                    uid,
+                    cid,
+                    anchor_name,
+                )
+                if exists:
+                    return
+
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO Locations (
+                            user_id,
+                            conversation_id,
+                            location_name,
+                            city,
+                            country,
+                            scope,
+                            is_fictional
+                        )
+                        VALUES ($1, $2, $3, $4, $5, 'real', FALSE)
+                        """,
+                        uid,
+                        cid,
+                        anchor_name,
+                        city_hint,
+                        country_hint,
+                    )
+                except asyncpg.UndefinedColumnError:
+                    await conn.execute(
+                        """
+                        INSERT INTO Locations (
+                            user_id,
+                            conversation_id,
+                            location_name,
+                            city,
+                            country,
+                            is_fictional
+                        )
+                        VALUES ($1, $2, $3, $4, $5, FALSE)
+                        """,
+                        uid,
+                        cid,
+                        anchor_name,
+                        city_hint,
+                        country_hint,
+                    )
+                except asyncpg.UniqueViolationError:
+                    pass
+    except Exception:
+        logger.debug(
+            "[ANCHOR] Failed to ensure anchor location '%s' exists", anchor_name,
+            exc_info=True,
+        )
+
+
 def _collect_location_tokens(
     anchor: Anchor,
     meta: Dict[str, Any],
@@ -1241,6 +1349,9 @@ async def resolve_place_or_travel(
         f"[ROUTER] Resolving '{q.target}' with scope={anchor.scope}, "
         f"is_travel={q.is_travel}, anchor_city={anchor.primary_city}"
     )
+
+    if anchor.scope == "real":
+        await _ensure_real_anchor_location(anchor, meta, user_id, conversation_id)
 
     res: Optional[ResolveResult] = None
     used_cache = False
