@@ -35,6 +35,7 @@ import asyncio
 import asyncpg
 import threading
 import weakref
+import contextlib
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import Optional, Dict, Any, Set, List, Tuple, Union
@@ -818,13 +819,18 @@ async def _register_vector_with_retry(
         return
 
     retry_delay = initial_retry_delay
-    for attempt in range(max_retries):
+    for attempt in range(1, max_retries + 1):
         try:
-            await asyncio.wait_for(pgvector_asyncpg.register_vector(conn), timeout=setup_timeout)
+            await asyncio.wait_for(
+                pgvector_asyncpg.register_vector(conn),
+                timeout=setup_timeout,
+            )
             setattr(conn, "_vector_registered", True)
             logger.debug(
                 "pgvector registered on connection %s (attempt %d/%d)",
-                id(conn), attempt + 1, max_retries
+                id(conn),
+                attempt,
+                max_retries,
             )
             return
         except asyncio.CancelledError:
@@ -832,69 +838,40 @@ async def _register_vector_with_retry(
             with contextlib.suppress(Exception):
                 await conn.close()
             raise
-        except asyncio.TimeoutError as e:
+        except asyncio.TimeoutError:
             logger.warning(
                 "pgvector registration timed out on connection %s (attempt %d/%d, timeout=%.1fs)",
-                id(conn), attempt + 1, max_retries, setup_timeout
+                id(conn),
+                attempt,
+                max_retries,
+                setup_timeout,
             )
-            if attempt == max_retries - 1:
-                # Close the conn to avoid reusing a poisoned setup
-                with contextlib.suppress(Exception):
-                    await conn.close()
-                raise
-        except Exception as e:
+            with contextlib.suppress(Exception):
+                await conn.close()
+            raise
+        except asyncpg.exceptions.UndefinedFunctionError as exc:
             logger.warning(
-                "pgvector registration failed on connection %s (attempt %d/%d): %s",
-                id(conn), attempt + 1, max_retries, e
-            )
-            if attempt == max_retries - 1:
-                with contextlib.suppress(Exception):
-                    await conn.close()
-                raise
-        # Linear backoff
-        await asyncio.sleep(retry_delay)
-        retry_delay += initial_retry_delay
-
-    for attempt in range(max_retries):
-        try:
-            await asyncio.wait_for(
-                pgvector_asyncpg.register_vector(conn),
-                timeout=setup_timeout,
-            )
-            logger.debug(
-                f"Successfully registered pgvector on connection {id(conn)} "
-                f"(attempt {attempt + 1}/{max_retries})"
-            )
-            setattr(conn, "_vector_registered", True)
-            return  # Success
-        except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
-            logger.warning(
-                f"Connection setup failed on attempt {attempt + 1}/{max_retries} "
-                f"({e.__class__.__name__}): {e} (timeout={setup_timeout}s)"
-            )
-            if attempt + 1 == max_retries:
-                logger.error(
-                    f"All {max_retries} attempts to register pgvector failed on "
-                    f"connection {id(conn)}. Connection will be marked as available "
-                    f"but vector operations may not work. Consider increasing "
-                    f"DB_SETUP_TIMEOUT (current: {setup_timeout}s) or checking database load."
-                )
-                return
-
-            await asyncio.sleep(retry_delay)
-            retry_delay *= 2
-        except asyncpg.exceptions.UndefinedFunctionError as e:
-            logger.warning(
-                f"pgvector extension not available: {e}. "
-                f"Connection {id(conn)} will work but vector operations will fail."
+                "pgvector extension not available on connection %s: %s",
+                id(conn),
+                exc,
             )
             return
-        except Exception as e:
-            logger.error(
-                f"Unexpected error setting up connection {id(conn)}: {e}",
-                exc_info=True,
+        except Exception as exc:
+            logger.warning(
+                "pgvector registration failed on connection %s (attempt %d/%d): %s",
+                id(conn),
+                attempt,
+                max_retries,
+                exc,
             )
-            raise
+            if attempt == max_retries:
+                with contextlib.suppress(Exception):
+                    await conn.close()
+                raise
+
+        # Linear backoff between retry attempts
+        await asyncio.sleep(retry_delay)
+        retry_delay += initial_retry_delay
 
 
 async def _defer_vector_registration(
