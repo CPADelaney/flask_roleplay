@@ -828,7 +828,7 @@ async def generate_and_persist_hierarchy(
             $26, $27, $28, $29, $30,
             $31
         )
-        ON CONFLICT ON CONSTRAINT idx_locations_user_conv_lower_name
+        ON CONFLICT (user_id, conversation_id, location_name_lc)
         DO UPDATE SET
             external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
             description = COALESCE(EXCLUDED.description, Locations.description),
