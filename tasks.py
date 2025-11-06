@@ -352,6 +352,7 @@ def warm_user_context_cache_task(user_id: int, conversation_id: int):
 
     async def do_warm_up() -> Dict[str, Any]:
         key = f"ctx:warmed:{user_id}:{conversation_id}"
+        early_marked = False
         promise_key = (user_id, conversation_id)
         logger.info(
             "Starting context cache warm-up for user_id=%s conversation_id=%s",
@@ -377,6 +378,20 @@ def warm_user_context_cache_task(user_id: int, conversation_id: int):
                         "user_id": user_id,
                         "conversation_id": conversation_id,
                     }
+
+        # Proactively mark as warmed so downstream initializations choose the fast/shallow path.
+        # If anything fails below, we roll this back.
+        if redis_publisher is not None:
+            try:
+                redis_publisher.setex(key, 600, "1")
+                early_marked = True
+                logger.debug(
+                    "Pre-marked context as warmed for user_id=%s conversation_id=%s",
+                    user_id,
+                    conversation_id,
+                )
+            except Exception:
+                logger.exception("Redis setex (early warm mark) failed for key=%s", key)
 
         existing_future = _context_warm_promises.get(promise_key)
         if existing_future is not None:
@@ -406,6 +421,17 @@ def warm_user_context_cache_task(user_id: int, conversation_id: int):
                 future.set_exception(exc)
             if _context_warm_promises.get(promise_key) is future:
                 _context_warm_promises.pop(promise_key, None)
+            # Roll back the early warm mark if we set it and init failed
+            if early_marked and redis_publisher is not None:
+                try:
+                    redis_publisher.delete(key)
+                    logger.debug(
+                        "Rolled back early warm mark for user_id=%s conversation_id=%s after failure",
+                        user_id,
+                        conversation_id,
+                    )
+                except Exception:
+                    logger.exception("Failed to roll back warm key=%s after failure", key)
             raise
 
         result = {
