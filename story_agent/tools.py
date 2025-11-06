@@ -24,7 +24,7 @@ from nyx.gateway import llm_gateway
 from story_agent.world_simulation_models import PowerDynamicType
 
 # Database imports
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, skip_vector_registration
 
 # Local application imports - Core systems
 from logic.npc_narrative_progression import (
@@ -526,21 +526,23 @@ async def _get_current_world_context(ctx: RunContextWrapper) -> WorldStateContex
     phase = _map_time_to_phase(current_time.time_of_day)
     
     # Get current location from context
-    async with get_db_connection_context() as conn:
-        location_val = await conn.fetchval("""
-            SELECT value FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
-        """, context.user_id, context.conversation_id)
+    with skip_vector_registration():
+        async with get_db_connection_context() as conn:
+            location_val = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
+            """, context.user_id, context.conversation_id)
     
     location = _map_location_string(location_val or "home")
     
     # Get present NPCs
-    async with get_db_connection_context() as conn:
-        present_npcs = await conn.fetch("""
-            SELECT npc_id FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2
-            AND introduced=true AND current_location=$3
-        """, context.user_id, context.conversation_id, location.value)
+    with skip_vector_registration():
+        async with get_db_connection_context() as conn:
+            present_npcs = await conn.fetch("""
+                SELECT npc_id FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+                AND introduced=true AND current_location=$3
+            """, context.user_id, context.conversation_id, location.value)
     
     npc_ids = [row['npc_id'] for row in present_npcs]
     
@@ -639,11 +641,12 @@ async def generate_daily_life_scene(
         
         npc_data = []
         for npc_id in npc_ids:
-            async with get_db_connection_context() as conn:
-                npc = await conn.fetchrow("""
-                    SELECT npc_name, dominance, personality_traits
-                    FROM NPCStats WHERE npc_id=$1
-                """, npc_id)
+            with skip_vector_registration():
+                async with get_db_connection_context() as conn:
+                    npc = await conn.fetchrow("""
+                        SELECT npc_name, dominance, personality_traits
+                        FROM NPCStats WHERE npc_id=$1
+                    """, npc_id)
             
             if npc:
                 stage = await get_npc_narrative_stage(
@@ -777,11 +780,12 @@ async def generate_organic_power_moment(
     
     try:
         # Get NPC details and stage
-        async with get_db_connection_context() as conn:
-            npc = await conn.fetchrow("""
-                SELECT npc_name, dominance, personality_traits
-                FROM NPCStats WHERE npc_id=$1
-            """, npc_id)
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                npc = await conn.fetchrow("""
+                    SELECT npc_name, dominance, personality_traits
+                    FROM NPCStats WHERE npc_id=$1
+                """, npc_id)
         
         if not npc:
             return None
@@ -1277,11 +1281,12 @@ async def simulate_npc_daily_routine(
     
     try:
         # Get NPC data
-        async with get_db_connection_context() as conn:
-            npc = await conn.fetchrow("""
-                SELECT npc_name, dominance, personality_traits, current_location
-                FROM NPCStats WHERE npc_id=$1
-            """, npc_id)
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                npc = await conn.fetchrow("""
+                    SELECT npc_name, dominance, personality_traits, current_location
+                    FROM NPCStats WHERE npc_id=$1
+                """, npc_id)
         
         if not npc:
             raise ValueError(f"NPC {npc_id} not found")
@@ -1444,11 +1449,12 @@ async def get_available_daily_activities(
                 npc_schedule = await simulate_npc_daily_routine(ctx, npc_id, world_context.current_phase)
                 
                 if npc_schedule.power_tendency and npc_schedule.availability != "busy":
-                    async with get_db_connection_context() as conn:
-                        npc_name = await conn.fetchval(
-                            "SELECT npc_name FROM NPCStats WHERE npc_id=$1",
-                            npc_id
-                        )
+                    with skip_vector_registration():
+                        async with get_db_connection_context() as conn:
+                            npc_name = await conn.fetchval(
+                                "SELECT npc_name FROM NPCStats WHERE npc_id=$1",
+                                npc_id
+                            )
 
                         activities.append(
                             DailyActivity(
@@ -1501,11 +1507,12 @@ async def transition_daily_phase(
         await advance_time_and_update(context.user_id, context.conversation_id, 1)
         
         # Update NPC locations for new phase
-        async with get_db_connection_context() as conn:
-            npcs = await conn.fetch("""
-                SELECT npc_id FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2
-            """, context.user_id, context.conversation_id)
+        with skip_vector_registration():
+            async with get_db_connection_context() as conn:
+                npcs = await conn.fetch("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                """, context.user_id, context.conversation_id)
         
         for npc in npcs:
             schedule = await simulate_npc_daily_routine(ctx, npc['npc_id'], new_phase)

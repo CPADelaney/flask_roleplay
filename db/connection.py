@@ -35,7 +35,8 @@ import asyncio
 import asyncpg
 import threading
 import weakref
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from typing import Optional, Dict, Any, Set, List, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass, field
@@ -55,6 +56,45 @@ from celery.signals import worker_process_init, worker_process_shutdown
 logger = logging.getLogger(__name__)
 
 AsyncpgConnection = Union[asyncpg.Connection, '_ResilientConnectionWrapper']
+
+
+_skip_vector_registration_var: ContextVar[bool] = ContextVar(
+    "skip_vector_registration",
+    default=False,
+)
+
+_VECTOR_TRUTHY = {"1", "true", "t", "yes", "y", "on", "enable", "enabled"}
+_VECTOR_FALSEY = {"0", "false", "f", "no", "n", "off", "disable", "disabled", ""}
+
+
+def get_register_vector() -> bool:
+    """Return whether pgvector registration should run for new connections."""
+
+    raw_value = os.getenv("DB_REGISTER_VECTOR")
+    if raw_value is None:
+        return False
+
+    value = raw_value.strip().lower()
+    if value in _VECTOR_TRUTHY:
+        return True
+    if value in _VECTOR_FALSEY:
+        return False
+
+    logger.warning(
+        "Unrecognized DB_REGISTER_VECTOR value '%s'; defaulting to False", raw_value
+    )
+    return False
+
+
+@contextmanager
+def skip_vector_registration():
+    """Context manager to temporarily skip pgvector codec registration."""
+
+    token = _skip_vector_registration_var.set(True)
+    try:
+        yield
+    finally:
+        _skip_vector_registration_var.reset(token)
 
 # ============================================================================
 # Type Definitions and Enums
@@ -725,14 +765,26 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
     Raises:
         asyncpg.PostgresError: If critical setup fails (not including pgvector)
     """
-    if os.getenv("DB_REGISTER_VECTOR", "1") != "1":
-        try:
-            logger.debug(
-                "Skipping pgvector registration on connection %s (DB_REGISTER_VECTOR!=1)",
-                id(conn)
-            )
-        finally:
-            return
+    if not get_register_vector():
+        logger.debug(
+            "Skipping pgvector registration on connection %s (env disabled)",
+            id(conn)
+        )
+        return
+
+    if _skip_vector_registration_var.get():
+        logger.debug(
+            "Skipping pgvector registration on connection %s (context override)",
+            id(conn)
+        )
+        return
+
+    if getattr(conn, "_vector_registered", False):
+        logger.debug(
+            "Connection %s already registered for pgvector; skipping",
+            id(conn)
+        )
+        return
 
     max_retries = 3
     retry_delay = 0.5  # Start with 0.5 seconds
@@ -749,6 +801,7 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
                 f"Successfully registered pgvector on connection {id(conn)} "
                 f"(attempt {attempt + 1}/{max_retries})"
             )
+            setattr(conn, "_vector_registered", True)
             return  # Success
         except (asyncpg.exceptions.ConnectionDoesNotExistError, asyncio.TimeoutError) as e:
             logger.warning(
@@ -1960,7 +2013,9 @@ __all__ = [
     'get_db_connection_context',
     'close_connection_pool',
     'setup_connection',
-    
+    'skip_vector_registration',
+    'get_register_vector',
+
     # Health & Metrics
     'check_pool_health',
     'get_pool_metrics',
