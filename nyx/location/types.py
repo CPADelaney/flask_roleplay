@@ -104,6 +104,7 @@ class ResolveResult:
     choices: List[str] = field(default_factory=list)
     candidates: List[Candidate] = field(default_factory=list)
     operations: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     anchor: Optional[Anchor] = None
     scope: Optional[Scope] = None
     errors: List[str] = field(default_factory=list)
