@@ -277,9 +277,9 @@ DEFAULT_MAX_CONNECTIONS = 20
 DEFAULT_CONNECTION_LIFETIME = 900  # seconds
 DEFAULT_COMMAND_TIMEOUT = 120  # seconds
 DEFAULT_MAX_QUERIES = 50000
-# Lower default so we fail fast; env DB_SETUP_TIMEOUT can override
+# Default values; env DB_SETUP_TIMEOUT can override
 DEFAULT_RELEASE_TIMEOUT = DEFAULT_COMMAND_TIMEOUT
-DEFAULT_SETUP_TIMEOUT = 10.0  # Timeout for connection setup (pgvector registration)
+DEFAULT_SETUP_TIMEOUT = 30.0  # Timeout for connection setup (pgvector registration, 30s)
 DEFAULT_ACQUIRE_TIMEOUT = 120.0  # Timeout for acquiring connection from pool
 DEFAULT_POOL_CREATE_TIMEOUT = 30.0  # Timeout for initial asyncpg.create_pool wait_for
 
