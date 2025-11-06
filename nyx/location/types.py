@@ -156,6 +156,7 @@ class Location:
     open_hours: Optional[Dict[str, Any]] = None
     embedding: Optional[List[float]] = None
     controlling_faction: Optional[str] = None
+    external_place_id: Optional[str] = None
 
     @property
     def location_id(self) -> Optional[int]:
@@ -210,6 +211,7 @@ class Location:
         self.open_hours = self._coerce_dict(self.open_hours)
         self.embedding = self._coerce_float_list(self.embedding)
         self.controlling_faction = self._clean_optional_str(self.controlling_faction)
+        self.external_place_id = self._clean_optional_str(self.external_place_id)
         if self.strategic_value is not None:
             try:
                 self.strategic_value = int(self.strategic_value)
@@ -357,6 +359,7 @@ class Location:
             "open_hours": dict(self.open_hours) if isinstance(self.open_hours, dict) else None,
             "embedding": list(self.embedding) if self.embedding else None,
             "controlling_faction": self.controlling_faction,
+            "external_place_id": self.external_place_id,
         }
 
 

@@ -421,6 +421,19 @@ async def generate_and_persist_hierarchy(
 
     meta = candidate.place.meta = dict(candidate.place.meta or {})
 
+    external_id: Optional[str] = None
+    for candidate_id in (
+        getattr(candidate.place, "key", None),
+        meta.get("place_key"),
+        meta.get("external_id"),
+        meta.get("id"),
+    ):
+        if candidate_id:
+            candidate_id_str = str(candidate_id).strip()
+            if candidate_id_str:
+                external_id = candidate_id_str
+                break
+
     # Normalize the address via Nominatim so that admin keys align with Nyx
     # hierarchy expectations.
     address = dict(candidate.place.address or {})
@@ -525,6 +538,13 @@ async def generate_and_persist_hierarchy(
         if isinstance(leaf, dict) and "place_leaf_id" not in meta:
             meta["place_leaf_id"] = leaf.get("id")
         world_name = hierarchy.get("world_name")
+
+    if not external_id:
+        final_place_key = getattr(candidate.place, "key", None) or candidate.place.meta.get("place_key")
+        if final_place_key:
+            final_key_str = str(final_place_key).strip()
+            if final_key_str:
+                external_id = final_key_str
 
     display_name = meta.get("display_name") or candidate.place.name or "Unknown"
     normalized_name = _normalize_location_name(display_name)
@@ -735,6 +755,7 @@ async def generate_and_persist_hierarchy(
         "is_fictional": bool(meta.get("is_fictional") or is_fictional_branch),
         "open_hours": open_hours,
         "controlling_faction": controlling_faction,
+        "external_place_id": external_id,
     }
 
     if cultural_significance is not None:
@@ -769,6 +790,7 @@ async def generate_and_persist_hierarchy(
             user_id,
             conversation_id,
             location_name,
+            external_place_id,
             description,
             location_type,
             parent_location,
@@ -803,10 +825,12 @@ async def generate_and_persist_hierarchy(
             $11, $12, $13, $14, $15,
             $16, $17, $18, $19, $20,
             $21, $22, $23, $24, $25,
-            $26, $27, $28, $29, $30
+            $26, $27, $28, $29, $30,
+            $31
         )
         ON CONFLICT (user_id, conversation_id, location_name)
         DO UPDATE SET
+            external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
             description = COALESCE(EXCLUDED.description, Locations.description),
             location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
             parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
@@ -839,6 +863,7 @@ async def generate_and_persist_hierarchy(
         serialized_payload["user_id"],
         serialized_payload["conversation_id"],
         serialized_payload["location_name"],
+        serialized_payload.get("external_place_id"),
         serialized_payload.get("description"),
         serialized_payload.get("location_type"),
         serialized_payload.get("parent_location"),
@@ -879,6 +904,8 @@ async def generate_and_persist_hierarchy(
     meta.setdefault("planet", persisted.planet)
     meta.setdefault("galaxy", persisted.galaxy)
     meta.setdefault("realm", persisted.realm)
+    if persisted.external_place_id:
+        meta.setdefault("external_place_id", persisted.external_place_id)
 
     # ✨ NEW: Notify canon system
     await _notify_canon_of_location(conn, user_id, conversation_id, persisted)

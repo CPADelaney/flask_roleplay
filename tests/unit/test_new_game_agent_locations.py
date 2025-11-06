@@ -229,11 +229,11 @@ def test_create_preset_locations_handles_nested_open_hours(monkeypatch):
                 self.insert_args = args
 
                 json_field_indexes = {
-                    "open_hours": 19,
-                    "notable_features": 25,
-                    "hidden_aspects": 26,
-                    "access_restrictions": 27,
-                    "local_customs": 28,
+                    "open_hours": 20,
+                    "notable_features": 26,
+                    "hidden_aspects": 27,
+                    "access_restrictions": 28,
+                    "local_customs": 29,
                 }
                 for index in json_field_indexes.values():
                     value = args[index]
@@ -300,11 +300,11 @@ def test_create_preset_locations_handles_nested_open_hours(monkeypatch):
     assert locations == ["aurora observatory"]
     assert fake_conn.insert_args is not None
 
-    serialized_open_hours = fake_conn.insert_args[19]
+    serialized_open_hours = fake_conn.insert_args[20]
     assert isinstance(serialized_open_hours, str)
     assert json.loads(serialized_open_hours) == nested_open_hours
 
-    for index in (25, 26, 27, 28):
+    for index in (26, 27, 28, 29):
         value = fake_conn.insert_args[index]
         if value is not None:
             assert isinstance(value, str)
@@ -328,10 +328,10 @@ def test_queen_of_thorns_locations_use_earth_defaults(monkeypatch):
                     "conversation_id": args[1],
                     "location_name": args[2],
                     "scope": "real",
-                    "planet": args[13],
-                    "galaxy": args[14],
-                    "realm": args[15],
-                    "is_fictional": args[18],
+                    "planet": args[14],
+                    "galaxy": args[15],
+                    "realm": args[16],
+                    "is_fictional": args[19],
                 }
             return None
 
@@ -387,10 +387,10 @@ def test_queen_of_thorns_locations_use_earth_defaults(monkeypatch):
 
     base_insert = fake_conn.insert_history[0]
 
-    planet_arg = base_insert[13]
-    galaxy_arg = base_insert[14]
-    realm_arg = base_insert[15]
-    is_fictional_arg = base_insert[18]
+    planet_arg = base_insert[14]
+    galaxy_arg = base_insert[15]
+    realm_arg = base_insert[16]
+    is_fictional_arg = base_insert[19]
 
     assert planet_arg == "Earth"
     assert galaxy_arg == "Milky Way"
