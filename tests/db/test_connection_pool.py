@@ -56,6 +56,16 @@ class _DummyPool:
         self._closed = True
 
 
+class _ClosableConnection:
+    def __init__(self):
+        self.closed = False
+        self.close_calls = 0
+
+    async def close(self):
+        self.closed = True
+        self.close_calls += 1
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_pool_from_dead_loop_is_terminated(monkeypatch, caplog, anyio_backend):
@@ -151,3 +161,37 @@ async def test_close_existing_pool_handles_terminate_runtime_error(monkeypatch, 
     assert isolated_state.pool is None
     assert failing_pool.terminate_calls == 1
     assert failing_pool._closed is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize(
+    "exception_type",
+    [asyncio.CancelledError, asyncio.TimeoutError],
+)
+async def test_register_vector_retry_closes_connection_on_cancel_or_timeout(
+    monkeypatch, exception_type, anyio_backend
+):
+    """Registration failures from cancellation or timeout should close the connection."""
+
+    conn = _ClosableConnection()
+
+    async def failing_register(connection):
+        raise exception_type()
+
+    monkeypatch.setattr(
+        db_connection.pgvector_asyncpg,
+        "register_vector",
+        failing_register,
+    )
+
+    with pytest.raises(exception_type):
+        await db_connection._register_vector_with_retry(
+            conn,
+            setup_timeout=0.05,
+            max_retries=3,
+            initial_retry_delay=0.01,
+        )
+
+    assert conn.closed is True
+    assert conn.close_calls == 1
