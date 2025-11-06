@@ -819,6 +819,7 @@ async def _register_vector_with_retry(
         return
 
     retry_delay = initial_retry_delay
+    last_exception: Optional[BaseException] = None
     for attempt in range(1, max_retries + 1):
         try:
             await asyncio.wait_for(
@@ -838,7 +839,16 @@ async def _register_vector_with_retry(
             with contextlib.suppress(Exception):
                 await conn.close()
             raise
-        except asyncio.TimeoutError:
+        except asyncpg.exceptions.ConnectionDoesNotExistError as exc:
+            logger.warning(
+                "pgvector registration lost connection %s (attempt %d/%d): %s",
+                id(conn),
+                attempt,
+                max_retries,
+                exc,
+            )
+            last_exception = exc
+        except asyncio.TimeoutError as exc:
             logger.warning(
                 "pgvector registration timed out on connection %s (attempt %d/%d, timeout=%.1fs)",
                 id(conn),
@@ -846,9 +856,7 @@ async def _register_vector_with_retry(
                 max_retries,
                 setup_timeout,
             )
-            with contextlib.suppress(Exception):
-                await conn.close()
-            raise
+            last_exception = exc
         except asyncpg.exceptions.UndefinedFunctionError as exc:
             logger.warning(
                 "pgvector extension not available on connection %s: %s",
@@ -864,14 +872,31 @@ async def _register_vector_with_retry(
                 max_retries,
                 exc,
             )
-            if attempt == max_retries:
-                with contextlib.suppress(Exception):
-                    await conn.close()
-                raise
+            with contextlib.suppress(Exception):
+                await conn.close()
+            raise
 
-        # Linear backoff between retry attempts
-        await asyncio.sleep(retry_delay)
-        retry_delay += initial_retry_delay
+        if attempt < max_retries:
+            # Linear backoff between retry attempts
+            await asyncio.sleep(retry_delay)
+            retry_delay += initial_retry_delay
+        else:
+            break
+
+    logger.error(
+        "pgvector registration failed on connection %s after %d attempts; closing connection",
+        id(conn),
+        max_retries,
+    )
+    with contextlib.suppress(Exception):
+        await conn.close()
+
+    if isinstance(last_exception, asyncio.TimeoutError):
+        raise TimeoutError("pgvector registration failed after retries") from last_exception
+    if last_exception is not None:
+        raise last_exception
+
+    raise TimeoutError("pgvector registration failed after retries")
 
 
 async def _defer_vector_registration(
