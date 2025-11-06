@@ -47,6 +47,7 @@ class StubConnection:
             user_id,
             conversation_id,
             location_name,
+            external_place_id,
             description,
             location_type,
             parent_location,
@@ -80,6 +81,7 @@ class StubConnection:
             "user_id": user_id,
             "conversation_id": conversation_id,
             "location_name": location_name,
+            "external_place_id": external_place_id,
             "description": description,
             "location_type": location_type,
             "parent_location": parent_location,
@@ -143,6 +145,7 @@ def _install_fake_assign_and_location(monkeypatch):
             "is_fictional": record.get("is_fictional") or False,
             "open_hours": record.get("open_hours"),
             "controlling_faction": record.get("controlling_faction"),
+            "external_place_id": record.get("external_place_id"),
         }
         data.update(overrides)
         return cls(**data)

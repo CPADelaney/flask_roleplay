@@ -21,6 +21,7 @@ class _FakeConnection:
         self.place_meta_payloads = []
         self.edge_meta_payloads = []
         self.place_key_payloads = []
+        self.location_external_ids = []
 
     async def fetchrow(self, query, *args):
         normalized = " ".join(query.split())
@@ -56,6 +57,7 @@ class _FakeConnection:
                 user_id,
                 conversation_id,
                 location_name,
+                external_place_id,
                 description,
                 location_type,
                 parent_location,
@@ -85,11 +87,14 @@ class _FakeConnection:
                 embedding,
             ) = args
 
+            self.location_external_ids.append(external_place_id)
+
             return {
                 "id": self._location_id,
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "location_name": location_name,
+                "external_place_id": external_place_id,
                 "description": description,
                 "location_type": location_type,
                 "parent_location": parent_location,
@@ -223,3 +228,5 @@ def test_get_or_create_location_serializes_place_and_edge_meta():
     assert conn.place_key_payloads[-1] == "ext-arcadia-spire"
     assert candidate.place.meta["place_key"] == "ext-arcadia-spire"
     assert candidate.place.key == "ext-arcadia-spire"
+    assert location.external_place_id == "ext-arcadia-spire"
+    assert conn.location_external_ids[-1] == "ext-arcadia-spire"

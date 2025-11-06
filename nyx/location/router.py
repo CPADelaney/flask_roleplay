@@ -87,11 +87,12 @@ async def _persist_gmaps_place(
             await conn.execute(
                 """
                 INSERT INTO Locations (
-                    user_id, conversation_id, location_name, location_type,
-                    city, country, lat, lon, is_fictional
+                    user_id, conversation_id, location_name, external_place_id,
+                    location_type, city, country, lat, lon, is_fictional
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)
                 ON CONFLICT (user_id, conversation_id, location_name) DO UPDATE SET
+                    external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
                     location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
                     city = COALESCE(EXCLUDED.city, Locations.city),
                     country = COALESCE(EXCLUDED.country, Locations.country),
@@ -102,6 +103,7 @@ async def _persist_gmaps_place(
                 user_key,
                 convo_key,
                 place.name,
+                place.place_id,
                 "venue" if place.districts else None,
                 place.city,
                 place.country,
@@ -113,11 +115,12 @@ async def _persist_gmaps_place(
                 await conn.execute(
                     """
                     INSERT INTO Locations (
-                        user_id, conversation_id, location_name, parent_location,
-                        location_type, city, country, lat, lon, is_fictional
+                        user_id, conversation_id, location_name, external_place_id,
+                        parent_location, location_type, city, country, lat, lon, is_fictional
                     )
-                    VALUES ($1, $2, $3, $4, 'district', $5, $6, $7, $8, FALSE)
+                    VALUES ($1, $2, $3, $4, $5, 'district', $6, $7, $8, $9, FALSE)
                     ON CONFLICT (user_id, conversation_id, location_name) DO UPDATE SET
+                        external_place_id = COALESCE(EXCLUDED.external_place_id, Locations.external_place_id),
                         parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
                         city = COALESCE(EXCLUDED.city, Locations.city),
                         country = COALESCE(EXCLUDED.country, Locations.country),
@@ -128,6 +131,7 @@ async def _persist_gmaps_place(
                     user_key,
                     convo_key,
                     district.name,
+                    district.place_id,
                     place.name,
                     place.city,
                     place.country,
