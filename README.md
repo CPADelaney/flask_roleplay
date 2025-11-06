@@ -265,6 +265,10 @@ Deploy to Kubernetes:
 kubectl apply -f k8s/
 ```
 
+### Database migrations
+
+- Alembic revision `20241009_player_indexes` builds new indexes on `PlayerStats` and `PlayerVitals` using `CREATE INDEX CONCURRENTLY`. Postgres requires concurrent index operations to run outside a transaction, so ensure your deployment pipeline lets Alembic manage autocommit and avoid wrapping this migration in additional DDL transactions.
+
 ## Contributing
 
 1. Fork the repository
