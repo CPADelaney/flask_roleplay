@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from typing import Any, Awaitable, Callable, Dict, TypeVar
+from typing import Any, Dict
 
 from nyx.tasks.base import NyxTask, app
+from nyx.tasks.utils import run_coro
 
 from nyx.utils.idempotency import idempotent
 from rag.vector_store import (
@@ -24,9 +24,6 @@ except Exception:  # pragma: no cover
 from memory.memory_service import MemoryEmbeddingService
 
 logger = logging.getLogger(__name__)
-
-
-T = TypeVar("T")
 
 
 def _add_key(payload: Dict[str, Any]) -> str:
@@ -117,16 +114,6 @@ def hydrate_local_embeddings(
         )
         return "skipped:legacy-disabled"
 
-    def _run_coroutine(factory: Callable[[], Awaitable[T]]) -> T:
-        try:
-            return asyncio.run(factory())
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                return loop.run_until_complete(factory())
-            finally:
-                loop.close()
-
     vector_config = config.get("vector_store") if isinstance(config, dict) else {}
     if not isinstance(vector_config, dict):
         vector_config = {}
@@ -155,7 +142,7 @@ def hydrate_local_embeddings(
         config=config or None,
     )
 
-    result = _run_coroutine(service.hydrate_legacy_vector_store)
+    result = run_coro(service.hydrate_legacy_vector_store())
 
     logger.info(
         "Hydration result for user_id=%s conversation_id=%s: %s",

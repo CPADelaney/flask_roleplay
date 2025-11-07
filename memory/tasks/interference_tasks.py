@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Union
 
 from celery import shared_task
 
 from memory.interference import MemoryInterferenceManager
+from nyx.tasks.utils import run_coro
 
 
 @shared_task(name="memory.tasks.generate_blended_memory")
@@ -30,4 +30,4 @@ def generate_blended_memory_task(
             conn=None,
         )
 
-    return asyncio.run(_run())
+    return run_coro(_run())

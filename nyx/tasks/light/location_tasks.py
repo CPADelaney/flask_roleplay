@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import logging
 from typing import Dict, Any
 
@@ -81,5 +82,4 @@ def notify_canon_of_location_task(self, user_id: int, conversation_id: int, loca
             entity_type="location",
         )
 
-    run_coro(_run())
-    return "ok"
+    return run_coro(_run())
