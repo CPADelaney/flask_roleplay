@@ -1,23 +1,28 @@
 from __future__ import annotations
 import logging
-from celery import shared_task
 from typing import Dict, Any
 
 from db.connection import get_db_connection_context
 from lore.core.canon import log_canonical_event, get_canon_memory_orchestrator
 from lore.core.context import CanonicalContext
 from memory.memory_orchestrator import EntityType
+from nyx.tasks.base import NyxTask, app
+from nyx.tasks.utils import run_coro
 
 logger = logging.getLogger(__name__)
 
-@shared_task(name="nyx.tasks.light.notify_canon_of_location")
-def notify_canon_of_location_task(user_id: int, conversation_id: int, location: Dict[str, Any]) -> str:
+@app.task(
+    bind=True,
+    base=NyxTask,
+    name="nyx.tasks.light.notify_canon_of_location",
+    queue="light",
+    priority=4,
+)
+def notify_canon_of_location_task(self, user_id: int, conversation_id: int, location: Dict[str, Any]) -> str:
     """
     Post-commit fan-out: write a tiny canon event (own short DB scope),
     then push memory + vector entry (no pooled conn held).
     """
-    import asyncio
-
     async def _run():
         ctx = CanonicalContext(user_id=user_id, conversation_id=conversation_id)
         name = location.get("location_name") or location.get("name") or "Unknown"
@@ -76,5 +81,5 @@ def notify_canon_of_location_task(user_id: int, conversation_id: int, location: 
             entity_type="location",
         )
 
-    asyncio.run(_run())
+    run_coro(_run())
     return "ok"
