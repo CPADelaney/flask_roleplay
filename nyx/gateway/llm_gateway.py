@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Optional, Protocol
 
+import httpx
+
 from nyx.telemetry.metrics import LLM_TOKENS_IN, LLM_TOKENS_OUT, REQUEST_LATENCY
 from nyx.telemetry.tracing import trace_step
 
