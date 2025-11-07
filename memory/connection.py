@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import asyncpg
+from asyncpg.transaction import Transaction as AsyncpgTransaction
 from typing import Optional, Dict, Any
 import time
 import functools
@@ -137,12 +138,12 @@ class DBConnectionManager:
         }
 
     @staticmethod
-    async def _safe_commit(tx: asyncpg.Transaction) -> None:
+    async def _safe_commit(tx: AsyncpgTransaction) -> None:
         """Commit without letting upstream cancellations interrupt it."""
         await asyncio.shield(tx.commit())
 
     @staticmethod
-    async def _safe_rollback(tx: asyncpg.Transaction) -> None:
+    async def _safe_rollback(tx: AsyncpgTransaction) -> None:
         """Best-effort rollback even if cancellation/error is in-flight."""
         with contextlib.suppress(Exception):
             await asyncio.shield(tx.rollback())
