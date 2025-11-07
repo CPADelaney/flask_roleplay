@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
 
+from db.connection import get_db_connection_context
 from .connection import TransactionContext, with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
 
@@ -119,7 +120,7 @@ class MemorySchemaManager:
             "description": description
         }
     
-    @with_transaction
+    # Remove long-held transaction: fetch → LLM → quick persist
     async def detect_schema_from_memories(self,
                                        entity_type: str,
                                        entity_id: int,
@@ -140,50 +141,50 @@ class MemorySchemaManager:
         Returns:
             Detected schema information or empty if no pattern found
         """
-        # Get memories to analyze
-        memories = []
-        
-        if memory_ids:
-            # Get specific memories
-            for memory_id in memory_ids:
-                row = await conn.fetchrow("""
+        # 1) QUICK READ PHASE (own short connection), no LLMs yet
+        memories: List[Dict[str, Any]] = []
+        async with get_db_connection_context() as read_conn:
+            if memory_ids:
+                # Get specific memories
+                for memory_id in memory_ids:
+                    row = await read_conn.fetchrow("""
+                        SELECT id, memory_text, tags
+                        FROM unified_memories
+                        WHERE id = $1
+                          AND entity_type = $2
+                          AND entity_id = $3
+                          AND user_id = $4
+                          AND conversation_id = $5
+                    """, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
+
+                    if row:
+                        memories.append({
+                            "id": row["id"],
+                            "text": row["memory_text"],
+                            "tags": row["tags"] or []
+                        })
+            else:
+                # Get memories by tags
+                tag_filter = tags or ["observation"]
+
+                rows = await read_conn.fetch("""
                     SELECT id, memory_text, tags
-                    FROM unified_memories
-                    WHERE id = $1
-                      AND entity_type = $2
-                      AND entity_id = $3
-                      AND user_id = $4
-                      AND conversation_id = $5
-                """, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
-                
-                if row:
+                      FROM unified_memories
+                     WHERE entity_type = $1
+                       AND entity_id = $2
+                       AND user_id = $3
+                       AND conversation_id = $4
+                       AND tags && $5
+                  ORDER BY timestamp DESC
+                     LIMIT 20
+                """, entity_type, entity_id, self.user_id, self.conversation_id, tag_filter)
+
+                for row in rows:
                     memories.append({
                         "id": row["id"],
                         "text": row["memory_text"],
                         "tags": row["tags"] or []
                     })
-        else:
-            # Get memories by tags
-            tag_filter = tags or ["observation"]
-            
-            rows = await conn.fetch("""
-                SELECT id, memory_text, tags
-                FROM unified_memories
-                WHERE entity_type = $1
-                  AND entity_id = $2
-                  AND user_id = $3
-                  AND conversation_id = $4
-                  AND tags && $5
-                ORDER BY timestamp DESC
-                LIMIT 20
-            """, entity_type, entity_id, self.user_id, self.conversation_id, tag_filter)
-            
-            for row in rows:
-                memories.append({
-                    "id": row["id"],
-                    "text": row["memory_text"],
-                    "tags": row["tags"] or []
-                })
         
         if len(memories) < min_memories:
             return {
@@ -191,7 +192,7 @@ class MemorySchemaManager:
                 "reason": f"Not enough memories to detect a schema (need {min_memories}, found {len(memories)})"
             }
             
-        # Analyze memories to find a pattern
+        # 2) LLM PHASE (no DB handle)
         schema = await self._detect_pattern(memories)
         
         if not schema:
@@ -200,57 +201,62 @@ class MemorySchemaManager:
                 "reason": "No clear pattern detected in the memories"
             }
             
-        # Check if a similar schema already exists
-        existing = await self.find_similar_schema(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            schema_name=schema["name"],
-            description=schema["description"],
-            conn=conn
-        )
-        
-        if existing:
-            # Update the existing schema instead of creating a new one
-            updated = await self.update_schema(
-                schema_id=existing["schema_id"],
+        # 3) PERSIST PHASE (short transaction)
+        async def _persist(write_conn):
+            existing = await self.find_similar_schema(
                 entity_type=entity_type,
                 entity_id=entity_id,
-                updates={
-                    "confidence_change": 0.1,  # Increase confidence
-                    "add_example_ids": [m["id"] for m in memories],
-                    "attributes_update": schema["attributes"]
-                },
-                conn=conn
+                schema_name=schema["name"],
+                description=schema["description"],
+                conn=write_conn
             )
-            
+
+            if existing:
+                updated = await self.update_schema(
+                    schema_id=existing["schema_id"],
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    updates={
+                        "confidence_change": 0.1,  # Increase confidence
+                        "add_example_ids": [m["id"] for m in memories],
+                        "attributes_update": schema["attributes"]
+                    },
+                    conn=write_conn
+                )
+
+                return {
+                    "schema_detected": True,
+                    "schema_already_exists": True,
+                    "schema_id": existing["schema_id"],
+                    "schema_name": existing["schema_name"],
+                    "confidence": updated["new_confidence"]
+                }
+
+            schema_result = await self.create_schema(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                schema_name=schema["name"],
+                description=schema["description"],
+                category=schema["category"],
+                attributes=schema["attributes"],
+                example_memory_ids=[m["id"] for m in memories],
+                conn=write_conn
+            )
+
             return {
                 "schema_detected": True,
-                "schema_already_exists": True,
-                "schema_id": existing["schema_id"],
-                "schema_name": existing["schema_name"],
-                "confidence": updated["new_confidence"]
+                "schema_already_exists": False,
+                "schema_id": schema_result["schema_id"],
+                "schema_name": schema_result["schema_name"],
+                "description": schema_result["description"],
+                "category": schema_result["category"]
             }
-            
-        # Create a new schema
-        schema_result = await self.create_schema(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            schema_name=schema["name"],
-            description=schema["description"],
-            category=schema["category"],
-            attributes=schema["attributes"],
-            example_memory_ids=[m["id"] for m in memories],
-            conn=conn
-        )
-        
-        return {
-            "schema_detected": True,
-            "schema_already_exists": False,
-            "schema_id": schema_result["schema_id"],
-            "schema_name": schema_result["schema_name"],
-            "description": schema_result["description"],
-            "category": schema_result["category"]
-        }
+
+        if conn is not None:
+            return await _persist(conn)
+
+        async with TransactionContext() as write_conn:
+            return await _persist(write_conn)
     
     async def _detect_pattern(self, memories: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
