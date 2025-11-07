@@ -72,11 +72,12 @@ _VECTOR_FALSEY = {"0", "false", "f", "no", "n", "off", "disable", "disabled", ""
 def get_register_vector() -> bool:
     """
     Return whether pgvector registration should run for new connections.
-    Defaults to False if DB_REGISTER_VECTOR is unset or unrecognized.
+    Defaults to True when DB_REGISTER_VECTOR is unset; explicit falsey values opt out.
+    Unrecognized values still log a warning and default to False.
     """
     raw_value = os.getenv("DB_REGISTER_VECTOR")
     if raw_value is None:
-        return False
+        return True
     value = raw_value.strip().lower()
     if value in _VECTOR_TRUTHY:
         return True
@@ -780,7 +781,7 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
     """
     Per-connection setup invoked by the pool.
     Honors:
-      - DB_REGISTER_VECTOR env to enable/disable pgvector codec registration
+      - DB_REGISTER_VECTOR env to opt-out of pgvector codec registration when falsey
       - skip_vector_registration() context manager to temporarily suppress it
       - One-time registration per connection with retry/timeout
     """
