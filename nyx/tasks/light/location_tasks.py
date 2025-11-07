@@ -19,12 +19,24 @@ logger = logging.getLogger(__name__)
     queue="light",
     priority=4,
 )
-def notify_canon_of_location_task(self, user_id: int, conversation_id: int, location: Dict[str, Any]) -> str:
+def notify_canon_of_location_task(
+    self,
+    user_id: int,
+    conversation_id: int,
+    location: Dict[str, Any],
+    *,
+    trace_id: str | None = None,
+) -> str:
     """
     Post-commit fan-out: write a tiny canon event (own short DB scope),
     then push memory + vector entry (no pooled conn held).
     """
-    async def _run():
+    async def _run(current_trace_id: str | None):
+        if current_trace_id:
+            logger.debug(
+                "notify_canon_of_location_task executing", extra={"trace_id": current_trace_id}
+            )
+
         ctx = CanonicalContext(user_id=user_id, conversation_id=conversation_id)
         name = location.get("location_name") or location.get("name") or "Unknown"
         city = location.get("city") or "the world"
@@ -82,4 +94,4 @@ def notify_canon_of_location_task(self, user_id: int, conversation_id: int, loca
             entity_type="location",
         )
 
-    return run_coro(_run())
+    return run_coro(_run(trace_id))
