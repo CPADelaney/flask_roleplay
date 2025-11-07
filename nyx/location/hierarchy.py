@@ -43,6 +43,75 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _ensure_parent_chain(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    conversation_id: int,
+    parents: Iterable[Any],
+    scope: Scope,
+) -> Optional[str]:
+    """
+    Upsert a linear chain of ancestor locations and return the deepest parent's name.
+    Each parent may be a plain string (name) or a dict with
+      { "name": ..., "location_type": ..., "city": ..., "region": ..., "country": ... }.
+    """
+
+    last_parent: Optional[str] = None
+    if not parents:
+        return None
+
+    for raw in parents:
+        if isinstance(raw, str):
+            name = raw.strip()
+            lt = None
+            city = region = country = None
+        elif isinstance(raw, dict):
+            name = str(raw.get("name") or "").strip()
+            lt = raw.get("location_type")
+            city = raw.get("city")
+            region = raw.get("region")
+            country = raw.get("country")
+        else:
+            continue
+        if not name:
+            continue
+
+        row = await conn.fetchrow(
+            """
+            INSERT INTO Locations (
+                user_id, conversation_id, location_name, location_type, parent_location,
+                city, region, country, planet, galaxy, realm, scope, is_fictional
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            ON CONFLICT (user_id, conversation_id, location_name_lc) DO UPDATE SET
+                location_type = COALESCE(EXCLUDED.location_type, Locations.location_type),
+                parent_location = COALESCE(EXCLUDED.parent_location, Locations.parent_location),
+                city = COALESCE(EXCLUDED.city, Locations.city),
+                region = COALESCE(EXCLUDED.region, Locations.region),
+                country = COALESCE(EXCLUDED.country, Locations.country),
+                scope = $12,
+                is_fictional = ($12 = 'fictional')
+            RETURNING location_name
+            """,
+            int(user_id),
+            int(conversation_id),
+            name,
+            lt,
+            last_parent,
+            city,
+            region,
+            country,
+            "Earth" if scope == "real" else "Fictional World",
+            "Milky Way" if scope == "real" else "Unknown Galaxy",
+            DEFAULT_REALM if scope == "real" else "fictional",
+            scope,
+            scope == "fictional",
+        )
+        last_parent = row["location_name"] if row else name
+    return last_parent
+
+
 def _slugify(value: str) -> str:
     value = value.strip().lower()
     value = _SLUG_RE.sub("-", value)
@@ -479,12 +548,36 @@ async def generate_and_persist_hierarchy(
             description = ", ".join(contextual)
 
     location_type = meta.get("location_type") or meta.get("category") or candidate.place.level
-    parent_location = (
-        meta.get("parent_location")
-        or admin_path.get("district")
-        or admin_path.get("city")
-        or admin_path.get("region")
-    )
+
+    # 0) If a parent chain is provided, mint it first and use its deepest node.
+    parent_location: Optional[str] = None
+    parents_payload = meta.get("parents") or meta.get("hierarchy_parents") or meta.get("hierarchy_chain")
+    if parents_payload:
+        if isinstance(parents_payload, (str, bytes)):
+            normalized_parents = [parents_payload]
+        elif isinstance(parents_payload, dict):
+            normalized_parents = [parents_payload]
+        else:
+            normalized_parents = list(parents_payload)
+        try:
+            parent_location = await _ensure_parent_chain(
+                conn,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                parents=normalized_parents,
+                scope=scope,
+            )
+        except Exception:
+            logger.debug("Parent chain mint failed softly", exc_info=True)
+
+    # 1) Otherwise fall back to district → city → region hints.
+    if not parent_location:
+        parent_location = (
+            meta.get("parent_location")
+            or admin_path.get("district")
+            or admin_path.get("city")
+            or admin_path.get("region")
+        )
 
     room = meta.get("room")
     building = meta.get("building") or admin_path.get("building")
