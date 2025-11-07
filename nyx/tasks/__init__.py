@@ -59,6 +59,14 @@ for _module in ("memory_tasks",):
 
         logging.getLogger(__name__).exception("Failed to import heavy task %s", _module)
 
+for _module in ("location_tasks",):
+    try:  # pragma: no cover - defensive import
+        __import__(f"nyx.tasks.light.{_module}")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("Failed to import light task %s", _module)
+
 try:  # pragma: no cover
     from . import beat  # noqa: F401
 except Exception:

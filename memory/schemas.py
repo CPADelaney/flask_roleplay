@@ -127,20 +127,62 @@ class MemorySchemaManager:
                                        memory_ids: List[int] = None,
                                        tags: List[str] = None,
                                        min_memories: int = 3,
-                                       conn = None) -> Dict[str, Any]:
-        """
-        Detect a potential schema from a set of memories.
-        
+                                       conn = None,
+                                       background: bool = False) -> Dict[str, Any]:
+        """Detect a potential schema from a set of memories.
+
         Args:
             entity_type: Type of entity
             entity_id: ID of the entity
             memory_ids: Specific memory IDs to analyze
             tags: Tags to filter memories by (if memory_ids not provided)
             min_memories: Minimum number of memories needed to form a schema
-            
+            background: If ``True``, enqueue a Celery task instead of running inline.
+
         Returns:
-            Detected schema information or empty if no pattern found
+            Detected schema information or empty if no pattern found.  When
+            ``background`` is ``True`` and the task is successfully enqueued, the
+            return payload contains the Celery task metadata instead.
         """
+        if background:
+            try:
+                from memory.tasks.schema_tasks import detect_schema_from_memories_task
+
+                task = detect_schema_from_memories_task.delay(
+                    int(self.user_id),
+                    int(self.conversation_id),
+                    entity_type,
+                    int(entity_id),
+                    list(memory_ids or []),
+                    list(tags or []),
+                    int(min_memories),
+                )
+                return {"queued": True, "task_id": task.id}
+            except Exception as exc:  # pragma: no cover - background enqueue best-effort
+                logger.warning(
+                    "Falling back to inline schema detection for conversation=%s: %s",
+                    self.conversation_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        return await self._detect_schema_from_memories_inline(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_ids=memory_ids,
+            tags=tags,
+            min_memories=min_memories,
+            conn=conn,
+        )
+
+    async def _detect_schema_from_memories_inline(self,
+                                               entity_type: str,
+                                               entity_id: int,
+                                               memory_ids: List[int] = None,
+                                               tags: List[str] = None,
+                                               min_memories: int = 3,
+                                               conn = None) -> Dict[str, Any]:
+        """Run schema detection inline without delegating to Celery."""
         # 1) QUICK READ PHASE (own short connection), no LLMs yet
         memories: List[Dict[str, Any]] = []
         async with get_db_connection_context() as read_conn:
