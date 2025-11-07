@@ -227,6 +227,21 @@ def _compose_description(vibe: str, layout: str, theme: str, summary: str) -> st
     return " ".join(parts).strip()
 
 
+def _compose_parent_chain(*values: Any) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for value in values:
+        text = _stringify(value)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(text)
+    return ordered
+
+
 def _truncate_seed_text(text: str, limit: int = 1500) -> str:
     if len(text) <= limit:
         return text
@@ -317,6 +332,19 @@ _LON_PATHS: Tuple[Tuple[str, ...], ...] = (
     ("primary_city", "longitude"),
     ("lon",),
     ("longitude",),
+)
+
+_PARK_ROOT_PATHS: Tuple[Tuple[str, ...], ...] = (
+    ("park_root_name",),
+    ("park_root", "name"),
+    ("park", "name"),
+    ("park", "display_name"),
+    ("theme_park", "name"),
+    ("theme_park", "display_name"),
+    ("world", "park_root_name"),
+    ("world", "park_name"),
+    ("world", "park", "name"),
+    ("world", "park", "display_name"),
 )
 
 _REGION_PATHS: Tuple[Tuple[str, ...], ...] = (
@@ -1261,6 +1289,16 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
                         }
                     ]
 
+                    poi_parent_chain = _compose_parent_chain(
+                        district.parent_location,
+                        district.location_name,
+                        district.city,
+                        district.region,
+                        district.country,
+                        district.planet or "Earth",
+                        district.galaxy or "Milky Way",
+                    )
+
                     meta: Dict[str, Any] = {
                         "source": "fictional",
                         "display_name": spec["name"],
@@ -1285,6 +1323,9 @@ async def generate_pois_for_district(district: Location, query: str) -> List[Loc
                         "poi_query": normalized_query,
                         "poi_offset": {"dx_m": dx_m, "dy_m": dy_m},
                     }
+
+                    if poi_parent_chain:
+                        meta["parents"] = poi_parent_chain
 
                     place = Place(
                         name=spec["name"],
@@ -1547,6 +1588,7 @@ async def get_or_generate_districts(
     galaxy = _extract_text_value(seed, _GALAXY_PATHS)
     realm = _extract_text_value(seed, _REALM_PATHS)
     world_name = _extract_text_value(seed, _WORLD_NAME_PATHS)
+    park_root_name = _extract_text_value(seed, _PARK_ROOT_PATHS)
 
     persisted: List[Location] = []
     async with get_db_connection_context() as conn:
@@ -1576,6 +1618,15 @@ async def get_or_generate_districts(
                     address["region"] = region
                 if country:
                     address["country"] = country
+
+                parent_chain = _compose_parent_chain(
+                    park_root_name,
+                    city,
+                    region,
+                    country,
+                    planet or "Earth",
+                    galaxy or "Milky Way",
+                )
 
                 meta: Dict[str, Any] = {
                     "source": "fictional",
@@ -1611,6 +1662,11 @@ async def get_or_generate_districts(
                     "lat": spec["lat"],
                     "lon": spec["lon"],
                 }
+
+                if park_root_name:
+                    meta["parent_location"] = park_root_name
+                if parent_chain:
+                    meta["parents"] = parent_chain
 
                 # Strip None values to keep payload lean
                 meta = {key_: value for key_, value in meta.items() if value is not None}
