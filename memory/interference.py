@@ -330,19 +330,32 @@ class MemoryInterferenceManager:
             top_memory = scored_memories[0][0]
             second_memory = scored_memories[1][0]
             
-            blended_memory = await self.generate_blended_memory(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                memory1_id=top_memory.id,
-                memory2_id=second_memory.id,
-                conn=conn
-            )
-            
-            result["memory_blend"] = {
-                "created": True,
-                "blended_memory_id": blended_memory["blended_memory_id"],
-                "blended_text": blended_memory["blended_text"]
-            }
+            # Enqueue Celery job (heavy LLM) instead of holding the caller path
+            try:
+                from memory.tasks.interference_tasks import generate_blended_memory_task
+
+                job = generate_blended_memory_task.delay(
+                    int(self.user_id),
+                    int(self.conversation_id),
+                    entity_type,
+                    int(entity_id) if isinstance(entity_id, int) or str(entity_id).isdigit() else str(entity_id),
+                    int(top_memory.id),
+                    int(second_memory.id),
+                    "auto"
+                )
+
+                result["memory_blend"] = {
+                    "queued": True,
+                    "task_id": job.id,
+                    "source_ids": [top_memory.id, second_memory.id]
+                }
+            except Exception as e:
+                logger.warning("Blend enqueue failed, skipping: %s", e)
+                result["memory_blend"] = {
+                    "queued": False,
+                    "error": str(e),
+                    "source_ids": [top_memory.id, second_memory.id]
+                }
         
         return result
     
