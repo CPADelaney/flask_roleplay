@@ -82,12 +82,13 @@ app.conf.update(
         "nyx.subscribers.npc_subscribers",
         "nyx.subscribers.world_subscribers",
         "tasks",
+        "memory.tasks.schema_tasks",
     ),
 )
 
 app.conf.beat_schedule = build_beat_schedule()
 
-app.autodiscover_tasks(["nyx.tasks", "nyx.subscribers"])
+app.autodiscover_tasks(["nyx.tasks", "nyx.subscribers", "memory.tasks"])
 
 try:  # pragma: no cover - optional legacy shim
     import celery_config  # noqa: F401  # side-effect import to merge legacy task routes
