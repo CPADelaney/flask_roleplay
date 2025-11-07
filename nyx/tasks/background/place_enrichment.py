@@ -86,8 +86,12 @@ def _sanitize_meta(value: Any, *, depth: int = 0, max_depth: int = 5) -> Any:
     priority=7,
     acks_late=True,
 )
-def enrich(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def enrich(
+    self, payload: Dict[str, Any], *, trace_id: str | None = None
+) -> Optional[Dict[str, Any]]:
     """Run heavier Maps enrichment off the hot path."""
+
+    _ = trace_id
 
     if not payload:
         return None
@@ -163,8 +167,12 @@ def enrich(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     priority=6,
     acks_late=True,
 )
-def fictional_fallback(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def fictional_fallback(
+    self, payload: Dict[str, Any], *, trace_id: str | None = None
+) -> Optional[Dict[str, Any]]:
     """Resolve fictional locations off-thread when real chains miss."""
+
+    _ = trace_id
 
     if not payload:
         return None
