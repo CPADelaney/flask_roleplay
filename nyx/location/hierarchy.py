@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 import random
 import json
@@ -42,94 +41,6 @@ if TYPE_CHECKING:
     from lore.core.context import CanonicalContext
 
 logger = logging.getLogger(__name__)
-
-# Add this helper to avoid circular imports and avoid holding caller's connection
-async def _notify_canon_of_location_async(
-    user_id: int,
-    conversation_id: int,
-    location: Location,
-) -> None:
-    """
-    Notify canon/memory after the location is committed.
-    Opens its own short DB scope for the canon event, then performs LLM/embedding
-    without holding any borrowed connection.
-    """
-    try:
-        # Import here to avoid circular dependency
-        from db.connection import get_db_connection_context
-        from lore.core.canon import log_canonical_event, get_canon_memory_orchestrator
-        from lore.core.context import CanonicalContext
-        from memory.memory_orchestrator import EntityType
-
-        ctx = CanonicalContext(user_id=user_id, conversation_id=conversation_id)
-
-        # Log the canonical event
-        significance = 7 if location.location_type == "city" else 6 if location.location_type == "district" else 5
-
-        # Do the quick DB write in its own short-lived connection
-        async with get_db_connection_context() as _conn:
-            await log_canonical_event(
-                ctx, _conn,
-                f"Location '{location.location_name}' established in {location.city or 'the world'}",
-                tags=['location', 'creation', location.location_type or 'venue', location.scope or 'real'],
-                significance=significance,
-                persist_memory=True
-            )
-        
-        # Store in memory system with embedding
-        memory_orchestrator = await get_canon_memory_orchestrator(user_id, conversation_id)
-        
-        # Build description for embedding
-        description_parts = [location.location_name]
-        if location.description:
-            description_parts.append(location.description)
-        if location.district:
-            description_parts.append(f"in {location.district}")
-        if location.city:
-            description_parts.append(f", {location.city}")
-        
-        embedding_text = " ".join(description_parts)
-        
-        # Store as memory
-        await memory_orchestrator.store_memory(
-            entity_type=EntityType.LORE,
-            entity_id=0,
-            memory_text=embedding_text,
-            significance=0.7 if location.location_type == "venue" else 0.8,
-            tags=['location', location.location_type or 'venue', location.scope or 'real'],
-            metadata={
-                "location_id": location.id,
-                "location_name": location.location_name,
-                "location_type": location.location_type,
-                "city": location.city,
-                "district": location.district,
-                "scope": location.scope
-            }
-        )
-        
-        # Add to vector store for searchability
-        await memory_orchestrator.add_to_vector_store(
-            text=embedding_text,
-            metadata={
-                "entity_type": "location",
-                "location_id": location.id,
-                "location_name": location.location_name,
-                "location_type": location.location_type,
-                "city": location.city,
-                "district": location.district,
-                "is_fictional": location.is_fictional,
-                "scope": location.scope,
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            },
-            entity_type="location"
-        )
-        
-        logger.info(f"✓ Notified canon system of location: {location.location_name}")
-        
-    except Exception as e:
-        # Don't let canon failures break location creation
-        logger.warning(f"Failed to notify canon of location creation: {e}", exc_info=True)
 
 
 def _slugify(value: str) -> str:
@@ -921,12 +832,31 @@ async def generate_and_persist_hierarchy(
     if persisted.external_place_id:
         meta.setdefault("external_place_id", persisted.external_place_id)
 
-    # ✨ NEW: Notify canon system AFTER the write, off the caller's connection.
-    # Do not block the caller on embeddings/LLM. Fire-and-forget is fine here.
+    # ✨ NEW: enqueue canon notification via Celery after commit (no pool blocking).
     try:
-        asyncio.create_task(_notify_canon_of_location_async(user_id, conversation_id, persisted))
+        from nyx.tasks.light.location_tasks import notify_canon_of_location_task
     except Exception:
-        logger.debug("Failed to schedule canon notification task", exc_info=True)
+        notify_canon_of_location_task = None
+
+    payload = (
+        persisted.to_dict()
+        if hasattr(persisted, "to_dict")
+        else {
+            "id": persisted.id,
+            "location_name": persisted.location_name,
+            "location_type": persisted.location_type,
+            "city": persisted.city,
+            "district": persisted.district,
+            "scope": persisted.scope,
+        }
+    )
+    if notify_canon_of_location_task:
+        notify_canon_of_location_task.delay(int(user_id), int(conversation_id), payload)
+    else:
+        logger.warning(
+            "Celery task not available; skipping canon notification for %r",
+            payload.get("location_name"),
+        )
 
     return persisted
 
