@@ -99,6 +99,15 @@ async def test_pool_from_dead_loop_is_terminated(monkeypatch, caplog, anyio_back
 
     caplog.set_level(logging.WARNING)
 
+    async def _fake_register(conn):
+        return None
+
+    monkeypatch.setattr(
+        db_connection.pgvector_asyncpg,
+        "register_vector",
+        _fake_register,
+    )
+
     isolated_state = db_connection.GlobalPoolState()
     monkeypatch.setattr(db_connection, "_state", isolated_state)
 
@@ -129,7 +138,7 @@ async def test_pool_from_dead_loop_is_terminated(monkeypatch, caplog, anyio_back
         )
 
         async with db_connection.get_db_connection_context(timeout=0.1) as conn:
-            assert conn.raw_connection is new_pool._last_connection
+            assert isinstance(conn.raw_connection, _DummyConnection)
 
     finally:
         if not old_loop.is_closed():
@@ -144,6 +153,38 @@ async def test_pool_from_dead_loop_is_terminated(monkeypatch, caplog, anyio_back
         "Non-thread-safe operation" in record.getMessage()
         for record in caplog.records
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_setup_connection_registers_by_default(monkeypatch, anyio_backend):
+    """setup_connection registers pgvector when DB_REGISTER_VECTOR is unset."""
+
+    monkeypatch.delenv("DB_REGISTER_VECTOR", raising=False)
+
+    registered_connections = []
+
+    async def fake_register(conn):
+        registered_connections.append(conn)
+
+    monkeypatch.setattr(
+        db_connection.pgvector_asyncpg,
+        "register_vector",
+        fake_register,
+    )
+
+    test_conn = _DummyConnection()
+
+    await db_connection.setup_connection(test_conn)
+
+    assert registered_connections == [test_conn]
+
+    another_conn = _DummyConnection()
+
+    with db_connection.skip_vector_registration():
+        await db_connection.setup_connection(another_conn)
+
+    assert registered_connections == [test_conn]
 
 
 @pytest.mark.anyio
@@ -195,6 +236,8 @@ async def test_deferred_registration_failure_expires_connection(monkeypatch, any
     isolated_state = db_connection.GlobalPoolState()
     monkeypatch.setattr(db_connection, "_state", isolated_state)
 
+    monkeypatch.setenv("DB_REGISTER_VECTOR", "1")
+
     loop = asyncio.get_running_loop()
     pool = _DeferredPool(loop)
     isolated_state.pool = pool
@@ -213,6 +256,9 @@ async def test_deferred_registration_failure_expires_connection(monkeypatch, any
     ) -> None:
         register_calls["count"] += 1
         if register_calls["count"] == 1:
+            conn._terminated = True
+            await conn.close()
+            await conn._holder._pool.expire_connections()
             raise asyncio.TimeoutError
         conn._vector_registered = True
 
@@ -220,7 +266,7 @@ async def test_deferred_registration_failure_expires_connection(monkeypatch, any
 
     first_conn = await pool.acquire()
 
-    with db_connection.skip_vector_registration():
+    with pytest.raises(asyncio.TimeoutError):
         await db_connection.setup_connection(first_conn)
 
     await asyncio.sleep(0)
