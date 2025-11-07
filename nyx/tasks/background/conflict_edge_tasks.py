@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -11,7 +10,7 @@ from typing import Any, Dict, List
 
 import redis
 from nyx.tasks.base import NyxTask, app
-from nyx.tasks.utils import with_retry
+from nyx.tasks.utils import run_coro, with_retry
 
 from agents import Agent
 from logic.conflict_system.dynamic_conflict_template import (
@@ -80,7 +79,7 @@ def _run_runner(agent: Agent, prompt: str) -> Any:
             )
         )
 
-    return asyncio.run(_run())
+    return run_coro(_run())
 
 
 def _timestamp() -> str:
