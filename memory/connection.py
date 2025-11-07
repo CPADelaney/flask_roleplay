@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 import time
 import functools
 import os
+import contextlib
 
 # Import config
 from memory.config import DB_CONFIG
@@ -129,11 +130,22 @@ class DBConnectionManager:
                 "size": len(cls._pool._holders),
                 "free": cls._pool._queue.qsize()
             }
-            
+
         return {
             **cls._metrics,
             "pool": pool_stats
         }
+
+    @staticmethod
+    async def _safe_commit(tx: asyncpg.Transaction) -> None:
+        """Commit without letting upstream cancellations interrupt it."""
+        await asyncio.shield(tx.commit())
+
+    @staticmethod
+    async def _safe_rollback(tx: asyncpg.Transaction) -> None:
+        """Best-effort rollback even if cancellation/error is in-flight."""
+        with contextlib.suppress(Exception):
+            await asyncio.shield(tx.rollback())
         
     @classmethod
     def track_query(cls):
@@ -175,13 +187,13 @@ class Transaction:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
             # Exception occurred, rollback
-            await self.tx.rollback()
+            await DBConnectionManager._safe_rollback(self.tx)
             DBConnectionManager.track_transaction_rollback()
             logger.debug(f"Transaction rolled back due to: {exc_val}")
             return False
         else:
             # No exception, commit
-            await self.tx.commit()
+            await DBConnectionManager._safe_commit(self.tx)
             DBConnectionManager.track_transaction_commit()
             return True
 
@@ -230,14 +242,14 @@ class TransactionContext:
         try:
             if exc_type is not None:
                 # Exception occurred, rollback
-                await self.tx.rollback()
+                await DBConnectionManager._safe_rollback(self.tx)
                 DBConnectionManager.track_transaction_rollback()
                 logger.debug(f"Transaction rolled back due to: {exc_val}")
             else:
                 # No exception, commit
-                await self.tx.commit()
+                await DBConnectionManager._safe_commit(self.tx)
                 DBConnectionManager.track_transaction_commit()
-                
+
                 # Log long-running transactions
                 elapsed = time.time() - self.start_time
                 if elapsed > 1.0:  # More than 1 second
@@ -282,11 +294,11 @@ async def execute_transaction(func, *args, readonly: bool = False, **kwargs) -> 
         
         try:
             result = await func(conn, *args, **kwargs)
-            await tx.commit()
+            await DBConnectionManager._safe_commit(tx)
             DBConnectionManager.track_transaction_commit()
             return result
         except Exception as e:
-            await tx.rollback()
+            await DBConnectionManager._safe_rollback(tx)
             DBConnectionManager.track_transaction_rollback()
             logger.debug(f"Transaction rolled back due to: {e}")
             raise
@@ -314,11 +326,11 @@ def with_transaction(func):
                 
                 try:
                     result = await func(*args, conn=db_conn, **kwargs)
-                    await tx.commit()
+                    await DBConnectionManager._safe_commit(tx)
                     DBConnectionManager.track_transaction_commit()
                     return result
                 except Exception as e:
-                    await tx.rollback()
+                    await DBConnectionManager._safe_rollback(tx)
                     DBConnectionManager.track_transaction_rollback()
                     logger.debug(f"Transaction rolled back due to: {e}")
                     raise
