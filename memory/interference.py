@@ -10,6 +10,7 @@ import openai
 import numpy as np
 
 from .connection import with_transaction, TransactionContext
+from db.connection import get_db_connection_context
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
 
 logger = logging.getLogger("memory_interference")
@@ -345,7 +346,7 @@ class MemoryInterferenceManager:
         
         return result
     
-    @with_transaction
+    # Split compute vs persist to avoid holding a pooled conn during LLM
     async def generate_blended_memory(self,
                                     entity_type: str,
                                     entity_id: int,
@@ -367,23 +368,17 @@ class MemoryInterferenceManager:
         Returns:
             Blended memory information
         """
-        # Get the source memories
-        memory_manager = UnifiedMemoryManager(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            user_id=self.user_id,
-            conversation_id=self.conversation_id
-        )
-        
-        rows = await conn.fetch("""
-            SELECT id, memory_text, significance, emotional_intensity, tags, metadata, timestamp
-            FROM unified_memories
-            WHERE id IN ($1, $2)
-              AND entity_type = $3
-              AND entity_id = $4
-              AND user_id = $5
-              AND conversation_id = $6
-        """, memory1_id, memory2_id, entity_type, entity_id, self.user_id, self.conversation_id)
+        # PHASE 1: quick read of the two memories (own short connection)
+        async with get_db_connection_context() as rd:
+            rows = await rd.fetch("""
+                SELECT id, memory_text, significance, emotional_intensity, tags, metadata, timestamp
+                  FROM unified_memories
+                 WHERE id IN ($1, $2)
+                   AND entity_type = $3
+                   AND entity_id = $4
+                   AND user_id = $5
+                   AND conversation_id = $6
+            """, memory1_id, memory2_id, entity_type, entity_id, self.user_id, self.conversation_id)
         
         if len(rows) < 2:
             return {"error": "One or both source memories not found"}
@@ -439,7 +434,13 @@ class MemoryInterferenceManager:
             # Default blend with GPT
             blended_text = await self._blend_with_gpt(memory1["text"], memory2["text"])
         
-        # Calculate blended properties
+        # PHASE 2: LLM finished; now calculate props and persist in a tiny txn
+        memory_manager = UnifiedMemoryManager(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id
+        )
         blended_significance = max(memory1["significance"], memory2["significance"])
         blended_emotion = max(memory1["emotional_intensity"], memory2["emotional_intensity"])
         
@@ -469,25 +470,28 @@ class MemoryInterferenceManager:
             timestamp=max(memory1["timestamp"], memory2["timestamp"])  # Use the more recent timestamp
         )
         
-        blended_id = await memory_manager.add_memory(blended_memory, conn=conn)
-        
+        # Persist the new memory in a short transaction
+        async with TransactionContext() as wconn:
+            blended_id = await memory_manager.add_memory(blended_memory, conn=wconn)
+
         # Mark source memories as contributing to a blend
-        for memory in memories:
-            metadata = memory["metadata"]
-            if "contributed_to_blends" not in metadata:
-                metadata["contributed_to_blends"] = []
-                
-            metadata["contributed_to_blends"].append({
-                "blend_id": blended_id,
-                "blend_type": blend_method,
-                "date": datetime.now().isoformat()
-            })
-            
-            await conn.execute("""
-                UPDATE unified_memories
-                SET metadata = $1
-                WHERE id = $2
-            """, json.dumps(metadata), memory["id"])
+        async with TransactionContext() as wconn2:
+            for memory in memories:
+                metadata = memory["metadata"]
+                if "contributed_to_blends" not in metadata:
+                    metadata["contributed_to_blends"] = []
+
+                metadata["contributed_to_blends"].append({
+                    "blend_id": blended_id,
+                    "blend_type": blend_method,
+                    "date": datetime.now().isoformat()
+                })
+
+                await wconn2.execute("""
+                    UPDATE unified_memories
+                       SET metadata = $1
+                     WHERE id = $2
+                """, json.dumps(metadata), memory["id"])
         
         return {
             "blended_memory_id": blended_id,
