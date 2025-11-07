@@ -1,7 +1,6 @@
 # nyx/core/sync/nyx_sync_daemon.py
 
 import asyncio
-import asyncpg
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -13,14 +12,12 @@ from nyx.nyx_agent import (
 )
 from agents import RunContextWrapper
 from nyx.user_model_sdk import UserModelManager
+from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
-DB_DSN = "postgresql://nyx_user:your_password@localhost/nyx_db"
-
 class NyxSyncDaemon:
-    def __init__(self, db_dsn=DB_DSN):
-        self.db_dsn = db_dsn
+    def __init__(self):
         self.interval_seconds = 60  # configurable polling time
         self._last_sync_time: Optional[datetime] = None
         self._sync_status: Dict[str, Any] = {
@@ -48,47 +45,44 @@ class NyxSyncDaemon:
 
     async def run_sync_cycle(self):
         logger.info("Running Nyx Sync Daemon cycle...")
-        conn = await asyncpg.connect(dsn=self.db_dsn)
-
         try:
-            # Reset sync counters
-            self._systems_synced = 0
-            
-            # --- Strategy Injection ---
-            active_strategies = await conn.fetch("""
-                SELECT * FROM nyx1_strategy_injections
-                WHERE status = 'active'
-                AND (expires_at IS NULL OR expires_at > NOW())
-            """)
-            
-            self._sync_status["pending_strategies"] = len(active_strategies)
+            async with get_db_connection_context() as conn:
+                # Reset sync counters
+                self._systems_synced = 0
 
-            for strategy in active_strategies:
-                await self.inject_strategy(strategy, conn)
-                self._systems_synced += 1
+                # --- Strategy Injection ---
+                active_strategies = await conn.fetch("""
+                    SELECT * FROM nyx1_strategy_injections
+                    WHERE status = 'active'
+                    AND (expires_at IS NULL OR expires_at > NOW())
+                """)
 
-            # --- Scene Templates ---
-            active_scenes = await conn.fetch("""
-                SELECT * FROM nyx1_scene_templates
-                WHERE active = TRUE
-            """)
-            
-            self._sync_status["pending_scenes"] = len(active_scenes)
+                self._sync_status["pending_strategies"] = len(active_strategies)
 
-            for scene in active_scenes:
-                await self.inject_scene(scene, conn)
-                self._systems_synced += 1
+                for strategy in active_strategies:
+                    await self.inject_strategy(strategy, conn)
+                    self._systems_synced += 1
 
-            # Update sync status
-            self._last_sync_time = datetime.now()
-            self._sync_status["last_sync"] = self._last_sync_time.isoformat()
-            self._sync_status["out_of_sync"] = False
+                # --- Scene Templates ---
+                active_scenes = await conn.fetch("""
+                    SELECT * FROM nyx1_scene_templates
+                    WHERE active = TRUE
+                """)
 
-        except Exception as e:
+                self._sync_status["pending_scenes"] = len(active_scenes)
+
+                for scene in active_scenes:
+                    await self.inject_scene(scene, conn)
+                    self._systems_synced += 1
+
+                # Update sync status
+                self._last_sync_time = datetime.now()
+                self._sync_status["last_sync"] = self._last_sync_time.isoformat()
+                self._sync_status["out_of_sync"] = False
+
+        except Exception:
             self._sync_status["out_of_sync"] = True
             raise
-        finally:
-            await conn.close()
 
     async def get_sync_status(self) -> Dict[str, Any]:
         """Return current sync status for the workspace adapter"""
