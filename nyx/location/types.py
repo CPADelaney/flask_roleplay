@@ -2,12 +2,73 @@
 from __future__ import annotations
 
 import os
+import re
+import string
 from dataclasses import MISSING, dataclass, field, fields
-from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, cast
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, cast
 
 DEFAULT_REALM = os.getenv("NYX_DEFAULT_REALM", "Prime Material")
 
 Scope = Literal["real", "fictional"]
+
+_DELIMITER_PATTERN = re.compile(r"\b(within|in)\b", re.IGNORECASE)
+_PUNCTUATION_STRIP = string.whitespace + string.punctuation + "“”‘’–—"
+
+
+def _clean_segment(value: str) -> str:
+    return value.strip(_PUNCTUATION_STRIP)
+
+
+def parse_location_chain(raw: str) -> Tuple[str, List[str]]:
+    """Split a location label into a leaf name and parent chain.
+
+    The input is trimmed of leading/trailing punctuation, then repeatedly
+    partitioned on the last case-insensitive occurrence of "in"/"within". Each
+    extracted segment becomes a parent, collected from nearest to farthest
+    ancestor with duplicates removed case-insensitively. The remainder becomes
+    the leaf display name. Strings without the delimiter are returned unchanged
+    with an empty parent list.
+    """
+
+    if not isinstance(raw, str):
+        raw = str(raw)
+
+    working = _clean_segment(raw)
+    if not working:
+        return "", []
+
+    parents: List[str] = []
+    while True:
+        matches = list(_DELIMITER_PATTERN.finditer(working))
+        if not matches:
+            break
+        last_match = matches[-1]
+        left = working[: last_match.start()]
+        right = working[last_match.end() :]
+        parent_candidate = _clean_segment(right)
+        if not parent_candidate:
+            break
+        parents.append(parent_candidate)
+        working = _clean_segment(left)
+        if not working:
+            break
+
+    leaf = _clean_segment(working) if working else ""
+    parents.reverse()
+
+    deduped_parents: List[str] = []
+    seen: set[str] = set()
+    for parent in parents:
+        key = parent.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_parents.append(parent)
+
+    if not leaf:
+        leaf = _clean_segment(raw)
+
+    return leaf, deduped_parents
 
 PlaceLevel = Literal[
     "world",
@@ -35,6 +96,19 @@ class Place:
     lon: Optional[float] = None
     address: Dict[str, Any] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.meta, dict):
+            self.meta = dict(self.meta or {})  # type: ignore[arg-type]
+
+        source_label = self.meta.get("display_name") or self.name
+        leaf, parent_chain = parse_location_chain(source_label or "")
+
+        self.name = leaf
+        self.meta["display_name"] = leaf
+
+        if parent_chain:
+            self.meta.setdefault("parents", parent_chain)
 
 
 @dataclass
@@ -369,6 +443,7 @@ __all__ = [
     "DEFAULT_REALM",
     "Candidate",
     "Location",
+    "parse_location_chain",
     "Place",
     "PlaceEdge",
     "PlaceLevel",
