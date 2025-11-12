@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,16 @@ def _load_place_enrichment(monkeypatch: pytest.MonkeyPatch):
 
     stub_types = types.ModuleType("nyx.location.types")
 
+    @dataclass
+    class GeoAnchor:  # pragma: no cover - mirrors production dataclass shape
+        lat: float | None = None
+        lon: float | None = None
+        neighborhood: str | None = None
+        city: str | None = None
+        region: str | None = None
+        country: str | None = None
+        label: str | None = None
+
     class Anchor:  # pragma: no cover - minimal
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
@@ -122,6 +133,7 @@ def _load_place_enrichment(monkeypatch: pytest.MonkeyPatch):
             self.operations = operations or []
 
     stub_types.Anchor = Anchor  # type: ignore[attr-defined]
+    stub_types.GeoAnchor = GeoAnchor  # type: ignore[attr-defined]
     stub_types.Place = Place  # type: ignore[attr-defined]
     stub_types.ResolveResult = ResolveResult  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nyx.location.types", stub_types)
@@ -150,3 +162,54 @@ def test_fictional_fallback_accepts_trace_id(monkeypatch: pytest.MonkeyPatch):
     result = module.fictional_fallback.run(payload={}, trace_id="trace-456")
 
     assert result is None
+
+
+def test_enqueue_serializes_dataclass_hints(monkeypatch: pytest.MonkeyPatch):
+    module = _load_place_enrichment(monkeypatch)
+
+    types_mod = sys.modules["nyx.location.types"]
+    query_mod = sys.modules["nyx.location.query"]
+
+    query = query_mod.PlaceQuery(
+        raw_text="Travel to park",
+        normalized="travel to park",
+        is_travel=False,
+        target="Travel to park",
+        transport_hint=None,
+    )
+
+    geo_hint = types_mod.GeoAnchor(lat=10.0, lon=20.0, label="Park")
+    anchor = types_mod.Anchor(
+        scope="real",
+        label="Origin",
+        lat=1.0,
+        lon=2.0,
+        primary_city="Metropolis",
+        region="Central",
+        country="Example",
+        world_name="Prime",
+        hints={"geo": geo_hint},
+    )
+
+    result = types_mod.ResolveResult(status="ok", candidates=[])
+
+    module.enqueue(
+        user_id="user-1",
+        conversation_id="conv-1",
+        query=query,
+        anchor=anchor,
+        result=result,
+    )
+
+    assert hasattr(module.enrich, "last_call")
+    _, kwargs = module.enrich.last_call
+    payload = kwargs["kwargs"]["payload"]
+
+    anchor_payload = payload["anchor"]
+    hints_payload = anchor_payload["hints"]
+
+    assert isinstance(hints_payload, dict)
+    assert isinstance(hints_payload.get("geo"), dict)
+    assert hints_payload["geo"]["lat"] == 10.0
+    assert hints_payload["geo"]["lon"] == 20.0
+    assert hints_payload["geo"]["label"] == "Park"
