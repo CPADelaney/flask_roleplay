@@ -94,6 +94,73 @@ class _DeferredConnection:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_resilient_wrapper_tracks_pending_tasks(monkeypatch, anyio_backend):
+    """Ensure resilient wrapper registers and cleans up pending operations during cancellation."""
+
+    isolated_state = db_connection.GlobalPoolState()
+    monkeypatch.setattr(db_connection, "_state", isolated_state)
+
+    class _BlockingPool:
+        async def acquire(self):
+            raise AssertionError("acquire should not be called in this test")
+
+        async def release(self, conn, timeout=None):
+            return None
+
+    class _BlockingConnection:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.block_event = asyncio.Event()
+            self.cancelled = False
+
+        async def fetch(self, *args, **kwargs):
+            self.started.set()
+            try:
+                await self.block_event.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    pool = _BlockingPool()
+    raw_conn = _BlockingConnection()
+    conn_id = id(raw_conn)
+    ops_lock = isolated_state.get_connection_ops_lock()
+
+    async with ops_lock:
+        isolated_state.connection_pending_ops[conn_id] = []
+
+    wrapped = db_connection._ResilientConnectionWrapper(
+        pool,
+        raw_conn,
+        conn_id,
+        ops_lock,
+    )
+
+    wait_task = asyncio.create_task(
+        asyncio.wait_for(wrapped.fetch("SELECT 1"), timeout=0.1)
+    )
+
+    await raw_conn.started.wait()
+
+    async with ops_lock:
+        pending_ops = list(isolated_state.connection_pending_ops[conn_id])
+
+    assert len(pending_ops) == 1
+    tracked_task = pending_ops[0]
+    assert isinstance(tracked_task, asyncio.Task)
+    assert not tracked_task.done()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await wait_task
+
+    assert raw_conn.cancelled is True
+
+    async with ops_lock:
+        assert isolated_state.connection_pending_ops.get(conn_id) == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_pool_from_dead_loop_is_terminated(monkeypatch, caplog, anyio_backend):
     """Ensure pools owned by closed loops are terminated without asyncpg loop errors."""
 

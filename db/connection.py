@@ -669,8 +669,20 @@ class _ResilientConnectionWrapper:
         max_attempts = 2
         
         while attempt < max_attempts:
+            task: Optional[asyncio.Task] = None
+            registered_conn_id: Optional[int] = None
             try:
-                return await method(*args, **kwargs)
+                task = asyncio.create_task(method(*args, **kwargs))
+                registered_conn_id = self._conn_id
+
+                async with self._ops_lock:
+                    pending_ops = _state.connection_pending_ops.get(registered_conn_id)
+                    if pending_ops is not None:
+                        pending_ops.append(task)
+                    else:
+                        registered_conn_id = None
+
+                return await task
             except AttributeError as exc:
                 if not _is_asyncpg_waiter_cancel_bug(exc) or attempt >= max_attempts - 1:
                     raise
@@ -702,6 +714,21 @@ class _ResilientConnectionWrapper:
                     method = getattr(self._conn, name)
                     continue
                 raise
+            finally:
+                if task is not None and registered_conn_id is not None:
+                    try:
+                        async with self._ops_lock:
+                            pending_ops = _state.connection_pending_ops.get(registered_conn_id)
+                            if pending_ops is not None:
+                                try:
+                                    pending_ops.remove(task)
+                                except ValueError:
+                                    pass
+                    except Exception:
+                        logger.debug(
+                            "Failed to remove task from pending ops for connection %s", registered_conn_id,
+                            exc_info=True,
+                        )
     
     async def _refresh_connection(self) -> None:
         """
