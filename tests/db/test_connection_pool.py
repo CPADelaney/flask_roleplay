@@ -256,6 +256,43 @@ async def test_setup_connection_registers_by_default(monkeypatch, anyio_backend)
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_setup_connection_respects_registration_marker(monkeypatch, anyio_backend):
+    """setup_connection skips registration when the connection is already marked."""
+
+    monkeypatch.delenv("DB_REGISTER_VECTOR", raising=False)
+
+    register_calls = {"count": 0}
+
+    async def fake_register(
+        conn,
+        *,
+        setup_timeout: float,
+        max_retries: int,
+        initial_retry_delay: float,
+    ) -> None:
+        register_calls["count"] += 1
+
+    monkeypatch.setattr(
+        db_connection,
+        "_register_vector_with_retry",
+        fake_register,
+    )
+
+    conn = _DummyConnection()
+
+    await db_connection.setup_connection(conn)
+
+    assert register_calls["count"] == 1
+    assert getattr(conn, "_pgvector_registered", False) is True
+
+    await db_connection.setup_connection(conn)
+
+    assert register_calls["count"] == 1
+    assert getattr(conn, "_pgvector_registered", False) is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_close_existing_pool_handles_terminate_runtime_error(monkeypatch, anyio_backend):
     """close_existing_pool treats RuntimeError("Event loop is closed") from terminate as graceful."""
 
