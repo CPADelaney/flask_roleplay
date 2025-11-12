@@ -610,10 +610,14 @@ class NyxAgentSDK:
         meta["_deadline"] = deadline
         if meta.get("timeout_profile"):
             logger.debug(
-                "[SDK-%s] Timeout profile %r resolved to %.2fs", trace_id, meta.get("timeout_profile"), timeout_budget
+                "[SDK-%s] Timeout profile %r resolved to %.2fs",
+                trace_id,
+                meta.get("timeout_profile"),
+                timeout_budget,
             )
         safety_margin = float(getattr(self.config, "safety_margin_seconds", 1.0))
         min_step = float(getattr(self.config, "min_step_seconds", 0.25))
+
         def _time_left() -> float:
             return max(min_step, deadline - time.monotonic())
 
@@ -636,7 +640,7 @@ class NyxAgentSDK:
                 logger.info(f"[SDK-{trace_id}] Cache hit")
                 return cached
 
-            # --- (1) Optional pre-moderation (unchanged) ---
+            # --- (1) Optional pre-moderation ---
             if getattr(self.config, "pre_moderate_input", False) and content_moderation_guardrail:
                 try:
                     verdict = await content_moderation_guardrail(message)
@@ -653,32 +657,116 @@ class NyxAgentSDK:
                         self._write_cache(cache_key, resp)
                         return resp
                 except Exception:
-                    logger.debug(f"[SDK-{trace_id}] pre-moderation failed softly", exc_info=True)
+                    logger.debug(
+                        f"[SDK-{trace_id}] pre-moderation failed softly",
+                        exc_info=True,
+                    )
 
-            # --- (2) Fast feasibility gate (unchanged except logging) ---
+            # --- (2) Fast feasibility gate (now softened for movement/location) ---
             feas = None
             try:
                 from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
+
                 feas = await assess_action_feasibility_fast(
                     user_id=int(user_id),
                     conversation_id=int(conversation_id),
-                    text=message
+                    text=message,
                 )
                 meta["feasibility"] = feas
             except ImportError as e:
                 logger.error(f"[SDK-{trace_id}] Feasibility module not found: {e}")
             except Exception as e:
-                logger.error(f"[SDK-{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
+                logger.error(
+                    f"[SDK-{trace_id}] Fast feasibility failed softly: {e}",
+                    exc_info=True,
+                )
 
             if isinstance(feas, dict):
-                overall = feas.get("overall", {})
+                overall = feas.get("overall", {}) or {}
                 feasible_flag = overall.get("feasible")
                 strategy = (overall.get("strategy") or "").lower()
 
-                if feasible_flag is False and strategy in {"deny", "defer", "ask"}:
+                # ---------- NEW: robust, future-proof softening ----------
+                def _is_soft_violation(rule: str) -> bool:
+                    """
+                    Treat purely *absence / resolver* style violations as soft:
+                    - npc_absent, item_absent, anything containing 'absent'
+                    - location_resolver:* (real/fictional resolver couldn't ground it yet)
+                    These should NOT hard-block; router + orchestrator can often fix them.
+                    """
+                    r = str(rule or "").lower()
+                    if not r:
+                        return False
+                    if r.startswith("location_resolver:"):
+                        return True
+                    if "absent" in r:
+                        return True
+                    if r in {"npc_absent", "item_absent"}:
+                        return True
+                    return False
+
+                def _is_soft_location_only(feas_payload: Dict[str, Any]) -> bool:
+                    """
+                    Returns True when ALL violating intents are:
+                      - movement / mundane_action (or uncategorized),
+                      - and ONLY have soft 'absent / location_resolver:*' style violations.
+                    Those should be treated as advisory, not as pre-orchestrator hard blocks.
+                    """
+                    per = feas_payload.get("per_intent") or []
+                    if not per:
+                        return False
+
+                    saw_soft = False
+
+                    for intent in per:
+                        if not isinstance(intent, dict):
+                            continue
+
+                        cats = set(intent.get("categories") or [])
+                        violations = intent.get("violations") or []
+                        rules = {
+                            str(v.get("rule") or "").lower()
+                            for v in violations
+                            if isinstance(v, dict)
+                        }
+                        if not rules:
+                            continue
+
+                        # parse_error or explicit "established_impossibility" remain hard
+                        if "parse_error" in rules or "established_impossibility" in rules:
+                            return False
+
+                        all_soft = all(_is_soft_violation(r) for r in rules)
+                        movement_like = (
+                            "movement" in cats
+                            or "mundane_action" in cats
+                            or not cats
+                        )
+
+                        if all_soft and movement_like:
+                            saw_soft = True
+                        else:
+                            # Mixed or non-movement + hard violations → treat as hard
+                            return False
+
+                    return saw_soft
+
+                soft_location_only = _is_soft_location_only(feas)
+
+                # Only hard-block when:
+                #   - overall says it's not feasible, AND
+                #   - strategy is deny/defer/ask, AND
+                #   - it's NOT just a soft movement/location issue
+                if (
+                    feasible_flag is False
+                    and strategy in {"deny", "defer", "ask"}
+                    and not soft_location_only
+                ):
                     per = feas.get("per_intent") or []
                     first = per[0] if per and isinstance(per[0], dict) else {}
+
                     if strategy == "defer":
+                        # Defer: enqueue background resolution and give user a narratively flavored "working on it"
                         defer_context, extra_meta = extract_defer_details(feas)
                         leads = extra_meta.get("leads", [])
                         guidance = None
@@ -687,19 +775,40 @@ class NyxAgentSDK:
                                 defer_context, trace_id, timeout=_time_left()
                             )
                         if not guidance:
-                            guidance = build_defer_fallback_text(defer_context) if defer_context else \
-                                "Oh, pet, slow down. Reality keeps its heel on you until you ground that attempt."
+                            guidance = build_defer_fallback_text(
+                                defer_context
+                            ) if defer_context else (
+                                "Reality is processing that attempt in the background."
+                            )
                         alternatives = leads
-                    elif strategy == "ask":
-                        guidance = first.get("narrator_guidance") or "I need a bit more detail to ground that."
-                        alternatives = first.get("suggested_alternatives") or feas.get("choices") or []
-                        extra_meta = {"violations": first.get("violations") or []}
-                    else:
-                        guidance = first.get("narrator_guidance") or "That can't happen here."
-                        alternatives = first.get("suggested_alternatives") or []
-                        extra_meta = {"violations": first.get("violations") or []}
 
-                    alt_list = list(alternatives) if isinstance(alternatives, (list, tuple)) else []
+                    elif strategy == "ask":
+                        guidance = first.get("narrator_guidance") or (
+                            "I need a bit more detail to ground that."
+                        )
+                        alternatives = (
+                            first.get("suggested_alternatives")
+                            or feas.get("choices")
+                            or []
+                        )
+                        extra_meta = {
+                            "violations": first.get("violations") or []
+                        }
+
+                    else:  # "deny" and not soft_location_only
+                        guidance = first.get("narrator_guidance") or (
+                            "That can't happen here."
+                        )
+                        alternatives = first.get("suggested_alternatives") or []
+                        extra_meta = {
+                            "violations": first.get("violations") or []
+                        }
+
+                    alt_list = (
+                        list(alternatives)
+                        if isinstance(alternatives, (list, tuple))
+                        else []
+                    )
 
                     metadata_out = {
                         "action_blocked": strategy != "ask",
@@ -722,7 +831,10 @@ class NyxAgentSDK:
                     self._write_cache(cache_key, resp)
                     return resp
 
-                logger.info(f"[SDK-{trace_id}] Feasibility: feasible={feasible_flag} strategy={strategy}")
+                logger.info(
+                    f"[SDK-{trace_id}] Feasibility: feasible={feasible_flag} "
+                    f"strategy={strategy} soft_location_only={soft_location_only}"
+                )
 
             # --- turn_index, scene_tags, stimuli (unchanged) ---
             if not hasattr(self, "_turn_indices"):
@@ -735,19 +847,27 @@ class NyxAgentSDK:
             if "scene_tags" not in meta:
                 try:
                     if hasattr(self, "scene_manager"):
-                        current_scene = self.scene_manager.get_current_scene(conversation_id)
+                        current_scene = self.scene_manager.get_current_scene(
+                            conversation_id
+                        )
                         if current_scene:
                             tags = list(current_scene.get("tags", []))
                             if tags:
                                 meta["scene_tags"] = tags
                                 meta["scene"] = {"tags": tags}
                 except Exception:
-                    logger.debug(f"[SDK-{trace_id}] scene tag lookup failed softly", exc_info=True)
+                    logger.debug(
+                        f"[SDK-{trace_id}] scene tag lookup failed softly",
+                        exc_info=True,
+                    )
 
             def _compile_stimuli_regex() -> Optional[re.Pattern]:
                 tokens = None
                 try:
-                    from logic.addiction_system_sdk import AddictionTriggerConfig  # type: ignore
+                    from logic.addiction_system_sdk import (
+                        AddictionTriggerConfig,
+                    )  # type: ignore
+
                     cfg = AddictionTriggerConfig()
                     vocab = set()
                     for vs in cfg.stimuli_affinity.values():
@@ -755,20 +875,47 @@ class NyxAgentSDK:
                     tokens = sorted(vocab)
                 except Exception:
                     tokens = [
-                        "feet","toes","ankle","barefoot","sandals","flipflops","heels",
-                        "perfume","musk","sweat","locker","gym","laundry","socks",
-                        "ankle_socks","knee_highs","thigh_highs","stockings",
-                        "hips","ass","shorts","tight_skirt",
-                        "snicker","laugh","eye_roll","dismissive",
-                        "order","command","kneel","obedience",
-                        "perspiration","moist"
+                        "feet",
+                        "toes",
+                        "ankle",
+                        "barefoot",
+                        "sandals",
+                        "flipflops",
+                        "heels",
+                        "perfume",
+                        "musk",
+                        "sweat",
+                        "locker",
+                        "gym",
+                        "laundry",
+                        "socks",
+                        "ankle_socks",
+                        "knee_highs",
+                        "thigh_highs",
+                        "stockings",
+                        "hips",
+                        "ass",
+                        "shorts",
+                        "tight_skirt",
+                        "snicker",
+                        "laugh",
+                        "eye_roll",
+                        "dismissive",
+                        "order",
+                        "command",
+                        "kneel",
+                        "obedience",
+                        "perspiration",
+                        "moist",
                     ]
                 escaped = []
-                for t in tokens:
-                    if "_" in t:
-                        escaped.append(r"\b" + re.escape(t).replace(r"\_", r"[-_ ]") + r"\b")
+                for tkn in tokens:
+                    if "_" in tkn:
+                        escaped.append(
+                            r"\b" + re.escape(tkn).replace(r"\_", r"[-_ ]") + r"\b"
+                        )
                     else:
-                        escaped.append(r"\b" + re.escape(t) + r"\b")
+                        escaped.append(r"\b" + re.escape(tkn) + r"\b")
                 return re.compile(r"(?:%s)" % "|".join(escaped), flags=re.IGNORECASE)
 
             def _extract_stimuli(text: str) -> List[str]:
@@ -778,10 +925,19 @@ class NyxAgentSDK:
                     setattr(self, "_stimuli_rx", rx)
                 if not rx:
                     return []
-                return sorted({m.group(0).lower().replace("-", "_").replace(" ", "_") for m in rx.finditer(text or "")})
+                return sorted(
+                    {
+                        m.group(0).lower()
+                        .replace("-", "_")
+                        .replace(" ", "_")
+                        for m in rx.finditer(text or "")
+                    }
+                )
 
             msg_stimuli = _extract_stimuli(message)
-            meta_stimuli = {s.lower() for s in meta.get("stimuli", []) if isinstance(s, str)}
+            meta_stimuli = {
+                s.lower() for s in meta.get("stimuli", []) if isinstance(s, str)
+            }
             combined_stimuli = sorted(set(msg_stimuli) | meta_stimuli)
             if combined_stimuli:
                 meta["stimuli"] = combined_stimuli
@@ -798,11 +954,14 @@ class NyxAgentSDK:
             resp.processing_time = resp.processing_time or (time.time() - t0)
             resp.trace_id = resp.trace_id or trace_id
 
-            # **Normalize location again on the way out (orchestrator may have changed it)**
+            # Normalize location on the way out
             try:
                 _normalize_location_meta_inplace(resp.metadata)
             except Exception:
-                logger.debug(f"[SDK-{trace_id}] output location normalization failed softly", exc_info=True)
+                logger.debug(
+                    f"[SDK-{trace_id}] output location normalization failed softly",
+                    exc_info=True,
+                )
 
             # glean stimuli from generated narrative
             try:
@@ -810,25 +969,44 @@ class NyxAgentSDK:
                     out_stimuli = _extract_stimuli(resp.narrative)
                     if out_stimuli:
                         resp.metadata.setdefault("observed_stimuli", [])
-                        resp.metadata["observed_stimuli"] = sorted({
-                            *resp.metadata["observed_stimuli"], *out_stimuli
-                        })
+                        resp.metadata["observed_stimuli"] = sorted(
+                            {
+                                *resp.metadata["observed_stimuli"],
+                                *out_stimuli,
+                            }
+                        )
             except Exception:
-                logger.debug(f"[SDK-{trace_id}] output stimuli glean failed softly", exc_info=True)
+                logger.debug(
+                    f"[SDK-{trace_id}] output stimuli glean failed softly",
+                    exc_info=True,
+                )
 
             # --- post moderation ---
             if getattr(self.config, "post_moderate_output", False) and content_moderation_guardrail:
                 try:
-                    verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
+                    verdict = await content_moderation_guardrail(
+                        resp.narrative, is_output=True
+                    )
                     resp.metadata["moderation_post"] = verdict
                     if verdict and verdict.get("blocked"):
                         if getattr(self.config, "redact_on_moderation_block", False):
-                            resp.narrative = verdict.get("safe_text") or "Content redacted."
+                            resp.narrative = (
+                                verdict.get("safe_text") or "Content redacted."
+                            )
                             resp.metadata["moderated"] = True
                         else:
-                            resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
+                            resp = self._blocked_response(
+                                "Content cannot be displayed.",
+                                trace_id,
+                                t0,
+                                stage="post",
+                                details=verdict,
+                            )
                 except Exception:
-                    logger.debug("post-moderation failed (non-fatal)", exc_info=True)
+                    logger.debug(
+                        "post-moderation failed (non-fatal)",
+                        exc_info=True,
+                    )
 
             # --- response filter (optional) ---
             if getattr(self, "_filter_class", None) and resp.narrative:
@@ -840,7 +1018,9 @@ class NyxAgentSDK:
                     filtered = filter_instance.filter_text(resp.narrative)
                     if filtered != resp.narrative:
                         resp.narrative = filtered
-                        resp.metadata.setdefault("filters", {})["response_filter"] = True
+                        resp.metadata.setdefault("filters", {})[
+                            "response_filter"
+                        ] = True
                 except Exception:
                     logger.debug("ResponseFilter failed softly", exc_info=True)
 
@@ -854,29 +1034,37 @@ class NyxAgentSDK:
 
             # --- telemetry/maintenance/fanout ---
             await self._maybe_log_perf(resp)
-            # If we're out of budget, skip non-essential fanout
             if _time_left() > safety_margin:
                 await self._maybe_enqueue_maintenance(resp, conversation_id)
-                await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
+                await self._fanout_post_turn(
+                    resp, user_id, conversation_id, trace_id
+                )
 
-            # **Invalidate aggregator/unified cache if we changed world state**
+            # Invalidate unified/aggregator cache if we actually touched world state
             try:
-                world_changed = bool(resp.world_state) \
-                    or bool(resp.metadata.get("universal_updates")) \
-                    or bool(resp.metadata.get("canon_event_applied")) \
-                    or bool(resp.metadata.get("action_deferred"))  # scene sealing etc can alter context
+                world_changed = bool(resp.world_state) or bool(
+                    resp.metadata.get("universal_updates")
+                ) or bool(resp.metadata.get("canon_event_applied")) or bool(
+                    resp.metadata.get("action_deferred")
+                )
                 if world_changed:
                     await _invalidate_context_cache_safe(user_id, conversation_id)
-                    # also clear our tiny per-conversation memoization window
                     self._clear_result_cache_for_conversation(conversation_id)
             except Exception:
-                logger.debug(f"[SDK-{trace_id}] cache invalidation failed softly", exc_info=True)
+                logger.debug(
+                    f"[SDK-{trace_id}] cache invalidation failed softly",
+                    exc_info=True,
+                )
 
             self._write_cache(cache_key, resp)
             return resp
 
         except Exception as e:
-            logger.error("orchestrator path failed; attempting fallback. err=%s", e, exc_info=True)
+            logger.error(
+                "orchestrator path failed; attempting fallback. err=%s",
+                e,
+                exc_info=True,
+            )
             try:
                 resp = await self._fallback_direct_run(
                     message=message,
@@ -887,19 +1075,32 @@ class NyxAgentSDK:
                     t0=t0,
                 )
 
-                # post moderation/filter/hooks (same as above), omitted here to keep diff tight:
+                # post moderation/filter/hooks as above
                 if getattr(self.config, "post_moderate_output", False) and content_moderation_guardrail:
                     try:
-                        verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
+                        verdict = await content_moderation_guardrail(
+                            resp.narrative, is_output=True
+                        )
                         resp.metadata["moderation_post"] = verdict
                         if verdict and verdict.get("blocked"):
                             if getattr(self.config, "redact_on_moderation_block", False):
-                                resp.narrative = verdict.get("safe_text") or "Content redacted."
+                                resp.narrative = (
+                                    verdict.get("safe_text") or "Content redacted."
+                                )
                                 resp.metadata["moderated"] = True
                             else:
-                                resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
+                                resp = self._blocked_response(
+                                    "Content cannot be displayed.",
+                                    trace_id,
+                                    t0,
+                                    stage="post",
+                                    details=verdict,
+                                )
                     except Exception:
-                        logger.debug("post-moderation failed (non-fatal)", exc_info=True)
+                        logger.debug(
+                            "post-moderation failed (non-fatal)",
+                            exc_info=True,
+                        )
 
                 if getattr(self, "_filter_class", None) and resp.narrative:
                     try:
@@ -910,37 +1111,53 @@ class NyxAgentSDK:
                         filtered = filter_instance.filter_text(resp.narrative)
                         if filtered != resp.narrative:
                             resp.narrative = filtered
-                            resp.metadata.setdefault("filters", {})["response_filter"] = True
+                            resp.metadata.setdefault("filters", {})[
+                                "response_filter"
+                            ] = True
                     except Exception:
-                        logger.debug("ResponseFilter failed softly", exc_info=True)
+                        logger.debug(
+                            "ResponseFilter failed softly", exc_info=True
+                        )
 
                 if getattr(self, "_post_hooks", None):
                     for hook in self._post_hooks:
                         try:
                             resp = await hook(resp)
                         except Exception:
-                            logger.debug("post_hook failed softly", exc_info=True)
+                            logger.debug(
+                                "post_hook failed softly", exc_info=True
+                            )
 
                 await self._maybe_log_perf(resp)
                 if _time_left() > safety_margin:
                     await self._maybe_enqueue_maintenance(resp, conversation_id)
-                    await self._fanout_post_turn(resp, user_id, conversation_id, trace_id)
+                    await self._fanout_post_turn(
+                        resp, user_id, conversation_id, trace_id
+                    )
 
-                # normalize location & invalidate caches on world change
                 try:
                     _normalize_location_meta_inplace(resp.metadata)
-                    world_changed = bool(resp.world_state) or bool(resp.metadata.get("universal_updates"))
+                    world_changed = bool(resp.world_state) or bool(
+                        resp.metadata.get("universal_updates")
+                    )
                     if world_changed:
-                        await _invalidate_context_cache_safe(user_id, conversation_id)
+                        await _invalidate_context_cache_safe(
+                            user_id, conversation_id
+                        )
                         self._clear_result_cache_for_conversation(conversation_id)
                 except Exception:
-                    logger.debug(f"[SDK-{trace_id}] fallback post steps failed softly", exc_info=True)
+                    logger.debug(
+                        f"[SDK-{trace_id}] fallback post steps failed softly",
+                        exc_info=True,
+                    )
 
                 self._write_cache(cache_key, resp)
                 return resp
 
             except Exception:
-                logger.exception(f"[SDK-{trace_id}] Fallback path failed", exc_info=True)
+                logger.exception(
+                    f"[SDK-{trace_id}] Fallback path failed", exc_info=True
+                )
                 raise
 
         except Exception as e:
@@ -957,6 +1174,7 @@ class NyxAgentSDK:
         finally:
             if lock and lock.locked():
                 lock.release()
+
 
 
 
@@ -1052,6 +1270,71 @@ class NyxAgentSDK:
                     context_data=meta,
                 )
 
+    def _is_soft_location_only_violation(feas: Dict[str, Any]) -> bool:
+        """
+        Return True when all violating intents are 'soft' absence / location issues
+        (e.g. npc_absent, item_absent, location_resolver:*) on movement / mundane actions.
+        Those should not cause a hard pre-block; we let the router / resolver handle them.
+        """
+        if not isinstance(feas, dict):
+            return False
+    
+        per = feas.get("per_intent") or []
+        if not per:
+            return False
+    
+        saw_soft = False
+    
+        for intent in per:
+            if not isinstance(intent, dict):
+                continue
+    
+            cats = set(intent.get("categories") or [])
+            violations = intent.get("violations") or []
+    
+            rules = {
+                str(v.get("rule") or "").lower()
+                for v in violations
+                if isinstance(v, dict)
+            }
+            if not rules:
+                continue
+    
+            # Hard reasons that must remain hard
+            if "parse_error" in rules or "established_impossibility" in rules:
+                return False
+    
+            all_soft = True
+            for r in rules:
+                if not r:
+                    continue
+                # location resolver asks / denies
+                if r.startswith("location_resolver:"):
+                    continue
+                # “no NPC / item by that name here”
+                if r in {"npc_absent", "item_absent"}:
+                    continue
+                if "absent" in r:
+                    continue
+                # anything else is not soft
+                all_soft = False
+                break
+    
+            movement_like = (
+                "movement" in cats
+                or "mundane_action" in cats
+                or not cats  # parser gave us nothing, still likely a move
+            )
+    
+            if all_soft and movement_like:
+                saw_soft = True
+            else:
+                # Mixed hard + soft or wrong categories → treat as real deny
+                return False
+    
+        return saw_soft
+
+
     async def _fallback_direct_run(
         self,
         message: str,
@@ -1062,10 +1345,12 @@ class NyxAgentSDK:
         t0: float,
     ) -> NyxResponse:
         """
-        Minimal reproduction of the orchestrator flow using public agent APIs.
+        Minimal reproduction of the orchestrator flow using the public agent APIs.
         Only invoked if the primary path fails and the runtime is available.
-        We avoid importing the class-based assembler; instead we safely coalesce
-        the runner history into a single narrative.
+        This version mirrors the soft-vs-hard feasibility logic from process_user_input:
+        it will NOT hard-deny purely "soft" absence/location violations (npc_absent,
+        item_absent, location_resolver:*, etc.), but will still deny true world-rule
+        or established-impossibility violations.
         """
         if not (RunConfig and RunContextWrapper and nyx_main_agent):
             logger.error("[SDK-%s] Fallback runtime unavailable", trace_id)
@@ -1078,19 +1363,19 @@ class NyxAgentSDK:
         ctx.current_context = (metadata or {}).copy()
         ctx.current_context["user_input"] = message
         _preserve_hydrated_location(ctx.current_context, ctx.current_location)
-        # Adopt absolute deadline if present
+
         import time as _time_mod
-        deadline = (metadata or {}).get("_deadline") or (
+        deadline = metadata.get("_deadline") or (
             _time_mod.monotonic() + self._resolve_timeout_budget(metadata or {})
         )
         min_step = float(getattr(self.config, "min_step_seconds", 0.25))
         safety_margin = float(getattr(self.config, "safety_margin_seconds", 1.0))
+
         def _left() -> float:
             return max(min_step, deadline - _time_mod.monotonic())
 
-        enhanced_input = message
-        feasibility: Optional[Dict[str, Any]] = None
-
+        # ----------------- FAST FEASIBILITY (fallback) -----------------
+        feasibility = None
         if assess_action_feasibility:
             try:
                 feasibility = await assess_action_feasibility(ctx, message)
@@ -1100,27 +1385,99 @@ class NyxAgentSDK:
                     trace_id,
                     (feasibility or {}).get("overall", {}),
                 )
-            except Exception:
-                logger.debug(
-                    "[SDK-%s] fallback feasibility check failed softly",
+            except Exception as e:
+                logger.error(
+                    "[SDK-%s] fallback feasibility check failed softly: %s",
                     trace_id,
+                    e,
                     exc_info=True,
                 )
 
-        if isinstance(feasibility, dict):
-            overall = feasibility.get("overall", {})
-            feasible_flag = overall.get("feasible")
-            strategy = str(overall.get("strategy") or "").lower()
+        def _is_soft_violation(rule: str) -> bool:
+            """
+            Same definition as in process_user_input:
+            treat "absence" / resolver-only issues as soft.
+            """
+            r = str(rule or "").lower()
+            if not r:
+                return False
+            if r.startswith("location_resolver:"):
+                return True
+            if "absent" in r:
+                return True
+            if r in {"npc_absent", "item_absent"}:
+                return True
+            return False
 
-            if feasible_flag is False and strategy == "deny":
+        def _is_soft_location_only(feas: Dict[str, Any]) -> bool:
+            """
+            True if every violating intent is a movement/mundane action whose only
+            violations are soft (npc_absent/item_absent/location_resolver:*).
+            Those should not cause a hard pre-block; we let the agent/orchestrator
+            try to resolve or narratively handle them.
+            """
+            per = feas.get("per_intent") or []
+            if not per:
+                return False
+
+            saw_soft = False
+            for intent in per:
+                if not isinstance(intent, dict):
+                    continue
+                cats = set(intent.get("categories") or [])
+                violations = intent.get("violations") or []
+                rules = {
+                    str(v.get("rule") or "").lower()
+                    for v in violations
+                    if isinstance(v, dict)
+                }
+                if not rules:
+                    continue
+
+                # hard reasons always stay hard
+                if "parse_error" in rules or "established_impossibility" in rules:
+                    return False
+
+                all_soft = all(_is_soft_violation(r) for r in rules)
+                movement_like = (
+                    "movement" in cats
+                    or "mundane_action" in cats
+                    or not cats
+                )
+
+                if all_soft and movement_like:
+                    saw_keep = True
+                    saw_soft = True
+                else:
+                    return False
+
+            return saw_soft
+
+        enhanced_input = message
+
+        if isinstance(feasibility, dict):
+            overall = feasibility.get("overall", {}) or {}
+            feasible_flag = overall.get("feasible")
+            strategy = (overall.get("strategy") or "").lower()
+
+            soft_location_only = _is_soft_location_only(feasibility)
+
+            # HARD DENY ONLY if not soft-location-only
+            if feasible_flag is False and strategy == "deny" and not soft_location_only:
                 per = feasibility.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 violations = first.get("violations", []) or []
-                violation_text = (
-                    violations[0].get("reason")
-                    if violations and isinstance(violations[0], dict)
-                    else "That violates the laws of this reality"
-                )
+                if any(
+                    (isinstance(v, dict) and v.get("rule") == "established_impossibility")
+                    for v in violations
+                ):
+                    violation_text = (
+                        violations[-1].get("reason")
+                        if violations and isinstance(violations[-1], dict)
+                        else "That contradicts something already established."
+                    )
+                else:
+                    violation_text = first.get("narrator_guidance") or "That action can’t occur in this world."
 
                 if record_impossibility:
                     try:
@@ -1136,15 +1493,10 @@ class NyxAgentSDK:
 
                 alternatives = first.get("suggested_alternatives") or []
                 rejection_narrative = (
-                    f"*{first.get('reality_response', 'Reality ripples and refuses.')}*\n\n"
+                    f"{violation_text}\n\n"
+                    "Try something that fits what’s already true about this world, "
+                    "or ask the Narrator for a hint."
                 )
-                rejection_narrative += first.get(
-                    "narrator_guidance", "The world itself resists your attempt."
-                )
-                if alternatives:
-                    rejection_narrative += (
-                        f"\n\n*Perhaps you could {alternatives[0]} instead.*"
-                    )
 
                 choice_payload = [
                     {
@@ -1166,7 +1518,6 @@ class NyxAgentSDK:
                     "action_blocked": True,
                     "block_reason": violation_text,
                     "reality_maintained": True,
-                    "metaphor": first.get("metaphor"),
                     "violations": violations,
                 }
 
@@ -1177,30 +1528,37 @@ class NyxAgentSDK:
                     world_state={},
                     success=True,
                     trace_id=trace_id,
-                    processing_time=(time.time() - t0),
+                    processing_time=(_time_mod.time() - t0),
                 )
 
-            if feasible_flag is False and strategy == "ask":
-                constraints = (feasibility.get("per_intent") or [{}])[0].get(
-                    "violations", []
+            if feasible_flag is False and strategy == "ask" and not soft_location_only:
+                per = feasibility.get("overall") or {}
+                guidance = per.get("narrator_guidance") or "I need a bit more detail to ground that."
+                alternatives = (
+                    per.get("suggested_alternatives")
+                    or feasibility.get("choices")
+                    or []
                 )
-                reason_list = [
-                    v.get("reason", "")
-                    for v in constraints
-                    if isinstance(v, dict) and v.get("reason")
-                ]
-                constraint_text = (
-                    "[REALITY CHECK: This action pushes boundaries. Consider: "
-                    + ", ".join(reason_list)
-                    + ". Describe how it fits within established limits.]"
-                )
-                enhanced_input = f"{constraint_text}\n\n{message}"
                 logger.info("[SDK-%s] Fallback prompting for clarification", trace_id)
+                resp = NyxResponse(
+                    narrative=guidance,
+                    choices=[{"text": alt} for alt in alternatives[:4]],
+                    metadata={
+                        "feasibility": feasibility,
+                        "action_blocked": True,
+                        "block_stage": "fallback_pre_orchestrator",
+                        "strategy": "ask",
+                    },
+                    success=True,
+                    trace_id=trace_id,
+                    processing_time=(_time_mod.time() - t0),
+                )
+                return resp
 
             if feasible_flag is True:
                 if record_possibility:
                     try:
-                        intents = feasibility.get("per_intent", [])
+                        intents = feasibility.get("per_intent") or []
                         if intents:
                             cats = intents[0].get("categories", [])
                             if cats:
@@ -1211,20 +1569,18 @@ class NyxAgentSDK:
                         )
 
                 enhanced_input = (
-                    "[REALITY CHECK: Action is feasible within universe laws.]\n\n" f"{message}"
+                    "[REALITY CHECK: Action is feasible within universe laws.]\n\n"
+                    f"{message}"
                 )
                 logger.info("[SDK-%s] Fallback proceeding with feasible action", trace_id)
 
+        # ----------------- RUN MAIN AGENT (fallback) -----------------
         safe_settings = ModelSettings(strict_tools=False)
         run_config = RunConfig(model_settings=safe_settings, workflow_name="Nyx Fallback")
         runner_context = RunContextWrapper(ctx)
 
         try:
             with _agents_trace("Nyx SDK - Fallback Run"):
-                runner_kwargs = {
-                    "context": runner_context,
-                    "run_config": run_config,
-                }
                 request = LLMRequest(
                     prompt=enhanced_input,
                     agent=nyx_main_agent,
@@ -1232,40 +1588,40 @@ class NyxAgentSDK:
                         "operation": LLMOperation.ORCHESTRATION.value,
                         "path": "sdk_fallback",
                     },
-                    runner_kwargs=runner_kwargs,
+                    runner_kwargs={
+                        "context": runner_context,
+                        "run_config": run_config,
+                    },
                 )
                 result_wrapper = await asyncio.wait_for(
                     _execute_llm(request),
-                    timeout=max(0.5, _left() - safety_margin)
+                    timeout=max(0.5, _left() - safety_margin),
                 )
                 result = result_wrapper.raw
         except Exception:
             logger.exception("[SDK-%s] Fallback Runner invocation failed", trace_id)
             raise
 
-        # 1) Extract best-effort text from the run
+        # Extract narrative
         def _extract_text(obj: Any) -> str:
             for attr in ("final_output", "output_text", "output", "text"):
                 val = getattr(obj, attr, None)
                 if isinstance(val, str) and val.strip():
                     return val
-            # Try messages/history if present
             for attr in ("messages", "history", "events"):
                 seq = getattr(obj, attr, None) or []
-                # look for assistant content blocks
                 for ev in seq:
                     content = ev.get("content") if isinstance(ev, dict) else None
                     if isinstance(content, list):
                         for c in content:
                             if isinstance(c, dict) and c.get("type") in {"output_text", "text"}:
-                                if isinstance(c.get("text"), str):
-                                    return c["text"]
-            # final fallback
-            return str(obj)
+                                txt = c.get("text")
+                                if isinstance(txt, str) and txt.strip():
+                                    return txt
+            return str(obj) if obj is not None else ""
 
         narrative = _extract_text(result) or ""
 
-        # 2) Minimal image/world placeholders to keep API shape
         meta = {
             "world": {},
             "image": {},
@@ -1284,12 +1640,15 @@ class NyxAgentSDK:
             world_state={},
             success=True,
             trace_id=trace_id,
-            processing_time=(time.time() - t0),
+            processing_time=(_time_mod.time() - t0),
         )
         logger.info(
-            "[SDK-%s] Fallback response generated (narrative_len=%d)", trace_id, len(narrative)
+            "[SDK-%s] Fallback response generated (narrative_len=%d)",
+            trace_id,
+            len(narrative),
         )
         return response
+
 
     def _clear_result_cache_for_conversation(self, conversation_id: str) -> None:
         """Remove all cached results for a given conversation id."""
