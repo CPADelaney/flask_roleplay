@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List, Optional
 
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
@@ -55,6 +56,9 @@ def _sanitize_meta(value: Any, *, depth: int = 0, max_depth: int = 5) -> Any:
 
     if depth >= max_depth:
         return None
+
+    if is_dataclass(value):
+        return _sanitize_meta(asdict(value), depth=depth + 1, max_depth=max_depth)
 
     if isinstance(value, dict):
         sanitized: Dict[str, Any] = {}
@@ -244,6 +248,13 @@ def _serialize_query(query: PlaceQuery) -> Dict[str, Any]:
 
 
 def _serialize_anchor(anchor: Anchor) -> Dict[str, Any]:
+    sanitized_hints = _sanitize_meta(anchor.hints or {})
+    if not isinstance(sanitized_hints, dict):
+        if sanitized_hints in (None, {}):
+            sanitized_hints = {}
+        else:
+            sanitized_hints = {"value": sanitized_hints}
+
     return {
         "scope": anchor.scope,
         "label": anchor.label,
@@ -253,7 +264,7 @@ def _serialize_anchor(anchor: Anchor) -> Dict[str, Any]:
         "region": anchor.region,
         "country": anchor.country,
         "world_name": anchor.world_name,
-        "hints": dict(anchor.hints or {}),
+        "hints": sanitized_hints,
     }
 
 
