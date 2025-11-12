@@ -39,7 +39,7 @@ import weakref
 import contextlib
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Optional, Dict, Any, Set, List, Tuple, Union
+from typing import Optional, Dict, Any, Set, List, Tuple, Union, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -58,6 +58,87 @@ from celery.signals import worker_process_init, worker_process_shutdown
 logger = logging.getLogger(__name__)
 
 AsyncpgConnection = Union[asyncpg.Connection, '_ResilientConnectionWrapper']
+
+
+def _get_pgvector_identity(conn: AsyncpgConnection) -> AsyncpgConnection:
+    """Return the underlying connection object used for pgvector registration bookkeeping."""
+
+    # asyncpg.PoolConnectionProxy stores the raw connection in _con
+    proxy_target = getattr(conn, "_con", None)
+    if proxy_target is not None:
+        return proxy_target
+
+    # Our resilient wrapper exposes raw_connection for access to the underlying connection
+    raw = getattr(conn, "raw_connection", None)
+    if raw is not None:
+        return raw
+
+    return conn
+
+
+class _PgvectorRegistrationRegistry:
+    """Weak-reference-backed registry tracking connections with pgvector registered."""
+
+    _SENTINEL = object()
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: Dict[int, object] = {}
+
+    def _finalizer(self, conn_id: int) -> Callable[[weakref.ReferenceType], None]:
+        def _cleanup(_: weakref.ReferenceType) -> None:
+            with self._lock:
+                self._entries.pop(conn_id, None)
+
+        return _cleanup
+
+    def _store_ref(self, base_conn: AsyncpgConnection, conn_id: int) -> object:
+        try:
+            return weakref.ref(base_conn, self._finalizer(conn_id))
+        except TypeError:
+            # Objects that do not support weakrefs (e.g. some C-extension types)
+            # are tracked via a sentinel entry while still avoiding attribute mutation.
+            return self._SENTINEL
+
+    def is_registered(self, conn: AsyncpgConnection) -> bool:
+        base_conn = _get_pgvector_identity(conn)
+        conn_id = id(base_conn)
+
+        with self._lock:
+            ref = self._entries.get(conn_id)
+            if ref is None:
+                return False
+            if ref is self._SENTINEL:
+                return True
+
+            obj = ref()
+            if obj is None:
+                # Weakref expired; drop the stale entry
+                self._entries.pop(conn_id, None)
+                return False
+
+            if obj is base_conn:
+                return True
+
+            # Connection identity reused; refresh the stored ref for the new object.
+            self._entries[conn_id] = self._store_ref(base_conn, conn_id)
+            return False
+
+    def mark_registered(self, conn: AsyncpgConnection) -> None:
+        base_conn = _get_pgvector_identity(conn)
+        conn_id = id(base_conn)
+
+        with self._lock:
+            self._entries[conn_id] = self._store_ref(base_conn, conn_id)
+
+    def reset(self) -> None:
+        """Clear tracked connections (primarily for tests)."""
+
+        with self._lock:
+            self._entries.clear()
+
+
+_pgvector_registry = _PgvectorRegistrationRegistry()
 
 _RETRYABLE_CONN_ERRORS = (
     asyncpg.PostgresConnectionError,
@@ -837,11 +918,13 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         logger.debug("Skipping pgvector registration on %s (context override)", id(conn))
         return
 
+    base_conn = _get_pgvector_identity(conn)
+
     # Short-circuit if this connection already completed registration.
-    if getattr(conn, "_pgvector_registered", False):
+    if _pgvector_registry.is_registered(base_conn):
         logger.debug(
             "Skipping pgvector registration on %s (already registered)",
-            id(conn),
+            id(base_conn),
         )
         return
 
@@ -865,7 +948,7 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         initial_retry_delay=initial_retry_delay,
     )
 
-    conn._pgvector_registered = True
+    _pgvector_registry.mark_registered(base_conn)
 # ============================================================================
 # Retry helper (from main), with small safety polish
 # ============================================================================

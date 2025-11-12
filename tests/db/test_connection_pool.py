@@ -92,6 +92,21 @@ class _DeferredConnection:
         return self._closed
 
 
+class _WeakrefableConnection:
+    __slots__ = ("registered", "__weakref__")
+
+    def __init__(self):
+        self.registered = 0
+
+
+class _ProxyWithSlots:
+    __slots__ = ("_con", "_holder")
+
+    def __init__(self, base_conn):
+        self._con = base_conn
+        self._holder = object()
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_resilient_wrapper_tracks_pending_tasks(monkeypatch, anyio_backend):
@@ -231,6 +246,9 @@ async def test_setup_connection_registers_by_default(monkeypatch, anyio_backend)
 
     registered_connections = []
 
+    registry = db_connection._PgvectorRegistrationRegistry()
+    monkeypatch.setattr(db_connection, "_pgvector_registry", registry)
+
     async def fake_register(conn):
         registered_connections.append(conn)
 
@@ -245,6 +263,7 @@ async def test_setup_connection_registers_by_default(monkeypatch, anyio_backend)
     await db_connection.setup_connection(test_conn)
 
     assert registered_connections == [test_conn]
+    assert registry.is_registered(test_conn) is True
 
     another_conn = _DummyConnection()
 
@@ -252,6 +271,7 @@ async def test_setup_connection_registers_by_default(monkeypatch, anyio_backend)
         await db_connection.setup_connection(another_conn)
 
     assert registered_connections == [test_conn]
+    assert registry.is_registered(another_conn) is False
 
 
 @pytest.mark.anyio
@@ -262,6 +282,9 @@ async def test_setup_connection_respects_registration_marker(monkeypatch, anyio_
     monkeypatch.delenv("DB_REGISTER_VECTOR", raising=False)
 
     register_calls = {"count": 0}
+
+    registry = db_connection._PgvectorRegistrationRegistry()
+    monkeypatch.setattr(db_connection, "_pgvector_registry", registry)
 
     async def fake_register(
         conn,
@@ -283,12 +306,51 @@ async def test_setup_connection_respects_registration_marker(monkeypatch, anyio_
     await db_connection.setup_connection(conn)
 
     assert register_calls["count"] == 1
-    assert getattr(conn, "_pgvector_registered", False) is True
+    assert registry.is_registered(conn) is True
+    assert not hasattr(conn, "_pgvector_registered")
 
     await db_connection.setup_connection(conn)
 
     assert register_calls["count"] == 1
-    assert getattr(conn, "_pgvector_registered", False) is True
+    assert registry.is_registered(conn) is True
+    assert not hasattr(conn, "_pgvector_registered")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_setup_connection_handles_pool_proxy_with_slots(monkeypatch, anyio_backend):
+    """PoolConnectionProxy-like objects with __slots__ do not raise during registration."""
+
+    monkeypatch.delenv("DB_REGISTER_VECTOR", raising=False)
+
+    registry = db_connection._PgvectorRegistrationRegistry()
+    monkeypatch.setattr(db_connection, "_pgvector_registry", registry)
+
+    register_calls = []
+
+    async def fake_register(conn):
+        register_calls.append(conn)
+
+    monkeypatch.setattr(
+        db_connection.pgvector_asyncpg,
+        "register_vector",
+        fake_register,
+    )
+
+    base_conn = _WeakrefableConnection()
+    proxy = _ProxyWithSlots(base_conn)
+
+    await db_connection.setup_connection(proxy)
+
+    assert register_calls == [proxy]
+    assert registry.is_registered(base_conn) is True
+    assert not hasattr(proxy, "_pgvector_registered")
+
+    await db_connection.setup_connection(proxy)
+
+    assert register_calls == [proxy]
+    assert registry.is_registered(base_conn) is True
+    assert not hasattr(proxy, "_pgvector_registered")
 
 
 @pytest.mark.anyio
