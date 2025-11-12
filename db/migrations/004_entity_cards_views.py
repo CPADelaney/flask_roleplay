@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from string import Template
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,8 @@ logger = logging.getLogger(__name__)
 description = "Create canonical entity-card and episodic views"
 
 
-CREATE_ENTITY_CARDS_VIEW = """
+_CREATE_ENTITY_CARDS_VIEW_TEMPLATE = Template(
+    """
 CREATE OR REPLACE VIEW public.v_entity_cards AS
 WITH npc_cards AS (
     SELECT
@@ -40,11 +42,11 @@ WITH npc_cards AS (
 location_cards AS (
     SELECT
         'location'::text AS entity_type,
-        COALESCE(l.location_id, l.id)::text AS entity_id,
+        ($location_identifier)::text AS entity_id,
         l.user_id,
         l.conversation_id,
         jsonb_build_object(
-            'location_id', COALESCE(l.location_id, l.id),
+            'location_id', $location_identifier,
             'location_name', l.location_name,
             'description', l.description,
             'location_type', l.location_type,
@@ -74,7 +76,7 @@ memory_cards AS (
             'memory_type', um.memory_type,
             'importance', um.significance,
             'tags', COALESCE(um.tags, '[]'::jsonb),
-            'metadata', COALESCE(um.metadata, '{}'::jsonb)
+            'metadata', COALESCE(um.metadata, '{{}}'::jsonb)
         ) AS card,
         to_tsvector('english', COALESCE(um.memory_text, '')) AS search_vector,
         um.embedding,
@@ -89,6 +91,7 @@ SELECT * FROM location_cards
 UNION ALL
 SELECT * FROM memory_cards;
 """
+)
 
 
 DROP_ENTITY_CARDS_VIEW = """
@@ -127,7 +130,12 @@ DROP VIEW IF EXISTS public.v_recent_chunks;
 
 
 async def upgrade(conn):
-    await conn.execute(CREATE_ENTITY_CARDS_VIEW)
+    location_identifier = await _determine_locations_identifier(conn, table_alias="l")
+    logger.info("Using locations identifier expression: %s", location_identifier)
+    create_entity_cards_view = _CREATE_ENTITY_CARDS_VIEW_TEMPLATE.substitute(
+        location_identifier=location_identifier
+    )
+    await conn.execute(create_entity_cards_view)
     await conn.execute(CREATE_RECENT_CHUNKS_VIEW)
     logger.info("Created v_entity_cards and v_recent_chunks views")
 
@@ -136,3 +144,24 @@ async def downgrade(conn):
     await conn.execute(DROP_ENTITY_CARDS_VIEW)
     await conn.execute(DROP_RECENT_CHUNKS_VIEW)
     logger.info("Dropped v_entity_cards and v_recent_chunks views")
+
+
+async def _determine_locations_identifier(conn, table_alias: str) -> str:
+    query = """
+        SELECT
+            bool_or(column_name = 'location_id') AS has_location_id,
+            bool_or(column_name = 'id') AS has_id
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'locations';
+    """
+    row = await conn.fetchrow(query)
+    has_location_id = bool(row and row["has_location_id"])
+    has_id = bool(row and row["has_id"])
+
+    if has_location_id and has_id:
+        return f"COALESCE({table_alias}.location_id, {table_alias}.id)"
+    if has_location_id:
+        return f"{table_alias}.location_id"
+    if has_id:
+        return f"{table_alias}.id"
+    raise RuntimeError("locations table is missing both location_id and id columns")
