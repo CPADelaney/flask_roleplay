@@ -51,8 +51,9 @@ class BaseDataAccess:
                 await conn.fetchval("SELECT 1")
                 self.initialized = True
                 return True
-        except Exception as e:
-            logger.error(f"Error initializing {self.__class__.__name__}: {e}")
+        except Exception:
+            # Log full traceback so we see the real failure site
+            logger.error("Error initializing %s", self.__class__.__name__, exc_info=True)
             return False
     
     async def cleanup(self):
@@ -404,11 +405,13 @@ class LocationDataAccess(BaseDataAccess):
             conditions = []
             
             if location_id is not None:
-                conditions.append(f"COALESCE(id, location_id) = ${len(params) + 1}")
+                # Locations uses 'location_id' as the PK column
+                conditions.append(f"location_id = ${len(params) + 1}")
                 params.append(location_id)
-            
+
             if location_name is not None:
-                conditions.append(f"location_name = ${len(params) + 1}")
+                # Use the generated lowercase column for robust lookups
+                conditions.append(f"location_name_lc = LOWER(${len(params) + 1})")
                 params.append(location_name)
             
             if conditions:
@@ -428,9 +431,10 @@ class LocationDataAccess(BaseDataAccess):
                     return {}
 
                 result = dict(row)
-                if "id" not in result and "location_id" in result:
+                # Normalize keys for downstream callers that still expect 'id'
+                if "location_id" in result and "id" not in result:
                     result["id"] = result["location_id"]
-                if "location_id" not in result and "id" in result:
+                if "id" in result and "location_id" not in result:
                     result["location_id"] = result["id"]
 
                 return result
@@ -1049,28 +1053,35 @@ class LoreKnowledgeAccess(BaseDataAccess):
             async with get_db_connection_context() as conn:
                 # Search each lore type
                 for lore_type in search_types:
+                    emb_expr: Optional[str]
                     if lore_type == "Factions":
                         table = "Factions"
                         columns = "id, name, type, description"
+                        emb_expr = "embedding"
                     elif lore_type == "WorldLore":
                         table = "WorldLore"
                         columns = "id, name, category, description"
+                        emb_expr = "embedding"
                     elif lore_type == "CulturalElements":
                         table = "CulturalElements"
                         columns = "id, name, element_type as type, description"
+                        emb_expr = "embedding"
                     elif lore_type == "HistoricalEvents":
                         table = "HistoricalEvents"
                         columns = "id, name, date_description, description"
+                        emb_expr = "embedding"
                     elif lore_type == "LocationLore":
-                        table = "LocationLore l JOIN Locations loc ON l.location_id = COALESCE(loc.id, loc.location_id)"
+                        # Join on the real PK; qualify embedding to avoid ambiguity
+                        table = "LocationLore l JOIN Locations loc ON l.location_id = loc.location_id"
                         columns = "l.location_id as id, loc.location_name as name, 'location' as type, loc.description"
+                        emb_expr = "l.embedding"
                     else:
                         # Unknown lore type
                         continue
-                    
-                    # Build query
+
+                    # Build query with a qualified embedding expression where needed
                     search_query = f"""
-                        SELECT {columns}, embedding
+                        SELECT {columns}, {emb_expr} AS embedding
                         FROM {table}
                         WHERE user_id = $1 AND conversation_id = $2
                     """
