@@ -837,6 +837,14 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         logger.debug("Skipping pgvector registration on %s (context override)", id(conn))
         return
 
+    # Short-circuit if this connection already completed registration.
+    if getattr(conn, "_pgvector_registered", False):
+        logger.debug(
+            "Skipping pgvector registration on %s (already registered)",
+            id(conn),
+        )
+        return
+
     # Pull timeouts/retries from helpers if present; otherwise environment defaults
     setup_timeout = get_setup_timeout()
 
@@ -856,6 +864,8 @@ async def setup_connection(conn: asyncpg.Connection) -> None:
         max_retries=max_retries,
         initial_retry_delay=initial_retry_delay,
     )
+
+    conn._pgvector_registered = True
 # ============================================================================
 # Retry helper (from main), with small safety polish
 # ============================================================================
