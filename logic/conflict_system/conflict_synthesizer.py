@@ -546,25 +546,30 @@ class ConflictSynthesizer:
             async with get_db_connection_context() as conn:
                 if isinstance(location_ref, int):
                     location_row = await conn.fetchrow(
-                        "SELECT id FROM locations WHERE id = $1",
-                        location_ref,
-                    )
-                    if location_row:
-                        resolved_location_id = int(location_row["id"])
-                elif isinstance(location_ref, str):
-                    logger.debug(f"Location is a string '{location_ref}', looking up ID.")
-                    location_row = await conn.fetchrow(
                         """
-                        SELECT id
+                        SELECT COALESCE(location_id, id) AS location_id
                         FROM locations
-                        WHERE location_name_lc = LOWER($1)
-                        ORDER BY id DESC
+                        WHERE COALESCE(location_id, id) = $1
                         LIMIT 1
                         """,
                         location_ref,
                     )
                     if location_row:
-                        resolved_location_id = int(location_row["id"])
+                        resolved_location_id = int(location_row["location_id"])
+                elif isinstance(location_ref, str):
+                    logger.debug(f"Location is a string '{location_ref}', looking up ID.")
+                    location_row = await conn.fetchrow(
+                        """
+                        SELECT COALESCE(location_id, id) AS location_id
+                        FROM locations
+                        WHERE location_name_lc = LOWER($1)
+                        ORDER BY COALESCE(location_id, id) DESC
+                        LIMIT 1
+                        """,
+                        location_ref,
+                    )
+                    if location_row:
+                        resolved_location_id = int(location_row["location_id"])
             # --- END of REFACTORED LOGIC ---
 
             if not valid_npc_ids and not resolved_location_id:
