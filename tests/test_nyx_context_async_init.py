@@ -13,6 +13,8 @@ typing.TypedDict = typing_extensions.TypedDict
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import context.cache_warmup as cache_warmup
+
 _dummy_models = types.ModuleType("sentence_transformers.models")
 _dummy_models.Transformer = lambda *args, **kwargs: None
 _dummy_models.Pooling = lambda *args, **kwargs: None
@@ -506,3 +508,96 @@ async def test_lore_initialization_shielding_allows_retry(monkeypatch):
     assert isinstance(section.data, context_module.LoreSectionData)
     assert section.data.location.get("name") == "Arcadia"
     assert section.canonical is True
+
+
+@pytest.mark.anyio
+async def test_warm_user_context_waits_for_memory_and_lore(monkeypatch):
+    monkeypatch.setattr(cache_warmup, "_context_warm_promises", {})
+
+    memory_event = asyncio.Event()
+    lore_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.05, memory_event.set)
+    loop.call_later(0.1, lore_event.set)
+
+    class DummyRedis:
+        def __init__(self) -> None:
+            self.get_calls = []
+            self.set_calls = []
+            self.delete_calls = []
+
+        def get(self, key):
+            self.get_calls.append(key)
+            return None
+
+        def setex(self, key, ttl, value):
+            context = StubNyxContext.instances[-1]
+            assert context.build_called is True
+            assert context.memory_ready is True
+            assert context.lore_ready is True
+            self.set_calls.append((key, ttl, value))
+
+        def delete(self, key):
+            self.delete_calls.append(key)
+
+    dummy_redis = DummyRedis()
+
+    class StubNyxContext:
+        instances = []
+
+        def __init__(self, user_id: int, conversation_id: int) -> None:
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+            self.initialized = False
+            self.memory_ready = False
+            self.lore_ready = False
+            self.awaited = []
+            self.build_called = False
+            self.memory_orchestrator = None
+            self.lore_bundle = None
+            StubNyxContext.instances.append(self)
+
+        async def initialize(self) -> None:
+            self.initialized = True
+
+        async def await_orchestrator(self, name: str) -> bool:
+            self.awaited.append(name)
+            if name == "memory":
+                await memory_event.wait()
+                self.memory_ready = True
+                self.memory_orchestrator = {"status": "ready"}
+                return True
+            if name == "lore":
+                assert self.memory_ready is True
+                await lore_event.wait()
+                self.lore_ready = True
+                self.lore_bundle = {"status": "ready"}
+                return True
+            return False
+
+        async def build_context_for_input(self, *_args):
+            if not (self.memory_ready and self.lore_ready):
+                raise AssertionError("Context built before orchestrators became ready")
+            self.build_called = True
+            return None
+
+    monkeypatch.setattr(cache_warmup, "NyxContext", StubNyxContext)
+
+    result = await cache_warmup.warm_user_context_cache(
+        user_id=5,
+        conversation_id=7,
+        redis_client=dummy_redis,
+    )
+
+    assert result == {"status": "warmed", "user_id": 5, "conversation_id": 7}
+    assert dummy_redis.get_calls == ["ctx:warmed:5:7"]
+    assert dummy_redis.set_calls == [("ctx:warmed:5:7", 600, "1")]
+    assert dummy_redis.delete_calls == []
+
+    context = StubNyxContext.instances[-1]
+    assert context.initialized is True
+    assert context.build_called is True
+    assert context.memory_orchestrator == {"status": "ready"}
+    assert context.lore_bundle == {"status": "ready"}
+    assert context.awaited.count("memory") >= 1
+    assert context.awaited.count("lore") >= 1
