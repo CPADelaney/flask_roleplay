@@ -1066,8 +1066,8 @@ class ContextBroker:
             return False
 
         try:
-            await awaiter(name)
-            return True
+            result = await awaiter(name)
+            return bool(result)
         except Exception:
             logger.error(
                 "[CONTEXT_BROKER] Await for orchestrator '%s' failed for user %s conversation %s",
@@ -2373,9 +2373,20 @@ class ContextBroker:
         dynamic relationship data (player↔NPC) including patterns/archetypes/momentum
         and the full dimensions vector. Falls back to per-NPC snapshots if needed.
         """
-        if not await self.ctx.await_orchestrator("npc"): return BundleSection(data=NPCSectionData(npcs=[], canonical_count=0))
+        fallback_section = BundleSection(data=NPCSectionData(npcs=[], canonical_count=0))
+
+        if not self.ctx.is_orchestrator_ready("npc"):
+            return fallback_section
+
+        if not await self.ctx.await_orchestrator("npc"):
+            return fallback_section
+
         if not self.ctx.npc_orchestrator:
-            return BundleSection(data=NPCSectionData(npcs=[], canonical_count=0), canonical=False, priority=0)
+            return BundleSection(
+                data=NPCSectionData(npcs=[], canonical_count=0),
+                canonical=False,
+                priority=0,
+            )
     
         npc_ids = list(scope.npc_ids)[:10] if getattr(scope, "npc_ids", None) else []
     
@@ -2548,7 +2559,16 @@ class ContextBroker:
     
     async def _fetch_memory_section(self, scope: SceneScope) -> BundleSection:
         """Fetch relevant memories using existing orchestrator API and link hints"""
-        if not await self.ctx.await_orchestrator("memory"): return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]))
+        fallback_section = BundleSection(
+            data=MemorySectionData(relevant=[], recent=[], patterns=[])
+        )
+
+        if not self.ctx.is_orchestrator_ready("memory"):
+            return fallback_section
+
+        if not await self.ctx.await_orchestrator("memory"):
+            return fallback_section
+
         if not self.ctx.memory_orchestrator:
             return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]),
                                canonical=False, priority=0)
@@ -2710,7 +2730,16 @@ class ContextBroker:
     
     async def _fetch_lore_section(self, scope: SceneScope) -> BundleSection:
         """Fetch lore context; prefer orchestrator scene bundle when available."""
-        if not await self.ctx.await_orchestrator("lore"): return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]))
+        fallback_section = BundleSection(
+            data=LoreSectionData(location={}, world={}, canonical_rules=[])
+        )
+
+        if not self.ctx.is_orchestrator_ready("lore"):
+            return fallback_section
+
+        if not await self.ctx.await_orchestrator("lore"):
+            return fallback_section
+
         if not self.ctx.lore_orchestrator:
             return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
                                  canonical=False, priority=0)
@@ -2816,7 +2845,14 @@ class ContextBroker:
     async def _fetch_conflict_section(self, scope: SceneScope) -> BundleSection:
         """Fetch conflict context using existing orchestrator API and link hints."""
         # Resolve synthesizer once and guard
-        if not await self.ctx.await_orchestrator("conflict"): return BundleSection(data={})
+        fallback_section = BundleSection(data={})
+
+        if not self.ctx.is_orchestrator_ready("conflict"):
+            return fallback_section
+
+        if not await self.ctx.await_orchestrator("conflict"):
+            return fallback_section
+
         synthesizer = getattr(self.ctx, "conflict_synthesizer", None)
         if not synthesizer:
             return BundleSection(data={}, canonical=False, priority=0)
@@ -3057,7 +3093,14 @@ class ContextBroker:
     
     async def _fetch_narrative_section(self, scope: SceneScope) -> BundleSection:
         """Fetch narrative context with safe method calls"""
-        if not await self.ctx.await_orchestrator("world"): return BundleSection(data={}) # Narrator is part of world systems
+        fallback_section = BundleSection(data={})
+
+        if not self.ctx.is_orchestrator_ready("world"):
+            return fallback_section
+
+        if not await self.ctx.await_orchestrator("world"):
+            return fallback_section
+        # Narrator is part of world systems
         if not self.ctx.slice_of_life_narrator:
             return BundleSection(data={}, canonical=False, priority=0)
         
@@ -3217,6 +3260,7 @@ class NyxContext:
     error_counts: Dict[str, int] = field(default_factory=dict)
 
     _init_tasks: Dict[str, asyncio.Task[Any]] = field(default_factory=dict, init=False, repr=False)
+    _init_failures: Dict[str, BaseException] = field(default_factory=dict, init=False, repr=False)
     _is_initialized: bool = field(default=False, init=False)
     _init_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     background_tasks: Set[asyncio.Task] = field(default_factory=set)
@@ -3289,6 +3333,7 @@ class NyxContext:
                     timed_init(label, coro),
                     name=f"nyx_init_{key}",
                 )
+                self._init_failures.pop(key, None)
                 self._init_tasks[key] = task
                 task.add_done_callback(
                     lambda t, task_key=key: self._on_init_task_done(task_key, t)
@@ -3375,6 +3420,9 @@ class NyxContext:
 
         if task.cancelled():
             logger.warning("Initialization task '%s' was cancelled", name)
+            self._init_failures[name] = asyncio.CancelledError(
+                f"Initialization task '{name}' was cancelled"
+            )
             return
 
         try:
@@ -3386,10 +3434,13 @@ class NyxContext:
                 exc,
                 exc_info=True,
             )
+            self._init_failures[name] = exc
             try:
                 self.log_error(exc, {"task": f"init_{name}"})
             except Exception:
                 logger.debug("Failed to record init task error for '%s'", name, exc_info=True)
+        else:
+            self._init_failures.pop(name, None)
 
     def get_init_task(self, name: str) -> Optional[asyncio.Task[Any]]:
         """Return the initialization task for a subsystem, if any."""
@@ -3397,19 +3448,72 @@ class NyxContext:
         return self._init_tasks.get(name)
 
     def is_orchestrator_ready(self, name: str) -> bool:
-        """Return True if the orchestrator has finished initializing."""
+        """Return True if the orchestrator finished initializing without errors."""
 
         task = self._init_tasks.get(name)
-        return task is None or task.done()
+        if task is None:
+            return False
 
-    async def await_orchestrator(self, name: str) -> None:
-        """Await the initialization task for a subsystem if it exists."""
+        if name in self._init_failures:
+            return False
+
+        if task.cancelled():
+            return False
+
+        if not task.done():
+            return False
+
+        exc = task.exception()
+        if exc is not None:
+            self._init_failures[name] = exc
+            return False
+
+        return True
+
+    async def await_orchestrator(self, name: str) -> bool:
+        """Await the initialization task for a subsystem and report readiness."""
 
         task = self._init_tasks.get(name)
         if not task:
-            return
+            return False
 
-        await task
+        if name in self._init_failures:
+            return False
+
+        if task.done():
+            if task.cancelled():
+                return False
+            exc = task.exception()
+            if exc is not None:
+                self._init_failures[name] = exc
+                return False
+            self._init_failures.pop(name, None)
+            return True
+
+        try:
+            await task
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                self._init_failures[name] = exc
+                return False
+            raise
+        except Exception as exc:
+            self._init_failures[name] = exc
+            return False
+
+        if task.cancelled():
+            self._init_failures[name] = asyncio.CancelledError(
+                f"Initialization task '{name}' was cancelled"
+            )
+            return False
+
+        exc = task.exception()
+        if exc is not None:
+            self._init_failures[name] = exc
+            return False
+
+        self._init_failures.pop(name, None)
+        return True
 
     async def _hydrate_location_from_db(self) -> None:
         """Preload the current location from the CurrentRoleplay table."""
