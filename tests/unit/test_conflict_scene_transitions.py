@@ -2,6 +2,7 @@ import os
 import sys
 import types
 import typing
+from typing import Any, List, Tuple
 from pathlib import Path
 
 import pytest
@@ -139,3 +140,92 @@ async def test_background_subsystem_handles_scene_enter_payload(monkeypatch):
     assert isinstance(seen['context_ctx'], dict)
     assert seen['relevance_ctx'] == event.payload['scene_context']
     assert seen['context_ctx'] == event.payload['scene_context']
+
+
+class _FakeNationConnection:
+    def __init__(self, location_id: int, nation_ids: List[int]):
+        self._location_id = location_id
+        self._nation_ids = nation_ids
+        self.calls: List[Tuple[str, str, Tuple[Any, ...]]] = []
+
+    async def fetchrow(self, query: str, *args: Any):
+        self.calls.append(("fetchrow", query, args))
+        if "from locations" in query.lower() and args and int(args[0]) == self._location_id:
+            return {"id": self._location_id}
+        return None
+
+    async def fetch(self, query: str, *args: Any):
+        self.calls.append(("fetch", query, args))
+        lowered = query.lower()
+        if "from conflict_stakeholders" in lowered:
+            return []
+        if "from conflict_locations" in lowered:
+            return []
+        if "from conflicts" in lowered:
+            return []
+        if "from loreconnections" in lowered:
+            if "source_type = 'nations'" in lowered:
+                return [{"source_id": nid} for nid in self._nation_ids]
+            if "target_type = 'nations'" in lowered:
+                return []
+        if "from nationalconflicts" in lowered:
+            assert args and list(args[0]) == self._nation_ids
+            return [
+                {"id": 501, "name": "Border Standoff", "type": "geopolitical", "intensity": 0.7}
+            ]
+        if "from domesticissues" in lowered:
+            assert args and list(args[0]) == self._nation_ids
+            return [
+                {"id": 601, "name": "Labor Unrest", "type": "domestic", "intensity": 0.4}
+            ]
+        return []
+
+    async def fetchval(self, query: str, *args: Any):
+        self.calls.append(("fetchval", query, args))
+        return None
+
+
+class _FakeNationContext:
+    def __init__(self, connection: _FakeNationConnection):
+        self._connection = connection
+
+    async def __aenter__(self):
+        return self._connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_conflict_fast_path_uses_loreconnections_for_nations(monkeypatch):
+    synthesizer = ConflictSynthesizer(user_id=11, conversation_id=22)
+
+    fake_connection = _FakeNationConnection(location_id=303, nation_ids=[7, 9])
+
+    def fake_get_db_connection_context():
+        return _FakeNationContext(fake_connection)
+
+    monkeypatch.setattr(
+        'logic.conflict_system.conflict_synthesizer.get_db_connection_context',
+        fake_get_db_connection_context,
+    )
+
+    scene_info = {"location_id": 303}
+
+    result = await synthesizer.conflict_context_for_scene(scene_info)
+
+    names = {conflict['name'] for conflict in result['conflicts']}
+    assert "Border Standoff" in names
+    assert "Labor Unrest" in names
+
+    # Ensure we derived nation IDs via lore connections instead of querying a missing column
+    assert not any(
+        "nation_id" in query.lower() and "from locations" in query.lower()
+        for _kind, query, _ in fake_connection.calls
+    )
+    assert any("from loreconnections" in query.lower() for _kind, query, _ in fake_connection.calls)

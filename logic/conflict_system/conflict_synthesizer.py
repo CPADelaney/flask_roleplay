@@ -545,14 +545,26 @@ class ConflictSynthesizer:
 
             async with get_db_connection_context() as conn:
                 if isinstance(location_ref, int):
-                    resolved_location_id = location_ref
+                    location_row = await conn.fetchrow(
+                        "SELECT id FROM locations WHERE id = $1",
+                        location_ref,
+                    )
+                    if location_row:
+                        resolved_location_id = int(location_row["id"])
                 elif isinstance(location_ref, str):
                     logger.debug(f"Location is a string '{location_ref}', looking up ID.")
-                    # This query finds the ID based on the name.
-                    resolved_location_id = await conn.fetchval(
-                        "SELECT location_id FROM locations WHERE location_name = $1 LIMIT 1",
-                        location_ref
+                    location_row = await conn.fetchrow(
+                        """
+                        SELECT id
+                        FROM locations
+                        WHERE location_name_lc = LOWER($1)
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        location_ref,
                     )
+                    if location_row:
+                        resolved_location_id = int(location_row["id"])
             # --- END of REFACTORED LOGIC ---
 
             if not valid_npc_ids and not resolved_location_id:
@@ -584,21 +596,104 @@ class ConflictSynthesizer:
                     )
                     active_conflicts.extend([dict(row) for row in conflict_rows])
 
-                if resolved_location_id:
-                    nation_id = await conn.fetchval("SELECT nation_id FROM locations WHERE location_id = $1", resolved_location_id)
-                    
-                    national_rows = await conn.fetch(
-                        "SELECT id, name, conflict_type as type, (severity / 10.0) as intensity FROM nationalconflicts WHERE location_id = $1 AND status != 'resolved'",
-                        resolved_location_id
-                    )
-                    active_conflicts.extend([dict(row) for row in national_rows])
+                derived_nation_ids: Set[int] = set()
 
-                    if nation_id:
+                raw_scene_nations = scene_info.get("nation_ids")
+                if isinstance(raw_scene_nations, (list, tuple, set)):
+                    for raw in raw_scene_nations:
+                        try:
+                            derived_nation_ids.add(int(raw))
+                        except (TypeError, ValueError):
+                            continue
+                elif raw_scene_nations is not None:
+                    try:
+                        derived_nation_ids.add(int(raw_scene_nations))
+                    except (TypeError, ValueError):
+                        pass
+
+                if resolved_location_id:
+                    try:
+                        lore_rows = await conn.fetch(
+                            """
+                            SELECT source_id
+                            FROM loreconnections
+                            WHERE source_type = 'Nations'
+                              AND target_type = 'Locations'
+                              AND target_id = $1
+                            """,
+                            resolved_location_id,
+                        )
+                        for row in lore_rows:
+                            source_id = row.get("source_id")
+                            if source_id is None:
+                                continue
+                            try:
+                                derived_nation_ids.add(int(source_id))
+                            except (TypeError, ValueError):
+                                continue
+                    except Exception:
+                        logger.debug("LoreConnections nation lookup failed", exc_info=True)
+
+                    try:
+                        reverse_rows = await conn.fetch(
+                            """
+                            SELECT target_id
+                            FROM loreconnections
+                            WHERE source_type = 'Locations'
+                              AND target_type = 'Nations'
+                              AND source_id = $1
+                            """,
+                            resolved_location_id,
+                        )
+                        for row in reverse_rows:
+                            target_id = row.get("target_id")
+                            if target_id is None:
+                                continue
+                            try:
+                                derived_nation_ids.add(int(target_id))
+                            except (TypeError, ValueError):
+                                continue
+                    except Exception:
+                        logger.debug("Reverse LoreConnections nation lookup failed", exc_info=True)
+
+                nation_id_list = sorted(derived_nation_ids)
+
+                if nation_id_list:
+                    try:
+                        national_rows = await conn.fetch(
+                            """
+                            SELECT id, name, conflict_type AS type, (severity / 10.0) AS intensity
+                            FROM nationalconflicts
+                            WHERE status != 'resolved'
+                              AND (
+                                  primary_aggressor = ANY($1::int[])
+                                  OR primary_defender = ANY($1::int[])
+                                  OR EXISTS (
+                                      SELECT 1
+                                      FROM jsonb_array_elements_text(COALESCE(involved_nations, '[]'::jsonb)) AS elem(nation_text)
+                                      WHERE elem.nation_text ~ '^\\d+$'
+                                        AND elem.nation_text::int = ANY($1::int[])
+                                  )
+                              )
+                        """,
+                            nation_id_list,
+                        )
+                        active_conflicts.extend([dict(row) for row in national_rows])
+                    except Exception:
+                        logger.debug("National conflict lookup failed", exc_info=True)
+
+                    try:
                         domestic_rows = await conn.fetch(
-                            "SELECT id, name, issue_type as type, (severity / 10.0) as intensity FROM domesticissues WHERE nation_id = $1 AND status = 'active'",
-                            nation_id
+                            """
+                            SELECT id, name, issue_type AS type, (severity / 10.0) AS intensity
+                            FROM domesticissues
+                            WHERE status = 'active' AND nation_id = ANY($1::int[])
+                        """,
+                            nation_id_list,
                         )
                         active_conflicts.extend([dict(row) for row in domestic_rows])
+                    except Exception:
+                        logger.debug("Domestic issue lookup failed", exc_info=True)
                 
                 if active_conflicts:
                     unique_conflicts = {c['id']: c for c in active_conflicts}.values()
