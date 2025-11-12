@@ -151,11 +151,11 @@ WITH npc_cards AS (
 location_cards AS (
     SELECT
         'location'::text AS entity_type,
-        id::text AS entity_id,
+        COALESCE(location_id, id)::text AS entity_id,
         user_id,
         conversation_id,
         jsonb_build_object(
-            'location_id', id,
+            'location_id', COALESCE(location_id, id),
             'location_name', location_name,
             'description', description,
             'location_type', location_type,

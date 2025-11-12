@@ -40,11 +40,11 @@ WITH npc_cards AS (
 location_cards AS (
     SELECT
         'location'::text AS entity_type,
-        l.id::text AS entity_id,
+        COALESCE(l.location_id, l.id)::text AS entity_id,
         l.user_id,
         l.conversation_id,
         jsonb_build_object(
-            'location_id', l.id,
+            'location_id', COALESCE(l.location_id, l.id),
             'location_name', l.location_name,
             'description', l.description,
             'location_type', l.location_type,
