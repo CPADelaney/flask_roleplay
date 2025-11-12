@@ -2077,35 +2077,48 @@ class ContextBroker:
         max_parallel = self.ctx.max_parallel_tasks
         semaphore = asyncio.Semaphore(max_parallel) if max_parallel > 0 else None
 
-        # Tight budgets per section to avoid long-tail stalls on cold misses
+        # Per-section budgets (seconds). Allow env overrides; bump slow paths.
+        def _to_float(env: str, default: float) -> float:
+            try:
+                v = float(os.getenv(env, "").strip() or default)
+                return max(0.25, v)
+            except Exception:
+                return default
+
         SECTION_BUDGETS = {
-            'npcs': 1.5,
-            'memories': 1.5,
-            'lore': 2.0,
-            'conflicts': 1.5,
-            'world': 1.5,
-            'narrative': 1.0,
+            'npcs':       _to_float("NYX_SECTION_TIMEOUT_NPCS",       1.5),
+            'memories':   _to_float("NYX_SECTION_TIMEOUT_MEMORIES",   3.0),  # was 1.5
+            'lore':       _to_float("NYX_SECTION_TIMEOUT_LORE",       2.0),
+            'conflicts':  _to_float("NYX_SECTION_TIMEOUT_CONFLICTS",  3.0),  # was 1.5
+            'world':      _to_float("NYX_SECTION_TIMEOUT_WORLD",      1.5),
+            'narrative':  _to_float("NYX_SECTION_TIMEOUT_NARRATIVE",  1.0),
         }
 
         async def fetch_with_semaphore(section_name: str):
             timeout = SECTION_BUDGETS.get(section_name, 1.5)
 
             async def _timed_fetch() -> BundleSection:
+                """
+                Run the section fetch without letting the timeout cancel the task.
+                If it doesn’t finish in time, return a fallback and let the
+                task finish in the background.
+                """
+                task = asyncio.create_task(self._fetch_section(section_name, scene_scope))
                 try:
-                    return await asyncio.wait_for(
-                        self._fetch_section(section_name, scene_scope),
-                        timeout=timeout,
-                    )
-                except asyncio.TimeoutError:
+                    # Use asyncio.wait to avoid cancelling the task on timeout.
+                    done, _pending = await asyncio.wait({task}, timeout=timeout)
+                    if task in done:
+                        return task.result()
                     logger.info(
-                        "[CONTEXT_BROKER] Section '%s' timed out after %.2fs; using fallback",
-                        section_name,
-                        timeout,
+                        "[CONTEXT_BROKER] Section '%s' exceeded %.2fs; using fallback (will finish in background)",
+                        section_name, timeout
                     )
+                    # Leave the task running; it can warm caches on completion.
+                    task.add_done_callback(lambda t: None)  # no-op, just avoid "never awaited" warnings
                     return self._build_section_fallback(section_name)
-                except asyncio.CancelledError:
+                except Exception:
                     logger.info(
-                        "[CONTEXT_BROKER] Section '%s' wait cancelled; using fallback",
+                        "[CONTEXT_BROKER] Section '%s' failed during timed fetch; using fallback",
                         section_name,
                     )
                     return self._build_section_fallback(section_name)
