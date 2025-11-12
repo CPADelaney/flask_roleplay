@@ -33,6 +33,7 @@ import os
 import logging
 import asyncio
 import asyncpg
+import socket
 import threading
 import weakref
 import contextlib
@@ -57,6 +58,13 @@ from celery.signals import worker_process_init, worker_process_shutdown
 logger = logging.getLogger(__name__)
 
 AsyncpgConnection = Union[asyncpg.Connection, '_ResilientConnectionWrapper']
+
+_RETRYABLE_CONN_ERRORS = (
+    asyncpg.PostgresConnectionError,
+    ConnectionResetError,
+    TimeoutError,
+    OSError,  # filtered by message below
+)
 
 
 # Use a single, consistent name for the ContextVar
@@ -650,43 +658,17 @@ class _ResilientConnectionWrapper:
         return attr
     
     async def _call_with_retry(self, name: str, method, *args, **kwargs):
-        """
-        Call a method with automatic retry on waiter bug detection.
-        
-        Args:
-            name: Method name for logging
-            method: Method to call
-            *args: Positional arguments
-            **kwargs: Keyword arguments
-            
-        Returns:
-            Result of the method call
-            
-        Raises:
-            AttributeError: If retry limit exceeded or not the waiter bug
-        """
         attempt = 0
         max_attempts = 2
-        
+    
         while attempt < max_attempts:
-            task: Optional[asyncio.Task] = None
-            registered_conn_id: Optional[int] = None
             try:
-                task = asyncio.create_task(method(*args, **kwargs))
-                registered_conn_id = self._conn_id
-
-                async with self._ops_lock:
-                    pending_ops = _state.connection_pending_ops.get(registered_conn_id)
-                    if pending_ops is not None:
-                        pending_ops.append(task)
-                    else:
-                        registered_conn_id = None
-
-                return await task
+                return await method(*args, **kwargs)
+    
             except AttributeError as exc:
                 if not _is_asyncpg_waiter_cancel_bug(exc) or attempt >= max_attempts - 1:
                     raise
-
+    
                 attempt += 1
                 logger.warning(
                     f"Detected asyncpg waiter cancellation bug while executing {name}; "
@@ -694,6 +676,39 @@ class _ResilientConnectionWrapper:
                 )
                 await self._refresh_connection()
                 method = getattr(self._conn, name)
+    
+            except _RETRYABLE_CONN_ERRORS as exc:
+                msg = str(exc).lower()
+                # Only treat clearly connection/SSL-related cases as retryable.
+                connection_lost = any(
+                    s in msg
+                    for s in (
+                        "connection reset by peer",
+                        "connection closed",
+                        "server closed the connection",
+                        "terminating connection",
+                        "ssl handshake failed",
+                        "eof occurred in violation of protocol",
+                        "tlsv1",
+                    )
+                )
+    
+                if not connection_lost or attempt >= max_attempts - 1:
+                    raise
+    
+                attempt += 1
+                logger.warning(
+                    "Connection-level error during %s; refreshing connection and retrying "
+                    "(attempt %d/%d): %s",
+                    name,
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                await self._refresh_connection()
+                method = getattr(self._conn, name)
+                continue
+    
             except Exception as exc:
                 msg = str(exc).lower()
                 if (
@@ -714,21 +729,6 @@ class _ResilientConnectionWrapper:
                     method = getattr(self._conn, name)
                     continue
                 raise
-            finally:
-                if task is not None and registered_conn_id is not None:
-                    try:
-                        async with self._ops_lock:
-                            pending_ops = _state.connection_pending_ops.get(registered_conn_id)
-                            if pending_ops is not None:
-                                try:
-                                    pending_ops.remove(task)
-                                except ValueError:
-                                    pass
-                    except Exception:
-                        logger.debug(
-                            "Failed to remove task from pending ops for connection %s", registered_conn_id,
-                            exc_info=True,
-                        )
     
     async def _refresh_connection(self) -> None:
         """
