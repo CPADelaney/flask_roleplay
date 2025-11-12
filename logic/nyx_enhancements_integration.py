@@ -95,6 +95,7 @@ def nyx_memory_maintenance_task():
     Should be scheduled to run daily.
     """
     async def process_all_conversations():
+        rows = []
         try:
             async with get_db_connection_context() as conn:
                 # Get active conversations
@@ -105,41 +106,57 @@ def nyx_memory_maintenance_task():
                     GROUP BY user_id, conversation_id
                     HAVING COUNT(*) > 10
                 """)
-                
-                for row in rows:
-                    user_id = row["user_id"]
-                    conversation_id = row["conversation_id"]
-                    
-                    try:
-                        # Create context and run maintenance through orchestrator
-                        memory_orchestrator = await get_memory_orchestrator(
-                            user_id, conversation_id
-                        )
-                        
-                        # Consolidate memories
-                        await memory_orchestrator.consolidate_memories(
-                            entity_type=EntityType.PLAYER,
-                            entity_id=user_id,
-                            force=False
-                        )
-                        
-                        # Clean up SDK cache for this conversation
-                        sdk = get_sdk()
-                        await sdk.cleanup_conversation(str(conversation_id))
-                        
-                        logger.info(f"Memory maintenance completed for user_id={user_id}, "
-                                   f"conversation_id={conversation_id}")
-                                   
-                    except Exception as e:
-                        logger.error(f"Error in memory maintenance for user_id={user_id}, "
-                                    f"conversation_id={conversation_id}: {str(e)}")
-                    
-                    # Brief pause between processing
-                    await asyncio.sleep(0.5)
-                    
+            logger.debug(
+                "Fetched %d candidate conversations for memory maintenance", len(rows)
+            )
         except Exception as e:
-            logger.error(f"Error in nyx_memory_maintenance_task: {str(e)}")
-    
+            logger.error(f"Error fetching conversations for maintenance: {str(e)}")
+            return
+
+        for row in rows:
+            user_id = row["user_id"]
+            conversation_id = row["conversation_id"]
+
+            try:
+                logger.debug(
+                    "Starting maintenance for user_id=%s conversation_id=%s", user_id, conversation_id
+                )
+
+                async with get_db_connection_context() as conn:
+                    # Create context and run maintenance through orchestrator
+                    memory_orchestrator = await get_memory_orchestrator(
+                        user_id, conversation_id
+                    )
+
+                    # Consolidate memories using a short-lived connection scope
+                    await memory_orchestrator.consolidate_memories(
+                        entity_type=EntityType.PLAYER,
+                        entity_id=user_id,
+                        force=False,
+                        conn=conn
+                    )
+
+                # Clean up SDK cache for this conversation (no DB connection required)
+                sdk = get_sdk()
+                await sdk.cleanup_conversation(str(conversation_id))
+
+                logger.info(
+                    "Memory maintenance completed for user_id=%s conversation_id=%s",
+                    user_id,
+                    conversation_id,
+                )
+
+            except Exception as e:
+                logger.error(
+                    "Error in memory maintenance for user_id=%s conversation_id=%s: %s",
+                    user_id,
+                    conversation_id,
+                    str(e),
+                )
+
+            # Brief pause between processing
+            await asyncio.sleep(0.5)
+
     run_async_in_worker_loop(process_all_conversations())
     return {"status": "Memory maintenance completed"}
 
