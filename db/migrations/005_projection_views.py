@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from string import Template
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,8 @@ logger = logging.getLogger(__name__)
 description = "Create projection views backed by canon schema"
 
 
-CREATE_CANON_VIEWS = """
+_CREATE_CANON_VIEWS_TEMPLATE = Template(
+    """
 CREATE SCHEMA IF NOT EXISTS canon;
 
 DROP VIEW IF EXISTS public.v_scene_context;
@@ -75,16 +77,16 @@ events AS (
         user_id,
         conversation_id,
         jsonb_agg(
-                jsonb_build_object(
-                    'event_name', event_name,
-                    'description', description,
-                    'location', location,
-                    'fantasy_level', NULL,
-                    'day', day,
-                    'time_of_day', time_of_day,
-                    'start_time', start_time,
-                    'end_time', end_time
-                )
+            jsonb_build_object(
+                'event_name', event_name,
+                'description', description,
+                'location', location,
+                'fantasy_level', NULL,
+                'day', day,
+                'time_of_day', time_of_day,
+                'start_time', start_time,
+                'end_time', end_time
+            )
         ) AS events_payload
     FROM events
     GROUP BY user_id, conversation_id
@@ -110,8 +112,8 @@ SELECT
     COALESCE(r.user_id, ps.user_id, n.user_id, e.user_id, q.user_id) AS user_id,
     COALESCE(r.conversation_id, ps.conversation_id, n.conversation_id, e.conversation_id, q.conversation_id) AS conversation_id,
     jsonb_build_object(
-        'current_roleplay', COALESCE(r.current_roleplay, '{}'::jsonb),
-        'player_stats', COALESCE(ps.player_stats, '{}'::jsonb),
+        'current_roleplay', COALESCE(r.current_roleplay, '{{}}'::jsonb),
+        'player_stats', COALESCE(ps.player_stats, '{{}}'::jsonb),
         'npcs_present', COALESCE(n.npcs_present, '[]'::jsonb),
         'events', COALESCE(e.events_payload, '[]'::jsonb),
         'quests', COALESCE(q.quests_payload, '[]'::jsonb)
@@ -151,25 +153,25 @@ WITH npc_cards AS (
 location_cards AS (
     SELECT
         'location'::text AS entity_type,
-        COALESCE(location_id, id)::text AS entity_id,
-        user_id,
-        conversation_id,
+        ($location_identifier)::text AS entity_id,
+        l.user_id,
+        l.conversation_id,
         jsonb_build_object(
-            'location_id', COALESCE(location_id, id),
-            'location_name', location_name,
-            'description', description,
-            'location_type', location_type,
-            'notable_features', COALESCE(notable_features, '[]'::jsonb)
+            'location_id', $location_identifier,
+            'location_name', l.location_name,
+            'description', l.description,
+            'location_type', l.location_type,
+            'notable_features', COALESCE(l.notable_features, '[]'::jsonb)
         ) AS card,
         to_tsvector(
             'english',
-            COALESCE(location_name, '') || ' ' ||
-            COALESCE(description, '') || ' ' ||
-            COALESCE(location_type, '')
+            COALESCE(l.location_name, '') || ' ' ||
+            COALESCE(l.description, '') || ' ' ||
+            COALESCE(l.location_type, '')
         ) AS search_vector,
-        embedding,
+        l.embedding,
         NULL::timestamptz AS updated_at
-    FROM locations
+    FROM locations AS l
 ),
 memory_cards AS (
     SELECT
@@ -185,7 +187,7 @@ memory_cards AS (
             'memory_type', memory_type,
             'importance', significance,
             'tags', COALESCE(tags, '[]'::jsonb),
-            'metadata', COALESCE(metadata, '{}'::jsonb)
+            'metadata', COALESCE(metadata, '{{}}'::jsonb)
         ) AS card,
         to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
         embedding,
@@ -212,7 +214,7 @@ SELECT
         'content', memory_text,
         'memory_type', memory_type,
         'tags', COALESCE(tags, '[]'::jsonb),
-        'metadata', COALESCE(metadata, '{}'::jsonb)
+        'metadata', COALESCE(metadata, '{{}}'::jsonb)
     ) AS chunk,
     to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
     embedding,
@@ -231,9 +233,11 @@ SELECT * FROM canon.entity_cards_projection;
 CREATE OR REPLACE VIEW public.v_recent_chunks AS
 SELECT * FROM canon.recent_chunks_projection;
 """
+)
 
 
-DROP_CANON_VIEWS = """
+_DROP_CANON_VIEWS_TEMPLATE = Template(
+    """
 DROP VIEW IF EXISTS public.v_scene_context;
 DROP VIEW IF EXISTS public.v_entity_cards;
 DROP VIEW IF EXISTS public.v_recent_chunks;
@@ -270,25 +274,25 @@ WITH npc_cards AS (
 location_cards AS (
     SELECT
         'location'::text AS entity_type,
-        id::text AS entity_id,
-        user_id,
-        conversation_id,
+        ($location_identifier)::text AS entity_id,
+        l.user_id,
+        l.conversation_id,
         jsonb_build_object(
-            'location_id', id,
-            'location_name', location_name,
-            'description', description,
-            'location_type', location_type,
-            'notable_features', COALESCE(notable_features, '[]'::jsonb)
+            'location_id', $location_identifier,
+            'location_name', l.location_name,
+            'description', l.description,
+            'location_type', l.location_type,
+            'notable_features', COALESCE(l.notable_features, '[]'::jsonb)
         ) AS card,
         to_tsvector(
             'english',
-            COALESCE(location_name, '') || ' ' ||
-            COALESCE(description, '') || ' ' ||
-            COALESCE(location_type, '')
+            COALESCE(l.location_name, '') || ' ' ||
+            COALESCE(l.description, '') || ' ' ||
+            COALESCE(l.location_type, '')
         ) AS search_vector,
-        embedding,
+        l.embedding,
         NULL::timestamptz AS updated_at
-    FROM locations
+    FROM locations AS l
 ),
 memory_cards AS (
     SELECT
@@ -304,7 +308,7 @@ memory_cards AS (
             'memory_type', memory_type,
             'importance', significance,
             'tags', COALESCE(tags, '[]'::jsonb),
-            'metadata', COALESCE(metadata, '{}'::jsonb)
+            'metadata', COALESCE(metadata, '{{}}'::jsonb)
         ) AS card,
         to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
         embedding,
@@ -331,7 +335,7 @@ SELECT
         'content', memory_text,
         'memory_type', memory_type,
         'tags', COALESCE(tags, '[]'::jsonb),
-        'metadata', COALESCE(metadata, '{}'::jsonb)
+        'metadata', COALESCE(metadata, '{{}}'::jsonb)
     ) AS chunk,
     to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
     embedding,
@@ -341,14 +345,50 @@ WHERE status = 'active'
   AND COALESCE(is_archived, FALSE) = FALSE
   AND memory_type = ANY(ARRAY['observation','episodic','experience','reflection']);
 """
+)
 
 
 async def upgrade(conn):
-    await conn.execute(CREATE_CANON_VIEWS)
+    location_identifier = await _determine_locations_identifier(conn, table_alias="l")
+    logger.info(
+        "Using locations identifier expression for canon views: %s", location_identifier
+    )
+    create_views_sql = _CREATE_CANON_VIEWS_TEMPLATE.substitute(
+        location_identifier=location_identifier
+    )
+    await conn.execute(create_views_sql)
     logger.info("Created canon-backed projection views")
 
 
 async def downgrade(conn):
-    await conn.execute(DROP_CANON_VIEWS)
+    location_identifier = await _determine_locations_identifier(conn, table_alias="l")
+    logger.info(
+        "Using locations identifier expression for legacy views: %s", location_identifier
+    )
+    drop_views_sql = _DROP_CANON_VIEWS_TEMPLATE.substitute(
+        location_identifier=location_identifier
+    )
+    await conn.execute(drop_views_sql)
     logger.info("Restored legacy projection views")
+
+
+async def _determine_locations_identifier(conn, table_alias: str) -> str:
+    query = """
+        SELECT
+            bool_or(column_name = 'location_id') AS has_location_id,
+            bool_or(column_name = 'id') AS has_id
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'locations';
+    """
+    row = await conn.fetchrow(query)
+    has_location_id = bool(row and row["has_location_id"])
+    has_id = bool(row and row["has_id"])
+
+    if has_location_id and has_id:
+        return f"COALESCE({table_alias}.location_id, {table_alias}.id)"
+    if has_location_id:
+        return f"{table_alias}.location_id"
+    if has_id:
+        return f"{table_alias}.id"
+    raise RuntimeError("locations table is missing both location_id and id columns")
 

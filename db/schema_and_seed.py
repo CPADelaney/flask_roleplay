@@ -4200,83 +4200,112 @@ async def create_all_tables():
                 END $$;
                 ''',
                 '''
-                CREATE OR REPLACE VIEW canon.entity_cards_projection AS
-                WITH npc_cards AS (
+                DO $$
+                DECLARE
+                    has_location_id BOOLEAN;
+                    has_id BOOLEAN;
+                    location_identifier TEXT;
+                BEGIN
                     SELECT
-                        'npc'::text AS entity_type,
-                        npc_id::text AS entity_id,
-                        user_id,
-                        conversation_id,
-                        jsonb_build_object(
-                            'npc_id', npc_id,
-                            'npc_name', npc_name,
-                            'role', role,
-                            'description', physical_description,
-                            'location', current_location,
-                            'personality_traits', COALESCE(personality_traits, '[]'::jsonb),
-                            'relationships', COALESCE(relationships, '[]'::jsonb)
-                        ) AS card,
-                        to_tsvector(
-                            'english',
-                            COALESCE(npc_name, '') || ' ' ||
-                            COALESCE(physical_description, '') || ' ' ||
-                            COALESCE(role, '')
-                        ) AS search_vector,
-                        embedding,
-                        created_at::timestamptz AS updated_at
-                    FROM npcstats
-                ),
-                location_cards AS (
-                    SELECT
-                        'location'::text AS entity_type,
-                        COALESCE(location_id, id)::text AS entity_id,
-                        user_id,
-                        conversation_id,
-                        jsonb_build_object(
-                            'location_id', COALESCE(location_id, id),
-                            'location_name', location_name,
-                            'description', description,
-                            'location_type', location_type,
-                            'notable_features', COALESCE(notable_features, '[]'::jsonb)
-                        ) AS card,
-                        to_tsvector(
-                            'english',
-                            COALESCE(location_name, '') || ' ' ||
-                            COALESCE(description, '') || ' ' ||
-                            COALESCE(location_type, '')
-                        ) AS search_vector,
-                        embedding,
-                        NULL::timestamptz AS updated_at
-                    FROM locations
-                ),
-                memory_cards AS (
-                    SELECT
-                        'memory'::text AS entity_type,
-                        id::text AS entity_id,
-                        user_id,
-                        conversation_id,
-                        jsonb_build_object(
-                            'memory_id', id,
-                            'entity_type', entity_type,
-                            'entity_id', entity_id,
-                            'content', memory_text,
-                            'memory_type', memory_type,
-                            'importance', significance,
-                            'tags', COALESCE(tags, '[]'::jsonb),
-                            'metadata', COALESCE(metadata, '{}'::jsonb)
-                        ) AS card,
-                        to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
-                        embedding,
-                        timestamp::timestamptz AS updated_at
-                    FROM unified_memories
-                    WHERE status = 'active'
-                      AND COALESCE(is_archived, FALSE) = FALSE
-                )
-                SELECT * FROM npc_cards
-                UNION ALL
-                SELECT * FROM location_cards
-                UNION ALL
-                SELECT * FROM memory_cards;
+                        bool_or(column_name = 'location_id'),
+                        bool_or(column_name = 'id')
+                    INTO has_location_id, has_id
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'locations';
+
+                    IF has_location_id AND has_id THEN
+                        location_identifier := 'COALESCE(l.location_id, l.id)';
+                    ELSIF has_location_id THEN
+                        location_identifier := 'l.location_id';
+                    ELSIF has_id THEN
+                        location_identifier := 'l.id';
+                    ELSE
+                        RAISE EXCEPTION 'locations table is missing identifier columns';
+                    END IF;
+
+                    EXECUTE format(
+$view$
+CREATE OR REPLACE VIEW canon.entity_cards_projection AS
+WITH npc_cards AS (
+    SELECT
+        'npc'::text AS entity_type,
+        npc_id::text AS entity_id,
+        user_id,
+        conversation_id,
+        jsonb_build_object(
+            'npc_id', npc_id,
+            'npc_name', npc_name,
+            'role', role,
+            'description', physical_description,
+            'location', current_location,
+            'personality_traits', COALESCE(personality_traits, '[]'::jsonb),
+            'relationships', COALESCE(relationships, '[]'::jsonb)
+        ) AS card,
+        to_tsvector(
+            'english',
+            COALESCE(npc_name, '') || ' ' ||
+            COALESCE(physical_description, '') || ' ' ||
+            COALESCE(role, '')
+        ) AS search_vector,
+        embedding,
+        created_at::timestamptz AS updated_at
+    FROM npcstats
+),
+location_cards AS (
+    SELECT
+        'location'::text AS entity_type,
+        (%1$s)::text AS entity_id,
+        l.user_id,
+        l.conversation_id,
+        jsonb_build_object(
+            'location_id', %1$s,
+            'location_name', l.location_name,
+            'description', l.description,
+            'location_type', l.location_type,
+            'notable_features', COALESCE(l.notable_features, '[]'::jsonb)
+        ) AS card,
+        to_tsvector(
+            'english',
+            COALESCE(l.location_name, '') || ' ' ||
+            COALESCE(l.description, '') || ' ' ||
+            COALESCE(l.location_type, '')
+        ) AS search_vector,
+        l.embedding,
+        NULL::timestamptz AS updated_at
+    FROM locations AS l
+),
+memory_cards AS (
+    SELECT
+        'memory'::text AS entity_type,
+        id::text AS entity_id,
+        user_id,
+        conversation_id,
+        jsonb_build_object(
+            'memory_id', id,
+            'entity_type', entity_type,
+            'entity_id', entity_id,
+            'content', memory_text,
+            'memory_type', memory_type,
+            'importance', significance,
+            'tags', COALESCE(tags, '[]'::jsonb),
+            'metadata', COALESCE(metadata, '{}'::jsonb)
+        ) AS card,
+        to_tsvector('english', COALESCE(memory_text, '')) AS search_vector,
+        embedding,
+        timestamp::timestamptz AS updated_at
+    FROM unified_memories
+    WHERE status = 'active'
+      AND COALESCE(is_archived, FALSE) = FALSE
+)
+SELECT * FROM npc_cards
+UNION ALL
+SELECT * FROM location_cards
+UNION ALL
+SELECT * FROM memory_cards;
+$view$,
+                        location_identifier
+                    );
+                END $$;
                 ''',
                 
                 # ======================================
