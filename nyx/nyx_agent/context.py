@@ -978,6 +978,31 @@ class ContextBroker:
             'narrative': 30.0
         }
 
+        # Precomputed fallbacks per section to keep shapes stable during warmups
+        self._fallback_builders: Dict[str, Callable[[], BundleSection]] = {
+            'npcs': lambda: BundleSection(data=NPCSectionData(npcs=[], canonical_count=0)),
+            'memories': lambda: BundleSection(
+                data=MemorySectionData(relevant=[], recent=[], patterns=[])
+            ),
+            'lore': lambda: BundleSection(
+                data=LoreSectionData(location={}, world={}, canonical_rules=[])
+            ),
+            'conflicts': lambda: BundleSection(data={}),
+            'world': lambda: BundleSection(
+                data={
+                    'time': {'year': None, 'month': None, 'day': None, 'tod': None},
+                    'locations': [],
+                    'npcs': [],
+                    'facts': {},
+                },
+                canonical=False,
+                priority=0,
+                last_changed_at=time.time(),
+                version='world_empty',
+            ),
+            'narrative': lambda: BundleSection(data={}),
+        }
+
         # Canonical fetch method registry + aliases
         self._section_fetchers: Dict[
             str, Callable[[SceneScope], Awaitable[BundleSection]]
@@ -1027,6 +1052,15 @@ class ContextBroker:
 
         self._init_lock = asyncio.Lock()
         self._is_initialized = False
+
+    def _build_section_fallback(self, section_name: str) -> BundleSection:
+        builder = self._fallback_builders.get(section_name)
+        if builder is not None:
+            section = builder()
+        else:
+            section = BundleSection(data={})
+        section.ttl = self.section_ttls.get(section_name, section.ttl)
+        return section
 
     async def initialize(self):
         """Initialize broker resources such as Redis connections and caches."""
@@ -1104,10 +1138,12 @@ class ContextBroker:
 
         try:
             section = await fetcher()
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[CONTEXT_BROKER] Fetch for section '%s' timed out",
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            reason = "timed out" if isinstance(exc, asyncio.TimeoutError) else "was cancelled"
+            logger.info(
+                "[CONTEXT_BROKER] Fetch for section '%s' %s; returning fallback",
                 orchestrator_name,
+                reason,
             )
             asyncio.create_task(
                 self._refresh_section_in_background(
@@ -1120,22 +1156,13 @@ class ContextBroker:
             )
 
             if cached is not None:
-                logger.warning(
-                    "[CONTEXT_BROKER] Using stale %s section due to timeout",
+                logger.info(
+                    "[CONTEXT_BROKER] Using stale %s section due to %s",
                     orchestrator_name,
+                    reason,
                 )
                 return cached
 
-            if orchestrator_name == "world":
-                logger.error(
-                    "[CONTEXT_BROKER] World section timed out with no cached value; returning minimal default",
-                )
-                return fallback_factory()
-
-            logger.error(
-                "[CONTEXT_BROKER] Fetch for section '%s' timed out with no cached value",
-                orchestrator_name,
-            )
             return fallback_factory()
         except Exception:
             logger.exception(
@@ -1999,10 +2026,19 @@ class ContextBroker:
         method = self._section_fetchers.get(canonical_name)
         if not method:
             logger.warning(f"Unknown section name: {section_name}")
-            return BundleSection(data={}, canonical=False, priority=0)
+            return self._build_section_fallback(canonical_name)
 
         start_time = time.time()
-        result = await method(scope)
+        try:
+            result = await method(scope)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            reason = "timed out" if isinstance(exc, asyncio.TimeoutError) else "was cancelled"
+            logger.info(
+                "[CONTEXT_BROKER] Section '%s' %s before completion; returning fallback",
+                canonical_name,
+                reason,
+            )
+            return self._build_section_fallback(canonical_name)
 
         # Track fetch time
         fetch_time = time.time() - start_time
@@ -2052,20 +2088,32 @@ class ContextBroker:
         }
 
         async def fetch_with_semaphore(section_name: str):
-            async def _one():
-                return await self._fetch_section(section_name, scene_scope)
             timeout = SECTION_BUDGETS.get(section_name, 1.5)
+
+            async def _timed_fetch() -> BundleSection:
+                try:
+                    return await asyncio.wait_for(
+                        self._fetch_section(section_name, scene_scope),
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(
+                        "[CONTEXT_BROKER] Section '%s' timed out after %.2fs; using fallback",
+                        section_name,
+                        timeout,
+                    )
+                    return self._build_section_fallback(section_name)
+                except asyncio.CancelledError:
+                    logger.info(
+                        "[CONTEXT_BROKER] Section '%s' wait cancelled; using fallback",
+                        section_name,
+                    )
+                    return self._build_section_fallback(section_name)
+
             if semaphore:
                 async with semaphore:
-                    try:
-                        return await asyncio.wait_for(_one(), timeout=timeout)
-                    except Exception as e:
-                        # Let the gather() path convert to a fallback section
-                        raise e
-            try:
-                return await asyncio.wait_for(_one(), timeout=timeout)
-            except Exception as e:
-                raise e
+                    return await _timed_fetch()
+            return await _timed_fetch()
 
         results = await asyncio.gather(
             *[fetch_with_semaphore(name) for name in SECTION_NAMES],
@@ -3038,18 +3086,7 @@ class ContextBroker:
         """Fetch world state with safe field access and enum handling"""
 
         def _empty_section() -> BundleSection:
-            return BundleSection(
-                data={
-                    "time": {"year": None, "month": None, "day": None, "tod": None},
-                    "locations": [],
-                    "npcs": [],
-                    "facts": {},
-                },
-                canonical=False,
-                priority=0,
-                last_changed_at=time.time(),
-                version="world_empty",
-            )
+            return self._build_section_fallback('world')
 
         async def _fetch() -> BundleSection:
             if not self.ctx.world_director:
@@ -3491,7 +3528,7 @@ class NyxContext:
             return True
 
         try:
-            await task
+            await asyncio.shield(task)
         except asyncio.CancelledError as exc:
             if task.cancelled():
                 self._init_failures[name] = exc

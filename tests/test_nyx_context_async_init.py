@@ -406,3 +406,103 @@ async def test_world_section_fetch_after_world_ready():
 
     cached_section = await broker._fetch_world_section(scope)
     assert cached_section is section
+
+
+@pytest.mark.anyio
+async def test_lore_initialization_shielding_allows_retry(monkeypatch):
+    lore_ready = asyncio.Event()
+
+    class DummyStore:
+        def __init__(self) -> None:
+            self._data = {}
+
+        def get(self, user_key, conversation_key):
+            return self._data.get((user_key, conversation_key))
+
+        def put(self, user_key, conversation_key, value):
+            self._data[(user_key, conversation_key)] = value
+
+    class DummyLoreOrchestrator:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_scene_bundle(self, scope):
+            self.calls += 1
+            return {
+                "data": {
+                    "location": {"name": "Arcadia"},
+                    "world": {"factions": []},
+                    "canonical_rules": ["Rule of Dawn"],
+                },
+                "canonical": True,
+                "last_changed_at": time.time(),
+                "version": "lore_stub",
+            }
+
+    async def _fake_fetch_snapshot(*_args, **_kwargs):
+        return None
+
+    async def _fake_get_context(*_args, **_kwargs):
+        return {}
+
+    async def _noop_hydrate(self):
+        return None
+
+    async def _noop_refresh(self, previous_location_id=None):
+        return None
+
+    async def _fast_memory(self):
+        self.memory_orchestrator = object()
+
+    async def _fast_npc(self):
+        self.npc_orchestrator = object()
+
+    async def _fast_conflict(self):
+        self.conflict_synthesizer = object()
+
+    async def _slow_lore(self):
+        await lore_ready.wait()
+        self.lore_orchestrator = DummyLoreOrchestrator()
+
+    async def _fast_broker_init(self):
+        self._is_initialized = True
+
+    monkeypatch.setattr(context_module, "_SNAPSHOT_STORE", DummyStore())
+    monkeypatch.setattr(context_module, "fetch_canonical_snapshot", _fake_fetch_snapshot)
+    monkeypatch.setattr(context_module, "get_comprehensive_context", _fake_get_context)
+    monkeypatch.setattr(context_module, "WORLD_SIMULATION_AVAILABLE", False)
+    monkeypatch.setattr(context_module.NyxContext, "_hydrate_location_from_db", _noop_hydrate)
+    monkeypatch.setattr(context_module.NyxContext, "_refresh_location_from_context", _noop_refresh)
+    monkeypatch.setattr(context_module.NyxContext, "_init_memory_orchestrator", _fast_memory)
+    monkeypatch.setattr(context_module.NyxContext, "_init_npc_orchestrator", _fast_npc)
+    monkeypatch.setattr(context_module.NyxContext, "_init_conflict_synthesizer", _fast_conflict)
+    monkeypatch.setattr(context_module.NyxContext, "_init_lore_orchestrator", _slow_lore)
+    monkeypatch.setattr(context_module.ContextBroker, "initialize", _fast_broker_init)
+
+    ctx = context_module.NyxContext(user_id=11, conversation_id=22)
+    await ctx.initialize()
+
+    lore_task = ctx.get_init_task("lore")
+    assert lore_task is not None and not lore_task.done()
+    assert not ctx.is_orchestrator_ready("lore")
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            ctx.context_broker.await_orchestrator("lore"),
+            timeout=0.05,
+        )
+
+    assert lore_task.cancelled() is False
+    assert "lore" not in ctx._init_failures
+
+    lore_ready.set()
+    await ctx.await_orchestrator("lore")
+    assert ctx.is_orchestrator_ready("lore")
+    assert isinstance(ctx.lore_orchestrator, DummyLoreOrchestrator)
+
+    scope = context_module.SceneScope()
+    section = await ctx.context_broker._fetch_lore_section(scope)
+
+    assert isinstance(section.data, context_module.LoreSectionData)
+    assert section.data.location.get("name") == "Arcadia"
+    assert section.canonical is True
