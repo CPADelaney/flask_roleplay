@@ -658,17 +658,25 @@ class _ResilientConnectionWrapper:
         return attr
     
     async def _call_with_retry(self, name: str, method, *args, **kwargs):
+        """
+        Call a method with automatic retry on:
+        - Known asyncpg waiter bug ("NoneType.cancelled")
+        - Clear connection-level errors (SSL / connection reset / closed)
+        - Certain internal protocol state issues
+        """
         attempt = 0
         max_attempts = 2
-    
+
         while attempt < max_attempts:
             try:
                 return await method(*args, **kwargs)
-    
+
             except AttributeError as exc:
+                # Handle the asyncpg waiter cancellation bug:
+                # AttributeError: 'NoneType' object has no attribute 'cancelled'
                 if not _is_asyncpg_waiter_cancel_bug(exc) or attempt >= max_attempts - 1:
                     raise
-    
+
                 attempt += 1
                 logger.warning(
                     f"Detected asyncpg waiter cancellation bug while executing {name}; "
@@ -676,10 +684,11 @@ class _ResilientConnectionWrapper:
                 )
                 await self._refresh_connection()
                 method = getattr(self._conn, name)
-    
+
             except _RETRYABLE_CONN_ERRORS as exc:
+                # Handle connection-level issues (SSL/TCP reset, server closed connection, etc.)
                 msg = str(exc).lower()
-                # Only treat clearly connection/SSL-related cases as retryable.
+
                 connection_lost = any(
                     s in msg
                     for s in (
@@ -692,10 +701,11 @@ class _ResilientConnectionWrapper:
                         "tlsv1",
                     )
                 )
-    
+
                 if not connection_lost or attempt >= max_attempts - 1:
+                    # Not clearly a connection loss, or we've already retried
                     raise
-    
+
                 attempt += 1
                 logger.warning(
                     "Connection-level error during %s; refreshing connection and retrying "
@@ -708,8 +718,10 @@ class _ResilientConnectionWrapper:
                 await self._refresh_connection()
                 method = getattr(self._conn, name)
                 continue
-    
+
             except Exception as exc:
+                # Fallback for certain internal protocol issues where asyncpg
+                # complains about unknown protocol state or already-released connections.
                 msg = str(exc).lower()
                 if (
                     attempt < max_attempts - 1
@@ -728,6 +740,8 @@ class _ResilientConnectionWrapper:
                     await self._refresh_connection()
                     method = getattr(self._conn, name)
                     continue
+
+                # Anything else: bubble up
                 raise
     
     async def _refresh_connection(self) -> None:
