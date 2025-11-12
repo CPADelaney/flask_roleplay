@@ -1031,7 +1031,7 @@ class ContextBroker:
             )
         except Exception as e:
             logger.warning(f"Conflict processor unavailable: {e}")
-        
+
         # Performance metrics
         self.metrics = {
             'cache_hits': defaultdict(int),
@@ -1040,11 +1040,15 @@ class ContextBroker:
             'fetch_p95': defaultdict(float),
             'bytes_cached': defaultdict(int)
         }
-        
+
         # Previous scene state for fast-path
         self._last_scene_key: Optional[str] = None
         self._last_packed: Optional[PackedContext] = None
         self._last_bundle: Optional[ContextBundle] = None
+
+        # Section timing state (populated during bundle fetches)
+        self._active_section_budgets: Optional[Dict[str, float]] = None
+        self._active_fetch_cold_flag: Optional[bool] = None
         
         # Metrics logging throttle
         self._metrics_log_counter = 0
@@ -2020,6 +2024,13 @@ class ContextBroker:
         """Return canonical section name for a given alias."""
         return self._section_aliases.get(section_name, section_name)
 
+    def _get_section_timeout(self, section_name: str, default: float) -> float:
+        """Return the active timeout budget for a section, falling back to default."""
+        budgets = self._active_section_budgets
+        if not budgets:
+            return default
+        return float(budgets.get(section_name, default))
+
     async def _fetch_section(self, section_name: str, scope: SceneScope) -> BundleSection:
         """Fetch a single section by name"""
         canonical_name = self._normalize_section_name(section_name)
@@ -2077,6 +2088,19 @@ class ContextBroker:
         max_parallel = self.ctx.max_parallel_tasks
         semaphore = asyncio.Semaphore(max_parallel) if max_parallel > 0 else None
 
+        # Determine whether we're still warming up slower orchestrators.
+        is_cold = False
+        ready_checker = getattr(self.ctx, "is_orchestrator_ready", None)
+        if callable(ready_checker):
+            readiness_samples: List[bool] = []
+            for orchestrator in ("memory", "lore"):
+                try:
+                    readiness_samples.append(bool(ready_checker(orchestrator)))
+                except Exception:
+                    readiness_samples.append(False)
+            if readiness_samples:
+                is_cold = not all(readiness_samples)
+
         # Per-section budgets (seconds). Allow env overrides; bump slow paths.
         def _to_float(env: str, default: float) -> float:
             try:
@@ -2085,17 +2109,34 @@ class ContextBroker:
             except Exception:
                 return default
 
-        SECTION_BUDGETS = {
+        warm_budgets: Dict[str, float] = {
             'npcs':       _to_float("NYX_SECTION_TIMEOUT_NPCS",       1.5),
-            'memories':   _to_float("NYX_SECTION_TIMEOUT_MEMORIES",   3.0),  # was 1.5
+            'memories':   _to_float("NYX_SECTION_TIMEOUT_MEMORIES",   3.0),
             'lore':       _to_float("NYX_SECTION_TIMEOUT_LORE",       2.0),
-            'conflicts':  _to_float("NYX_SECTION_TIMEOUT_CONFLICTS",  3.0),  # was 1.5
+            'conflicts':  _to_float("NYX_SECTION_TIMEOUT_CONFLICTS",  3.0),
             'world':      _to_float("NYX_SECTION_TIMEOUT_WORLD",      1.5),
             'narrative':  _to_float("NYX_SECTION_TIMEOUT_NARRATIVE",  1.0),
         }
 
-        async def fetch_with_semaphore(section_name: str):
-            timeout = SECTION_BUDGETS.get(section_name, 1.5)
+        cold_budgets = dict(warm_budgets)
+        cold_budgets['memories'] = _to_float(
+            "NYX_SECTION_TIMEOUT_MEMORIES_COLD",
+            max(warm_budgets.get('memories', 3.0), 5.0),
+        )
+        cold_budgets['lore'] = _to_float(
+            "NYX_SECTION_TIMEOUT_LORE_COLD",
+            max(warm_budgets.get('lore', 2.0), 5.0),
+        )
+
+        section_budgets = cold_budgets if is_cold else warm_budgets
+
+        previous_budgets = self._active_section_budgets
+        previous_cold_flag = self._active_fetch_cold_flag
+        self._active_section_budgets = section_budgets
+        self._active_fetch_cold_flag = is_cold
+
+        async def fetch_with_semaphore(section_name: str, timeout: float):
+            timeout = max(0.25, timeout)
 
             async def _timed_fetch() -> BundleSection:
                 """
@@ -2128,10 +2169,17 @@ class ContextBroker:
                     return await _timed_fetch()
             return await _timed_fetch()
 
-        results = await asyncio.gather(
-            *[fetch_with_semaphore(name) for name in SECTION_NAMES],
-            return_exceptions=True
-        )
+        try:
+            results = await asyncio.gather(
+                *[
+                    fetch_with_semaphore(name, section_budgets.get(name, 1.5))
+                    for name in SECTION_NAMES
+                ],
+                return_exceptions=True
+            )
+        finally:
+            self._active_section_budgets = previous_budgets
+            self._active_fetch_cold_flag = previous_cold_flag
 
         bundle_data = {}
         for section_name, result in zip(SECTION_NAMES, results):
@@ -2633,11 +2681,11 @@ class ContextBroker:
         if not self.ctx.memory_orchestrator:
             return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]),
                                canonical=False, priority=0)
-        
+
         relevant_memories = []
         recent_memories = []
         patterns = []
-        
+
         try:
             # Build NPC list including link hints
             npc_list = list(scope.npc_ids)[:3]
@@ -2648,7 +2696,8 @@ class ContextBroker:
                     npc_list.append(hint_npc)
 
             orchestrator = self.ctx.memory_orchestrator
-            timeout = getattr(self.ctx, 'memory_fetch_timeout', 1.5)
+            base_timeout = getattr(self.ctx, 'memory_fetch_timeout', 1.5)
+            timeout = self._get_section_timeout('memories', base_timeout)
 
             async def _await_with_timeout(coro, label: str):
                 try:
@@ -2805,10 +2854,16 @@ class ContextBroker:
             return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
                                  canonical=False, priority=0)
     
+        base_timeout = getattr(self.ctx, 'lore_fetch_timeout', 2.0)
+        timeout_budget = self._get_section_timeout('lore', base_timeout)
+
         # --- Fast path: one RPC for the whole scene ---
         if hasattr(self.ctx.lore_orchestrator, 'get_scene_bundle'):
             try:
-                bundle = await self.ctx.lore_orchestrator.get_scene_bundle(scope)
+                bundle = await asyncio.wait_for(
+                    self.ctx.lore_orchestrator.get_scene_bundle(scope),
+                    timeout=timeout_budget,
+                )
                 data = bundle.get('data', {}) or {}
                 rules_raw = data.get('canonical_rules', []) or []
     
@@ -2833,6 +2888,11 @@ class ContextBroker:
                     last_changed_at=float(bundle.get('last_changed_at', time.time())),
                     version=bundle.get('version') or f"lore_scene_{int(time.time())}"
                 )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Lore scene bundle fetch timed out after %.2fs; falling back",
+                    timeout_budget,
+                )
             except Exception as e:
                 logger.error(f"Lore scene bundle fetch failed, falling back: {e}")
     
@@ -2856,7 +2916,15 @@ class ContextBroker:
 
             location_result: Optional[Dict[str, Any]] = None
             if location_task is not None:
-                location_result = await location_task
+                try:
+                    location_result = await asyncio.wait_for(
+                        location_task, timeout=timeout_budget
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Location lore fetch timed out after %.2fs", timeout_budget
+                    )
+                    location_result = None
 
             if location_result:
                 location_lore = {
@@ -2872,12 +2940,31 @@ class ContextBroker:
                 tag_seed.extend(scope.link_hints['related_tags'][:3])
 
             if tag_seed and hasattr(self.ctx.lore_orchestrator, 'get_tagged_lore'):
-                tagged_lore = await self.ctx.lore_orchestrator.get_tagged_lore(tags=tag_seed)
+                try:
+                    tagged_lore = await asyncio.wait_for(
+                        self.ctx.lore_orchestrator.get_tagged_lore(tags=tag_seed),
+                        timeout=timeout_budget,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Tagged lore fetch timed out after %.2fs", timeout_budget
+                    )
+                    tagged_lore = None
                 world_lore = tagged_lore or {}
 
             if canonical_task is not None:
-                canonical = await canonical_task
-                canonical_rules = (canonical.get('rules') or [])[:5]
+                canonical_payload: Optional[Dict[str, Any]] = None
+                try:
+                    canonical_payload = await asyncio.wait_for(
+                        canonical_task, timeout=timeout_budget
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Canonical lore consistency check timed out after %.2fs",
+                        timeout_budget,
+                    )
+                if canonical_payload:
+                    canonical_rules = (canonical_payload.get('rules') or [])[:5]
 
         except Exception as e:
             if location_task is not None and not location_task.done():
