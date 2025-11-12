@@ -153,21 +153,43 @@ async def test_context_broker_waits_for_memory(monkeypatch):
             return None
 
     class MemoryStub:
-        def __init__(self):
+        def __init__(self) -> None:
             self.retrievals = 0
 
         async def retrieve_memories(self, *args, **kwargs):
             self.retrievals += 1
-            return {"memories": []}
+            entity_id = kwargs.get("entity_id")
+            return {
+                "memories": [
+                    {
+                        "id": entity_id,
+                        "text": f"memory-{entity_id}",
+                    }
+                ]
+            }
 
         async def retrieve_recent_memories(self, *args, **kwargs):
-            return {"memories": []}
+            return {
+                "memories": [
+                    {
+                        "id": "recent-1",
+                        "text": "recent memory",
+                    }
+                ]
+            }
 
         async def analyze_patterns(self, *args, **kwargs):
-            return {"patterns": []}
+            return {
+                "predictions": [
+                    {
+                        "pattern": "arc",
+                        "confidence": 0.9,
+                    }
+                ]
+            }
 
     class BrokerCtx:
-        def __init__(self):
+        def __init__(self) -> None:
             self.user_id = 7
             self.conversation_id = 9
             self.current_context = {}
@@ -179,14 +201,30 @@ async def test_context_broker_waits_for_memory(monkeypatch):
                 "memory": asyncio.create_task(self._finish_memory())
             }
 
-        async def _finish_memory(self):
+        async def _finish_memory(self) -> None:
             await asyncio.sleep(memory_delay)
             self.memory_orchestrator = MemoryStub()
 
-        async def await_orchestrator(self, name: str):
+        async def analyze_memory_patterns(self, *args, **kwargs):
+            return {
+                "predictions": [
+                    {
+                        "pattern": "arc",
+                        "confidence": 0.9,
+                    }
+                ]
+            }
+
+        def is_orchestrator_ready(self, name: str) -> bool:
             task = self._init_tasks.get(name)
-            if task:
-                await task
+            return bool(task and task.done())
+
+        async def await_orchestrator(self, name: str) -> bool:
+            task = self._init_tasks.get(name)
+            if not task:
+                return False
+            await task
+            return True
 
     monkeypatch.setattr(context_module, "redis", DummyRedisModule)
     monkeypatch.setattr(context_module, "get_conflict_scheduler", lambda: DummyScheduler())
@@ -194,18 +232,31 @@ async def test_context_broker_waits_for_memory(monkeypatch):
     ctx = BrokerCtx()
     broker = context_module.ContextBroker(ctx)
     scope = context_module.SceneScope()
+    scope.npc_ids = {1}
+    scope.topics = {"mystery"}
+    scope.location_id = "loc-1"
 
     start = time.perf_counter()
-    section = await broker._fetch_memory_section(scope)
+    fallback_section = await broker._fetch_memory_section(scope)
     elapsed = time.perf_counter() - start
 
-    assert elapsed >= memory_delay - 0.01
-    assert isinstance(section, context_module.BundleSection)
-    assert isinstance(ctx.memory_orchestrator, MemoryStub)
-    assert ctx.memory_orchestrator.retrievals >= 0
+    assert elapsed < memory_delay / 2
+    assert isinstance(fallback_section, context_module.BundleSection)
+    assert fallback_section.data.relevant == []
+    assert fallback_section.data.recent == []
+    assert fallback_section.data.patterns == []
 
-    # Ensure the initialization task completed cleanly
-    await ctx.await_orchestrator("memory")
+    # Ensure the initialization task completed cleanly and readiness flips
+    assert await ctx.await_orchestrator("memory") is True
+    assert ctx.is_orchestrator_ready("memory") is True
+    assert isinstance(ctx.memory_orchestrator, MemoryStub)
+
+    ready_section = await broker._fetch_memory_section(scope)
+
+    assert ready_section.data.relevant  # orchestrator data populated
+    assert ready_section.data.recent
+    assert ready_section.data.patterns
+    assert ctx.memory_orchestrator.retrievals > 0
 
 
 @pytest.mark.anyio
@@ -238,8 +289,12 @@ async def test_context_broker_initialize_is_idempotent(monkeypatch):
             self.npc_orchestrator = DummyNPCOrchestrator()
             self.awaited = []
 
+        def is_orchestrator_ready(self, name: str) -> bool:
+            return True
+
         async def await_orchestrator(self, name: str):
             self.awaited.append(name)
+            return True
 
     monkeypatch.setattr(context_module.redis, "from_url", fake_from_url)
     monkeypatch.setattr(context_module, "get_conflict_scheduler", lambda: DummyScheduler())
@@ -283,9 +338,33 @@ async def test_world_section_fetch_after_world_ready():
     class DummyWorldDirector:
         def __init__(self, state: DummyWorldState) -> None:
             self._state = state
+            self.context = self._build_context(state)
 
         async def get_world_state(self) -> DummyWorldState:
             return self._state
+
+        def _build_context(self, state: DummyWorldState):
+            class _Context:
+                def __init__(self, world_state: DummyWorldState) -> None:
+                    self._world_state = world_state
+
+                async def get_world_bundle(self, fast: bool = True) -> typing.Dict[str, typing.Any]:
+                    vitals = self._world_state.player_vitals
+                    return {
+                        "summary": {
+                            "time": self._world_state.current_time,
+                            "mood": self._world_state.world_mood.value,
+                            "weather": self._world_state.weather.value,
+                            "events": list(self._world_state.active_events),
+                            "vitals": {
+                                "fatigue": vitals.fatigue,
+                                "hunger": vitals.hunger,
+                                "thirst": vitals.thirst,
+                            },
+                        }
+                    }
+
+            return _Context(state)
 
     class BrokerCtx:
         def __init__(self) -> None:
@@ -301,10 +380,16 @@ async def test_world_section_fetch_after_world_ready():
             await asyncio.sleep(0)
             self.world_director = DummyWorldDirector(self._state)
 
-        async def await_orchestrator(self, name: str) -> None:
+        def is_orchestrator_ready(self, name: str) -> bool:
             task = self._init_tasks.get(name)
-            if task:
-                await task
+            return bool(task and task.done())
+
+        async def await_orchestrator(self, name: str) -> bool:
+            task = self._init_tasks.get(name)
+            if not task:
+                return False
+            await task
+            return True
 
     ctx = BrokerCtx()
     broker = context_module.ContextBroker(ctx)
