@@ -547,9 +547,9 @@ class ConflictSynthesizer:
                 if isinstance(location_ref, int):
                     location_row = await conn.fetchrow(
                         """
-                        SELECT COALESCE(location_id, id) AS location_id
+                        SELECT location_id AS location_id
                         FROM locations
-                        WHERE COALESCE(location_id, id) = $1
+                        WHERE location_id = $1
                         LIMIT 1
                         """,
                         location_ref,
@@ -560,10 +560,10 @@ class ConflictSynthesizer:
                     logger.debug(f"Location is a string '{location_ref}', looking up ID.")
                     location_row = await conn.fetchrow(
                         """
-                        SELECT COALESCE(location_id, id) AS location_id
+                        SELECT location_id
                         FROM locations
                         WHERE location_name_lc = LOWER($1)
-                        ORDER BY COALESCE(location_id, id) DESC
+                        ORDER BY location_id DESC
                         LIMIT 1
                         """,
                         location_ref,
