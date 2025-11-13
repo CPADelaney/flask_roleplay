@@ -14,11 +14,8 @@ from db.connection import get_db_connection_context
 
 # Import enhanced feasibility functions
 from nyx.nyx_agent.feasibility import (
-    assess_action_feasibility,
-    record_impossibility,
-    record_possibility,
     detect_setting_type,
-    assess_action_feasibility_fast
+    assess_action_feasibility_fast,
 )
 
 from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
@@ -495,19 +492,27 @@ async def process_user_input(
                 f"[{trace_id}] Fast feasibility supplied via context; skipping duplicate check"
             )
 
+        fast_overall: Dict[str, Any] = {}
+        fast_strategy = ""
+        fast_feasible_flag: Optional[bool] = None
+
         if isinstance(fast, dict):
-            overall = fast.get("overall", {}) or {}
-            feasible_flag = overall.get("feasible")
-            strategy = (overall.get("strategy") or "").lower()
+            fast_overall = (fast or {}).get("overall", {}) or {}
+            fast_strategy = (fast_overall.get("strategy") or "").lower()
+            fast_feasible_flag = fast_overall.get("feasible")
             soft_location_only = _is_soft_location_only_violation(fast)
 
             logger.info(
-                f"[{trace_id}] Fast feasibility: feasible={feasible_flag} "
-                f"strategy={strategy} soft_location_only={soft_location_only}"
+                f"[{trace_id}] Fast feasibility: feasible={fast_feasible_flag} "
+                f"strategy={fast_strategy} soft_location_only={soft_location_only}"
             )
 
             # Hard-block ONLY when it's a real impossibility, not a location-only miss
-            if feasible_flag is False and strategy == "deny" and not soft_location_only:
+            if (
+                fast_feasible_flag is False
+                and fast_strategy == "deny"
+                and not soft_location_only
+            ):
                 per = fast.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 guidance = (
@@ -537,7 +542,11 @@ async def process_user_input(
                 }
 
             # Soft location-only deny → let router + full pipeline handle it
-            if feasible_flag is False and strategy == "deny" and soft_location_only:
+            if (
+                fast_feasible_flag is False
+                and fast_strategy == "deny"
+                and soft_location_only
+            ):
                 logger.info(
                     f"[{trace_id}] Fast feasibility DENY is soft location-only; "
                     "continuing to orchestrator + location resolver."
@@ -576,20 +585,45 @@ async def process_user_input(
         feas: Optional[Dict[str, Any]] = None
         enhanced_input = user_input  # Initialize with original input
 
+        assess_action_feasibility_fn = None
+        record_impossibility_fn = None
+        record_possibility_fn = None
+
         try:
             from nyx.nyx_agent.feasibility import (
-                assess_action_feasibility,
-                record_impossibility,
-                record_possibility,
+                assess_action_feasibility as assess_action_feasibility_fn,
+                record_impossibility as record_impossibility_fn,
+                record_possibility as record_possibility_fn,
+            )
+        except ImportError:
+            logger.warning(
+                f"[{trace_id}] Full feasibility not available; proceeding without it."
+            )
+        except Exception as e:
+            logger.warning(
+                f"[{trace_id}] Full feasibility import failed softly: {e}", exc_info=True
             )
 
-            feas = await assess_action_feasibility(nyx_context, user_input)
-            nyx_context.current_context["feasibility"] = feas
-            logger.info(f"[{trace_id}] Full feasibility: {feas.get('overall', {})}")
-        except ImportError:
-            logger.warning(f"[{trace_id}] Full feasibility not available; proceeding without it.")
-        except Exception as e:
-            logger.warning(f"[{trace_id}] Full feasibility failed softly: {e}", exc_info=True)
+        fast_allows_action = fast_feasible_flag is True and fast_strategy == "allow"
+
+        if assess_action_feasibility_fn:
+            try:
+                if fast_allows_action and isinstance(fast, dict):
+                    feas = fast
+                    nyx_context.current_context["feasibility"] = fast
+                    logger.info(
+                        f"[{trace_id}] Fast feasibility allowed action; skipping full feasibility assessment"
+                    )
+                else:
+                    feas = await assess_action_feasibility_fn(nyx_context, user_input)
+                    nyx_context.current_context["feasibility"] = feas
+                    logger.info(
+                        f"[{trace_id}] Full feasibility: {feas.get('overall', {})}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[{trace_id}] Full feasibility failed softly: {e}", exc_info=True
+                )
 
         if isinstance(feas, dict):
             overall = feas.get("overall", {}) or {}
@@ -606,12 +640,16 @@ async def process_user_input(
                     else "That violates the laws of this reality"
                 )
 
-                try:
-                    await record_impossibility(nyx_context, user_input, violation_text)
-                except Exception:
-                    logger.debug(
-                        f"[{trace_id}] record_impossibility failed softly", exc_info=True
-                    )
+                if record_impossibility_fn:
+                    try:
+                        await record_impossibility_fn(
+                            nyx_context, user_input, violation_text
+                        )
+                    except Exception:
+                        logger.debug(
+                            f"[{trace_id}] record_impossibility failed softly",
+                            exc_info=True,
+                        )
 
                 rejection_narrative = (
                     f"*{first.get('reality_response', 'Reality ripples and refuses.')}*\n\n"
@@ -686,14 +724,18 @@ async def process_user_input(
                     "processing_time": time.time() - start_time,
                 }
             elif feasible_flag is True:
-                try:
-                    intents = feas.get("per_intent", [])
-                    if intents and (cats := intents[0].get("categories")):
-                        await record_possibility(nyx_context, user_input, cats)
-                except Exception:
-                    logger.debug(
-                        f"[{trace_id}] record_possibility failed softly", exc_info=True
-                    )
+                if record_possibility_fn:
+                    try:
+                        intents = feas.get("per_intent", [])
+                        if intents and (cats := intents[0].get("categories")):
+                            await record_possibility_fn(
+                                nyx_context, user_input, cats
+                            )
+                    except Exception:
+                        logger.debug(
+                            f"[{trace_id}] record_possibility failed softly",
+                            exc_info=True,
+                        )
                 enhanced_input = (
                     "[REALITY CHECK: Action is feasible within universe laws.]\n\n"
                     f"{user_input}"
