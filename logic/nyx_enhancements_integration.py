@@ -30,8 +30,8 @@ from nyx.nyx_agent.orchestrator import (
     generate_reflection,
     manage_scenario,
     manage_relationships,
-    store_messages
 )
+from nyx.conversation import ConversationStore
 
 # Memory operations through the new orchestrator
 from memory.memory_orchestrator import (
@@ -75,6 +75,9 @@ _sdk_config = NyxSDKConfig(
     result_cache_ttl_seconds=10,
     timeout_profiles={"grounding": 120.0},
 )
+
+# Conversation persistence helper
+_conversation_store = ConversationStore()
 
 def get_sdk() -> NyxAgentSDK:
     """Get or create the global SDK instance"""
@@ -272,10 +275,22 @@ async def enhanced_background_chat_task(
         ai_response = sdk_response.narrative
         response_metadata = sdk_response.metadata
         
-        # Store messages (SDK may already do this, but ensure it happens)
-        performance_tracker.start_phase("store_messages")
-        await store_messages(user_id, conversation_id, user_input, ai_response)
-        logger.info(f"Stored messages for conversation {conversation_id}")
+        # Persist the conversation turns via the shared ConversationStore helper
+        performance_tracker.start_phase("append_turns")
+        await _conversation_store.append_turn(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            turn={"sender": "user", "content": user_input},
+        )
+        await _conversation_store.append_turn(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            turn={"sender": "Nyx", "content": ai_response},
+        )
+        logger.info(
+            "Appended conversation turns for conversation %s via ConversationStore",
+            conversation_id,
+        )
         performance_tracker.end_phase()
         
         # Emit response to client via SocketIO
