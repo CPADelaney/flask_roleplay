@@ -40,21 +40,34 @@ class BaseDataAccess:
         Initialize the data access component.
         
         Returns:
-            True if initialization successful, False otherwise
+            True if initialization successful, False otherwise.
         """
         if self.initialized:
             return True
-            
+
         try:
             # Test database connection
             async with get_db_connection_context() as conn:
                 await conn.fetchval("SELECT 1")
-                self.initialized = True
-                return True
+        except asyncio.CancelledError:
+            # This means some higher-level timeout / wait_for cancelled us.
+            # Log at info and propagate so the caller can decide what to do.
+            logger.info(
+                "Initialization for %s was cancelled; will retry on next access",
+                self.__class__.__name__,
+            )
+            raise
         except Exception:
-            # Log full traceback so we see the real failure site
-            logger.error("Error initializing %s", self.__class__.__name__, exc_info=True)
+            # Real DB error; log full traceback and mark as not initialized.
+            logger.error(
+                "Error initializing %s",
+                self.__class__.__name__,
+                exc_info=True,
+            )
             return False
+        else:
+            self.initialized = True
+            return True
     
     async def cleanup(self):
         """Clean up resources."""
