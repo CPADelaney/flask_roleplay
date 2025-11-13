@@ -65,11 +65,76 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+_LOCATION_RULE_PREFIXES = (
+    "location_resolver:",
+    "location:",
+    "unavailable:location",
+)
+
+_LOCATION_RULES_EXACT = {
+    "npc_absent",      # "No sign of X anywhere in this scene..."
+    "item_absent",     # "No sign of that item / stash..."
+}
+
 
 DEFAULT_DEFER_RUN_TIMEOUT_SECONDS: float = getattr(
     Config, "DEFER_RUN_TIMEOUT_SECONDS", 45.0
 )
 DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
+
+def _is_soft_location_only_violation(fast_result: Dict[str, Any]) -> bool:
+    """
+    Return True if the fast feasibility result is a deny *only* because
+    the target/place is missing or unresolved (location_resolver / npc_absent /
+    item_absent), with no physics/magic/rule-based hard impossibilities.
+    """
+
+    if not isinstance(fast_result, dict):
+        return False
+
+    overall = fast_result.get("overall") or {}
+    if overall.get("feasible") is not False:
+        return False
+
+    strategy = (overall.get("strategy") or "").lower()
+    if strategy != "deny":
+        return False
+
+    per_intent = fast_result.get("per_intent") or []
+    if not per_intent:
+        # No detail → treat as hard deny
+        return False
+
+    any_violation = False
+
+    for intent in per_intent:
+        if intent.get("feasible") is True:
+            # Allowed intent is fine
+            continue
+
+        violations = intent.get("violations") or []
+        if not violations:
+            # “Deny with no violations” is not soft
+            return False
+
+        for v in violations:
+            rule = str(v.get("rule") or "").lower()
+            if not rule:
+                return False
+
+            any_violation = True
+
+            # Location-ish rules we treat as "soft"
+            if rule in _LOCATION_RULES_EXACT:
+                continue
+            if any(rule.startswith(prefix) for prefix in _LOCATION_RULE_PREFIXES):
+                continue
+
+            # Anything else (established_impossibility, category:foo, scene:bar, etc.)
+            # means this is NOT a pure location-only problem.
+            return False
+
+    return any_violation
 
 
 def get_defer_run_timeout_seconds(config: Optional["NyxSDKConfig"] = None) -> float:
@@ -412,11 +477,11 @@ async def process_user_input(
     try:
         # ---- STEP 0: Mandatory fast feasibility (dynamic) ---------------------
         logger.info(f"[{trace_id}] Running mandatory fast feasibility check")
-        fast = None
+        fast: Optional[Dict[str, Any]] = None
         try:
             from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
+
             fast = await assess_action_feasibility_fast(user_id, conversation_id, user_input)
-            logger.info(f"[{trace_id}] Fast feasibility: {fast.get('overall', {})}")
         except Exception as e:
             logger.error(f"[{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
 
@@ -426,8 +491,13 @@ async def process_user_input(
             strategy = (overall.get("strategy") or "").lower()
             soft_location_only = _is_soft_location_only_violation(fast)
 
+            logger.info(
+                f"[{trace_id}] Fast feasibility: feasible={feasible_flag} "
+                f"strategy={strategy} soft_location_only={soft_location_only}"
+            )
+
+            # Hard-block ONLY when it's a real impossibility, not a location-only miss
             if feasible_flag is False and strategy == "deny" and not soft_location_only:
-                # Hard block: true rule / physics / established-impossibility violation
                 per = fast.get("per_intent") or []
                 first = per[0] if per and isinstance(per[0], dict) else {}
                 guidance = (
@@ -456,9 +526,8 @@ async def process_user_input(
                     "processing_time": time.time() - start_time,
                 }
 
-            elif feasible_flag is False and strategy == "deny" and soft_location_only:
-                # Soft “no such NPC / location yet” → DO NOT hard-block here.
-                # Let the location router + resolver handle it downstream.
+            # Soft location-only deny → let router + full pipeline handle it
+            if feasible_flag is False and strategy == "deny" and soft_location_only:
                 logger.info(
                     f"[{trace_id}] Fast feasibility DENY is soft location-only; "
                     "continuing to orchestrator + location resolver."
@@ -494,7 +563,7 @@ async def process_user_input(
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")
-        feas = None
+        feas: Optional[Dict[str, Any]] = None
         enhanced_input = user_input  # Initialize with original input
 
         try:
@@ -503,6 +572,7 @@ async def process_user_input(
                 record_impossibility,
                 record_possibility,
             )
+
             feas = await assess_action_feasibility(nyx_context, user_input)
             nyx_context.current_context["feasibility"] = feas
             logger.info(f"[{trace_id}] Full feasibility: {feas.get('overall', {})}")
@@ -512,7 +582,7 @@ async def process_user_input(
             logger.warning(f"[{trace_id}] Full feasibility failed softly: {e}", exc_info=True)
 
         if isinstance(feas, dict):
-            overall = feas.get("overall", {})
+            overall = feas.get("overall", {}) or {}
             feasible_flag = overall.get("feasible")
             strategy = (overall.get("strategy") or "").lower()
 
@@ -767,7 +837,7 @@ async def process_user_input(
                 "processing_time": time.time() - start_time,
             }
 
-            async def perform_background_writes():
+            async def perform_background_writes() -> None:
                 try:
                     # Save the final context state (emotional, scene, etc.)
                     await _save_context_state(nyx_context)
