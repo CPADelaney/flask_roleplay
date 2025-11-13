@@ -339,10 +339,11 @@ def test_fast_feasibility_blocks_unknown_location(monkeypatch, action_text):
     overall = result.get("overall", {})
     per_intent = (result.get("per_intent") or [])[0]
     assert overall.get("feasible") is False
-    assert overall.get("strategy") == "deny"
-    assert per_intent.get("strategy") == "deny"
+    assert overall.get("strategy") == "ask"
+    assert overall.get("soft_location_only") is True
+    assert per_intent.get("strategy") == "ask"
     violation_blob = json.dumps(per_intent.get("violations", []))
-    assert "location_resolver:deny" in violation_blob
+    assert "location_resolver:ask" in violation_blob
     assert "hidden moon base" in violation_blob.lower()
 
 
@@ -566,10 +567,11 @@ def test_fast_feasibility_denies_implausible_harbor(monkeypatch, action_text, fa
     overall = result.get("overall", {})
     per_intent = (result.get("per_intent") or [])[0]
     assert overall.get("feasible") is False
-    assert overall.get("strategy") == "deny"
-    assert per_intent.get("strategy") == "deny"
+    assert overall.get("strategy") == "ask"
+    assert overall.get("soft_location_only") is True
+    assert per_intent.get("strategy") == "ask"
     violation_blob = json.dumps(per_intent.get("violations", []))
-    assert "location_resolver:deny" in violation_blob
+    assert "location_resolver:ask" in violation_blob
     assert "harbor in topeka" in violation_blob.lower()
 
 
