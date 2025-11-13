@@ -57,11 +57,12 @@ from utils.performance import PerformanceTracker, timed_function
 from utils.caching import NPC_CACHE, MEMORY_CACHE
 from db.connection import get_db_connection_context
 from agents import RunContextWrapper
-from utils.conversation_history import fetch_recent_turns
+from nyx.conversation.store import ConversationStore
 
 logger = logging.getLogger(__name__)
 
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
+_conversation_store = ConversationStore()
 
 # ===== Serialization Helpers =====
 
@@ -165,7 +166,10 @@ async def nyx_response():
             "activity_type": data.get("activity_type", "conversation"),
             "timestamp": time.time()
         }
-        metadata["recent_turns"] = await fetch_recent_turns(user_id, conversation_id_int)
+        metadata["recent_turns"] = await _conversation_store.fetch_recent_turns(
+            user_id=user_id,
+            conversation_id=conversation_id_int,
+        )
 
         # Merge any additional context
         if data.get("additional_context"):
@@ -202,6 +206,25 @@ async def nyx_response():
             metadata=metadata
         )
         tracker.end_phase()
+
+        if sdk_response.success:
+            try:
+                await _conversation_store.append_turn(
+                    user_id=user_id,
+                    conversation_id=conversation_id_int,
+                    turn={"sender": "user", "content": user_input},
+                )
+                await _conversation_store.append_turn(
+                    user_id=user_id,
+                    conversation_id=conversation_id_int,
+                    turn={"sender": "Nyx", "content": sdk_response.narrative},
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to append conversation turns for conversation_id=%s",  # pragma: no cover - logging only
+                    conversation_id_int,
+                    exc_info=True,
+                )
         
         # Post-processing steps
         tracker.start_phase("post_processing")

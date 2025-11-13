@@ -271,6 +271,9 @@ class _RecordingSDK:
 
 
 class _StubConversationStore:
+    async def fetch_recent_turns(self, *args: Any, **kwargs: Any) -> list[Dict[str, Any]]:
+        return []
+
     async def append_turn(self, *args: Any, **kwargs: Any) -> None:
         return None
 
@@ -286,11 +289,6 @@ def test_enhanced_background_chat_task_normalizes_current_location(monkeypatch: 
         "get_db_connection_context",
         lambda: _StubConnectionContext(stub_connection),
     )
-
-    async def _recent_turns_stub(*_: Any, **__: Any) -> list[Dict[str, Any]]:
-        return []
-
-    monkeypatch.setattr(integration, "fetch_recent_turns", _recent_turns_stub)
 
     async def _noop(*_: Any, **__: Any) -> None:
         return None
