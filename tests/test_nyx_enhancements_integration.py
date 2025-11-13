@@ -155,14 +155,9 @@ async def _stub_async_return(*_: Any, **__: Any) -> Dict[str, Any]:
     return {}
 
 
-async def _stub_store_messages(*_: Any, **__: Any) -> None:
-    return None
-
-
 nyx_orchestrator_module.generate_reflection = _stub_async_return
 nyx_orchestrator_module.manage_relationships = _stub_async_return
 nyx_orchestrator_module.manage_scenario = _stub_async_return
-nyx_orchestrator_module.store_messages = _stub_store_messages
 
 nyx_agent_pkg = types.ModuleType("nyx.nyx_agent")
 nyx_agent_pkg.context = nyx_context_module
@@ -275,6 +270,11 @@ class _RecordingSDK:
         )
 
 
+class _StubConversationStore:
+    async def append_turn(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
 def test_enhanced_background_chat_task_normalizes_current_location(monkeypatch: pytest.MonkeyPatch) -> None:
     raw_location = json.dumps({"name": "Velvet Sanctum", "id": "scene-019"})
     stub_connection = _StubConnection(
@@ -295,7 +295,7 @@ def test_enhanced_background_chat_task_normalizes_current_location(monkeypatch: 
     async def _noop(*_: Any, **__: Any) -> None:
         return None
 
-    monkeypatch.setattr(integration, "store_messages", _noop)
+    monkeypatch.setattr(integration, "_conversation_store", _StubConversationStore())
     monkeypatch.setattr(integration, "store_performance_metrics", _noop)
     monkeypatch.setattr(integration, "handle_image_generation_through_sdk", _noop)
     monkeypatch.setattr(integration, "update_narrative_arcs_from_sdk_response", _noop)

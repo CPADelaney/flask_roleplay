@@ -60,7 +60,11 @@ async def _exercise_full_turn(monkeypatch):
     orchestrator_module.generate_reflection = fake_process_user_input
     orchestrator_module.manage_scenario = fake_process_user_input
     orchestrator_module.manage_relationships = fake_process_user_input
-    orchestrator_module.store_messages = fake_process_user_input
+
+    async def fake_store_messages(*_args, **_kwargs):
+        return None
+
+    orchestrator_module.store_messages = fake_store_messages
     orchestrator_module.run_agent_safely = fake_process_user_input
     orchestrator_module.run_agent_with_error_handling = fake_process_user_input
     orchestrator_module.decide_image_generation_standalone = fake_process_user_input
@@ -69,6 +73,17 @@ async def _exercise_full_turn(monkeypatch):
     import nyx.nyx_agent_sdk as sdk
 
     importlib.reload(sdk)
+
+    import nyx.conversation.store as conversation_store_module
+
+    async def fake_append_turn(self, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        conversation_store_module.ConversationStore,
+        "append_turn",
+        fake_append_turn,
+    )
 
     # Stub snapshot store backend (avoid Redis) and persistence
     monkeypatch.setattr(sdk.ConversationSnapshotStore, "_build_client", lambda self: None)
