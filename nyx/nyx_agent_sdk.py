@@ -47,6 +47,11 @@ from .nyx_agent._feasibility_helpers import (
 
 from nyx.nyx_agent.models import NyxResponse
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
+
+try:
+    from nyx.conversation import ConversationStore
+except Exception:  # pragma: no cover - store is optional in some runtimes
+    ConversationStore = None  # type: ignore
 from nyx.core.side_effects import (
     ConflictEvent,
     LoreHint,
@@ -437,6 +442,7 @@ class NyxAgentSDK:
         # optional per-conversation context kept only when explicitly warmed
         self._warm_contexts: Dict[str, NyxContext] = {}
         self._snapshot_store = ConversationSnapshotStore() if flags.versioned_cache_enabled() else None
+        self._conversation_store = ConversationStore() if ConversationStore else None
         self._legacy_snapshots: Dict[Tuple[str, str], Dict[str, Any]] = {}
         raw_profiles = getattr(self.config, "timeout_profiles", {}) or {}
         self._timeout_profiles: Dict[str, float] = {}
@@ -1056,6 +1062,16 @@ class NyxAgentSDK:
                     exc_info=True,
                 )
 
+            if resp.success:
+                await self._append_conversation_turns_safe(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    user_message=message,
+                    nyx_response=resp,
+                    metadata=meta,
+                    trace_id=trace_id,
+                )
+
             self._write_cache(cache_key, resp)
             return resp
 
@@ -1151,6 +1167,16 @@ class NyxAgentSDK:
                         exc_info=True,
                     )
 
+                if resp.success:
+                    await self._append_conversation_turns_safe(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        user_message=message,
+                        nyx_response=resp,
+                        metadata=meta,
+                        trace_id=trace_id,
+                    )
+
                 self._write_cache(cache_key, resp)
                 return resp
 
@@ -1213,6 +1239,58 @@ class NyxAgentSDK:
         }
 
     # ── internals -------------------------------------------------------------
+
+    async def _append_conversation_turns_safe(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        user_message: Optional[str],
+        nyx_response: Optional[NyxResponse],
+        metadata: Optional[Dict[str, Any]],
+        trace_id: str,
+    ) -> None:
+        store = getattr(self, "_conversation_store", None)
+        if not store or nyx_response is None:
+            return
+
+        try:
+            meta = metadata or {}
+
+            def _pick_name(keys: Tuple[str, ...], default: str) -> str:
+                for key in keys:
+                    value = meta.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+                return default
+
+            player_name = _pick_name(
+                ("player_name", "user_display_name", "user_name", "player"), "Player"
+            )
+            nyx_name = _pick_name(("nyx_display_name", "assistant_name"), "Nyx")
+
+            if user_message and str(user_message).strip():
+                await store.append_turn(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    turn={"sender": player_name, "content": str(user_message)},
+                )
+
+            narrative = nyx_response.narrative if nyx_response.narrative is not None else ""
+            if narrative:
+                await store.append_turn(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    turn={
+                        "sender": nyx_name,
+                        "content": narrative,
+                        "metadata": nyx_response.metadata,
+                    },
+                )
+        except Exception:
+            logger.debug(
+                "[SDK-%s] ConversationStore append failed softly", trace_id, exc_info=True
+            )
 
     async def _call_orchestrator_with_timeout(
         self,
@@ -1647,6 +1725,15 @@ class NyxAgentSDK:
             trace_id,
             len(narrative),
         )
+        if response.success:
+            await self._append_conversation_turns_safe(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                user_message=message,
+                nyx_response=response,
+                metadata=metadata,
+                trace_id=trace_id,
+            )
         return response
 
 
