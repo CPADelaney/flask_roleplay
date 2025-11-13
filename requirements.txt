@@ -39,7 +39,7 @@ sqlmodel>=0.0.22
 aiosqlite>=0.20
 
 # Database
-asyncpg==0.29.0
+asyncpg==0.30.0
 psycopg2-binary==2.9.10  # Use binary version to avoid compilation
 SQLAlchemy==2.0.41
 alembic==1.15.2
