@@ -3,6 +3,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+import asyncio
+import time
 from typing import Any, Dict, List, Tuple
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -45,6 +47,26 @@ class _StubNyxContext:
 class _StubSceneScope(dict):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+
+
+class _RecorderConversationStore:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    async def append_turn(
+        self,
+        *,
+        user_id: Any,
+        conversation_id: Any,
+        turn: Dict[str, Any],
+    ) -> None:
+        self.calls.append(
+            {
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "turn": dict(turn),
+            }
+        )
 
 
 def _stub_build_canonical_snapshot_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -114,7 +136,12 @@ class _StubModelsNyxResponse:
     narrative: str = ""
 
 
+class _StubBaseModel:
+    pass
+
+
 stub_models.NyxResponse = _StubModelsNyxResponse
+stub_models.BaseModel = _StubBaseModel
 
 sys.modules.setdefault("nyx.nyx_agent.models", stub_models)
 
@@ -150,9 +177,18 @@ stub_helpers.extract_defer_details = extract_defer_details
 
 sys.modules.setdefault("nyx.nyx_agent._feasibility_helpers", stub_helpers)
 
+stub_package = ModuleType("nyx.nyx_agent")
+stub_package.__path__ = []  # type: ignore[attr-defined]
+stub_package.orchestrator = stub_orchestrator
+stub_package.context = stub_context
+stub_package.models = stub_models
+stub_package._feasibility_helpers = stub_helpers
+
+sys.modules.setdefault("nyx.nyx_agent", stub_package)
+
 import pytest
 
-from nyx.nyx_agent_sdk import NyxAgentSDK, NyxResponse
+from nyx.nyx_agent_sdk import NyxAgentSDK, NyxResponse, NyxSDKConfig
 
 
 class _DummySnapshotStore:
@@ -174,50 +210,169 @@ class _DummyDispatch:
         self.calls.append({"kwargs": kwargs, "queue": queue, "priority": priority})
 
 
-@pytest.mark.asyncio
-async def test_fanout_persists_canonical_snapshot_with_integer_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    sdk = NyxAgentSDK()
-    sdk._snapshot_store = _DummySnapshotStore()
+def test_fanout_persists_canonical_snapshot_with_integer_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> None:
+        sdk = NyxAgentSDK()
+        sdk._snapshot_store = _DummySnapshotStore()
 
-    recorded: Dict[str, Any] = {}
+        recorded: Dict[str, Any] = {}
 
-    async def _record_persist(user_id: int, conversation_id: int, payload: Dict[str, Any]) -> None:
-        recorded["args"] = (user_id, conversation_id, payload)
+        async def _record_persist(user_id: int, conversation_id: int, payload: Dict[str, Any]) -> None:
+            recorded["args"] = (user_id, conversation_id, payload)
 
-    dummy_dispatch = _DummyDispatch()
+        dummy_dispatch = _DummyDispatch()
 
-    monkeypatch.setattr("nyx.nyx_agent_sdk.persist_canonical_snapshot", _record_persist)
-    monkeypatch.setattr("nyx.nyx_agent_sdk.post_turn_dispatch", dummy_dispatch)
+        monkeypatch.setattr("nyx.nyx_agent_sdk.persist_canonical_snapshot", _record_persist)
+        monkeypatch.setattr("nyx.nyx_agent_sdk.post_turn_dispatch", dummy_dispatch)
 
-    response = NyxResponse(narrative="hello", metadata={}, world_state={"delta": {"foo": "bar"}})
+        response = NyxResponse(narrative="hello", metadata={}, world_state={"delta": {"foo": "bar"}})
 
-    await sdk._fanout_post_turn(response, "101", "202", trace_id="trace")
+        await sdk._fanout_post_turn(response, "101", "202", trace_id="trace")
 
-    assert recorded["args"][0] == 101
-    assert recorded["args"][1] == 202
-    assert recorded["args"][2]  # payload is not empty
-    assert dummy_dispatch.calls
+        assert recorded["args"][0] == 101
+        assert recorded["args"][1] == 202
+        assert recorded["args"][2]  # payload is not empty
+        assert dummy_dispatch.calls
+
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_fanout_skips_persistence_for_non_integer_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    sdk = NyxAgentSDK()
-    sdk._snapshot_store = _DummySnapshotStore()
+def test_fanout_skips_persistence_for_non_integer_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> None:
+        sdk = NyxAgentSDK()
+        sdk._snapshot_store = _DummySnapshotStore()
 
-    called = False
+        called = False
 
-    async def _record_persist(*_: Any, **__: Any) -> None:
-        nonlocal called
-        called = True
+        async def _record_persist(*_: Any, **__: Any) -> None:
+            nonlocal called
+            called = True
 
-    dummy_dispatch = _DummyDispatch()
+        dummy_dispatch = _DummyDispatch()
 
-    monkeypatch.setattr("nyx.nyx_agent_sdk.persist_canonical_snapshot", _record_persist)
-    monkeypatch.setattr("nyx.nyx_agent_sdk.post_turn_dispatch", dummy_dispatch)
+        monkeypatch.setattr("nyx.nyx_agent_sdk.persist_canonical_snapshot", _record_persist)
+        monkeypatch.setattr("nyx.nyx_agent_sdk.post_turn_dispatch", dummy_dispatch)
 
-    response = NyxResponse(narrative="hello", metadata={}, world_state={"delta": {"foo": "bar"}})
+        response = NyxResponse(narrative="hello", metadata={}, world_state={"delta": {"foo": "bar"}})
 
-    await sdk._fanout_post_turn(response, "user-1", "conversation-A", trace_id="trace")
+        await sdk._fanout_post_turn(response, "user-1", "conversation-A", trace_id="trace")
 
-    assert called is False
-    assert dummy_dispatch.calls
+        assert called is False
+        assert dummy_dispatch.calls
+
+    asyncio.run(_run())
+
+
+def test_process_user_input_appends_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> None:
+        sdk = NyxAgentSDK(
+            NyxSDKConfig(
+                rate_limit_per_conversation=False,
+                enable_response_filter=False,
+                enable_telemetry=False,
+            )
+        )
+        recorder = _RecorderConversationStore()
+        sdk._conversation_store = recorder
+
+        async def _fake_orchestrator(*_: Any, **__: Any) -> Dict[str, Any]:
+            return {
+                "response": "Narrative from Nyx",
+                "success": True,
+                "metadata": {"world": {}, "telemetry": {}},
+            }
+
+        async def _fake_async(*_: Any, **__: Any) -> None:
+            return None
+
+        monkeypatch.setattr(sdk, "_call_orchestrator_with_timeout", _fake_orchestrator)
+        monkeypatch.setattr(sdk, "_fanout_post_turn", _fake_async)
+        monkeypatch.setattr(sdk, "_maybe_enqueue_maintenance", _fake_async)
+        monkeypatch.setattr(sdk, "_maybe_log_perf", _fake_async)
+        monkeypatch.setattr(
+            "nyx.nyx_agent_sdk._invalidate_context_cache_safe", _fake_async, raising=False
+        )
+
+        response = await sdk.process_user_input(
+            "Hello Nyx",
+            conversation_id="42",
+            user_id="7",
+            metadata={"player_name": "Hero", "nyx_display_name": "Narrator"},
+        )
+
+        assert response.narrative == "Narrative from Nyx"
+        assert len(recorder.calls) == 2
+        first, second = recorder.calls
+        assert first["turn"]["sender"] == "Hero"
+        assert first["turn"]["content"] == "Hello Nyx"
+        assert second["turn"]["sender"] == "Narrator"
+        assert second["turn"]["content"] == "Narrative from Nyx"
+        assert second["turn"].get("metadata") == response.metadata
+
+    asyncio.run(_run())
+
+
+def test_fallback_run_appends_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> None:
+        sdk = NyxAgentSDK(
+            NyxSDKConfig(
+                rate_limit_per_conversation=False,
+                enable_response_filter=False,
+                enable_telemetry=False,
+            )
+        )
+        recorder = _RecorderConversationStore()
+        sdk._conversation_store = recorder
+
+        class _StubModelSettings:
+            def __init__(self, **kwargs: Any) -> None:
+                self.kwargs = kwargs
+
+        class _StubRunConfig:
+            def __init__(self, **kwargs: Any) -> None:
+                self.kwargs = kwargs
+
+        class _StubRunContextWrapper:
+            def __init__(self, ctx: Any) -> None:
+                self.ctx = ctx
+
+        class _Wrapper:
+            def __init__(self, text: str) -> None:
+                self.raw = SimpleNamespace(final_output=text)
+
+        async def _fake_execute(*_: Any, **__: Any) -> _Wrapper:
+            return _Wrapper("Fallback narrative")
+
+        monkeypatch.setattr("nyx.nyx_agent_sdk.ModelSettings", _StubModelSettings, raising=False)
+        monkeypatch.setattr("nyx.nyx_agent_sdk.RunConfig", _StubRunConfig, raising=False)
+        monkeypatch.setattr(
+            "nyx.nyx_agent_sdk.RunContextWrapper", _StubRunContextWrapper, raising=False
+        )
+        monkeypatch.setattr("nyx.nyx_agent_sdk.nyx_main_agent", object(), raising=False)
+        monkeypatch.setattr("nyx.nyx_agent_sdk._execute_llm", _fake_execute, raising=False)
+        monkeypatch.setattr("nyx.nyx_agent_sdk.assess_action_feasibility", None, raising=False)
+
+        metadata = {
+            "_deadline": time.monotonic() + 5,
+            "player_name": "Hero",
+            "nyx_display_name": "Narrator",
+        }
+
+        response = await sdk._fallback_direct_run(
+            message="Hello Nyx",
+            conversation_id="42",
+            user_id="7",
+            metadata=metadata,
+            trace_id="trace",
+            t0=0.0,
+        )
+
+        assert response.narrative == "Fallback narrative"
+        assert len(recorder.calls) == 2
+        first, second = recorder.calls
+        assert first["turn"]["sender"] == "Hero"
+        assert first["turn"]["content"] == "Hello Nyx"
+        assert second["turn"]["sender"] == "Narrator"
+        assert second["turn"]["content"] == "Fallback narrative"
+
+    asyncio.run(_run())
