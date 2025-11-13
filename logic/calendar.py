@@ -118,6 +118,7 @@ async def ensure_calendar_tables(user_id: int, conversation_id: int):
 
 # ---------------------------------------------------------------------------
 async def get_chatgpt_response_no_function(
+    user_id: int,
     conversation_id: int,
     aggregator_text: str,
     user_input: str,
@@ -130,7 +131,7 @@ async def get_chatgpt_response_no_function(
 
     # prepare the request payload ------------------------------------------
     messages = await build_message_history(
-        conversation_id, aggregator_text, user_input, limit=15
+        user_id, conversation_id, aggregator_text, user_input, limit=15
     )
 
     # call the Responses API -----------------------------------------------
@@ -150,7 +151,7 @@ async def get_chatgpt_response_no_function(
     }
 
     
-async def generate_calendar_names(environment_desc, conversation_id):
+async def generate_calendar_names(environment_desc, conversation_id, user_id):
     """
     Use GPT to generate immersive calendar names for the in-game time system.
     
@@ -176,7 +177,7 @@ async def generate_calendar_names(environment_desc, conversation_id):
     
     logging.info("Calling GPT for calendar names with prompt:\n%s", prompt)
     # Use the no-function variant for calendar names.
-    gpt_response = await get_chatgpt_response_no_function(conversation_id, environment_desc, prompt)
+    gpt_response = await get_chatgpt_response_no_function(user_id, conversation_id, environment_desc, prompt)
     logging.info("GPT calendar naming response: %s", gpt_response)
     
     calendar_names = {}
@@ -277,7 +278,7 @@ async def update_calendar_names(user_id, conversation_id, environment_desc) -> d
     REFACTORED: Generates immersive calendar names based on the provided environment description,
     stores them using canon, and returns the resulting dictionary.
     """
-    calendar_names = await generate_calendar_names(environment_desc, conversation_id)
+    calendar_names = await generate_calendar_names(environment_desc, conversation_id, user_id)
     
     # Get connection from context manager and pass it to store function
     async with get_db_connection_context() as conn:

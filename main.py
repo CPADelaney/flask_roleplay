@@ -708,7 +708,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         chatkit_messages: List[Dict[str, Any]] = []
         if aggregator_text:
             try:
-                history = await build_message_history(conversation_id, aggregator_text, user_input)
+                history = await build_message_history(user_id, conversation_id, aggregator_text, user_input)
                 chatkit_messages = format_messages_for_chatkit(history)
             except Exception as history_err:  # pragma: no cover - defensive logging
                 logger.debug(

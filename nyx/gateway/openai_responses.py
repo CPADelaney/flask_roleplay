@@ -111,9 +111,13 @@ async def run_response_for_conversation(
     model: str,
     metadata: Optional[Mapping[str, Any]] = None,
     system_prompt: Optional[str] = None,
+    context_prompt: Optional[str] = None,
+    latest_user_input: Optional[str] = None,
+    latest_user_role: str = "user",
     history_limit: int = 8,
     client: Optional[_AsyncOpenAI] = None,
     store: Optional[ConversationStore] = None,
+    request_overrides: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """Run the Responses API for a persisted conversation."""
 
@@ -130,16 +134,53 @@ async def run_response_for_conversation(
         turns=turns, system_prompt=system_prompt
     )
 
+    if context_prompt:
+        context_message: MutableMapping[str, Any] = {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": _normalize_text(context_prompt),
+                }
+            ],
+        }
+        insert_index = 0
+        if responses_input and responses_input[0].get("role") == "system":
+            insert_index = 1
+        responses_input.insert(insert_index, context_message)
+
+    if latest_user_input:
+        responses_input.append(
+            {
+                "role": _resolve_role(latest_user_role),
+                "content": [
+                    {
+                        "type": "text",
+                        "text": _normalize_text(latest_user_input),
+                    }
+                ],
+            }
+        )
+
     request: MutableMapping[str, Any] = {
         "model": model,
         "input": responses_input,
     }
+    if request_overrides:
+        request.update(dict(request_overrides))
     if metadata:
-        request["metadata"] = {
+        sanitized = {
             str(key): str(value)
             for key, value in metadata.items()
             if value is not None
         }
+        existing = request.get("metadata")
+        if isinstance(existing, Mapping):
+            merged = {str(k): str(v) for k, v in existing.items() if v is not None}
+            merged.update(sanitized)
+            request["metadata"] = merged
+        else:
+            request["metadata"] = sanitized
 
     try:
         response = await openai_client.responses.create(**request)

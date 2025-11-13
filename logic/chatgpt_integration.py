@@ -38,6 +38,8 @@ from openai._exceptions import APIStatusError
 from db.connection import get_db_connection_context
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
+from nyx.conversation.store import ConversationStore
+from nyx.gateway.openai_responses import run_response_for_conversation
 
 
 # Configure module logger
@@ -1125,6 +1127,10 @@ class OpenAIClientManager:
 _client_manager = OpenAIClientManager()
 
 
+# Shared conversation store for persisting turns locally.
+_conversation_store = ConversationStore()
+
+
 # =====================================================
 # Backwards compatibility functions (deprecated)
 # =====================================================
@@ -1189,43 +1195,76 @@ async def _safe_max_tokens(client, model: str, reserve: int = 256, hard_cap: int
     return min(max_tokens - reserve, hard_cap)
 
 
-async def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
-    """
-    Build message history using async DB connection
-    """
-    try:
-        async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT sender, content
-                FROM messages
-                WHERE conversation_id=$1
-                ORDER BY id DESC
-                LIMIT $2
-            """, conversation_id, limit)
-            
-        # Convert to list and reverse for oldest first
-        messages_data = [(row['sender'], row['content']) for row in rows]
-        messages_data.reverse()  # Oldest first
-        
-        chat_history = []
-        for sender, content in messages_data:
-            role = "user" if sender.lower() == "user" else "assistant"
-            chat_history.append({"role": role, "content": content})
+async def build_message_history(
+    user_id: int,
+    conversation_id: int,
+    aggregator_text: str,
+    user_input: str,
+    limit: int = 15,
+):
+    """Build a chat history payload using the shared ``ConversationStore``."""
 
-        messages = []
-        messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    try:
+        turns = await _conversation_store.fetch_recent_turns(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            limit=limit,
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Error building message history via ConversationStore: %s", exc)
+        turns = []
+
+    chat_history: list[dict[str, str]] = []
+    for turn in turns:
+        sender = str(turn.get("sender", "")).lower()
+        content = turn.get("content")
+        if content in (None, ""):
+            continue
+        role = "assistant"
+        if sender in {"user", "player"}:
+            role = "user"
+        elif sender == "system":
+            role = "system"
+        chat_history.append({"role": role, "content": str(content)})
+
+    messages: list[dict[str, str]] = []
+    messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    if aggregator_text:
         messages.append({"role": "system", "content": aggregator_text})
-        messages.extend(chat_history)
-        messages.append({"role": "user", "content": user_input})
-        return messages
-    except Exception as e:
-        logger.error(f"Error building message history: {e}")
-        # Return a minimal set of messages in case of error
-        return [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": aggregator_text},
-            {"role": "user", "content": user_input}
-        ]
+    messages.extend(chat_history)
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
+async def _persist_conversation_turns(
+    *,
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    assistant_content: Optional[str],
+) -> None:
+    """Persist the latest user/assistant turns without interrupting the flow."""
+
+    if not user_input and not assistant_content:
+        return
+
+    try:
+        if user_input:
+            await _conversation_store.append_turn(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn={"sender": "user", "content": user_input},
+            )
+        if assistant_content:
+            await _conversation_store.append_turn(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn={"sender": "assistant", "content": assistant_content},
+            )
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception(
+            "Failed to persist conversation turns for conversation_id=%s", conversation_id
+        )
 
 
 def retry_with_backoff(
@@ -1476,45 +1515,66 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
     # If reflection is OFF, do the single-step call (RESPONSES API)
     if not reflection_enabled:
-        messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
-        
-        # Update system prompt in messages if preset is active
-        if messages and messages[0]['role'] == 'system':
-            messages[0]['content'] = primary_system_prompt
-
         model = "gpt-5-nano"
+        request_overrides: dict[str, Any] = {"max_output_tokens": 2048}
 
-        params = {
-            "model": model,
-            "input": messages,
-            "max_output_tokens": 2048,
-        }
-
-        # --- This is the core fix ---
         if force_json_response:
-            # For world-building: request a direct JSON object.
             logger.debug("Requesting direct JSON object response (force_json_response=True)")
-            _apply_forced_json_token_headroom(params)
+            token_overrides = {"model": model, "max_output_tokens": request_overrides["max_output_tokens"]}
+            _apply_forced_json_token_headroom(token_overrides)
+            request_overrides["max_output_tokens"] = token_overrides.get("max_output_tokens", 2048)
         else:
-            # For game actions: force the universal update tool.
             tools_payload = ToolSchemaManager.get_all_tools()
             if tools_payload:
-                params["tools"] = tools_payload
-                params["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
-        # --- End of fix ---
+                request_overrides["tools"] = tools_payload
+                request_overrides["tool_choice"] = {"type": "function", "name": "apply_universal_update"}
+
+        metadata = {
+            "component": "logic.chatgpt_integration",
+            "mode": "single_step",
+            "conversation_id": conversation_id,
+        }
 
         try:
-            response = await _responses_create_with_retry(client, params)
+            response = await run_response_for_conversation(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                model=model,
+                system_prompt=primary_system_prompt,
+                context_prompt=aggregator_text,
+                latest_user_input=user_input,
+                metadata=metadata,
+                history_limit=15,
+                client=client,
+                store=_conversation_store,
+                request_overrides=request_overrides,
+            )
         except openai.BadRequestError as e:
-            logger.warning("Responses API rejected call (%s); retrying without forced tool", e)
-            params.pop("tool_choice", None)
-            response = await _responses_create_with_retry(client, params)
+            if "tool_choice" in request_overrides:
+                logger.warning("Responses API rejected call (%s); retrying without forced tool", e)
+                request_overrides.pop("tool_choice", None)
+                response = await run_response_for_conversation(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    model=model,
+                    system_prompt=primary_system_prompt,
+                    context_prompt=aggregator_text,
+                    latest_user_input=user_input,
+                    metadata=metadata,
+                    history_limit=15,
+                    client=client,
+                    store=_conversation_store,
+                    request_overrides=request_overrides,
+                )
+            else:
+                raise
 
         tool_name, tool_args = _extract_first_tool_call(response)
         tokens_used = _calculate_token_usage(response)
 
+        assistant_turn_content: Optional[str] = None
+
         if tool_name:
-            # tool_args may be str (JSON) or dict; normalize to dict
             if isinstance(tool_args, str):
                 cleaned_args = _clean_function_args(tool_args)
                 try:
@@ -1525,7 +1585,6 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
             else:
                 parsed_args = tool_args or {}
 
-            # Validate narrative if preset is active
             if preset_info and parsed_args.get("narrative"):
                 from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
                 validation = QueenOfThornsConsistencyGuide.validate_content(parsed_args["narrative"])
@@ -1534,7 +1593,16 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
             _ensure_default_scene_data(parsed_args)
 
-            return {
+            narrative_text = parsed_args.get("narrative")
+            if isinstance(narrative_text, str) and narrative_text.strip():
+                assistant_turn_content = narrative_text
+            else:
+                try:
+                    assistant_turn_content = json.dumps(parsed_args, ensure_ascii=False)
+                except TypeError:
+                    assistant_turn_content = str(parsed_args)
+
+            result_payload = {
                 "type": "function_call",
                 "function_name": tool_name,
                 "function_args": parsed_args,
@@ -1542,9 +1610,9 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
         else:
-            # Logic for a direct text response (which should be our JSON for world-building)
             raw_text_response = (response.output_text or "")
-            return {
+            assistant_turn_content = raw_text_response
+            result_payload = {
                 "type": "input_text",
                 "function_name": None,
                 "function_args": None,
@@ -1552,6 +1620,15 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
                 "tokens_used": tokens_used,
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
+
+        await _persist_conversation_turns(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            user_input=user_input,
+            assistant_content=assistant_turn_content,
+        )
+
+        return result_payload
 
     # If reflection is ON, do a two-step approach (RESPONSES API)
     else:
@@ -1661,8 +1738,9 @@ DO NOT produce user-facing text here; only the JSON.
         tool_name, tool_args = _extract_first_tool_call(final_response)
         final_tokens_used = _calculate_token_usage(final_response)
 
+        assistant_turn_content = None
+
         if tool_name:
-            # tool_args may be str (JSON) or dict; normalize to dict
             if isinstance(tool_args, str):
                 cleaned_args = _clean_function_args(tool_args)
                 try:
@@ -1673,7 +1751,6 @@ DO NOT produce user-facing text here; only the JSON.
             else:
                 parsed_args = tool_args or {}
 
-            # Validate if preset active
             if preset_info and parsed_args.get("narrative"):
                 from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
                 validation = QueenOfThornsConsistencyGuide.validate_content(parsed_args["narrative"])
@@ -1682,7 +1759,16 @@ DO NOT produce user-facing text here; only the JSON.
 
             _ensure_default_scene_data(parsed_args)
 
-            return {
+            narrative_text = parsed_args.get("narrative")
+            if isinstance(narrative_text, str) and narrative_text.strip():
+                assistant_turn_content = narrative_text
+            else:
+                try:
+                    assistant_turn_content = json.dumps(parsed_args, ensure_ascii=False)
+                except TypeError:
+                    assistant_turn_content = str(parsed_args)
+
+            result_payload = {
                 "type": "function_call",
                 "function_name": tool_name,
                 "function_args": parsed_args,
@@ -1690,9 +1776,9 @@ DO NOT produce user-facing text here; only the JSON.
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
         else:
-            # Direct text response for reflection path
             raw_text_response = (final_response.output_text or "")
-            return {
+            assistant_turn_content = raw_text_response
+            result_payload = {
                 "type": "input_text",
                 "function_name": None,
                 "function_args": None,
@@ -1700,6 +1786,15 @@ DO NOT produce user-facing text here; only the JSON.
                 "tokens_used": (reflection_tokens_used + final_tokens_used),
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
+
+        await _persist_conversation_turns(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            user_input=user_input,
+            assistant_content=assistant_turn_content,
+        )
+
+        return result_payload
 
 
 async def check_preset_story(conversation_id: int) -> Optional[Dict[str, Any]]:

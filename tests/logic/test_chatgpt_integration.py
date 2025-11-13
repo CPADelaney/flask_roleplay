@@ -8,6 +8,7 @@ import asyncio
 import types
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Any
 
 # Ensure API key is available before importing the integration module which
 # constructs the OpenAI client manager at import time.
@@ -28,6 +29,34 @@ nyx_core_stub.__path__ = []
 nyx_orchestrator_stub = types.ModuleType("nyx.core.orchestrator")
 nyx_agent_sdk_stub = types.ModuleType("nyx.nyx_agent_sdk")
 universal_updater_stub = types.ModuleType("logic.universal_updater_agent")
+nyx_conversation_stub = types.ModuleType("nyx.conversation")
+nyx_conversation_store_stub = types.ModuleType("nyx.conversation.store")
+nyx_gateway_stub = types.ModuleType("nyx.gateway")
+nyx_gateway_responses_stub = types.ModuleType("nyx.gateway.openai_responses")
+
+
+class _StubConversationStore:
+    async def fetch_recent_turns(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    async def append_turn(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+nyx_conversation_store_stub.ConversationStore = _StubConversationStore
+nyx_conversation_stub.store = nyx_conversation_store_stub
+
+
+async def _stub_run_response_for_conversation(**_: Any) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        output=[],
+        output_text="",
+        usage=types.SimpleNamespace(input_tokens=0, output_tokens=0),
+    )
+
+
+nyx_gateway_responses_stub.run_response_for_conversation = _stub_run_response_for_conversation
+nyx_gateway_stub.openai_responses = nyx_gateway_responses_stub
 
 setattr(nyx_orchestrator_stub, "prepare_context", None)
 setattr(nyx_agent_sdk_stub, "process_user_input", None)
@@ -39,11 +68,17 @@ sys.modules.setdefault("nyx", nyx_stub)
 sys.modules.setdefault("nyx.core", nyx_core_stub)
 sys.modules.setdefault("nyx.core.orchestrator", nyx_orchestrator_stub)
 sys.modules.setdefault("nyx.nyx_agent_sdk", nyx_agent_sdk_stub)
+sys.modules.setdefault("nyx.conversation", nyx_conversation_stub)
+sys.modules.setdefault("nyx.conversation.store", nyx_conversation_store_stub)
+sys.modules.setdefault("nyx.gateway", nyx_gateway_stub)
+sys.modules.setdefault("nyx.gateway.openai_responses", nyx_gateway_responses_stub)
 sys.modules.setdefault("logic.universal_updater_agent", universal_updater_stub)
 
 setattr(nyx_stub, "core", nyx_core_stub)
 setattr(nyx_core_stub, "orchestrator", nyx_orchestrator_stub)
 setattr(nyx_stub, "nyx_agent_sdk", nyx_agent_sdk_stub)
+setattr(nyx_stub, "conversation", nyx_conversation_stub)
+setattr(nyx_stub, "gateway", nyx_gateway_stub)
 
 from logic import chatgpt_integration as chatgpt  # noqa: E402
 
@@ -113,7 +148,7 @@ def test_get_chatgpt_response_nyx_string_narrative(monkeypatch):
 async def _run_force_json_response_headroom_test(monkeypatch):
     """Forcing JSON responses should expand the output token budget."""
 
-    captured: dict[str, dict] = {}
+    captured: dict[str, Any] = {}
     fake_client = object()
 
     monkeypatch.setattr(chatgpt, "get_db_connection_context", _fake_db_context)
@@ -122,33 +157,35 @@ async def _run_force_json_response_headroom_test(monkeypatch):
 
     monkeypatch.setattr(chatgpt, "check_preset_story", _fake_check_preset_story)
 
-    async def _fake_build_message_history(*args, **kwargs):
-        return [
-            {"role": "system", "content": "system"},
-            {"role": "user", "content": "hi"},
-        ]
-
-    monkeypatch.setattr(chatgpt, "build_message_history", _fake_build_message_history)
-
     monkeypatch.setattr(
         chatgpt.OpenAIClientManager,
         "async_client",
         property(lambda self: fake_client),
     )
 
-    async def _fake_responses_create_with_retry(client, params):
-        captured["params"] = params.copy()
+    class _StubStore:
+        def __init__(self) -> None:
+            self.append_calls: list[dict[str, Any]] = []
+
+        async def fetch_recent_turns(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            captured["history_args"] = {"args": args, "kwargs": kwargs}
+            return []
+
+        async def append_turn(self, *args: Any, **kwargs: Any) -> None:
+            self.append_calls.append({"args": args, "kwargs": kwargs})
+
+    store = _StubStore()
+    monkeypatch.setattr(chatgpt, "_conversation_store", store)
+
+    async def _fake_run_response_for_conversation(**kwargs: Any):
+        captured["run_kwargs"] = kwargs
         return types.SimpleNamespace(
             output=[],
             output_text="{}",
             usage=types.SimpleNamespace(input_tokens=100, output_tokens=50),
         )
 
-    monkeypatch.setattr(
-        chatgpt,
-        "_responses_create_with_retry",
-        _fake_responses_create_with_retry,
-    )
+    monkeypatch.setattr(chatgpt, "run_response_for_conversation", _fake_run_response_for_conversation)
 
     result = await chatgpt.get_chatgpt_response(
         conversation_id=1,
@@ -159,11 +196,16 @@ async def _run_force_json_response_headroom_test(monkeypatch):
         force_json_response=True,
     )
 
-    assert captured["params"]["model"] == "gpt-5-nano"
+    overrides = captured["run_kwargs"]["request_overrides"]
+    assert overrides["max_output_tokens"] == chatgpt._compute_forced_json_max_tokens("gpt-5-nano", 2048)
+    assert "tool_choice" not in overrides
+    assert captured["run_kwargs"]["model"] == "gpt-5-nano"
+    assert captured["run_kwargs"]["latest_user_input"] == "hello"
+    assert captured["run_kwargs"]["context_prompt"] == "context"
     expected_budget = chatgpt._compute_forced_json_max_tokens("gpt-5-nano", 2048)
-    assert captured["params"]["max_output_tokens"] == expected_budget
-    assert "tool_choice" not in captured["params"]
+    assert overrides["max_output_tokens"] == expected_budget
     assert result["type"] == "input_text"
+    assert len(store.append_calls) == 2
 
 
 def test_force_json_response_headroom(monkeypatch):
