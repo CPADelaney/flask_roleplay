@@ -289,6 +289,16 @@ async def create_all_tables():
                 ON openai_conversations (conversation_id);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS openai_threads (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    channel TEXT NOT NULL,
+                    remote_id TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (user_id, conversation_id, channel)
+                );
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS chatkit_threads (
                     id SERIAL PRIMARY KEY,
                     conversation_id INTEGER NOT NULL,
