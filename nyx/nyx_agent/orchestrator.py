@@ -719,86 +719,51 @@ async def process_user_input(
 
             resp_stream = extract_runner_response(result.raw)
 
+        post_run_narrative: str = ""
+        defer_universal_updates = False
+        defer_punishment = False
+
         # ---- STEP 6: Post-run enforcement (updates/image hooks + punishment) ---
         async with _log_step("post_run_enforcement", trace_id):
-            if time_left() < 2.0:
-                logger.info(f"[{trace_id}] Skipping post-run extras due to low budget")
-            elif not _did_call_tool(resp_stream, "generate_universal_updates"):
-                narrative = _extract_last_assistant_text(resp_stream)
-                if narrative and len(narrative) > 20:
-                    try:
-                        update_result = await generate_universal_updates_impl(
-                            nyx_context, narrative
-                        )
-                        resp_stream.append(
-                            {
-                                "type": "function_call_output",
-                                "name": "generate_universal_updates",
-                                "output": json.dumps(
-                                    {
-                                        "success": update_result.success,
-                                        "updates_generated": update_result.updates_generated,
-                                        "source": "post_run_injection",
-                                    }
-                                ),
-                            }
-                        )
-                    except Exception as e:
-                        logger.debug(
-                            f"[{trace_id}] Post-run universal updates failed softly: {e}"
-                        )
+            post_run_narrative = _extract_last_assistant_text(resp_stream)
+
+            if not _did_call_tool(resp_stream, "generate_universal_updates"):
+                defer_universal_updates = True
+                logger.info(
+                    f"[{trace_id}] Deferring universal updates to background task"
+                )
 
             if (
                 time_left() >= 2.0
                 and not _did_call_tool(resp_stream, "decide_image_generation")
+                and post_run_narrative
+                and len(post_run_narrative) > 20
             ):
-                narrative = _extract_last_assistant_text(resp_stream)
-                if narrative and len(narrative) > 20:
-                    try:
-                        image_result = await decide_image_generation_standalone(
-                            nyx_context, narrative
-                        )
-                        resp_stream.append(
-                            {
-                                "type": "function_call_output",
-                                "name": "decide_image_generation",
-                                "output": image_result,
-                            }
-                        )
-                    except Exception as e:
-                        logger.debug(
-                            f"[{trace_id}] Post-run image decision failed softly: {e}"
-                        )
-
-            if time_left() >= 2.0 and enforce_all_rules_on_player:
                 try:
-                    player_name = (
-                        nyx_context.current_context.get("player_name") or "Chase"
-                    )
-                    punishment_meta = {
-                        "scene_tags": nyx_context.current_context.get("scene_tags", []),
-                        "stimuli": nyx_context.current_context.get("stimuli", []),
-                        "feasibility": (feas or fast),
-                        "turn_index": nyx_context.current_context.get("turn_index", 0),
-                    }
-                    punishment_result = await enforce_all_rules_on_player(
-                        player_name=player_name,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        metadata=punishment_meta,
+                    image_result = await decide_image_generation_standalone(
+                        nyx_context, post_run_narrative
                     )
                     resp_stream.append(
                         {
                             "type": "function_call_output",
-                            "name": "enforce_punishments",
-                            "output": json.dumps(punishment_result),
+                            "name": "decide_image_generation",
+                            "output": image_result,
                         }
                     )
-                    nyx_context.current_context["punishment"] = punishment_result
                 except Exception as e:
                     logger.debug(
-                        f"[{trace_id}] Punishment enforcement failed softly: {e}"
+                        f"[{trace_id}] Post-run image decision failed softly: {e}"
                     )
+            elif time_left() < 2.0:
+                logger.info(
+                    f"[{trace_id}] Skipping image decision due to low remaining budget"
+                )
+
+            if enforce_all_rules_on_player:
+                defer_punishment = True
+                logger.info(
+                    f"[{trace_id}] Deferring punishment enforcement to background task"
+                )
             else:
                 logger.debug(
                     f"[{trace_id}] punishment module unavailable; skipping enforcement"
@@ -816,6 +781,8 @@ async def process_user_input(
                 user_input=user_input,
                 conversation_id=str(conversation_id),
             )
+
+            final_narrative = assembled.narrative or post_run_narrative
 
             out = {
                 "success": True,
@@ -841,6 +808,69 @@ async def process_user_input(
                 try:
                     # Save the final context state (emotional, scene, etc.)
                     await _save_context_state(nyx_context)
+
+                    if defer_universal_updates and final_narrative:
+                        try:
+                            update_result = await generate_universal_updates_impl(
+                                nyx_context, final_narrative
+                            )
+                            tool_payload = {
+                                "type": "function_call_output",
+                                "name": "generate_universal_updates",
+                                "output": json.dumps(
+                                    {
+                                        "success": getattr(update_result, "success", True),
+                                        "updates_generated": getattr(
+                                            update_result, "updates_generated", False
+                                        ),
+                                        "source": "background_post_run",
+                                    }
+                                ),
+                            }
+                            resp_stream.append(tool_payload)
+                            nyx_context.current_context.setdefault(
+                                "deferred_tool_outputs", []
+                            ).append(tool_payload)
+                        except Exception as e:
+                            logger.debug(
+                                f"[{trace_id}] Deferred universal updates failed softly: {e}"
+                            )
+
+                    if defer_punishment and enforce_all_rules_on_player:
+                        try:
+                            player_name = (
+                                nyx_context.current_context.get("player_name") or "Chase"
+                            )
+                            punishment_meta = {
+                                "scene_tags": nyx_context.current_context.get(
+                                    "scene_tags", []
+                                ),
+                                "stimuli": nyx_context.current_context.get("stimuli", []),
+                                "feasibility": (feas or fast),
+                                "turn_index": nyx_context.current_context.get(
+                                    "turn_index", 0
+                                ),
+                            }
+                            punishment_result = await enforce_all_rules_on_player(
+                                player_name=player_name,
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                metadata=punishment_meta,
+                            )
+                            punishment_payload = {
+                                "type": "function_call_output",
+                                "name": "enforce_punishments",
+                                "output": json.dumps(punishment_result),
+                            }
+                            resp_stream.append(punishment_payload)
+                            nyx_context.current_context.setdefault(
+                                "deferred_tool_outputs", []
+                            ).append(punishment_payload)
+                            nyx_context.current_context["punishment"] = punishment_result
+                        except Exception as e:
+                            logger.debug(
+                                f"[{trace_id}] Deferred punishment enforcement failed softly: {e}"
+                            )
 
                     # Persist any universal updates (like location changes)
                     if nyx_context and nyx_context.context_broker:
