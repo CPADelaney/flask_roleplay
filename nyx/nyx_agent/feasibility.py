@@ -3063,8 +3063,24 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         )
 
     # --- Step 5: Check if any intents need full AI-powered assessment ---
+    def _result_is_soft_location_followup(result: Dict[str, Any]) -> bool:
+        if not result:
+            return False
+        strategy = str(result.get("strategy") or "").lower()
+        if strategy not in {"ask", "defer"}:
+            return False
+        violations = result.get("violations") or []
+        if not isinstance(violations, list):
+            return False
+        for violation in violations:
+            rule = str((violation or {}).get("rule") or "").lower()
+            if rule.startswith("location_resolver:"):
+                return True
+        return False
+
     needs_full_assessment = any(
-        result.get("strategy") not in {"allow", "defer"} 
+        result.get("strategy") not in {"allow", "defer"}
+        and not _result_is_soft_location_followup(result)
         for result in per_intent_results
     )
     
@@ -3075,6 +3091,14 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
     )
 
     # If we have clear decisions for all intents, return them
+    movement_like_categories = {"movement", "mundane_action", "travel", "locomotion"}
+    if needs_full_assessment and per_intent_results:
+        if all(
+            set(result.get("categories") or []) <= movement_like_categories
+            for result in per_intent_results
+        ):
+            needs_full_assessment = False
+
     if all_straightforward and not needs_full_assessment:
         overall_result = _combine_overall(per_intent_results)
         final_payload = {"overall": overall_result, "per_intent": per_intent_results}
@@ -5414,31 +5438,27 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     else "That destination isn't an established location right now."
                 )
                 reason_text = message or default_reason
-                strategy = (
-                    "ask"
-                    if status in {STATUS_MULTIPLE, STATUS_ASK, STATUS_TRAVEL_PLAN}
-                    else "deny"
-                )
+                soft_strategy = "defer" if status == STATUS_TRAVEL_PLAN else "ask"
 
                 ask_payload = {
                     "feasible": False,
-                    "strategy": strategy,
+                    "strategy": soft_strategy,
                     "violations": [
                         {
-                            "rule": f"location_resolver:{strategy}",
+                            "rule": f"location_resolver:{soft_strategy}",
                             "reason": reason_text,
                         }
                     ],
                     "narrator_guidance": (
                         f"{reason_text} Give me a quick sense of the place or pick one of the known options."
-                        if strategy == "ask"
+                        if soft_strategy == "ask"
                         else f"{reason_text} Stick to known locations or introduce it in-scene first."
                     ),
                     "suggested_alternatives": suggested[:3]
                     if suggested
                     else fallback_choices[:3],
                     "categories": sorted(cats),
-                    "location_resolved": True,
+                    "location_resolved": False,
                 }
                 if hierarchy_payload:
                     leaf = hierarchy_payload.get("leaf") or {}
@@ -5456,10 +5476,10 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     ask_payload["resolver_location_name"] = location_obj.location_name
 
                 per_intent.append(ask_payload)
-                if strategy == "ask":
+                if soft_strategy == "ask":
                     any_ask = True
                 else:
-                    any_hard_block = True
+                    any_defer = True
                 continue
 
             # No resolver result → pure "not established" location
@@ -5480,16 +5500,16 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                 else "That destination isn't an established location right now."
             )
             logger.info(
-                "[FEASIBILITY] Hard deny - fabricated location -> %s",
+                "[FEASIBILITY] Soft ask - fabricated location -> %s",
                 missing_location_tokens,
             )
             per_intent.append(
                 {
                     "feasible": False,
-                    "strategy": "deny",
+                    "strategy": "ask",
                     "violations": [
                         {
-                            "rule": "location_resolver:deny",
+                            "rule": "location_resolver:ask",
                             "reason": reason_text,
                         }
                     ],
@@ -5499,9 +5519,10 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
                     "suggested_alternatives": lead_candidates,
                     "leads": lead_candidates,
                     "categories": sorted(cats),
+                    "location_resolved": False,
                 }
             )
-            any_hard_block = True
+            any_ask = True
             continue
         # --- END: Updated location resolver integration ---
 

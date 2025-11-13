@@ -298,10 +298,11 @@ def test_assess_action_feasibility_location_deny_trumps_ask(monkeypatch):
 
         overall = result["overall"]
         assert overall["feasible"] is False
-        assert overall["strategy"] == "deny"
+        assert overall["strategy"] == "ask"
+        assert overall.get("soft_location_only") is True
         per_intent = result["per_intent"][0]
-        assert per_intent["strategy"] == "deny"
-        assert per_intent["violations"][0]["rule"] == "location_resolver:deny"
+        assert per_intent["strategy"] == "ask"
+        assert per_intent["violations"][0]["rule"] == "location_resolver:ask"
         reason = per_intent["violations"][0]["reason"]
         assert "Shadow Hall is sealed tight" in reason
         guidance = per_intent["narrator_guidance"]
@@ -481,14 +482,79 @@ async def test_fast_feasibility_location_deny_trumps_ask(monkeypatch):
         text="Head to the Shadow Hall and Mystery Lounge",
     )
 
-    assert result["overall"] == {"feasible": False, "strategy": "deny"}
+    overall = result["overall"]
+    assert overall["feasible"] is False
+    assert overall["strategy"] == "ask"
+    assert overall.get("soft_location_only") is True
     per_intent = result["per_intent"][0]
-    assert per_intent["strategy"] == "deny"
-    assert per_intent["violations"][0]["rule"] == "location_resolver:deny"
+    assert per_intent["strategy"] == "ask"
+    assert per_intent["violations"][0]["rule"] == "location_resolver:ask"
     reason = per_intent["violations"][0]["reason"]
     assert "Shadow Hall is sealed tight" in reason
     guidance = per_intent["narrator_guidance"]
     assert "Shadow Hall is sealed tight" in guidance
+
+
+@pytest.mark.anyio
+async def test_location_resolver_missing_place_yields_soft_ask(monkeypatch):
+    async def fake_parse_action_intents(_text):
+        return [
+            {
+                "categories": ["movement"],
+                "direct_object": ["Atlantis"],
+            }
+        ]
+
+    class DummyConn:
+        async def fetch(self, query, *args):
+            query_str = str(query)
+            if "CurrentRoleplay" in query_str:
+                return [
+                    {"key": "SettingKind", "value": "modern_realistic"},
+                    {"key": "CurrentScene", "value": json.dumps({"location": {"name": "Harbor"}})},
+                    {"key": "CurrentLocation", "value": "Harbor"},
+                    {"key": "SettingCapabilities", "value": json.dumps({"movement": True})},
+                    {"key": "EstablishedImpossibilities", "value": json.dumps([])},
+                ]
+            if "GameRules" in query_str:
+                return []
+            if "Locations" in query_str:
+                return []
+            return []
+
+    class DummyContext:
+        async def __aenter__(self):
+            return DummyConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(feasibility, "get_db_connection_context", lambda: DummyContext())
+
+    async def fake_find_unresolved_location_targets(*_args, **_kwargs):
+        return ["atlantis"], None
+
+    monkeypatch.setattr(
+        feasibility,
+        "_find_unresolved_location_targets",
+        fake_find_unresolved_location_targets,
+    )
+
+    result = await feasibility.assess_action_feasibility_fast(
+        user_id=99,
+        conversation_id=101,
+        text="Travel to Atlantis",
+    )
+
+    overall = result["overall"]
+    assert overall["strategy"] == "ask"
+    assert overall.get("soft_location_only") is True
+
+    per_intent = result["per_intent"][0]
+    assert per_intent["strategy"] == "ask"
+    violations = per_intent.get("violations", [])
+    assert {v.get("rule") for v in violations} == {"location_resolver:ask"}
 
 
 @pytest.mark.anyio
@@ -874,11 +940,15 @@ async def test_movement_intent_uses_location_resolver_for_unknown_venue(monkeypa
     assert captured.get("missing_tokens") == ["fisherman's wharf"]
     assert captured.get("resolver_result") is not None
 
+    overall = result["overall"]
+    assert overall["strategy"] == "ask"
+    assert overall.get("soft_location_only") is True
+
     per_intent = result["per_intent"][0]
     violations = per_intent.get("violations", [])
-    assert per_intent["strategy"] in {"ask", "deny"}
+    assert per_intent["strategy"] == "ask"
     assert any(v.get("rule", "").startswith("location_resolver") for v in violations)
-    assert "location_resolver:deny" in {v.get("rule") for v in violations}
+    assert "location_resolver:ask" in {v.get("rule") for v in violations}
     assert "npc_absent" not in {v.get("rule") for v in violations}
 
 
