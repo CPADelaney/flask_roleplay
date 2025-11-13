@@ -474,16 +474,26 @@ async def process_user_input(
     logger.info(f"[{trace_id}] user_id={user_id} conversation_id={conversation_id}")
     logger.info(f"[{trace_id}] user_input={user_input[:200]}")
 
+    fast: Optional[Dict[str, Any]] = None
+    if isinstance(context_data, dict):
+        feas_from_context = context_data.get("feasibility")
+        if isinstance(feas_from_context, dict):
+            fast = feas_from_context
+
     try:
         # ---- STEP 0: Mandatory fast feasibility (dynamic) ---------------------
-        logger.info(f"[{trace_id}] Running mandatory fast feasibility check")
-        fast: Optional[Dict[str, Any]] = None
-        try:
-            from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
+        if fast is None:
+            logger.info(f"[{trace_id}] Running mandatory fast feasibility check")
+            try:
+                from nyx.nyx_agent.feasibility import assess_action_feasibility_fast
 
-            fast = await assess_action_feasibility_fast(user_id, conversation_id, user_input)
-        except Exception as e:
-            logger.error(f"[{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
+                fast = await assess_action_feasibility_fast(user_id, conversation_id, user_input)
+            except Exception as e:
+                logger.error(f"[{trace_id}] Fast feasibility failed softly: {e}", exc_info=True)
+        else:
+            logger.info(
+                f"[{trace_id}] Fast feasibility supplied via context; skipping duplicate check"
+            )
 
         if isinstance(fast, dict):
             overall = fast.get("overall", {}) or {}
