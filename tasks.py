@@ -445,10 +445,14 @@ def background_chat_task_with_memory(
         """Inner async function to run the core logic."""
         full_response_payload = {}
         with trace(workflow_name="background_chat_task_celery"):
-            logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}, request_id={request_id}")
+            logger.info(
+                "[BG Task %s] Starting for user %s, request_id=%s",
+                conversation_id,
+                user_id,
+                request_id,
+            )
             try:
                 # === Step-level timeout budget ===
-                # Keep a little buffer under the Celery soft limit so we can publish a result.
                 SOFT_BUDGET = 170.0  # seconds (soft_limit=180 -> leave ~10s for publishing/cleanup)
                 STEP_MAX = {
                     "agg": 20.0,
@@ -463,14 +467,24 @@ def background_chat_task_with_memory(
 
                 # 1) Build aggregator context
                 from logic.aggregator_sdk import get_aggregated_roleplay_context
+
                 aggregator_data = await asyncio.wait_for(
                     get_aggregated_roleplay_context(user_id, conversation_id, "Chase"),
                     timeout=min(STEP_MAX["agg"], time_left()),
                 )
-                recent_turns = await asyncio.wait_for(
-                    fetch_recent_turns(user_id, conversation_id),
-                    timeout=min(8.0, time_left()),
-                )
+
+                # Fetch recent turns, but do NOT treat timeout as fatal
+                try:
+                    recent_turns = await asyncio.wait_for(
+                        fetch_recent_turns(user_id, conversation_id),
+                        timeout=min(8.0, time_left()),
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    logger.warning(
+                        "[BG Task %s] recent_turns fetch timed out/cancelled; proceeding without history",
+                        conversation_id,
+                    )
+                    recent_turns = []
 
                 context = {
                     "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
@@ -483,7 +497,7 @@ def background_chat_task_with_memory(
 
                 # 2) Apply universal updates if provided
                 if universal_update:
-                    logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
+                    logger.info("[BG Task %s] Applying universal updates...", conversation_id)
                     try:
                         from logic.universal_updater_agent import (
                             UniversalUpdaterContext,
@@ -507,61 +521,98 @@ def background_chat_task_with_memory(
                                 ),
                                 timeout=min(STEP_MAX["updates"], time_left()),
                             )
-                        logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
+
+                        logger.info("[BG Task %s] Applied universal updates.", conversation_id)
+
                         # Refresh context after updates
                         aggregator_data = await asyncio.wait_for(
-                            get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"]),
+                            get_aggregated_roleplay_context(
+                                user_id,
+                                conversation_id,
+                                context["player_name"],
+                            ),
                             timeout=min(10.0, time_left()),
                         )
                         context["aggregator_data"] = aggregator_data
-                        context["recent_turns"] = await asyncio.wait_for(
-                            fetch_recent_turns(user_id, conversation_id),
-                            timeout=min(6.0, time_left()),
-                        )
+
+                        # Recent turns again, but still non-fatal on timeout
+                        try:
+                            context["recent_turns"] = await asyncio.wait_for(
+                                fetch_recent_turns(user_id, conversation_id),
+                                timeout=min(6.0, time_left()),
+                            )
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            logger.warning(
+                                "[BG Task %s] recent_turns refresh timed out/cancelled after updates; "
+                                "proceeding without refreshed history",
+                                conversation_id,
+                            )
+                            # Keep whatever was already in context["recent_turns"]
                     except Exception as update_err:
-                        # Log and raise to be caught by the main exception handler
-                        logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
+                        logger.error(
+                            "[BG Task %s] Error applying universal updates: %s",
+                            conversation_id,
+                            update_err,
+                            exc_info=True,
+                        )
                         raise Exception("Failed to apply world updates") from update_err
 
                 # 3) Enrich context with memories
                 try:
                     from memory.memory_integration import enrich_context_with_memories
-                    logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
+
+                    logger.info("[BG Task %s] Enriching context with memories...", conversation_id)
                     context = await asyncio.wait_for(
                         enrich_context_with_memories(
                             user_id=user_id,
                             conversation_id=conversation_id,
                             user_input=user_input,
-                            context=context
+                            context=context,
                         ),
                         timeout=min(STEP_MAX["mem"], time_left()),
                     )
-                    logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
+                    logger.info("[BG Task %s] Context enriched with memories.", conversation_id)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[BG Task %s] Memory enrichment timed out; continuing without extra memory context",
+                        conversation_id,
+                    )
                 except Exception as memory_err:
-                    logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
-                    # This is non-critical, so we just log it and continue
+                    logger.error(
+                        "[BG Task %s] Error enriching context with memories: %s",
+                        conversation_id,
+                        memory_err,
+                        exc_info=True,
+                    )
+                    # Non-critical; just continue.
 
                 # 4) Invoke Nyx SDK for the main response
                 sdk = await _get_nyx_sdk()
-                logger.info(f"[BG Task {conversation_id}] Processing input with Nyx SDK...")
+                logger.info("[BG Task %s] Processing input with Nyx SDK...", conversation_id)
+
                 nyx_resp = await asyncio.wait_for(
                     sdk.process_user_input(
                         message=user_input,
                         conversation_id=str(conversation_id),
                         user_id=str(user_id),
-                        metadata=context
+                        metadata=context,
                     ),
                     timeout=min(STEP_MAX["sdk"], time_left()),
                 )
-                logger.info(f"[BG Task {conversation_id}] Nyx SDK processing complete.")
+
+                logger.info("[BG Task %s] Nyx SDK processing complete.", conversation_id)
 
                 if not nyx_resp or not nyx_resp.success:
-                    error_msg = (nyx_resp.metadata or {}).get("error", "Unknown SDK error") if nyx_resp else "Empty SDK response"
+                    error_msg = (
+                        (nyx_resp.metadata or {}).get("error", "Unknown SDK error")
+                        if nyx_resp
+                        else "Empty SDK response"
+                    )
                     raise Exception(error_msg)
 
                 # 5) Prepare the final success payload for publishing
                 message_content = nyx_resp.narrative.strip() if nyx_resp.narrative else "…"
-                
+
                 full_response_payload = {
                     "conversation_id": conversation_id,
                     "full_text": message_content,
@@ -571,15 +622,23 @@ def background_chat_task_with_memory(
                 }
 
             except Exception as e:
-                logger.error(f"[BG Task {conversation_id}] Critical Error in task execution: {str(e)}", exc_info=True)
+                logger.error(
+                    "[BG Task %s] Critical Error in task execution: %s",
+                    conversation_id,
+                    str(e),
+                    exc_info=True,
+                )
                 # Prepare a structured error payload for publishing
                 full_response_payload = {
                     "conversation_id": conversation_id,
                     "request_id": request_id,
                     "success": False,
-                    "error": f"I encountered an issue while processing your request. Please try again. (Details: {str(e)})",
+                    "error": (
+                        "I encountered an issue while processing your request. "
+                        f"Please try again. (Details: {str(e)})"
+                    ),
                 }
-            
+
             finally:
                 # 6) ALWAYS publish the result (success or failure) to the Redis channel
                 if full_response_payload and redis_publisher:
@@ -587,11 +646,24 @@ def background_chat_task_with_memory(
                     try:
                         payload_json = json.dumps(full_response_payload)
                         redis_publisher.publish(channel, payload_json)
-                        logger.info(f"[BG Task {conversation_id}] Published result to '{channel}' for request_id={request_id}")
+                        logger.info(
+                            "[BG Task %s] Published result to '%s' for request_id=%s",
+                            conversation_id,
+                            channel,
+                            request_id,
+                        )
                     except Exception as pub_err:
-                        logger.critical(f"[BG Task {conversation_id}] FAILED to publish result to Redis for request_id={request_id}. Error: {pub_err}", exc_info=True)
+                        logger.critical(
+                            "[BG Task %s] FAILED to publish result to Redis for request_id=%s. Error: %s",
+                            conversation_id,
+                            request_id,
+                            pub_err,
+                            exc_info=True,
+                        )
                 elif not redis_publisher:
-                    logger.critical("[BG Task] Redis publisher is not available. Cannot publish task result.")
+                    logger.critical(
+                        "[BG Task] Redis publisher is not available. Cannot publish task result."
+                    )
 
     # Execute the async function within the Celery worker's event loop
     try:
@@ -604,13 +676,21 @@ def background_chat_task_with_memory(
                     "conversation_id": conversation_id,
                     "request_id": request_id,
                     "success": False,
-                    "error": "The server is still crunching. I hit a time limit in the background; please retry.",
+                    "error": (
+                        "The server is still crunching. I hit a time limit in the "
+                        "background; please retry."
+                    ),
                     "error_type": "SoftTimeLimitExceeded",
                 }
                 redis_publisher.publish("chat-responses", json.dumps(payload))
-                logger.warning("[BG Task %s] SoftTimeLimitExceeded – published timeout notice", conversation_id)
+                logger.warning(
+                    "[BG Task %s] SoftTimeLimitExceeded – published timeout notice",
+                    conversation_id,
+                )
             except Exception:
-                logger.exception("[BG Task %s] Failed to publish timeout notice", conversation_id)
+                logger.exception(
+                    "[BG Task %s] Failed to publish timeout notice", conversation_id
+                )
         # Re-raise so Celery records the timeout
         raise
 
