@@ -30,7 +30,7 @@ from db.connection import (
     get_db_connection_sync,
     run_async_in_worker_loop,
 )
-from utils.conversation_history import fetch_recent_turns
+from nyx.conversation.store import ConversationStore
 
 # --- LLM + NPC + memory integration (unchanged external modules) ---
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
@@ -49,6 +49,7 @@ from nyx.nyx_agent_sdk import NyxAgentSDK, NyxSDKConfig
 from psycopg2 import errors as psycopg2_errors
 
 logger = logging.getLogger(__name__)
+_conversation_store = ConversationStore()
 
 # Define DSN (optional sanity check)
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
@@ -476,7 +477,10 @@ def background_chat_task_with_memory(
                 # Fetch recent turns, but do NOT treat timeout as fatal
                 try:
                     recent_turns = await asyncio.wait_for(
-                        fetch_recent_turns(user_id, conversation_id),
+                        _conversation_store.fetch_recent_turns(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
+                        ),
                         timeout=min(8.0, time_left()),
                     )
                 except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -538,7 +542,10 @@ def background_chat_task_with_memory(
                         # Recent turns again, but still non-fatal on timeout
                         try:
                             context["recent_turns"] = await asyncio.wait_for(
-                                fetch_recent_turns(user_id, conversation_id),
+                                _conversation_store.fetch_recent_turns(
+                                    user_id=user_id,
+                                    conversation_id=conversation_id,
+                                ),
                                 timeout=min(6.0, time_left()),
                             )
                         except (asyncio.TimeoutError, asyncio.CancelledError):

@@ -30,9 +30,16 @@ from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEv
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation, fetch_row_async, fetch_all_async, execute_async
 from utils.performance import PerformanceTracker, timed_function, STATS
-from utils.caching import NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE, COMPUTATION_CACHE, cache
+from utils.caching import (
+    NPC_CACHE,
+    LOCATION_CACHE,
+    AGGREGATOR_CACHE,
+    TIME_CACHE,
+    COMPUTATION_CACHE,
+    cache,
+)
 from utils.performance import timed_function
-from utils.conversation_history import fetch_recent_turns
+from nyx.conversation.store import ConversationStore
 
 # Import core logic modules
 from db.connection import get_db_connection_context
@@ -65,6 +72,7 @@ from typing import List, Dict, Any, Optional
 from lore.lore_generator import DynamicLoreGenerator
 
 story_bp = Blueprint("story_bp", __name__)
+_conversation_store = ConversationStore()
 
 # -------------------------------------------------------------------
 # FUNCTION SCHEMAS (for ChatGPT function calls)
@@ -1691,7 +1699,10 @@ async def next_storybeat():
         # 2) Build aggregator context
         tracker.start_phase("get_context")
         aggregator_data = await get_aggregated_roleplay_context(user_id, conv_id, player_name)
-        recent_turns = await fetch_recent_turns(user_id, conv_id)
+        recent_turns = await _conversation_store.fetch_recent_turns(
+            user_id=user_id,
+            conversation_id=conv_id,
+        )
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning"),

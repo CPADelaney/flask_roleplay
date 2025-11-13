@@ -31,7 +31,7 @@ from nyx.nyx_agent.orchestrator import (
     manage_scenario,
     manage_relationships,
 )
-from nyx.conversation import ConversationStore
+from nyx.conversation.store import ConversationStore
 
 # Memory operations through the new orchestrator
 from memory.memory_orchestrator import (
@@ -58,7 +58,6 @@ from db.connection import get_db_connection_context, run_async_in_worker_loop
 
 # Performance monitoring
 from utils.performance import PerformanceTracker, timed_function
-from utils.conversation_history import fetch_recent_turns
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -200,7 +199,10 @@ async def enhanced_background_chat_task(
         # Build context metadata
         performance_tracker.start_phase("context_preparation")
         
-        recent_turns = await fetch_recent_turns(user_id, conversation_id)
+        recent_turns = await _conversation_store.fetch_recent_turns(
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
 
         metadata = {
             "background_task": True,
@@ -277,20 +279,27 @@ async def enhanced_background_chat_task(
         
         # Persist the conversation turns via the shared ConversationStore helper
         performance_tracker.start_phase("append_turns")
-        await _conversation_store.append_turn(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            turn={"sender": "user", "content": user_input},
-        )
-        await _conversation_store.append_turn(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            turn={"sender": "Nyx", "content": ai_response},
-        )
-        logger.info(
-            "Appended conversation turns for conversation %s via ConversationStore",
-            conversation_id,
-        )
+        try:
+            await _conversation_store.append_turn(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn={"sender": "user", "content": user_input},
+            )
+            await _conversation_store.append_turn(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn={"sender": "Nyx", "content": ai_response},
+            )
+            logger.info(
+                "Appended conversation turns for conversation %s via ConversationStore",
+                conversation_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to append conversation turns for conversation %s",  # pragma: no cover - logging only
+                conversation_id,
+                exc_info=True,
+            )
         performance_tracker.end_phase()
         
         # Emit response to client via SocketIO
