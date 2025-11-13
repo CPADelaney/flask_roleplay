@@ -23,26 +23,33 @@ class BaseMetadata(BaseModel):
 class MemoryMetadata(BaseMetadata):
     """Metadata specific to memories – strict version used by Agent tools."""
 
-    # ---- existing keys ----------------------------------------------------
-    npc_id:          Optional[str] = None
-    location_id:     Optional[str] = None
-    quest_id:        Optional[str] = None
-    emotion:         Optional[str] = None
-    context_type:    Optional[str] = None
+    # Core linkage
+    npc_id:           Optional[str] = None
+    location_id:      Optional[str] = None
+    quest_id:         Optional[str] = None
+
+    # Emotional / contextual
+    emotion:          Optional[str] = None
+    context_type:     Optional[str] = None
     related_memories: Optional[List[str]] = None
 
-    conflict_id:       Optional[int]  = None
-    conflict_name:     Optional[str]  = None
-    conflict_type:     Optional[str]  = None
-    phase:             Optional[str]  = None
-    location:          Optional[str]  = None
+    # Conflict hooks
+    conflict_id:      Optional[int]  = None
+    conflict_name:    Optional[str]  = None
+    conflict_type:    Optional[str]  = None
+    phase:            Optional[str]  = None
+    location:         Optional[str]  = None
 
-    # 🔥 NEW: alias of “conflict_identifier” → conflict_id
+    # NEW: allow tags here too, same shape as EntityMetadata
+    tags: Optional[List[str]] = None
+
+    # Deprecated alias – keep for forward compat, but don’t rely on it
     conflict_identifier: Optional[int] = Field(
         default=None,
-        description="Deprecated.  Alias for conflict_id.",
-        alias="conflict_identifier"
+        description="Deprecated. Alias for conflict_id.",
+        alias="conflict_identifier",
     )
+
 
 
 class TimeSpanMetadata(BaseModel):
