@@ -9,7 +9,7 @@ import json
 import uuid
 from typing import Dict, Any, Optional, List
 from nyx.nyx_agent.utils import _extract_last_assistant_text
-from utils.conversation_history import fetch_recent_turns
+from nyx.conversation.store import ConversationStore
 from openai_integration.scene_manager import SceneManager
 from openai_integration.conversations import ConversationManager
 from chatkit_server import (
@@ -130,6 +130,8 @@ from logic.aggregator_sdk import init_singletons, build_aggregator_text
 from tasks import background_chat_task_with_memory, warm_user_context_cache_task
 
 logger = logging.getLogger(__name__)
+
+conversation_store = ConversationStore()
 
 app_is_ready = asyncio.Event()
 
@@ -304,7 +306,10 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
         from logic.aggregator_sdk import get_aggregated_roleplay_context
         aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
-        recent_turns = await fetch_recent_turns(user_id, conversation_id)
+        recent_turns = await conversation_store.fetch_recent_turns(
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
 
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
@@ -513,7 +518,10 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 # Refresh aggregator data post-update
                 aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                 context["aggregator_data"] = aggregator_data
-                context["recent_turns"] = await fetch_recent_turns(user_id, conversation_id)
+                context["recent_turns"] = await conversation_store.fetch_recent_turns(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
 
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
@@ -793,16 +801,29 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 trimmed_text = final_text.strip()
 
         stored_text = final_text
-        if stored_text:
+        player_sender = context.get("player_name") or "Player"
+
+        if success and user_input:
             try:
-                async with get_db_connection_context() as conn:
-                    await conn.execute(
-                        """INSERT INTO messages (conversation_id, sender, content, created_at)
-                           VALUES ($1, $2, $3, NOW())""",
-                        conversation_id,
-                        "Nyx",
-                        stored_text,
-                    )
+                await conversation_store.append_turn(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    turn={"sender": player_sender, "content": user_input},
+                )
+                logger.info(f"[BG Task {conversation_id}] Stored player input to DB.")
+            except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+                logger.error(
+                    f"[BG Task {conversation_id}] DB Error storing player input: {db_err}",
+                    exc_info=True,
+                )
+
+        if stored_text and success:
+            try:
+                await conversation_store.append_turn(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    turn={"sender": "Nyx", "content": stored_text},
+                )
                 logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
                 logger.error(
