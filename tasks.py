@@ -610,11 +610,14 @@ def background_chat_task_with_memory(
                 logger.info("[BG Task %s] Nyx SDK processing complete.", conversation_id)
 
                 if not nyx_resp or not nyx_resp.success:
-                    error_msg = (
-                        (nyx_resp.metadata or {}).get("error", "Unknown SDK error")
-                        if nyx_resp
-                        else "Empty SDK response"
-                    )
+                    if nyx_resp:
+                        error_msg = (
+                            nyx_resp.error
+                            or (nyx_resp.metadata or {}).get("error")
+                            or "Unknown SDK error"
+                        )
+                    else:
+                        error_msg = "Empty SDK response"
                     raise Exception(error_msg)
 
                 # 5) Prepare the final success payload for publishing
