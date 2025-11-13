@@ -197,6 +197,22 @@ caching_module.cache = _StubCacheDecorator()
 conversation_history_module = _stub_module("utils.conversation_history")
 conversation_history_module.fetch_recent_turns = _async_noop
 
+conversation_store_module = _stub_module("nyx.conversation.store")
+
+
+class _StubConversationStore:
+    def __init__(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def fetch_recent_turns(self, *_: Any, **__: Any) -> list[Dict[str, Any]]:
+        return []
+
+    async def append_turn(self, *_: Any, **__: Any) -> None:
+        return None
+
+
+conversation_store_module.ConversationStore = _StubConversationStore
+
 universal_updater_module = _stub_module("logic.universal_updater_agent")
 universal_updater_module.apply_universal_updates = _async_noop
 
