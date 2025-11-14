@@ -15,6 +15,7 @@ from typing import Any, Dict
 from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from infra.cache import cache_key, set_json
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from nyx.tasks.utils import with_retry, run_coro
@@ -114,6 +115,7 @@ async def _generate_manifestation_slow(
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
         raw = extract_runner_response(run_result) or "{}"
@@ -182,6 +184,7 @@ async def _generate_escalation_narrative(escalation_event: Dict[str, Any]) -> Di
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
         raw = extract_runner_response(run_result) or "{}"

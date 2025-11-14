@@ -19,6 +19,7 @@ from nyx.common.events import ConflictResolved, publish as publish_event
 from nyx.common.outbox import get_session_factory as get_outbox_session_factory
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
+from nyx.config import WARMUP_MODEL
 from nyx.tasks.background import evals as eval_tasks
 from nyx.tasks.base import NyxTask, app, current_trace_id
 from nyx.tasks.utils import run_coro, with_retry
@@ -163,6 +164,7 @@ async def _generate_draft_async(conflict_id: uuid.UUID, payload: Dict[str, Any])
                 context=context,
                 metadata=metadata,
                 runner_kwargs=runner_kwargs,
+                model_override=WARMUP_MODEL,
             )
         )
         text = _extract_text(result)
@@ -236,6 +238,7 @@ async def _evaluate_draft_async(
                 context=context,
                 metadata=metadata,
                 runner_kwargs=runner_kwargs,
+                model_override=WARMUP_MODEL,
             )
         )
         text = _extract_text(result)

@@ -15,7 +15,7 @@ import random
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any, Optional, Protocol
 
@@ -71,6 +71,7 @@ class LLMRequest:
     context: Any | None = None
     metadata: Mapping[str, Any] | None = None
     runner_kwargs: Mapping[str, Any] | None = None
+    model_override: str | None = None
     fallback_agent: AgentSpec | None = None
     max_attempts: int = 3
     backoff_initial: float = 0.5
@@ -87,6 +88,7 @@ class LLMRequest:
             context=self.context,
             metadata=self.metadata,
             runner_kwargs=self.runner_kwargs,
+            model_override=self.model_override,
             fallback_agent=self.fallback_agent,
             max_attempts=self.max_attempts,
             backoff_initial=self.backoff_initial,
@@ -113,6 +115,7 @@ class LLMResult:
 
 
 _runner: type | None = None
+_run_config_cls: type | None = None
 
 
 class LLMOperation(str, Enum):
@@ -131,6 +134,17 @@ def _lazy_import_runner() -> type:
 
         _runner = Runner
     return _runner
+
+
+def _lazy_import_run_config() -> type:
+    """Import ``RunConfig`` lazily to avoid heavy agent SDK imports."""
+
+    global _run_config_cls
+    if _run_config_cls is None:
+        from agents import RunConfig  # type: ignore
+
+        _run_config_cls = RunConfig
+    return _run_config_cls
 
 
 def _iter_candidate_agents(request: LLMRequest) -> Iterable[tuple[AgentSpec, bool]]:
@@ -265,6 +279,23 @@ async def _run_once(
 
     start = time.perf_counter()
     runner_kwargs = dict(request.runner_kwargs or {})
+    if request.model_override:
+        run_config_cls = _lazy_import_run_config()
+        run_config = runner_kwargs.get("run_config")
+        if run_config is None:
+            runner_kwargs["run_config"] = run_config_cls(model=request.model_override)
+        elif isinstance(run_config, run_config_cls):
+            runner_kwargs["run_config"] = replace(run_config, model=request.model_override)
+        elif hasattr(run_config, "__dataclass_fields__"):
+            try:
+                runner_kwargs["run_config"] = replace(run_config, model=request.model_override)
+            except TypeError:
+                runner_kwargs["run_config"] = run_config_cls(model=request.model_override)
+        else:
+            try:
+                runner_kwargs["run_config"] = replace(run_config, model=request.model_override)  # type: ignore[arg-type]
+            except Exception:
+                runner_kwargs["run_config"] = run_config_cls(model=request.model_override)
     context = request.context
     metadata = dict(request.metadata or {})
     operation = str(metadata.get("operation") or "unknown")

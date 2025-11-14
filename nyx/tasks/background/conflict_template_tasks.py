@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from db.connection import get_db_connection_context
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from monitoring.metrics import metrics
@@ -587,6 +588,7 @@ def create_template_for_category(self, payload: Dict[str, Any]) -> Dict[str, Any
                 LLMRequest(
                     prompt=prompt,
                     agent=agent,
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -670,6 +672,7 @@ def generate_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 LLMRequest(
                     prompt=prompt,
                     agent=agent,
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -755,6 +758,7 @@ def adapt_variation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 LLMRequest(
                     prompt=prompt,
                     agent=agent,
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -840,6 +844,7 @@ def add_unique_elements(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 LLMRequest(
                     prompt=prompt,
                     agent=agent,
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -925,6 +930,7 @@ def generate_hooks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 LLMRequest(
                     prompt=prompt,
                     agent=agent,
+                    model_override=WARMUP_MODEL,
                 )
             )
         )

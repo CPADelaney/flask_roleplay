@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from logic.conflict_system.integration import IntegrationMode
 from logic.conflict_system.mode_recommendation import (
     MODE_OPTIMIZER_INSTRUCTIONS,
@@ -87,6 +88,7 @@ def recommend_mode(
                 LLMRequest(
                     prompt=prompt,
                     agent=agent,
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
