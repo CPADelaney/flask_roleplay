@@ -72,6 +72,9 @@ logger = logging.getLogger(__name__)
 # Schema version for cache invalidation
 SCHEMA_VERSION = 3
 
+CANONICAL_RULES_RESERVED = 512
+CONFLICT_RESERVED = 512
+
 from db.connection import get_db_connection_context
 from nyx.user_model_sdk import UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
@@ -585,6 +588,82 @@ class ContextBundle:
         """
         working_budget = token_budget
         packed = PackedContext(token_budget=working_budget)
+
+        lore_priority = 0.4
+        if isinstance(self.metadata, dict):
+            raw_priority = self.metadata.get('lore_priority', lore_priority)
+            try:
+                lore_priority = float(raw_priority)
+            except (TypeError, ValueError):
+                lore_priority = 0.4
+        lore_priority = max(0.1, min(1.0, lore_priority))
+
+        lore_allocation = int(working_budget * 0.6 * lore_priority)
+        npc_allocation = int(working_budget * 0.3)
+        memory_allocation = max(0, working_budget - lore_allocation - npc_allocation)
+
+        canonical_reserve = min(CANONICAL_RULES_RESERVED, working_budget)
+        conflict_reserve = min(CONFLICT_RESERVED, max(0, working_budget - canonical_reserve))
+
+        def has_capacity(tokens_needed: int, *, include_conflict: bool = False) -> bool:
+            reserve = 0
+            if not include_conflict:
+                reserve = conflict_reserve
+            available = max(0, working_budget - reserve)
+            return packed.tokens_used + tokens_needed <= available
+
+        def _add_payload(name: str, section: BundleSection, payload: Any, *, canonical_mode: bool = True) -> bool:
+            if section.canonical and canonical_mode:
+                packed.add_canonical(name, payload)
+                return True
+            return packed.try_add(name, payload)
+
+        def _handle_primary(name: str, allocation: int) -> None:
+            if name in added:
+                return
+            section = sec_map.get(name)
+            if section is None:
+                return
+            payload = self._as_dict(section.data)
+            compacted = packed._compact_if_needed(name, payload, hard=False)
+            estimated = packed._estimate_tokens(compacted)
+            has_room = has_capacity(estimated)
+            exceeds_allocation = allocation <= 0 or estimated > allocation
+            needs_summary = exceeds_allocation or not has_room
+            if not needs_summary:
+                if _add_payload(name, section, compacted):
+                    added.add(name)
+                return
+            summary = packed._summarize(name, compacted)
+            if summary is not None:
+                summary_tokens = packed._estimate_tokens(summary)
+                if has_capacity(summary_tokens) and packed.try_add(name, summary):
+                    added.add(name)
+                    return
+            if section.canonical or has_room:
+                if _add_payload(name, section, compacted):
+                    added.add(name)
+
+        def _handle_generic(name: str, *, include_conflict: bool = False) -> None:
+            if name in added:
+                return
+            section = sec_map.get(name)
+            if section is None:
+                return
+            payload = self._as_dict(section.data)
+            compacted = packed._compact_if_needed(name, payload, hard=False)
+            estimated = packed._estimate_tokens(compacted)
+            has_room = has_capacity(estimated, include_conflict=include_conflict)
+            if not has_room:
+                summary = packed._summarize(name, compacted)
+                if summary is not None:
+                    summary_tokens = packed._estimate_tokens(summary)
+                    if has_capacity(summary_tokens, include_conflict=include_conflict) and packed.try_add(name, summary):
+                        added.add(name)
+                        return
+            if section.canonical or has_room:
+                if _add_payload(name, section, compacted):
+                    added.add(name)
         must_include = set(must_include or [])
 
         # Map of section name → BundleSection
@@ -621,6 +700,20 @@ class ContextBundle:
                 packed.add_canonical(name, sec_map[name].data)
                 added.add(name)
 
+        # Pre-handle core sections with explicit allocations
+        _handle_primary('lore', lore_allocation)
+        _handle_primary('npcs', npc_allocation)
+        _handle_primary('memories', memory_allocation)
+
+        # Conflicts reserve their own pool before releasing remaining capacity
+        _handle_generic('conflicts', include_conflict=True)
+        conflict_reserve = 0
+
+        # Retry primaries once conflict reserve is released to use any reclaimed space
+        _handle_primary('lore', lore_allocation)
+        _handle_primary('npcs', npc_allocation)
+        _handle_primary('memories', memory_allocation)
+
         # Now add remaining sections: canonical ones first, then by priority desc
         sections = [
             ('npcs', self.npcs),
@@ -632,13 +725,10 @@ class ContextBundle:
         ]
         sections.sort(key=lambda x: (not x[1].canonical, -x[1].priority))
 
-        for name, section in sections:
-            if name in added:
+        for name, _section in sections:
+            if name in added or name in {'lore', 'npcs', 'memories', 'conflicts'}:
                 continue
-            if section.canonical:
-                packed.add_canonical(name, section.data)
-            else:
-                packed.try_add(name, section.data)
+            _handle_generic(name)
 
         # Canonical rules are non-negotiable: always append them after other sections
         lore_dict = self._as_dict(self.lore.data)
@@ -646,8 +736,10 @@ class ContextBundle:
         if rules:
             payload = {'canonical_rules': rules}
             rule_tokens = packed._estimate_tokens(payload)
-            packed.canonical['canonical_rules'] = payload['canonical_rules']
-            packed.tokens_used += rule_tokens
+            budget_ceiling = working_budget + canonical_reserve
+            if payload['canonical_rules'] and packed.tokens_used + rule_tokens <= budget_ceiling:
+                packed.canonical['canonical_rules'] = payload['canonical_rules']
+                packed.tokens_used += rule_tokens
 
         if isinstance(self.metadata, dict):
             packed.metadata = dict(self.metadata)
