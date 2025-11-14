@@ -2,6 +2,7 @@
 """Main orchestration and runtime functions for Nyx Agent SDK with enhanced reality enforcement"""
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
@@ -29,6 +30,7 @@ from .config import Config
 
 if TYPE_CHECKING:
     from nyx.nyx_agent_sdk import NyxSDKConfig
+from . import context as context_module
 from .context import NyxContext, PackedContext
 from ._feasibility_helpers import (
     DeferPromptContext,
@@ -38,7 +40,13 @@ from ._feasibility_helpers import (
     extract_defer_details,
 )
 from .models import *
-from .agents import nyx_main_agent, nyx_defer_agent, reflection_agent, DEFAULT_MODEL_SETTINGS
+from .agents import (
+    nyx_main_agent,
+    nyx_defer_agent,
+    reflection_agent,
+    movement_transition_agent,
+    DEFAULT_MODEL_SETTINGS,
+)
 from .assembly import assemble_nyx_response, resolve_scene_requests
 from .tools import (
     update_relationship_state,
@@ -78,6 +86,8 @@ DEFAULT_DEFER_RUN_TIMEOUT_SECONDS: float = getattr(
     Config, "DEFER_RUN_TIMEOUT_SECONDS", 45.0
 )
 DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
+
+_MOVEMENT_FAST_PATH_CATEGORIES: set[str] = {"movement", "mundane_action"}
 
 def _is_soft_location_only_violation(fast_result: Dict[str, Any]) -> bool:
     """
@@ -305,6 +315,362 @@ def _preserve_hydrated_location(target: Dict[str, Any], location: Any) -> None:
         if not _is_meaningful(target.get(key)):
             target[key] = location
 
+
+def _intents_are_movement_only(fast_result: Dict[str, Any]) -> bool:
+    """Return True when every intent category is movement-centric."""
+
+    per_intent = fast_result.get("per_intent")
+    if not isinstance(per_intent, list) or not per_intent:
+        return False
+
+    for intent in per_intent:
+        if not isinstance(intent, dict):
+            return False
+
+        categories = intent.get("categories") or []
+        normalized = {
+            str(cat).strip().lower()
+            for cat in categories
+            if isinstance(cat, str) and cat.strip()
+        }
+
+        if not normalized:
+            return False
+
+        if not normalized.issubset(_MOVEMENT_FAST_PATH_CATEGORIES):
+            return False
+
+    return True
+
+
+def _context_payload_for_router(nyx_context: NyxContext) -> Dict[str, Any]:
+    """Prepare a sanitized context payload for the location router."""
+
+    payload: Dict[str, Any] = {}
+    current = getattr(nyx_context, "current_context", {}) or {}
+
+    for key, value in current.items():
+        if isinstance(key, str) and key.startswith("_"):
+            continue
+        payload[key] = value
+
+    return payload
+
+
+def _extract_location_payload(resolve_result: Any) -> Dict[str, Any]:
+    """Normalize a ResolveResult location payload for context storage."""
+
+    if not resolve_result:
+        return {}
+
+    payload: Dict[str, Any] = {}
+    location = getattr(resolve_result, "location", None)
+
+    if location:
+        if dataclasses.is_dataclass(location):
+            payload = dataclasses.asdict(location)
+        elif isinstance(location, dict):
+            payload = dict(location)
+        else:
+            payload = {
+                "id": getattr(location, "id", getattr(location, "location_id", None)),
+                "location_id": getattr(location, "location_id", None),
+                "name": getattr(location, "location_name", getattr(location, "name", None)),
+                "location_name": getattr(location, "location_name", None),
+                "location_type": getattr(location, "location_type", None),
+                "city": getattr(location, "city", None),
+                "region": getattr(location, "region", None),
+                "country": getattr(location, "country", None),
+                "description": getattr(location, "description", None),
+            }
+        name = payload.get("location_name") or payload.get("name")
+        if name:
+            payload.setdefault("name", name)
+        return {k: v for k, v in payload.items() if v not in (None, "", [])}
+
+    candidates = getattr(resolve_result, "candidates", None) or []
+    if candidates:
+        first = candidates[0]
+        place = getattr(first, "place", None)
+        if place:
+            place_payload = {
+                "name": getattr(place, "name", None),
+                "key": getattr(place, "key", None),
+                "level": getattr(place, "level", None),
+            }
+            address = getattr(place, "address", None)
+            if address:
+                place_payload["address"] = address
+            meta = getattr(place, "meta", None)
+            if meta:
+                place_payload["meta"] = meta
+            return {k: v for k, v in place_payload.items() if v not in (None, "", [])}
+
+    return {}
+
+
+def _compact_npcs(npcs: Any) -> List[Dict[str, Any]]:
+    """Return at most two lightweight NPC descriptors."""
+
+    compact: List[Dict[str, Any]] = []
+    if not isinstance(npcs, list):
+        return compact
+
+    for npc in npcs:
+        entry: Dict[str, Any] = {}
+        if isinstance(npc, dict):
+            for key in ("name", "nickname", "role", "description"):
+                value = npc.get(key)
+                if value:
+                    entry[key] = value
+            rel = npc.get("relationship")
+            if isinstance(rel, dict):
+                entry["relationship"] = {
+                    k: rel[k]
+                    for k in ("trust", "respect", "closeness")
+                    if k in rel and rel[k] is not None
+                }
+        elif npc:
+            entry["name"] = str(npc)
+
+        if entry:
+            compact.append(entry)
+
+        if len(compact) >= 2:
+            break
+
+    return compact
+
+
+def _extract_recent_turns(
+    nyx_context: NyxContext,
+    packed_context: Optional[PackedContext],
+) -> List[Dict[str, Any]]:
+    """Collect the last few turns from packed context or live context."""
+
+    candidate_sequences: List[List[Any]] = []
+
+    if packed_context is not None and hasattr(packed_context, "canonical"):
+        canonical = getattr(packed_context, "canonical", {}) or {}
+        for key in ("recent_interactions", "recent_turns"):
+            sequence = canonical.get(key)
+            if isinstance(sequence, list) and sequence:
+                candidate_sequences.append(sequence)
+
+    current_context = getattr(nyx_context, "current_context", {}) or {}
+    for key in ("recent_interactions", "recent_turns"):
+        sequence = current_context.get(key)
+        if isinstance(sequence, list) and sequence:
+            candidate_sequences.append(sequence)
+
+    if not candidate_sequences:
+        return []
+
+    turns_source: List[Any] = []
+    for sequence in candidate_sequences:
+        if isinstance(sequence, list) and sequence:
+            turns_source = sequence
+
+    recent = turns_source[-3:]
+    normalized: List[Dict[str, Any]] = []
+
+    for turn in recent:
+        if not isinstance(turn, dict):
+            continue
+        entry: Dict[str, Any] = {}
+        sender = turn.get("sender") or turn.get("speaker")
+        if sender:
+            entry["sender"] = sender
+        content = turn.get("content") or turn.get("text") or turn.get("message")
+        if content:
+            entry["content"] = content
+        if entry:
+            normalized.append(entry)
+
+    return normalized
+
+
+def _build_movement_scene_bundle(
+    nyx_context: NyxContext,
+    packed_context: Optional[PackedContext],
+    location_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Compose a compact scene summary for the movement fast path."""
+
+    location_info: Dict[str, Any] = {}
+    current_location = getattr(nyx_context, "current_context", {}).get("current_location")
+    if isinstance(current_location, dict):
+        location_info.update(current_location)
+    if location_payload:
+        location_info.update(location_payload)
+
+    name = (
+        location_info.get("name")
+        or location_info.get("location_name")
+        or location_info.get("location")
+    )
+    if name:
+        location_info["name"] = name
+
+    recent_turns = _extract_recent_turns(nyx_context, packed_context)
+    npcs = _compact_npcs(getattr(nyx_context, "current_context", {}).get("present_npcs"))
+
+    return {
+        "location": {k: v for k, v in location_info.items() if v not in (None, "")},
+        "npcs": npcs,
+        "recent_turns": recent_turns,
+    }
+
+
+def _build_movement_transition_prompt(
+    user_input: str,
+    scene_bundle: Dict[str, Any],
+) -> str:
+    """Create the lightweight transition prompt for the movement agent."""
+
+    bundle_json = json.dumps(scene_bundle, ensure_ascii=False)
+    return "\n".join(
+        [
+            "You are Nyx crafting a quick movement transition.",
+            "Respond in 2-3 sentences max with noir, dominant sensuality. Keep continuity with the provided context.",
+            f"Player intent: {user_input}",
+            f"Scene bundle JSON: {bundle_json}",
+        ]
+    )
+
+
+def _default_movement_transition_narration(scene_bundle: Dict[str, Any]) -> str:
+    """Fallback narration if the movement agent output is empty."""
+
+    location = scene_bundle.get("location") or {}
+    location_name = location.get("name") or "the next space"
+    return (
+        f"You move toward {location_name}, the world adjusting around your stride."
+    )
+
+
+async def _run_movement_transition_fast_path(
+    nyx_context: NyxContext,
+    packed_context: Optional[PackedContext],
+    user_input: str,
+    fast_result: Dict[str, Any],
+    trace_id: str,
+    start_time: float,
+) -> Dict[str, Any]:
+    """Execute the streamlined movement transition pipeline."""
+
+    logger.info(f"[{trace_id}] Movement-only intents detected; running transition fast path")
+
+    nyx_context.current_context.setdefault("feasibility", fast_result)
+
+    snapshot_store = getattr(context_module, "_SNAPSHOT_STORE", None)
+    if snapshot_store is not None and not hasattr(snapshot_store, "get"):
+        snapshot_store = None
+
+    resolve_result: Any = None
+    try:
+        from nyx.location import router as location_router
+
+        resolve_result = await location_router.resolve_place_or_travel(
+            user_input,
+            _context_payload_for_router(nyx_context),
+            snapshot_store,
+            str(nyx_context.user_id),
+            str(nyx_context.conversation_id),
+        )
+    except Exception as exc:
+        logger.warning(
+            f"[{trace_id}] Movement router failed softly: {exc}",
+            exc_info=True,
+        )
+
+    previous_location_id = nyx_context.current_context.get("location_id")
+    location_payload = _extract_location_payload(resolve_result)
+
+    if location_payload:
+        existing = nyx_context.current_context.get("current_location")
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        merged.update(location_payload)
+        name = (
+            merged.get("name")
+            or merged.get("location_name")
+            or merged.get("location")
+        )
+        if name:
+            merged["name"] = name
+            nyx_context.current_context["location_name"] = name
+        location_id = (
+            merged.get("id")
+            or merged.get("location_id")
+        )
+        if location_id is not None:
+            nyx_context.current_context["location_id"] = location_id
+        nyx_context.current_context["current_location"] = merged
+        _preserve_hydrated_location(nyx_context.current_context, merged)
+
+    try:
+        await nyx_context._refresh_location_from_context(previous_location_id)
+    except Exception:
+        logger.debug(
+            f"[{trace_id}] Movement fast path location refresh failed softly",
+            exc_info=True,
+        )
+
+    scene_bundle = _build_movement_scene_bundle(
+        nyx_context,
+        packed_context,
+        location_payload,
+    )
+
+    prompt = _build_movement_transition_prompt(user_input, scene_bundle)
+    agent_context = RunContextWrapper(nyx_context) if RunContextWrapper else nyx_context
+    run_config = RunConfig(
+        workflow_name="Nyx Movement Transition",
+        model_settings=ModelSettings(strict_tools=False),
+    )
+
+    try:
+        agent_result = await run_agent_safely(
+            movement_transition_agent,
+            prompt,
+            agent_context,
+            run_config=run_config,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"[{trace_id}] Movement transition agent failed softly: {exc}",
+            exc_info=True,
+        )
+        agent_result = None
+
+    narration = (
+        coalesce_agent_output_text(agent_result)
+        or _default_movement_transition_narration(scene_bundle)
+    )
+
+    location_transition = {
+        "router_called": resolve_result is not None,
+        "router_status": getattr(resolve_result, "status", None) if resolve_result else None,
+        "router_choices": getattr(resolve_result, "choices", []),
+        "router_operations": getattr(resolve_result, "operations", []),
+        "router_metadata": getattr(resolve_result, "metadata", {}) if resolve_result else {},
+        "location": scene_bundle.get("location", {}),
+    }
+
+    return {
+        "success": True,
+        "response": narration,
+        "metadata": {
+            "movement_fast_path": True,
+            "universal_updates": False,
+            "feasibility": fast_result,
+            "location_transition": location_transition,
+            "scene_bundle": scene_bundle,
+        },
+        "trace_id": trace_id,
+        "processing_time": time.time() - start_time,
+    }
+
 # ===== Logging Helper =====
 @asynccontextmanager
 async def _log_step(name: str, trace_id: str, **meta):
@@ -495,6 +861,7 @@ async def process_user_input(
         fast_overall: Dict[str, Any] = {}
         fast_strategy = ""
         fast_feasible_flag: Optional[bool] = None
+        movement_fast_path = False
 
         if isinstance(fast, dict):
             fast_overall = (fast or {}).get("overall", {}) or {}
@@ -506,6 +873,12 @@ async def process_user_input(
                 f"[{trace_id}] Fast feasibility: feasible={fast_feasible_flag} "
                 f"strategy={fast_strategy} soft_location_only={soft_location_only}"
             )
+
+            if fast_feasible_flag is True and fast_strategy == "allow":
+                movement_fast_path = _intents_are_movement_only(fast)
+                logger.info(
+                    f"[{trace_id}] Movement-only intents detected? {movement_fast_path}"
+                )
 
             # Hard-block ONLY when it's a real impossibility, not a location-only miss
             if (
@@ -579,6 +952,17 @@ async def process_user_input(
                     nyx_context.current_world_state = (
                         nyx_context.world_director.context.current_world_state
                     )
+
+        if movement_fast_path and nyx_context is not None:
+            nyx_context.current_context["feasibility"] = fast if isinstance(fast, dict) else {}
+            return await _run_movement_transition_fast_path(
+                nyx_context,
+                packed_context,
+                user_input,
+                fast if isinstance(fast, dict) else {},
+                trace_id,
+                start_time,
+            )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")
