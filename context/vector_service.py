@@ -1,6 +1,7 @@
 # context/vector_service.py
 
 import asyncio
+import json
 import logging
 import time
 import hashlib
@@ -571,6 +572,20 @@ class VectorService:
 
         return await self._query_recent_chunks(limit)
 
+    @staticmethod
+    def _normalize_card_payload(card: Any) -> Optional[Dict[str, Any]]:
+        """Ensure card payloads are dictionaries for pydantic validation."""
+        if isinstance(card, dict):
+            return card
+        if isinstance(card, str):
+            try:
+                parsed = json.loads(card)
+            except json.JSONDecodeError:
+                logger.warning("Failed to decode card payload JSON string")
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
     async def _perform_search(self, data) -> List[VectorSearchResultItem]:
         """Perform a vector search operation."""
         query_text = data.get("query_text", "")
@@ -610,9 +625,19 @@ class VectorService:
             entity_type: str = ""
 
             if isinstance(result, dict):
-                card = result.get("card")
+                card = self._normalize_card_payload(result.get("card"))
                 entity_type = result.get("entity_type", "")
-                metadata_source = result.get("metadata", {}) if isinstance(result.get("metadata"), dict) else {}
+
+                raw_metadata = result.get("metadata", {})
+                if isinstance(raw_metadata, str):
+                    try:
+                        parsed_metadata = json.loads(raw_metadata)
+                    except json.JSONDecodeError:
+                        logger.warning("Failed to decode metadata JSON for entity %s", result.get("entity_id"))
+                        parsed_metadata = {}
+                    metadata_source = parsed_metadata if isinstance(parsed_metadata, dict) else {}
+                else:
+                    metadata_source = raw_metadata if isinstance(raw_metadata, dict) else {}
                 if not entity_type and metadata_source:
                     entity_type = metadata_source.get("entity_type", "")
             else:
@@ -620,11 +645,18 @@ class VectorService:
                     metadata_source = result.get("metadata", {})  # type: ignore[assignment]
                 except AttributeError:
                     metadata_source = {}
+                if isinstance(metadata_source, str):
+                    try:
+                        metadata_source = json.loads(metadata_source)
+                    except json.JSONDecodeError:
+                        logger.warning("Failed to decode metadata JSON from legacy result")
+                        metadata_source = {}
                 entity_type = metadata_source.get("entity_type", "") if isinstance(metadata_source, dict) else ""
 
             # FIX: Filter metadata_dict to only include fields relevant to each metadata type
             if entity_type == "npc":
-                card_data = card or metadata_source.get("card", {}) if isinstance(metadata_source, dict) else {}
+                card_data = ((card or self._normalize_card_payload(metadata_source.get("card")))
+                             if isinstance(metadata_source, dict) else None) or {}
                 personality_traits = card_data.get("personality_traits") if isinstance(card_data, dict) else None
                 relationships = card_data.get("relationships") if isinstance(card_data, dict) else None
                 metadata = NPCMetadata(
@@ -633,13 +665,15 @@ class VectorService:
                     tags=relationships if isinstance(relationships, list) else None,
                 )
             elif entity_type == "location":
-                card_data = card or metadata_source.get("card", {}) if isinstance(metadata_source, dict) else {}
+                card_data = ((card or self._normalize_card_payload(metadata_source.get("card")))
+                             if isinstance(metadata_source, dict) else None) or {}
                 metadata = LocationMetadata(
                     location_type=card_data.get("location_type") if isinstance(card_data, dict) else None,
                     attributes=card_data.get("notable_features") if isinstance(card_data, dict) else None,
                 )
             elif entity_type == "memory":
-                card_data = card or metadata_source.get("card", {}) if isinstance(metadata_source, dict) else {}
+                card_data = ((card or self._normalize_card_payload(metadata_source.get("card")))
+                             if isinstance(metadata_source, dict) else None) or {}
                 metadata = MemoryMetadata(
                     context_type=card_data.get("memory_type") if isinstance(card_data, dict) else None,
                     tags=card_data.get("tags") if isinstance(card_data, dict) else None,
@@ -650,11 +684,11 @@ class VectorService:
             if isinstance(result, dict):
                 score = result.get("score", result.get("vector_score", 0.0))
                 entity_id = result.get("entity_id", "")
-                card_payload = result.get("card")
+                card_payload = self._normalize_card_payload(result.get("card"))
             else:
                 score = result.get("score", 0.0)
                 entity_id = result.get("id", "")
-                card_payload = metadata_source.get("card") if isinstance(metadata_source, dict) else None
+                card_payload = self._normalize_card_payload(metadata_source.get("card")) if isinstance(metadata_source, dict) else None
 
             typed_results.append(VectorSearchResultItem(
                 id=str(entity_id),
