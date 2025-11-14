@@ -39,7 +39,7 @@ import dataclasses
 import contextlib
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING, Callable, Awaitable
+from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING, Callable, Awaitable, Iterable
 from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
@@ -112,6 +112,8 @@ def build_canonical_snapshot_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]
         "conflict_active",
         "time_window",
         "updated_at",
+        "turns_at_location",
+        "conflict_intensity",
     ):
         if key not in snapshot:
             continue
@@ -249,9 +251,6 @@ except ImportError as e:
 # Section names constant to avoid typos
 SECTION_NAMES = ('npcs', 'memories', 'lore', 'conflicts', 'world', 'narrative')
 
-# Reserved token budget to guarantee canonical lore rules are always included
-CANONICAL_RULES_RESERVED = 500
-
 # ===== New Data Structures for Optimized Context Assembly =====
 
 import re
@@ -270,6 +269,8 @@ class SceneScope:
     nation_ids: Set[int] = field(default_factory=set)  # optional, helps lore anchoring
     time_window: Optional[int] = 24
     link_hints: Dict[str, List[Union[int, str]]] = field(default_factory=dict)
+    turns_at_location: int = 0
+    conflict_intensity: float = 0.0
 
     def to_key(self) -> str:
         # Single canonical key path for all systems
@@ -292,6 +293,121 @@ class SceneScope:
             if k in d and isinstance(d[k], list):
                 d[k] = set(d[k])
         return cls(**d)
+
+    @property
+    def is_first_turn_at_location(self) -> bool:
+        return self.turns_at_location == 0
+
+
+def compute_lore_priority(
+    user_input: Optional[str],
+    intents: Optional[Iterable[Dict[str, Any]]],
+    scope: Optional[SceneScope],
+) -> float:
+    """Estimate how urgently lore should be surfaced for the next turn.
+
+    Heuristics blend the current user request, feasibility intent metadata,
+    conflict intensity, whether we are at the first turn for the location, and
+    any lore tags already attached to the scope. The output is clamped to the
+    [0.1, 1.0] range so downstream packing always has a sane weight to work
+    with even when data is sparse.
+    """
+
+    normalized_text = (user_input or "").strip().lower()
+    score = 0.4 if normalized_text else 0.25
+
+    tokens: Set[str] = set()
+    if normalized_text:
+        tokens = set(re.findall(r"\b\w+\b", normalized_text))
+
+        inquiry_phrases = (
+            "tell me about",
+            "what is",
+            "what's",
+            "who is",
+            "who's",
+            "where is",
+            "where's",
+            "why is",
+            "how did",
+            "how does",
+        )
+        if any(phrase in normalized_text for phrase in inquiry_phrases):
+            score += 0.15
+
+        lore_keywords = {
+            "lore",
+            "history",
+            "background",
+            "legend",
+            "myth",
+            "culture",
+            "tradition",
+            "origin",
+            "story",
+            "stories",
+        }
+        if tokens & lore_keywords:
+            score += 0.2
+
+        if normalized_text.endswith("?"):
+            score += 0.05
+
+    categories: Set[str] = set()
+    if intents:
+        for entry in intents:
+            if not isinstance(entry, dict):
+                continue
+            raw_categories = entry.get("categories")
+            if isinstance(raw_categories, (list, tuple, set)):
+                categories.update(
+                    str(category).lower()
+                    for category in raw_categories
+                    if category is not None
+                )
+
+    if categories:
+        lore_categories = {
+            "lore",
+            "world_lore",
+            "knowledge",
+            "information",
+            "investigation",
+            "exploration",
+            "history",
+            "discovery",
+            "research",
+        }
+        if categories & lore_categories:
+            score += 0.2
+
+        action_categories = {
+            "combat",
+            "violence",
+            "attack",
+            "fight",
+            "stealth",
+        }
+        if categories & action_categories:
+            score -= 0.1
+
+    scope_obj = scope if isinstance(scope, SceneScope) else None
+    if scope_obj:
+        intensity = scope_obj.conflict_intensity
+        if isinstance(intensity, (int, float)):
+            clamped_intensity = max(0.0, min(float(intensity), 1.0))
+            if clamped_intensity >= 0.75:
+                score -= 0.1
+            elif clamped_intensity >= 0.4:
+                score -= 0.05
+
+        if scope_obj.is_first_turn_at_location:
+            score += 0.2
+
+        if scope_obj.lore_tags:
+            score += min(0.15, 0.03 * len(scope_obj.lore_tags))
+
+    return max(0.1, min(1.0, score))
 # ===== Strong DTOs for Section Data =====
 
 @dataclass
@@ -532,6 +648,11 @@ class ContextBundle:
             rule_tokens = packed._estimate_tokens(payload)
             packed.canonical['canonical_rules'] = payload['canonical_rules']
             packed.tokens_used += rule_tokens
+
+        if isinstance(self.metadata, dict):
+            packed.metadata = dict(self.metadata)
+        else:
+            packed.metadata = {}
 
         return packed
 
@@ -797,6 +918,7 @@ class PackedContext:
     canonical: Dict[str, Any] = field(default_factory=dict)
     optional: Dict[str, Any] = field(default_factory=dict)
     summarized: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     tokens_used: int = 0
     
     def add_canonical(self, key: str, data: Any):
@@ -944,6 +1066,8 @@ class PackedContext:
         result = {**self.canonical, **self.optional}
         if self.summarized:
             result['_summarized'] = self.summarized
+        if self.metadata:
+            result['_metadata'] = dict(self.metadata)
         return result
 
 # ===== LRU Cache Implementation =====
@@ -1312,11 +1436,223 @@ class ContextBroker:
         except Exception as e:
             logger.warning(f"Could not build NPC alias cache: {e}")
             self._npc_alias_cache = {}
-    
+
+    def _get_latest_snapshot(self) -> Dict[str, Any]:
+        """Fetch the most recent lightweight snapshot for turn metadata."""
+
+        user_id = getattr(self.ctx, "user_id", None)
+        conversation_id = getattr(self.ctx, "conversation_id", None)
+        if user_id is None or conversation_id is None:
+            return {}
+
+        try:
+            snapshot = _SNAPSHOT_STORE.get(str(user_id), str(conversation_id))
+        except Exception:
+            logger.debug(
+                "[CONTEXT_BROKER] Failed to read snapshot for scope computation",
+                exc_info=True,
+            )
+            return {}
+
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    @staticmethod
+    def _coerce_turn_count(value: Any) -> Optional[int]:
+        """Convert heterogeneous turn counters into a non-negative integer."""
+
+        if isinstance(value, bool):
+            return None
+
+        if isinstance(value, (int, float)):
+            return max(int(round(value)), 0)
+
+        if isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            try:
+                parsed = int(candidate)
+            except ValueError:
+                try:
+                    parsed = int(float(candidate))
+                except ValueError:
+                    return None
+            return max(parsed, 0)
+
+        return None
+
+    @staticmethod
+    def _extract_turn_count(mapping: Any, keys: Iterable[str]) -> Optional[int]:
+        if not isinstance(mapping, dict):
+            return None
+
+        for key in keys:
+            if key not in mapping:
+                continue
+            count = ContextBroker._coerce_turn_count(mapping.get(key))
+            if count is not None:
+                return count
+
+        return None
+
+    @staticmethod
+    def _lookup_turns_by_location(
+        mapping: Any, location_tokens: Iterable[str]
+    ) -> Optional[int]:
+        if not isinstance(mapping, dict):
+            return None
+
+        for token in location_tokens:
+            if not token:
+                continue
+
+            direct = ContextBroker._coerce_turn_count(mapping.get(token))
+            if direct is not None:
+                return direct
+
+            if isinstance(token, str):
+                lowered = token.casefold()
+                for raw_key, raw_value in mapping.items():
+                    if not isinstance(raw_key, str):
+                        continue
+                    if raw_key == token:
+                        continue
+                    if raw_key.casefold() == lowered:
+                        count = ContextBroker._coerce_turn_count(raw_value)
+                        if count is not None:
+                            return count
+
+        return None
+
+    def _derive_turns_at_location(
+        self,
+        *,
+        location_candidates: Iterable[Any],
+        current_state: Optional[Dict[str, Any]],
+        snapshot: Optional[Dict[str, Any]],
+    ) -> int:
+        """Determine how many turns have occurred at the active location."""
+
+        normalized_tokens: List[str] = []
+        for value in location_candidates:
+            normalized = self.ctx._normalize_location_value(value)
+            if normalized and normalized not in normalized_tokens:
+                normalized_tokens.append(normalized)
+
+        if not normalized_tokens:
+            return 0
+
+        state = current_state or {}
+        direct_keys = (
+            "turns_at_location",
+            "turns_at_scene",
+            "scene_turns",
+            "turns_in_scene",
+            "turn_count",
+            "scene_turn_count",
+        )
+
+        count = self._extract_turn_count(state, direct_keys)
+        if count is not None:
+            return count
+
+        location_turns = state.get("location_turns")
+        count = self._lookup_turns_by_location(location_turns, normalized_tokens)
+        if count is not None:
+            return count
+
+        for nested_key in (
+            "scene",
+            "current_scene",
+            "currentRoleplay",
+            "current_roleplay",
+            "aggregator_data",
+        ):
+            nested = state.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+
+            count = self._extract_turn_count(nested, direct_keys + ("turns",))
+            if count is not None:
+                return count
+
+            nested_location_turns = nested.get("location_turns")
+            count = self._lookup_turns_by_location(
+                nested_location_turns, normalized_tokens
+            )
+            if count is not None:
+                return count
+
+        snap = snapshot or {}
+        count = self._extract_turn_count(snap, ("turns_at_location",))
+        if count is not None:
+            scene_tokens: List[str] = []
+            for key in ("scene_id", "location_name"):
+                normalized_scene = self.ctx._normalize_location_value(snap.get(key))
+                if normalized_scene:
+                    scene_tokens.append(normalized_scene)
+
+            if not scene_tokens:
+                return count
+
+            scene_matches = any(
+                isinstance(candidate, str)
+                and any(
+                    candidate.casefold() == scene.casefold()
+                    for scene in scene_tokens
+                    if isinstance(scene, str)
+                )
+                for candidate in normalized_tokens
+            )
+
+            if scene_matches:
+                return count
+
+        snapshot_location_turns = snap.get("location_turn_counts")
+        if not isinstance(snapshot_location_turns, dict):
+            snapshot_location_turns = snap.get("location_turns")
+
+        count = self._lookup_turns_by_location(
+            snapshot_location_turns, normalized_tokens
+        )
+        if count is not None:
+            return count
+
+        turn_counts = snap.get("turn_counts")
+        count = self._lookup_turns_by_location(turn_counts, normalized_tokens)
+        if count is not None:
+            return count
+
+        return 0
+
+    def _resolve_conflict_intensity(self) -> float:
+        """Average conflict tension scores into a single intensity metric."""
+
+        tensions = getattr(self.ctx, "conflict_tensions", None)
+        if not isinstance(tensions, dict) or not tensions:
+            return 0.0
+
+        values: List[float] = []
+        for value in tensions.values():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+            elif isinstance(value, str):
+                try:
+                    values.append(float(value.strip()))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+
+        if not values:
+            return 0.0
+
+        return float(sum(values) / len(values))
+
     async def compute_scene_scope(self, user_input: str, current_state: Dict[str, Any]) -> SceneScope:
         """Analyze input and state to determine relevant scope (no orchestrator calls)"""
         scope = SceneScope()
-        
+
         # Extract location (keep both ID and name)
         location_id = self.ctx._normalize_location_value(current_state.get('location_id'))
         if not location_id:
@@ -1353,7 +1689,24 @@ class ContextBroker:
         
         # Expand scope with linked concepts (lightweight graph hop)
         await self._expand_scope_with_links(scope)
-        
+
+        snapshot = self._get_latest_snapshot()
+        scope.turns_at_location = self._derive_turns_at_location(
+            location_candidates=(
+                scope.location_id,
+                scope.location_name,
+                current_state.get("location_id"),
+                current_state.get("location_name"),
+                self.ctx.current_location,
+            ),
+            current_state=current_state,
+            snapshot=snapshot,
+        )
+        current_state["turns_at_location"] = scope.turns_at_location
+
+        scope.conflict_intensity = self._resolve_conflict_intensity()
+        current_state["conflict_intensity"] = scope.conflict_intensity
+
         return scope
     
     async def _expand_scope_with_links(self, scope: SceneScope):
@@ -4249,6 +4602,64 @@ class NyxContext:
         
         # Load or fetch the context bundle
         bundle = await self.context_broker.load_or_fetch_bundle(scene_scope)
+
+        def _extract_per_intent(source: Any, depth: int = 0) -> Optional[List[Dict[str, Any]]]:
+            if source is None or depth > 4:
+                return None
+
+            if isinstance(source, list):
+                if source and all(isinstance(item, dict) for item in source):
+                    return source
+                return None
+
+            if isinstance(source, dict):
+                per_intent_value = source.get("per_intent")
+                if isinstance(per_intent_value, list):
+                    return per_intent_value
+
+                for nested_key in (
+                    "feasibility",
+                    "fast_feasibility",
+                    "feasibility_payload",
+                    "payload",
+                    "result",
+                    "data",
+                    "meta",
+                ):
+                    nested = source.get(nested_key)
+                    extracted = _extract_per_intent(nested, depth + 1)
+                    if extracted:
+                        return extracted
+
+            return None
+
+        per_intent_payload: Optional[List[Dict[str, Any]]] = None
+        candidate_sources: List[Any] = [
+            self.current_context.get("feasibility"),
+            self.current_context.get("feasibility_payload"),
+            self.current_context.get("fast_feasibility"),
+        ]
+
+        processing_metadata = self.current_context.get("processing_metadata")
+        if isinstance(processing_metadata, dict):
+            candidate_sources.append(processing_metadata.get("feasibility"))
+
+        aggregator_data = self.current_context.get("aggregator_data")
+        if isinstance(aggregator_data, dict):
+            candidate_sources.extend(list(aggregator_data.values())[:5])
+
+        for attr in ("last_feasibility", "last_feasibility_result", "fast_feasibility"):
+            candidate_sources.append(getattr(self, attr, None))
+
+        for candidate in candidate_sources:
+            per_intent_payload = _extract_per_intent(candidate)
+            if per_intent_payload:
+                break
+
+        lore_priority = compute_lore_priority(user_input, per_intent_payload, scene_scope)
+        if not isinstance(bundle.metadata, dict):
+            bundle.metadata = {}
+        bundle.metadata["lore_priority"] = lore_priority
 
         # Propagate recent conversation turns into the bundle metadata
         raw_recent = self.current_context.get("recent_turns")
