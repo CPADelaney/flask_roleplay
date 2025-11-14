@@ -4865,6 +4865,22 @@ class NyxContext:
         bundle.metadata["hints"] = hints_payload
         self.current_context["hints"] = hints_payload
 
+        try:
+            logger.info(
+                "Nyx lore priority evaluated",
+                extra={
+                    "user_id": getattr(self, "user_id", None),
+                    "conversation_id": getattr(self, "conversation_id", None),
+                    "location_id": scene_scope.location_id,
+                    "lore_priority": float(lore_priority),
+                    "lore_tool_recommended": bool(hints_payload.get("lore_tool_recommended")),
+                    "suggested_aspects": hints_payload.get("suggested_aspects") or [],
+                },
+            )
+        except Exception:
+            # Metrics should never break the turn
+            logger.debug("Failed to log lore priority metrics", exc_info=True)
+
         # Propagate recent conversation turns into the bundle metadata
         raw_recent = self.current_context.get("recent_turns")
         if raw_recent is None:
