@@ -44,6 +44,7 @@ class BundleMetadata(AgentSafeModel):
     schema_version: Optional[int] = None
     fetch_time: Optional[float] = None
     link_hints: Dict[str, List[Union[int, str]]] = Field(default_factory=dict)
+    hints: Dict[str, Any] = Field(default_factory=dict)
     expanded_sections: List[str] = Field(default_factory=list)
     extras: KVList = Field(default_factory=KVList)
 

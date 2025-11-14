@@ -23,15 +23,16 @@ _TOKEN_LIMITS: Mapping[str, int] = {
     "low": 80,
     "standard": 160,
     "medium": 160,
+    "rich": 220,
+    "comprehensive": 320,
+    "verbose": 320,
     "default": 160,
     "normal": 160,
     "balanced": 220,
     "high": 320,
-    "rich": 320,
     "extended": 320,
     "full": 480,
     "detailed": 480,
-    "comprehensive": 480,
 }
 
 

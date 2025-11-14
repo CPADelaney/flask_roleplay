@@ -1038,6 +1038,7 @@ async def lore_handle_operation(
                 "aspects": forward_payload.get("aspects"),
             },
         )
+        # Degrade gracefully: let the agent continue with baseline context instead
         return {}
 
 
