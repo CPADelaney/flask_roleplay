@@ -20,6 +20,8 @@ from typing import NotRequired
 
 from agents import function_tool, RunContextWrapper
 
+from nyx.gateway.lore_tool import handle_lore_operation as gateway_handle_lore_operation
+
 from .context import NyxContext, ContextBroker, SceneScope, ContextBundle, PackedContext
 from .models import (
     # OUTPUT models only (safe to keep as they don't affect tool param schema)
@@ -85,6 +87,15 @@ class DecisionOptionInput(TypedDict, total=False):
 
 class ScoreDecisionOptionsInput(TypedDict):
     options: List[Union[str, DecisionOptionInput]]
+
+
+class LoreOperationInput(TypedDict, total=False):
+    aspects: List[str]
+    location_id: Union[int, str]
+    location_name: str
+    npc_ids: List[Union[int, str]]
+    detail_level: str
+    extra: Dict[str, Any]
 
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -991,6 +1002,43 @@ async def prefetch_next_context(
         'predicted_scope': predicted_scope.to_dict(),
         'task_id': task_id
     }
+
+
+@function_tool(name_override="lore.handle_operation")
+async def lore_handle_operation(
+    ctx: RunContextWrapper,
+    payload: LoreOperationInput,
+) -> Dict[str, Any]:
+    """Timeout-protected bridge for lore orchestrator operations."""
+
+    nyx_ctx = ctx.context if isinstance(ctx.context, NyxContext) else ctx
+    user_id = getattr(nyx_ctx, "user_id", None)
+    conversation_id = getattr(nyx_ctx, "conversation_id", None)
+
+    if user_id is None or conversation_id is None:
+        raise ValueError("Nyx context missing identifiers for lore operation")
+
+    forward_payload: Dict[str, Any] = dict(payload) if payload is not None else {}
+
+    try:
+        return await asyncio.wait_for(
+            gateway_handle_lore_operation(
+                user_id=int(user_id),
+                conversation_id=int(conversation_id),
+                payload=forward_payload,
+            ),
+            timeout=3.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Lore operation timed out",
+            extra={
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "aspects": forward_payload.get("aspects"),
+            },
+        )
+        return {}
 
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮

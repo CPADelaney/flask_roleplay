@@ -5,7 +5,34 @@ import logging
 from agents import Agent, handoff, ModelSettings
 
 from .context import NyxContext
-from .tools import *  # Import all tools
+from .tools import (
+    add_memory,
+    calculate_and_update_emotional_state,
+    calculate_emotional_impact,
+    check_performance_metrics,
+    check_world_state,
+    decide_image_generation,
+    detect_conflicts_and_instability,
+    detect_narrative_patterns,
+    detect_user_revelations,
+    generate_ambient_narration,
+    generate_emergent_event,
+    generate_image_from_scene,
+    generate_npc_dialogue,
+    generate_universal_updates,
+    get_activity_recommendations,
+    get_user_model_guidance,
+    lore_handle_operation,
+    manage_beliefs,
+    narrate_daily_routine,
+    narrate_power_exchange,
+    orchestrate_slice_scene,
+    retrieve_memories,
+    score_decision_options,
+    simulate_npc_autonomy,
+    tool_narrate_slice_of_life_scene,
+    update_relationship_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -324,8 +351,9 @@ Remember: Every response is a single scene. No mechanics visible. Let the player
         retrieve_memories,
         detect_user_revelations,
         calculate_emotional_impact,
+        lore_handle_operation,
     ],
-    
+
     model="gpt-5-nano",
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
