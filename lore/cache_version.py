@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from db.connection import get_db_connection_context
 
@@ -23,6 +23,9 @@ _DEFAULT_VERSION_KEY = "nyx:lore:version"
 _LOCAL_VERSION = 0
 _LOCAL_LOCK = threading.Lock()
 _redis_client: Optional["redis.Redis"] = None
+_LOCATION_VERSIONS: Dict[str, int] = {}
+_LOCATION_LOCK = threading.Lock()
+_LOCATION_KEY_TEMPLATE = "nyx:lore:location_version:{location_id}"
 
 
 def _get_redis_client() -> Optional["redis.Redis"]:
@@ -82,6 +85,132 @@ def bump_lore_version() -> int:
     with _LOCAL_LOCK:
         _LOCAL_VERSION += 1
         return _LOCAL_VERSION
+
+
+def _location_version_key(location_id: str) -> str:
+    return _LOCATION_KEY_TEMPLATE.format(location_id=location_id)
+
+
+def _encode_version(value: int) -> str:
+    """Return a short, base-16 representation for cache payloads."""
+
+    if value < 0:
+        value = 0
+    return format(value, "x")
+
+
+def _get_local_location_version(location_id: str) -> int:
+    with _LOCATION_LOCK:
+        return _LOCATION_VERSIONS.get(location_id, 0)
+
+
+def _update_local_location_version(location_id: str, candidate: int) -> int:
+    if candidate < 0:
+        candidate = 0
+    with _LOCATION_LOCK:
+        current = _LOCATION_VERSIONS.get(location_id, 0)
+        if candidate > current:
+            _LOCATION_VERSIONS[location_id] = candidate
+            return candidate
+        return current
+
+
+def compute_lore_version_for_location(location_id: str) -> str:
+    """Return the cached version marker for a location as a short string."""
+
+    if location_id is None:
+        return _encode_version(0)
+
+    # Normalize to a stable string key
+    location_key = str(location_id)
+
+    global _redis_client
+    version: Optional[int] = None
+    client = _get_redis_client()
+    key = _location_version_key(location_key)
+
+    if client is not None:
+        try:
+            raw = client.get(key)
+            if raw is None:
+                if client.setnx(key, 0):
+                    version = 0
+                else:
+                    raw = client.get(key)
+
+            if version is None:
+                if raw is not None:
+                    try:
+                        version = int(raw)
+                    except (TypeError, ValueError):
+                        version = 0
+                else:
+                    version = 0
+        except Exception:  # pragma: no cover - network errors are best effort
+            logger.debug(
+                "Failed to fetch location lore version via Redis", exc_info=True
+            )
+            _redis_client = None
+
+    if version is None:
+        version = _get_local_location_version(location_key)
+
+    synced = _update_local_location_version(location_key, version)
+    if client is not None and _redis_client is not None and synced > version:
+        try:
+            client.set(key, synced)
+        except Exception:  # pragma: no cover - best effort reconciliation
+            logger.debug(
+                "Failed to reconcile location lore version back to Redis",
+                exc_info=True,
+            )
+            _redis_client = None
+
+    return _encode_version(synced)
+
+
+def bump_location_lore_version(location_id: str) -> str:
+    """Bump the lore version counter for a specific location."""
+
+    if location_id is None:
+        return _encode_version(0)
+
+    location_key = str(location_id)
+
+    global _redis_client
+    version: Optional[int] = None
+    client = _get_redis_client()
+    key = _location_version_key(location_key)
+
+    if client is not None:
+        try:
+            version = int(client.incr(key))
+        except Exception as exc:  # pragma: no cover - best effort invalidation
+            logger.warning(
+                "Failed to bump location lore version via Redis: %s", exc,
+                exc_info=True,
+            )
+            _redis_client = None
+
+    if version is None:
+        with _LOCATION_LOCK:
+            current = _LOCATION_VERSIONS.get(location_key, 0) + 1
+            _LOCATION_VERSIONS[location_key] = current
+            version = current
+        return _encode_version(version)
+
+    synced = _update_local_location_version(location_key, version)
+    if client is not None and _redis_client is not None and synced > version:
+        try:
+            client.set(key, synced)
+        except Exception as exc:  # pragma: no cover - best effort reconciliation
+            logger.warning(
+                "Failed to reconcile location lore version via Redis set: %s",
+                exc,
+                exc_info=True,
+            )
+            _redis_client = None
+    return _encode_version(synced)
 
 
 def _should_bump_from_sql(sql: str) -> bool:
@@ -154,4 +283,9 @@ async def get_lore_db_connection_context(*args, **kwargs) -> AsyncIterator[Any]:
                 conn.fetchval = original_fetchval  # type: ignore[attr-defined]
 
 
-__all__ = ["bump_lore_version", "get_lore_db_connection_context"]
+__all__ = [
+    "bump_lore_version",
+    "bump_location_lore_version",
+    "compute_lore_version_for_location",
+    "get_lore_db_connection_context",
+]
