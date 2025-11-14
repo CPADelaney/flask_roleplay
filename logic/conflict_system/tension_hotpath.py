@@ -138,6 +138,10 @@ def queue_manifestation_generation(
 ) -> str:
     """Queue background task to generate tension manifestations.
 
+    Callers should route through :meth:`logic.conflict_system.tension.TensionSubsystem.
+    _trigger_manifestation_generation` so eager warm-up toggles and orchestration
+    policies remain centralized.
+
     Args:
         user_id: User identifier
         conversation_id: Conversation identifier

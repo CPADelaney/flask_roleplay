@@ -306,7 +306,9 @@ class SliceOfLifeConflictSubsystem:
                 data={'no_conflict': True},
                 side_effects=[]
             )
-        
+
+        await self.detector.detect_brewing_tensions(eager=True)
+
         # Check for pattern-based resolution
         resolution = await self.resolver.check_resolution_by_pattern(int(conflict_id))
         
@@ -336,6 +338,7 @@ class SliceOfLifeConflictSubsystem:
         """Handle phase transitions"""
         _, _, _, SubsystemResponse = _orch()
         new_phase = (event.payload or {}).get('new_phase')
+        await self.detector.detect_brewing_tensions(eager=True)
         data = {
             'integration_adjustment': 'reducing' if new_phase in ['resolution', 'aftermath'] else 'maintaining',
             'phase_acknowledged': new_phase
@@ -365,6 +368,8 @@ class SliceOfLifeConflictSubsystem:
             )
         
         context = payload.get('context', {}) or {}
+        await self.detector.detect_brewing_tensions(eager=True)
+
         conflict_id = payload.get('conflict_id')  # May be absent during initial create event
         if conflict_id:
             event_result = await self.manager.embed_conflict_in_activity(
@@ -404,13 +409,15 @@ class EmergentConflictDetector:
         self.user_id = user_id
         self.conversation_id = conversation_id
 
-    async def detect_brewing_tensions(self) -> List[Dict[str, Any]]:
+    async def detect_brewing_tensions(self, *, eager: bool = False) -> List[Dict[str, Any]]:
         """Analyze recent interactions for emerging conflicts using cache-first helper."""
         from logic.conflict_system.slice_of_life_conflicts_hotpath import (
             get_detected_tensions,
         )
 
-        return await get_detected_tensions(self.user_id, self.conversation_id)
+        return await get_detected_tensions(
+            self.user_id, self.conversation_id, eager=eager
+        )
 
     async def collect_tension_inputs(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Fetch memory and relationship slices for downstream processing."""

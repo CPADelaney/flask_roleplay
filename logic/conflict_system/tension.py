@@ -126,14 +126,17 @@ class TensionSubsystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self._synthesizer = None  # weakref set in initialize
-        
+
         # Lightweight tension state (fast numerical updates)
         self._current_tensions: Dict[TensionType, float] = {}
-        
+
         # LLM agents (lazy-loaded)
         self._tension_analyzer = None
         self._manifestation_generator = None
         self._escalation_narrator = None
+
+        eager_setting = os.getenv("TENSION_EAGER_WARMUP", "0").lower()
+        self._eager_manifestation_warmup = eager_setting in {"1", "true", "yes", "on"}
     
     # ----- Subsystem interface -----
     
@@ -239,22 +242,18 @@ class TensionSubsystem:
         scene_hash = self._hash_scene_context(scene_context)
 
         # HOT PATH: Use hotpath helper for cache-first retrieval
-        from logic.conflict_system.tension_hotpath import (
-            get_tension_bundle,
-            queue_manifestation_generation,
-        )
+        from logic.conflict_system.tension_hotpath import get_tension_bundle
 
         dominant_type, dominant_level = self._get_dominant_tension()
         current_tensions = {t.value: v for t, v in self._current_tensions.items()}
 
-        # Ensure a background refresh is queued
-        queue_manifestation_generation(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            scene_context=scene_context,
+        # Ensure a background refresh is queued only when explicitly requested
+        self._trigger_manifestation_generation(
+            scene_context,
             current_tensions=current_tensions,
-            dominant_type=dominant_type.value if dominant_type else TensionType.EMOTIONAL.value,
-            dominant_level=float(dominant_level),
+            dominant_type=dominant_type,
+            dominant_level=dominant_level,
+            eager=False,
         )
 
         tension_bundle = get_tension_bundle(self.user_id, self.conversation_id, scene_hash)
@@ -283,19 +282,69 @@ class TensionSubsystem:
         Legacy callers expect this coroutine to exist; it now delegates to the
         hot-path dispatcher so work is performed by Celery workers.
         """
-        from logic.conflict_system.tension_hotpath import queue_manifestation_generation
-
         dominant_type, dominant_level = self._get_dominant_tension()
         current_tensions = {t.value: v for t, v in self._current_tensions.items()}
 
-        queue_manifestation_generation(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            scene_context=scene_context,
+        self._trigger_manifestation_generation(
+            scene_context,
             current_tensions=current_tensions,
-            dominant_type=dominant_type.value if dominant_type else TensionType.EMOTIONAL.value,
-            dominant_level=float(dominant_level),
+            dominant_type=dominant_type,
+            dominant_level=dominant_level,
+            eager=True,
         )
+
+    def _trigger_manifestation_generation(
+        self,
+        scene_context: Dict[str, Any],
+        *,
+        current_tensions: Optional[Dict[Any, float]] = None,
+        dominant_type: Optional[TensionType] = None,
+        dominant_level: Optional[float] = None,
+        eager: bool,
+    ) -> Optional[str]:
+        """Dispatch manifestation generation when eager or warm-up is enabled."""
+
+        scene_context = dict(scene_context or {})
+
+        if not eager and not self._eager_manifestation_warmup:
+            logger.debug(
+                "Skipping tension manifestation warmup (eager=%s, env_enabled=%s)",
+                eager,
+                self._eager_manifestation_warmup,
+            )
+            return None
+
+        try:
+            from logic.conflict_system.tension_hotpath import queue_manifestation_generation
+        except Exception as exc:  # pragma: no cover - import safety
+            logger.warning("Unable to load tension hotpath dispatcher: %s", exc)
+            return None
+
+        tensions_payload = (
+            {getattr(k, "value", k): float(v) for k, v in current_tensions.items()}
+            if current_tensions is not None
+            else {t.value: float(v) for t, v in self._current_tensions.items()}
+        )
+
+        if dominant_type is None or dominant_level is None:
+            dominant_type, dominant_level = self._get_dominant_tension()
+
+        dominant_enum = dominant_type or TensionType.EMOTIONAL
+        dominant_value = getattr(dominant_enum, "value", str(dominant_enum))
+        dominant_level_value = float(dominant_level or 0.0)
+
+        try:
+            return queue_manifestation_generation(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                scene_context=scene_context,
+                current_tensions=tensions_payload,
+                dominant_type=dominant_value,
+                dominant_level=dominant_level_value,
+            )
+        except Exception as exc:  # pragma: no cover - dispatch safety
+            logger.warning("Failed to queue manifestation generation: %s", exc)
+            return None
     
     # ===== Fast, Numerical Event Handlers =====
     
@@ -323,9 +372,14 @@ class TensionSubsystem:
                     },
                     priority=5
                 ))
-        
+
         await self._save_tension_state()
-        
+
+        self._trigger_manifestation_generation(
+            context,
+            eager=True,
+        )
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,

@@ -116,8 +116,10 @@ def _deserialize_event(payload: Dict[str, Any], fallback_activity: str) -> Daily
         )
 
 
-async def get_detected_tensions(user_id: int, conversation_id: int) -> List[Dict[str, Any]]:
-    """Fetch cached tensions and dispatch regeneration when stale."""
+async def get_detected_tensions(
+    user_id: int, conversation_id: int, *, eager: bool = False
+) -> List[Dict[str, Any]]:
+    """Fetch cached tensions and optionally dispatch regeneration when stale."""
 
     async with get_db_connection_context() as conn:
         try:
@@ -146,10 +148,17 @@ async def get_detected_tensions(user_id: int, conversation_id: int) -> List[Dict
         status == "pending" and _pending_expired(updated_at)
     )
 
-    if needs_refresh:
+    if needs_refresh and eager:
         _queue_task(
             "refresh_tension_cache",
             {"user_id": int(user_id), "conversation_id": int(conversation_id)},
+        )
+    elif needs_refresh:
+        logger.debug(
+            "Detected stale slice-of-life tension cache for user=%s conversation=%s but deferring refresh (eager=%s)",
+            user_id,
+            conversation_id,
+            eager,
         )
 
     if status == "ready" and payload:
