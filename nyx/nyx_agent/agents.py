@@ -27,6 +27,17 @@ nyx_defer_agent = Agent[NyxContext](
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
+movement_transition_agent = Agent[NyxContext](
+    name="Movement Transition",
+    instructions=(
+        "You are Nyx delivering a brisk movement transition. Keep responses to 2-3 sentences."
+        " Maintain sultry noir dominance, weave in the destination's sensory details,"
+        " and nod to nearby NPCs or recent exchanges when provided."
+    ),
+    model="gpt-5-nano",
+    model_settings=DEFAULT_MODEL_SETTINGS,
+)
+
 memory_agent = Agent[NyxContext](
     name="Memory Manager",
     handoff_description="Consult memory system for context or store important information",
