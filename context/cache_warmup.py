@@ -1,9 +1,9 @@
 from __future__ import annotations
 import asyncio
 import logging
-import os
 from typing import Any, Dict, Optional, Tuple
 
+from nyx import settings
 from nyx.nyx_agent.context import NyxContext
 
 logger = logging.getLogger(__name__)
@@ -58,9 +58,9 @@ async def warm_user_context_cache(
     """Warm the Nyx user context cache for a given conversation.
 
     By default this function executes the minimal warm path, skipping expensive
-    orchestrator bootstraps. Set ``NYX_CONFLICT_EAGER_WARMUP=1`` to opt into the
-    legacy eager warm that fully initializes memory/lore orchestrators and
-    builds a context bundle.
+    orchestrator bootstraps. Enable ``settings.CONFLICT_EAGER_WARMUP`` (set
+    ``NYX_CONFLICT_EAGER_WARMUP=1``) to opt into the legacy eager warm that fully
+    initializes memory/lore orchestrators and builds a context bundle.
     """
 
     key = f"ctx:warmed:{user_id}:{conversation_id}"
@@ -105,14 +105,13 @@ async def warm_user_context_cache(
     try:
         context = NyxContext(user_id=user_id, conversation_id=conversation_id)
 
-        eager_flag = os.getenv("NYX_CONFLICT_EAGER_WARMUP", "")
-        eager_conflict = eager_flag.strip().lower() in {"1", "true", "yes"}
+        eager_conflict = settings.CONFLICT_EAGER_WARMUP
 
         await context.initialize(warm_minimal=not eager_conflict)
 
         if eager_conflict:
             logger.info(
-                "Eager warm enabled via NYX_CONFLICT_EAGER_WARMUP for user_id=%s conversation_id=%s",
+                "Eager warm enabled via settings.CONFLICT_EAGER_WARMUP for user_id=%s conversation_id=%s",
                 user_id,
                 conversation_id,
             )

@@ -524,6 +524,7 @@ async def test_lore_initialization_shielding_allows_retry(monkeypatch):
 @pytest.mark.anyio
 async def test_warm_user_context_minimal_mode(monkeypatch):
     monkeypatch.setattr(cache_warmup, "_context_warm_promises", {})
+    monkeypatch.setattr(cache_warmup.settings, "CONFLICT_EAGER_WARMUP", False)
 
     memory_event = asyncio.Event()
     lore_event = asyncio.Event()
@@ -633,7 +634,7 @@ async def test_warm_user_context_minimal_mode(monkeypatch):
 @pytest.mark.anyio
 async def test_warm_user_context_eager_opt_in(monkeypatch):
     monkeypatch.setattr(cache_warmup, "_context_warm_promises", {})
-    monkeypatch.setenv("NYX_CONFLICT_EAGER_WARMUP", "1")
+    monkeypatch.setattr(cache_warmup.settings, "CONFLICT_EAGER_WARMUP", True)
 
     memory_event = asyncio.Event()
     lore_event = asyncio.Event()

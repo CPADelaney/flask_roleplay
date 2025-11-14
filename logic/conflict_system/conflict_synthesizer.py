@@ -785,7 +785,8 @@ class ConflictSynthesizer:
 
         if signal.type is ConflictSignalType.SCENE_ENTERED:
             new_scene_ctx = scene_context or signal.scene_scope
-            await self._handle_scene_transition(self._last_scene, new_scene_ctx)
+            normalized_new_scene = self._scene_scope_to_mapping(new_scene_ctx)
+            await self._handle_scene_transition(self._last_scene, normalized_new_scene)
             self._last_scene = new_scene_ctx
             return
 
