@@ -337,6 +337,8 @@ def compute_lore_priority(
         )
         if any(phrase in normalized_text for phrase in inquiry_phrases):
             score += 0.15
+            # Strong hint this is a lore-focused question
+            score = max(score, 0.75)
 
         lore_keywords = {
             "lore",
@@ -352,6 +354,7 @@ def compute_lore_priority(
         }
         if tokens & lore_keywords:
             score += 0.2
+            score = max(score, 0.8)
 
         if normalized_text.endswith("?"):
             score += 0.05
@@ -383,6 +386,8 @@ def compute_lore_priority(
         }
         if categories & lore_categories:
             score += 0.2
+            # Intents explicitly mark lore/knowledge – strongly favor lore
+            score = max(score, 0.8)
 
         action_categories = {
             "combat",
@@ -410,7 +415,14 @@ def compute_lore_priority(
         if scope_obj.lore_tags:
             score += min(0.15, 0.03 * len(scope_obj.lore_tags))
 
-    return max(0.1, min(1.0, score))
+    # Clamp and gently bias away from the exact threshold edges so small bumps
+    # don’t cause unpredictable flip-flopping around 0.75.
+    score = max(0.1, min(1.0, score))
+    if 0.72 <= score < 0.75:
+        score = 0.72
+    if 0.75 < score < 0.78:
+        score = 0.78
+    return score
 
 
 def infer_lore_aspects(user_input: str, scope: SceneScope) -> List[str]:
@@ -420,6 +432,7 @@ def infer_lore_aspects(user_input: str, scope: SceneScope) -> List[str]:
     aspects: List[str] = []
 
     npc_names: List[str] = []
+    lore_tags: List[str] = []
     if scope is not None:
         hints_dict = getattr(scope, "link_hints", {}) or {}
         if isinstance(hints_dict, dict):
@@ -431,6 +444,14 @@ def infer_lore_aspects(user_input: str, scope: SceneScope) -> List[str]:
                         name = str(value).strip()
                         if name:
                             npc_names.append(name.lower())
+
+        # Normalize lore tags for cheap keyword inference
+        raw_tags = getattr(scope, "lore_tags", set()) or set()
+        for tag in raw_tags:
+            try:
+                lore_tags.append(str(tag).lower())
+            except Exception:
+                continue
 
     npc_query_phrases = ("who is", "who's", "tell me about")
     npc_backstory_needed = False
@@ -452,16 +473,38 @@ def infer_lore_aspects(user_input: str, scope: SceneScope) -> List[str]:
     if (
         "history" in normalized_text
         or "origin" in normalized_text
+        or "backstory" in normalized_text
         or "why is this place" in normalized_text
     ):
         aspects.append("location_history")
 
+    # Soft "what is this place / where are we" → at least history
+    if (
+        "what is this place" in normalized_text
+        or "what's this place" in normalized_text
+        or "where are we" in normalized_text
+    ) and "location_history" not in aspects:
+        aspects.append("location_history")
+
+    # Religion / faith – either from text or from lore tags
     if (
         "religion" in normalized_text
         or "faith" in normalized_text
         or "temple" in normalized_text
+        or any(tag in ("religion", "faith", "church", "cult") for tag in lore_tags)
     ):
         aspects.append("religious_context")
+
+    # Politics / power structures
+    if (
+        "politic" in normalized_text
+        or "government" in normalized_text
+        or "regime" in normalized_text
+        or "laws" in normalized_text
+        or "who rules" in normalized_text
+        or any(tag in ("politics", "government", "regime") for tag in lore_tags)
+    ):
+        aspects.append("political_context")
 
     if not aspects:
         aspects.append("location_flavor")
