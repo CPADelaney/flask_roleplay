@@ -100,3 +100,30 @@ def test_recent_turns_propagated_into_bundle_metadata():
         {"sender": "User", "content": "Hello"},
         {"sender": "Nyx", "content": "Welcome"},
     ]
+
+
+def test_lore_hints_recommend_tool_when_priority_high():
+    scene_scope = SceneScope()
+    bundle = ContextBundle(
+        scene_scope=scene_scope,
+        npcs=BundleSection(data={}, canonical=True),
+        memories=BundleSection(data={}, canonical=True),
+        lore=BundleSection(data={}, canonical=True),
+        conflicts=BundleSection(data={}, canonical=True),
+        world=BundleSection(data={}, canonical=True),
+        narrative=BundleSection(data={}, canonical=True),
+        metadata={},
+    )
+    broker = _StubBroker(bundle)
+
+    context = NyxContext(user_id=3, conversation_id=4, context_broker=broker)
+
+    user_input = "Tell me about the history of this temple?"
+    asyncio.run(context.build_context_for_input(user_input, {}))
+
+    hints = bundle.metadata.get("hints", {})
+    assert hints.get("lore_priority", 0) >= 0.75
+    assert hints.get("lore_tool_recommended") is True
+    assert "location_history" in hints.get("suggested_aspects", [])
+    assert "religious_context" in hints.get("suggested_aspects", [])
+    assert context.current_context.get("hints") == hints
