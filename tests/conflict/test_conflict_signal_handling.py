@@ -135,6 +135,8 @@ async def test_handle_signal_time_tick_without_day_emits_state_sync(synthesizer)
             {
                 conflict_synthesizer.SubsystemType.CANON,
                 conflict_synthesizer.SubsystemType.BACKGROUND,
+                conflict_synthesizer.SubsystemType.SOCIAL,
+                conflict_synthesizer.SubsystemType.LEVERAGE,
             },
         ),
         (
