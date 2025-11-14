@@ -70,7 +70,7 @@ def test_packed_context_always_includes_canonical_rules(budget):
 
     packed = bundle.pack(token_budget=budget)
 
-    assert 'lore_rules' in packed.canonical
-    assert packed.canonical['lore_rules']['canonical_rules'] == rules
+    assert 'canonical_rules' in packed.canonical
+    assert packed.canonical['canonical_rules'] == rules
     packed_dict = packed.to_dict()
-    assert packed_dict['lore_rules']['canonical_rules'] == rules
+    assert packed_dict['canonical_rules'] == rules

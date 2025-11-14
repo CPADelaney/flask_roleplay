@@ -467,7 +467,7 @@ class ContextBundle:
         - canonical sections are guaranteed first
         - 'must_include' forces specific keys into canonical (e.g. 'canon')
         """
-        working_budget = max(512, token_budget - CANONICAL_RULES_RESERVED)
+        working_budget = token_budget
         packed = PackedContext(token_budget=working_budget)
         must_include = set(must_include or [])
 
@@ -530,7 +530,7 @@ class ContextBundle:
         if rules:
             payload = {'canonical_rules': rules}
             rule_tokens = packed._estimate_tokens(payload)
-            packed.canonical['lore_rules'] = payload
+            packed.canonical['canonical_rules'] = payload['canonical_rules']
             packed.tokens_used += rule_tokens
 
         return packed
