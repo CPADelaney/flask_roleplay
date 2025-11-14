@@ -13,6 +13,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 import uuid
 from typing import Dict, List, Any, Optional, Union, TypedDict
@@ -59,8 +60,11 @@ async def lore_handle_operation_tool_wrapper(
         "aspects": payload.get("aspects"),
     }
 
+    start = time.monotonic()
+    outcome: Dict[str, Any]
+
     try:
-        return await asyncio.wait_for(
+        outcome = await asyncio.wait_for(
             gateway_handle_lore_operation(
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -69,11 +73,27 @@ async def lore_handle_operation_tool_wrapper(
             timeout=3.0,
         )
     except asyncio.TimeoutError:
-        logger.warning("Lore operation timed out", extra=extra)
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.warning(
+            "Lore operation timed out",
+            extra={**extra, "duration_ms": duration_ms, "success": False, "error_kind": "timeout"},
+        )
         return {"ok": False, "error": LORE_TIMEOUT_ERROR_MESSAGE}
     except Exception:
-        logger.exception("Lore operation failed", extra=extra)
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.exception(
+            "Lore operation failed",
+            extra={**extra, "duration_ms": duration_ms, "success": False, "error_kind": "internal"},
+        )
         return {"ok": False, "error": LORE_GENERIC_ERROR_MESSAGE}
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    # Successful call: log once with basic metrics
+    logger.info(
+        "Lore operation completed",
+        extra={**extra, "duration_ms": duration_ms, "success": True, "error_kind": None},
+    )
+    return outcome
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮
 # │ TypedDict INPUT MODELS (strict JSON schema–friendly)                         │
