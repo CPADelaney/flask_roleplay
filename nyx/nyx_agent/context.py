@@ -249,6 +249,9 @@ except ImportError as e:
 # Section names constant to avoid typos
 SECTION_NAMES = ('npcs', 'memories', 'lore', 'conflicts', 'world', 'narrative')
 
+# Reserved token budget to guarantee canonical lore rules are always included
+CANONICAL_RULES_RESERVED = 500
+
 # ===== New Data Structures for Optimized Context Assembly =====
 
 import re
@@ -341,15 +344,15 @@ class LoreSectionData:
     location: Dict[str, Any]
     world: Dict[str, Any]
     canonical_rules: List[str]
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-    
+
     def compact(self) -> 'LoreSectionData':
         return LoreSectionData(
             location={'description': self.location.get('description', '')[:200]},
             world={k: v for k, v in list(self.world.items())[:3]},
-            canonical_rules=self.canonical_rules[:3]
+            canonical_rules=list(self.canonical_rules)
         )
 
 @dataclass
@@ -464,7 +467,8 @@ class ContextBundle:
         - canonical sections are guaranteed first
         - 'must_include' forces specific keys into canonical (e.g. 'canon')
         """
-        packed = PackedContext(token_budget=token_budget)
+        working_budget = max(512, token_budget - CANONICAL_RULES_RESERVED)
+        packed = PackedContext(token_budget=working_budget)
         must_include = set(must_include or [])
 
         # Map of section name → BundleSection
@@ -519,6 +523,15 @@ class ContextBundle:
                 packed.add_canonical(name, section.data)
             else:
                 packed.try_add(name, section.data)
+
+        # Canonical rules are non-negotiable: always append them after other sections
+        lore_dict = self._as_dict(self.lore.data)
+        rules = list(lore_dict.get('canonical_rules') or [])
+        if rules:
+            payload = {'canonical_rules': rules}
+            rule_tokens = packed._estimate_tokens(payload)
+            packed.canonical['lore_rules'] = payload
+            packed.tokens_used += rule_tokens
 
         return packed
 
@@ -840,7 +853,12 @@ class PackedContext:
             return max(1, len(data) // 4)
         elif isinstance(data, dict):
             # Count only values, not keys (keys are structure)
-            return sum(self._estimate_tokens(v) for v in data.values())
+            total = 0
+            for key, value in data.items():
+                if key == 'canonical_rules':
+                    continue
+                total += self._estimate_tokens(value)
+            return total
         elif isinstance(data, list):
             return sum(self._estimate_tokens(item) for item in data)
         elif data is None:
@@ -876,7 +894,7 @@ class PackedContext:
         
         elif key == 'lore' and isinstance(data, LoreSectionData):
             return data.compact().to_dict()
-        
+
         return data
     
     def _summarize(self, key: str, data: Any) -> Optional[Dict[str, Any]]:
@@ -895,9 +913,10 @@ class PackedContext:
             if isinstance(data, LoreSectionData):
                 return data.compact().to_dict()
             elif isinstance(data, dict):
+                rules = data.get('canonical_rules', [])
                 return {
                     'location': data.get('location', {}).get('description', '')[:100],
-                    'canonical_rules': data.get('canonical_rules', [])[:3]
+                    'canonical_rules': list(rules) if isinstance(rules, list) else rules
                 }
         
         elif key == 'npcs':
@@ -2878,7 +2897,7 @@ class ContextBroker:
                 section_data = LoreSectionData(
                     location=data.get('location', {}) or {},
                     world=data.get('world', {}) or {},
-                    canonical_rules=rules[:5]
+                    canonical_rules=rules
                 )
     
                 return BundleSection(
@@ -2964,7 +2983,7 @@ class ContextBroker:
                         timeout_budget,
                     )
                 if canonical_payload:
-                    canonical_rules = (canonical_payload.get('rules') or [])[:5]
+                    canonical_rules = list(canonical_payload.get('rules') or [])
 
         except Exception as e:
             if location_task is not None and not location_task.done():
