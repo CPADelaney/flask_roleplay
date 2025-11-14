@@ -13,12 +13,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from infra.cache import redis_client, cache_key, get_json, set_json, redis_lock
 from db.connection import get_db_connection_context
+from nyx import settings
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ def _is_truthy_env(value: Optional[str]) -> bool:
 
 
 def _eager_warmup_enabled() -> bool:
-    return _is_truthy_env(os.getenv("NYX_CONFLICT_EAGER_WARMUP"))
+    return settings.CONFLICT_EAGER_WARMUP
 
 
 def get_scene_bundle(

@@ -23,8 +23,8 @@ class _DummyTask:
 
 
 @pytest.fixture(autouse=True)
-def _clear_env(monkeypatch):
-    monkeypatch.delenv("NYX_CONFLICT_EAGER_WARMUP", raising=False)
+def _reset_conflict_flag(monkeypatch):
+    monkeypatch.setattr(hotpath.settings, "CONFLICT_EAGER_WARMUP", False)
 
 
 def _configure_hotpath(monkeypatch):
@@ -80,13 +80,13 @@ def test_get_scene_bundle_dispatches_when_eager_flag(monkeypatch):
     assert payload["target_npcs"] == targets
 
 
-def test_get_scene_bundle_dispatches_when_env_opt_in(monkeypatch):
+def test_get_scene_bundle_dispatches_when_config_opt_in(monkeypatch):
     task = _configure_hotpath(monkeypatch)
-    monkeypatch.setenv("NYX_CONFLICT_EAGER_WARMUP", "true")
+    monkeypatch.setattr(hotpath.settings, "CONFLICT_EAGER_WARMUP", True)
 
     scene_hash = "envhash"
     scene_context = {"scene_id": 7, "location": "plaza"}
 
     hotpath.get_scene_bundle(scene_hash, scene_context=scene_context)
 
-    assert task.calls, "generate_social_bundle.delay should respect env opt-in"
+    assert task.calls, "generate_social_bundle.delay should respect config opt-in"
