@@ -411,6 +411,64 @@ def compute_lore_priority(
             score += min(0.15, 0.03 * len(scope_obj.lore_tags))
 
     return max(0.1, min(1.0, score))
+
+
+def infer_lore_aspects(user_input: str, scope: SceneScope) -> List[str]:
+    """Infer which lore aspects are most relevant for the current turn."""
+
+    normalized_text = (user_input or "").lower()
+    aspects: List[str] = []
+
+    npc_names: List[str] = []
+    if scope is not None:
+        hints_dict = getattr(scope, "link_hints", {}) or {}
+        if isinstance(hints_dict, dict):
+            for values in hints_dict.values():
+                if isinstance(values, list):
+                    for value in values:
+                        if value is None:
+                            continue
+                        name = str(value).strip()
+                        if name:
+                            npc_names.append(name.lower())
+
+    npc_query_phrases = ("who is", "who's", "tell me about")
+    npc_backstory_needed = False
+    if normalized_text:
+        for phrase in npc_query_phrases:
+            idx = normalized_text.find(phrase)
+            if idx == -1:
+                continue
+            if npc_names and any(name in normalized_text for name in npc_names):
+                npc_backstory_needed = True
+                break
+            remainder = (user_input or "")[idx + len(phrase):]
+            if re.findall(r"[A-Z][\w']+", remainder):
+                npc_backstory_needed = True
+                break
+    if npc_backstory_needed:
+        aspects.append("npc_backstory")
+
+    if (
+        "history" in normalized_text
+        or "origin" in normalized_text
+        or "why is this place" in normalized_text
+    ):
+        aspects.append("location_history")
+
+    if (
+        "religion" in normalized_text
+        or "faith" in normalized_text
+        or "temple" in normalized_text
+    ):
+        aspects.append("religious_context")
+
+    if not aspects:
+        aspects.append("location_flavor")
+
+    return list(dict.fromkeys(aspects))
+
+
 # ===== Strong DTOs for Section Data =====
 
 @dataclass
@@ -4752,6 +4810,17 @@ class NyxContext:
         if not isinstance(bundle.metadata, dict):
             bundle.metadata = {}
         bundle.metadata["lore_priority"] = lore_priority
+
+        hints_payload = dict(bundle.metadata.get("hints") or {})
+        hints_payload["lore_priority"] = lore_priority
+        if lore_priority >= 0.75:
+            hints_payload["lore_tool_recommended"] = True
+            hints_payload["suggested_aspects"] = infer_lore_aspects(user_input, scene_scope)
+        else:
+            hints_payload.pop("lore_tool_recommended", None)
+            hints_payload.pop("suggested_aspects", None)
+        bundle.metadata["hints"] = hints_payload
+        self.current_context["hints"] = hints_payload
 
         # Propagate recent conversation turns into the bundle metadata
         raw_recent = self.current_context.get("recent_turns")

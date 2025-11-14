@@ -302,6 +302,7 @@ TOOL HEURISTICS
 - generate_emergent_event only when the world should "push back" unprompted
 - retrieve_memories / detect_user_revelations before inventing backstory; only invent if nothing conflicts
 - calculate_emotional_impact to color diction and pacing
+- If metadata.hints.lore_tool_recommended is true, strongly consider calling lore_handle_operation with metadata.hints.suggested_aspects before answering lore-heavy questions.
 - Always call generate_universal_updates afterward (internally), but never mention it
 
 VOICE
