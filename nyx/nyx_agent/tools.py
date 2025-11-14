@@ -40,6 +40,41 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+
+LORE_TIMEOUT_ERROR_MESSAGE = "Lore request timed out (Codex Task 7). Please try again."
+LORE_GENERIC_ERROR_MESSAGE = "Lore request failed unexpectedly (Codex Task 7). Please try again later."
+
+
+async def lore_handle_operation_tool_wrapper(
+    *,
+    user_id: int,
+    conversation_id: int,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Invoke the lore gateway with a strict timeout and rich logging."""
+
+    extra = {
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "aspects": payload.get("aspects"),
+    }
+
+    try:
+        return await asyncio.wait_for(
+            gateway_handle_lore_operation(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                payload=payload,
+            ),
+            timeout=3.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Lore operation timed out", extra=extra)
+        return {"ok": False, "error": LORE_TIMEOUT_ERROR_MESSAGE}
+    except Exception:
+        logger.exception("Lore operation failed", extra=extra)
+        return {"ok": False, "error": LORE_GENERIC_ERROR_MESSAGE}
+
 # ╭──────────────────────────────────────────────────────────────────────────────╮
 # │ TypedDict INPUT MODELS (strict JSON schema–friendly)                         │
 # ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -1020,26 +1055,11 @@ async def lore_handle_operation(
 
     forward_payload: Dict[str, Any] = dict(payload) if payload is not None else {}
 
-    try:
-        return await asyncio.wait_for(
-            gateway_handle_lore_operation(
-                user_id=int(user_id),
-                conversation_id=int(conversation_id),
-                payload=forward_payload,
-            ),
-            timeout=3.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Lore operation timed out",
-            extra={
-                "user_id": user_id,
-                "conversation_id": conversation_id,
-                "aspects": forward_payload.get("aspects"),
-            },
-        )
-        # Degrade gracefully: let the agent continue with baseline context instead
-        return {}
+    return await lore_handle_operation_tool_wrapper(
+        user_id=int(user_id),
+        conversation_id=int(conversation_id),
+        payload=forward_payload,
+    )
 
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮
