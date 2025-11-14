@@ -6,10 +6,11 @@ Connects background processing to game events and Celery tasks.
 
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
-from celery import Celery, Task
+from datetime import datetime
+from celery import Celery
 from celery.schedules import crontab
 
+from conflict.signals import ConflictSignal, ConflictSignalType
 from db.connection import get_db_connection_context, run_async_in_worker_loop
 from logic.time_cycle import get_current_game_day
 from logic.conflict_system.background_processor import (
@@ -42,37 +43,25 @@ class ConflictEventHooks:
         Primary trigger for background updates.
         """
         logger.info(f"Game day transition to {new_day} for user {user_id}")
-    
-        scheduler = get_conflict_scheduler()
+
         try:
-            # Run background model updates (do NOT call synthesizer.handle_day_transition to avoid recursion)
-            result = await scheduler.on_game_day_change(user_id, conversation_id, new_day)
-    
-            # Notify orchestrator so subsystems can react
-            try:
-                from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
-                synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-                await synthesizer.emit_event(SystemEvent(
-                    event_id=f"day_{new_day}_{datetime.utcnow().timestamp()}",
-                    event_type=EventType.DAY_TRANSITION,
-                    source_subsystem=SubsystemType.ORCHESTRATOR,
-                    payload={'new_day': new_day, 'processing_result': result},
-                    requires_response=False,
-                    priority=7,
-                ))
-    
-                # Best-effort: process a few queued items (news, etc.) so side-effects are enqueued
-                await synthesizer.process_background_queue(max_items=5)
-            except Exception as e:
-                logger.debug(f"Orchestrator day-transition notification failed (non-fatal): {e}")
-    
-            # Kick Celery if processor queue is still non-empty
-            processor = scheduler.get_processor(user_id, conversation_id)
-            if processor._processing_queue:
-                process_conflict_queue.delay(user_id, conversation_id)
-    
-            return result
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+
+            synthesizer = await get_synthesizer(user_id, conversation_id)
+            tick_payload = {
+                'new_day': datetime.utcnow().isoformat(),
+                'day': new_day,
+            }
+            signal = ConflictSignal(
+                type=ConflictSignalType.TIME_TICK,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                payload=tick_payload,
+            )
+
+            await synthesizer.handle_signal(signal)
+
+            return {'dispatched': True, 'day': new_day}
         except Exception as e:
             logger.error(f"Error in game day transition: {e}")
             return {"error": str(e)}
@@ -90,17 +79,65 @@ class ConflictEventHooks:
         """
         try:
             from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            from conflict.signals import ConflictSignal, ConflictSignalType
+            from nyx.nyx_agent.context import SceneScope
+
             synth = await get_synthesizer(user_id, conversation_id)
-    
-            # Get scene-relevant context (this also enqueues background ambient events via orchestrator)
-            context = await synth.conflict_context_for_scene(new_scene)
-    
-            # Best-effort: process a few high-priority background items now
+
+            scene_data = new_scene or {}
+
+            scope_fields = getattr(SceneScope, "__dataclass_fields__", {}).keys()
+            set_fields = {
+                "npc_ids",
+                "topics",
+                "lore_tags",
+                "conflict_ids",
+                "memory_anchors",
+                "nation_ids",
+            }
+
+            scope_payload: Dict[str, Any] = {}
+            for field_name in scope_fields:
+                if field_name == "npc_ids":
+                    source_value = scene_data.get("npc_ids", scene_data.get("npcs"))
+                elif field_name == "topics":
+                    source_value = scene_data.get("topics", scene_data.get("conversation_topics"))
+                elif field_name == "location_name":
+                    source_value = scene_data.get("location_name", scene_data.get("location"))
+                else:
+                    source_value = scene_data.get(field_name)
+
+                if source_value is None:
+                    continue
+
+                if field_name in set_fields:
+                    if isinstance(source_value, set):
+                        normalized_value = list(source_value)
+                    elif isinstance(source_value, (list, tuple)):
+                        normalized_value = list(source_value)
+                    else:
+                        normalized_value = [source_value]
+                    scope_payload[field_name] = normalized_value
+                else:
+                    scope_payload[field_name] = source_value
+
             try:
-                await synth.process_background_queue(max_items=5)
+                scene_scope = SceneScope.from_dict(scope_payload)
             except Exception:
-                pass
-    
+                scene_scope = SceneScope()
+
+            signal = ConflictSignal(
+                type=ConflictSignalType.SCENE_ENTERED,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                scene_scope=scene_scope,
+                payload={"scene_context": scene_data},
+            )
+
+            await synth.handle_signal(signal)
+
+            context = await synth.conflict_context_for_scene(scene_data)
+
             return context
         except Exception as e:
             logger.error(f"Error in scene transition: {e}")
