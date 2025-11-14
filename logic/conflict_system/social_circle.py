@@ -124,6 +124,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         self._active_gossip: Dict[int, GossipItem] = {}
         self._reputation_cache: Dict[int, Dict[ReputationType, float]] = {}
         self._social_circles: Dict[int, SocialCircle] = {}
+        self._fact_gossip_map: Dict[str, int] = {}
     
     # ========== ConflictSubsystem Interface Implementation ==========
     
@@ -153,7 +154,8 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             EventType.STAKEHOLDER_ACTION,
             EventType.NPC_REACTION,
             EventType.STATE_SYNC,
-            EventType.CONFLICT_RESOLVED
+            EventType.CONFLICT_RESOLVED,
+            EventType.CANON_ESTABLISHED,
         }
     
     async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
@@ -167,6 +169,8 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         try:
             if event.event_type == EventType.STATE_SYNC:
                 return await self._handle_state_sync(event)
+            elif event.event_type == EventType.CANON_ESTABLISHED:
+                return await self._on_fact_became_public(event)
             elif event.event_type == EventType.STAKEHOLDER_ACTION:
                 return await self._handle_stakeholder_action(event)
             elif event.event_type == EventType.NPC_REACTION:
@@ -233,10 +237,26 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
     
     async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
         """Handle scene state synchronization"""
-        scene_context = dict(event.payload or {})
+        raw_payload = event.payload or {}
+        if not isinstance(raw_payload, dict):
+            raw_payload = {}
+
+        scene_payload = raw_payload.get('scene_context') if isinstance(raw_payload.get('scene_context'), dict) else None
+        scene_context = dict(scene_payload or raw_payload)
         scene_context.setdefault('user_id', self.user_id)
         scene_context.setdefault('conversation_id', self.conversation_id)
-        present_npcs = scene_context.get('present_npcs', [])
+        present_npcs = (
+            scene_context.get('present_npcs')
+            or scene_context.get('npcs_present')
+            or []
+        )
+        if not isinstance(present_npcs, list):
+            if isinstance(present_npcs, (set, tuple)):
+                present_npcs = list(present_npcs)
+            elif present_npcs:
+                present_npcs = [present_npcs]
+            else:
+                present_npcs = []
 
         # HOT PATH: Use cached social data and dispatch background tasks
         from logic.conflict_system.social_circle_hotpath import (
@@ -288,7 +308,46 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             },
             side_effects=side_effects
         )
-    
+
+    async def _on_fact_became_public(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle newly public facts by updating gossip state."""
+        payload = event.payload or {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        fact_id = payload.get('fact_id')
+        holder_id = payload.get('holder_id')
+        target_ids = payload.get('targets') or []
+        visibility = payload.get('visibility', 'local')
+
+        if not fact_id or not target_ids:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'gossip_created': False, 'reason': 'missing_fact_or_targets'},
+            )
+
+        created_ids = await self._create_or_update_gossip_items(
+            fact_id=fact_id,
+            holder_id=holder_id,
+            targets=target_ids,
+            visibility=visibility,
+            context=payload,
+        )
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'gossip_created': bool(created_ids),
+                'gossip_ids': created_ids,
+                'targets': target_ids,
+                'fact_id': fact_id,
+            },
+        )
+
     async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
         """Handle stakeholder actions affecting social dynamics"""
         stakeholder_id = event.payload.get('stakeholder_id')
@@ -405,7 +464,130 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             success=True,
             data={'no_social_dimension': True}
         )
-    
+
+    async def _create_or_update_gossip_items(
+        self,
+        fact_id: Any,
+        holder_id: Any,
+        targets: List[Any],
+        visibility: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> List[int]:
+        """Create or update gossip entries for a newly public fact."""
+
+        fact_key = str(fact_id)
+        normalized_targets: List[int] = []
+        for target in targets:
+            if isinstance(target, int):
+                normalized_targets.append(target)
+            else:
+                try:
+                    normalized_targets.append(int(target))
+                except (TypeError, ValueError):
+                    continue
+
+        holder_normalized: Optional[int]
+        if isinstance(holder_id, int):
+            holder_normalized = holder_id
+        else:
+            try:
+                holder_normalized = int(holder_id)
+            except (TypeError, ValueError):
+                holder_normalized = None
+
+        created_ids: List[int] = []
+        existing_id = self._fact_gossip_map.get(fact_key)
+
+        visibility_map = {
+            'local': GossipType.RUMOR,
+            'faction': GossipType.SECRET,
+            'global': GossipType.SCANDAL,
+        }
+        gossip_type = visibility_map.get(str(visibility).lower(), GossipType.RUMOR)
+
+        if existing_id and existing_id in self._active_gossip:
+            gossip_item = self._active_gossip[existing_id]
+            merged_targets = set(gossip_item.about or [])
+            merged_targets.update(normalized_targets)
+            gossip_item.about = list(merged_targets)
+
+            if holder_normalized is not None:
+                gossip_item.spreaders.add(holder_normalized)
+
+            impact = gossip_item.impact or {}
+            impact.setdefault('fact_id', fact_key)
+            impact.setdefault('visibility', visibility)
+            if normalized_targets:
+                existing_targets = set(impact.get('targets', []))
+                impact['targets'] = list(existing_targets.union(normalized_targets))
+            gossip_item.impact = impact
+        else:
+            gossip_id = int(uuid.uuid4().int % 1_000_000_000)
+            content_hint = ''
+            if context:
+                content_hint = context.get('fact_summary') or context.get('summary') or context.get('description') or ''
+
+            if not content_hint:
+                target_label = ', '.join(str(t) for t in normalized_targets[:3]) or 'others'
+                content_hint = f"Word spreads about fact {fact_key} involving {target_label}."
+
+            gossip_item = GossipItem(
+                gossip_id=gossip_id,
+                gossip_type=gossip_type,
+                content=content_hint,
+                about=list(set(normalized_targets)),
+                spreaders={holder_normalized} if holder_normalized is not None else set(),
+                believers=set(normalized_targets),
+                deniers=set(),
+                spread_rate=0.5 if str(visibility).lower() == 'global' else 0.35,
+                truthfulness=0.9,
+                impact={
+                    'fact_id': fact_key,
+                    'visibility': visibility,
+                    'targets': list(set(normalized_targets)),
+                    'holder_id': holder_normalized,
+                },
+            )
+
+            self._active_gossip[gossip_id] = gossip_item
+            self._fact_gossip_map[fact_key] = gossip_id
+            created_ids.append(gossip_id)
+
+            # v1 behavior: schedule background LLM gossip generation for new facts
+            try:
+                from logic.conflict_system.social_circle_hotpath import (
+                    schedule_gossip_generation,
+                )
+
+                unique_targets = list(set(normalized_targets))
+                context_snapshot = {
+                    'fact_id': fact_key,
+                    'holder_id': holder_normalized,
+                    'targets': unique_targets,
+                    'visibility': visibility,
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                }
+                scene_hash = hashlib.sha256(
+                    json.dumps(context_snapshot, sort_keys=True).encode()
+                ).hexdigest()[:16]
+                context_snapshot['scene_hash'] = scene_hash
+
+                schedule_gossip_generation(
+                    context_snapshot,
+                    unique_targets,
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Failed to queue gossip generation for fact %s: %s",
+                    fact_key,
+                    exc,
+                )
+
+        return created_ids
+
     def _calculate_reputation_delta(self, action_type: str) -> Dict[str, float]:
         """Fast rule-based reputation delta calculation (no LLM)."""
         deltas = {

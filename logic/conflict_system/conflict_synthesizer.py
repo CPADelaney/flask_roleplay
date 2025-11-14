@@ -855,7 +855,12 @@ class ConflictSynthesizer:
             ),
             ConflictSignalType.FACT_BECAME_PUBLIC: (
                 EventType.CANON_ESTABLISHED,
-                {SubsystemType.CANON, SubsystemType.BACKGROUND},
+                {
+                    SubsystemType.CANON,
+                    SubsystemType.BACKGROUND,
+                    SubsystemType.SOCIAL,
+                    SubsystemType.LEVERAGE,
+                },
             ),
             ConflictSignalType.RELATIONSHIP_CHANGE: (
                 EventType.STAKEHOLDER_ACTION,

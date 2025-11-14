@@ -105,6 +105,7 @@ class LeverageSubsystem(ConflictSubsystem):
         self._active_leverage: Dict[int, LeverageItem] = {}
         self._leverage_applications: Dict[int, LeverageApplication] = {}
         self._counter_strategies: Dict[int, List[CounterStrategy]] = {}
+        self._public_facts: Dict[str, Dict[str, Any]] = {}
     
     # ========== ConflictSubsystem Interface Implementation ==========
     
@@ -132,7 +133,8 @@ class LeverageSubsystem(ConflictSubsystem):
             EventType.STAKEHOLDER_ACTION,
             EventType.NPC_REACTION,
             EventType.CONFLICT_UPDATED,
-            EventType.STATE_SYNC
+            EventType.STATE_SYNC,
+            EventType.CANON_ESTABLISHED,
         }
     
     async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
@@ -146,6 +148,8 @@ class LeverageSubsystem(ConflictSubsystem):
         try:
             if event.event_type == EventType.STATE_SYNC:
                 return await self._handle_state_sync(event)
+            elif event.event_type == EventType.CANON_ESTABLISHED:
+                return await self._handle_fact_became_public(event)
             elif event.event_type == EventType.STAKEHOLDER_ACTION:
                 return await self._handle_stakeholder_action(event)
             elif event.event_type == EventType.NPC_REACTION:
@@ -216,16 +220,32 @@ class LeverageSubsystem(ConflictSubsystem):
     
     async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
         """Handle scene state synchronization"""
-        scene_context = event.payload
-        present_npcs = scene_context.get('present_npcs', [])
-        
+        raw_payload = event.payload or {}
+        if not isinstance(raw_payload, dict):
+            raw_payload = {}
+
+        scene_payload = raw_payload.get('scene_context') if isinstance(raw_payload.get('scene_context'), dict) else None
+        scene_context = dict(scene_payload or raw_payload)
+        present_npcs = (
+            scene_context.get('present_npcs')
+            or scene_context.get('npcs_present')
+            or []
+        )
+        if not isinstance(present_npcs, list):
+            if isinstance(present_npcs, (set, tuple)):
+                present_npcs = list(present_npcs)
+            elif present_npcs:
+                present_npcs = [present_npcs]
+            else:
+                present_npcs = []
+
         side_effects = []
-        
+
         # Check for leverage discovery opportunities
         if present_npcs and random.random() < 0.2:  # 20% chance
             observer_id = self.user_id  # Player observing
             target_id = random.choice(present_npcs)
-            
+
             leverage = await self.manager.discover_leverage(
                 observer_id, target_id, scene_context
             )
@@ -265,7 +285,73 @@ class LeverageSubsystem(ConflictSubsystem):
             },
             side_effects=side_effects
         )
-    
+
+    async def _handle_fact_became_public(self, event: SystemEvent) -> SubsystemResponse:
+        """Record newly public facts for leverage tracking."""
+        payload = event.payload or {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        fact_id = payload.get('fact_id')
+        holder_id = payload.get('holder_id')
+        target_ids = payload.get('targets') or []
+        visibility = payload.get('visibility', 'local')
+
+        if not fact_id:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'fact_recorded': False, 'reason': 'missing_fact_id'},
+            )
+
+        fact_key = str(fact_id)
+        normalized_holder: Optional[int]
+        if isinstance(holder_id, int):
+            normalized_holder = holder_id
+        else:
+            try:
+                normalized_holder = int(holder_id)
+            except (TypeError, ValueError):
+                normalized_holder = None
+
+        normalized_targets: List[int] = []
+        for target in target_ids:
+            if isinstance(target, int):
+                normalized_targets.append(target)
+            else:
+                try:
+                    normalized_targets.append(int(target))
+                except (TypeError, ValueError):
+                    continue
+
+        is_new_fact = fact_key not in self._public_facts
+        self._public_facts[fact_key] = {
+            'holder_id': normalized_holder,
+            'targets': normalized_targets,
+            'visibility': visibility,
+            'raw_payload': payload,
+            'timestamp': datetime.utcnow().isoformat(),
+        }
+
+        leverage_candidates = self._evaluate_fact_for_leverage(
+            normalized_holder,
+            normalized_targets,
+            visibility,
+        )
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'fact_recorded': True,
+                'new_fact': is_new_fact,
+                'leverage_candidates': leverage_candidates,
+                'fact_id': fact_key,
+            },
+        )
+
     async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
         """Handle stakeholder actions that might involve leverage"""
         stakeholder_id = event.payload.get('stakeholder_id')
@@ -377,7 +463,7 @@ class LeverageSubsystem(ConflictSubsystem):
         """Handle conflict updates that might affect leverage"""
         conflict_id = event.payload.get('conflict_id')
         update_type = event.payload.get('update_type')
-        
+
         # Conflict progression might reveal or invalidate leverage
         if update_type == 'escalation':
             # Higher stakes might reveal more leverage
@@ -396,9 +482,37 @@ class LeverageSubsystem(ConflictSubsystem):
             success=True,
             data={'leverage_adjusted': True}
         )
-    
+
     # ========== Helper Methods ==========
-    
+
+    def _evaluate_fact_for_leverage(
+        self,
+        holder_id: Optional[int],
+        targets: List[int],
+        visibility: str,
+    ) -> List[Dict[str, Any]]:
+        """Heuristic assessment for leverage opportunities from a fact."""
+
+        if not targets:
+            return []
+
+        if str(visibility).lower() == 'global':
+            return []
+
+        opportunities: List[Dict[str, Any]] = []
+        for target_id in targets:
+            if holder_id is not None and target_id == holder_id:
+                continue
+
+            opportunities.append({
+                'target_id': target_id,
+                'holder_id': holder_id,
+                'visibility': visibility,
+                'type': 'information',
+            })
+
+        return opportunities
+
     def _find_relevant_leverage(
         self,
         holder_id: int,
