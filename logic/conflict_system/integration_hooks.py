@@ -6,16 +6,13 @@ Connects background processing to game events and Celery tasks.
 
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
-from celery import Celery, Task
+from datetime import datetime
+from celery import Celery
 from celery.schedules import crontab
 
+from conflict.signals import ConflictSignal, ConflictSignalType
 from db.connection import get_db_connection_context, run_async_in_worker_loop
 from logic.time_cycle import get_current_game_day
-from logic.conflict_system.background_processor import (
-    get_conflict_scheduler,
-    ProcessingPriority
-)
 
 logger = logging.getLogger(__name__)
 
@@ -41,37 +38,25 @@ class ConflictEventHooks:
         Primary trigger for background updates.
         """
         logger.info(f"Game day transition to {new_day} for user {user_id}")
-    
-        scheduler = get_conflict_scheduler()
+
         try:
-            # Run background model updates (do NOT call synthesizer.handle_day_transition to avoid recursion)
-            result = await scheduler.on_game_day_change(user_id, conversation_id, new_day)
-    
-            # Notify orchestrator so subsystems can react
-            try:
-                from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
-                synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-                await synthesizer.emit_event(SystemEvent(
-                    event_id=f"day_{new_day}_{datetime.utcnow().timestamp()}",
-                    event_type=EventType.DAY_TRANSITION,
-                    source_subsystem=SubsystemType.ORCHESTRATOR,
-                    payload={'new_day': new_day, 'processing_result': result},
-                    requires_response=False,
-                    priority=7,
-                ))
-    
-                # Best-effort: process a few queued items (news, etc.) so side-effects are enqueued
-                await synthesizer.process_background_queue(max_items=5)
-            except Exception as e:
-                logger.debug(f"Orchestrator day-transition notification failed (non-fatal): {e}")
-    
-            # Kick Celery if processor queue is still non-empty
-            processor = scheduler.get_processor(user_id, conversation_id)
-            if processor._processing_queue:
-                process_conflict_queue.delay(user_id, conversation_id)
-    
-            return result
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+
+            synthesizer = await get_synthesizer(user_id, conversation_id)
+            tick_payload = {
+                'new_day': datetime.utcnow().isoformat(),
+                'day': new_day,
+            }
+            signal = ConflictSignal(
+                type=ConflictSignalType.TIME_TICK,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                payload=tick_payload,
+            )
+
+            await synthesizer.handle_signal(signal)
+
+            return {'dispatched': True, 'day': new_day}
         except Exception as e:
             logger.error(f"Error in game day transition: {e}")
             return {"error": str(e)}
