@@ -8,7 +8,10 @@ import logging
 import os
 from typing import Any, Optional
 
-from lore.cache_version import compute_lore_version_for_location
+from lore.cache_version import (
+    bump_location_lore_version,
+    compute_lore_version_for_location,
+)
 
 try:  # pragma: no cover - optional dependency shim for tests
     import redis.asyncio as redis_async
@@ -152,5 +155,28 @@ async def set_deep_lore_bundle(
         return False
 
 
-__all__ = ["get_deep_lore_bundle", "set_deep_lore_bundle"]
+async def invalidate_deep_lore(
+    location_id: Any,
+    user_id: Any,
+    conversation_id: Any,
+) -> None:
+    """Remove cached deep lore for a location and bump its version marker."""
+
+    key = _build_key(user_id, conversation_id, location_id)
+
+    client = await _get_client()
+    if client is not None and key:
+        try:
+            await client.delete(key)
+        except Exception:  # pragma: no cover - best effort cache invalidation
+            logger.debug("Failed to delete deep lore bundle from Redis", exc_info=True)
+
+    if location_id is not None:
+        try:
+            bump_location_lore_version(str(location_id))
+        except Exception:  # pragma: no cover - version bumps must not break writes
+            logger.debug("Failed to bump location lore version during invalidation", exc_info=True)
+
+
+__all__ = ["get_deep_lore_bundle", "set_deep_lore_bundle", "invalidate_deep_lore"]
 

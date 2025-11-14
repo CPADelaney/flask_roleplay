@@ -16,9 +16,9 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
 from lore.cache_version import (
-    bump_location_lore_version,
     get_lore_db_connection_context as get_db_connection_context,
 )
+from lore.deep_cache import invalidate_deep_lore
 
 # Agents SDK imports
 from agents import Agent, function_tool
@@ -1630,7 +1630,11 @@ class FactionGenerator(BaseGenerator):
             return 0
 
         if location_id:
-            bump_location_lore_version(str(location_id))
+            await invalidate_deep_lore(
+                str(location_id),
+                self.user_id,
+                self.conversation_id,
+            )
             logger.info(
                 "Stored location '%s' with id %s",
                 location_data["name"],
@@ -1748,7 +1752,11 @@ class FactionGenerator(BaseGenerator):
             return 0
 
         if lore_id:
-            bump_location_lore_version(str(location_id))
+            await invalidate_deep_lore(
+                str(location_id),
+                self.user_id,
+                self.conversation_id,
+            )
             logger.info(f"Stored location lore for location {location_id}")
         return lore_id
 
@@ -1852,7 +1860,11 @@ class FactionGenerator(BaseGenerator):
             return False
 
         if success:
-            bump_location_lore_version(str(location_id))
+            await invalidate_deep_lore(
+                str(location_id),
+                self.user_id,
+                self.conversation_id,
+            )
             logger.info(
                 f"Connected faction '{canonical_name}' to location {location_id}"
             )

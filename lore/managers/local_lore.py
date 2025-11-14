@@ -43,9 +43,9 @@ from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.cache_version import (
-    bump_location_lore_version,
     get_lore_db_connection_context as get_db_connection_context,
 )
+from lore.deep_cache import invalidate_deep_lore
 from nyx.gateway import llm_gateway
 from lore.utils.llm_gateway import build_llm_request
 
@@ -841,10 +841,17 @@ class LocalLoreManager(BaseLoreManager):
                         "Event occurred at landmark", 8
                     )
 
-            bump_location_lore_version(str(input.location_id))
-
-            # Invalidate cache
-            self.invalidate_cache_pattern(f"local_history_{input.location_id}")
+            # Invalidate caches and deep lore bundle
+            await asyncio.gather(
+                self.invalidate_cache_pattern_async(
+                    f"local_history_{input.location_id}"
+                ),
+                invalidate_deep_lore(
+                    str(input.location_id),
+                    self.user_id,
+                    self.conversation_id,
+                ),
+            )
 
             logger.info(f"Created local history '{input.event_name}' with ID {event_id}")
             return event_id
@@ -923,10 +930,17 @@ class LocalLoreManager(BaseLoreManager):
                         "Historical event at landmark", 8
                     )
 
-            bump_location_lore_version(str(input.location_id))
-
-            # Invalidate cache
-            self.invalidate_cache_pattern(f"landmarks_{input.location_id}")
+            # Invalidate caches and deep lore bundle
+            await asyncio.gather(
+                self.invalidate_cache_pattern_async(
+                    f"landmarks_{input.location_id}"
+                ),
+                invalidate_deep_lore(
+                    str(input.location_id),
+                    self.user_id,
+                    self.conversation_id,
+                ),
+            )
 
             logger.info(f"Created landmark '{input.name}' with ID {landmark_id}")
             return landmark_id
@@ -1179,7 +1193,11 @@ Be specific and compelling in your connection.
                 )
                 await self._update_cross_references(conn, "myth", myth_id, "history", history_id)
 
-            bump_location_lore_version(str(history["location_id"]))
+            await invalidate_deep_lore(
+                str(history["location_id"]),
+                self.user_id,
+                self.conversation_id,
+            )
             return connection
 
     async def _connect_history_landmark_impl(self, ctx, history_id: int, landmark_id: int) -> NarrativeConnection:
@@ -1239,7 +1257,11 @@ Be historically plausible and culturally sensitive.
                 )
                 await self._update_cross_references(conn, "history", history_id, "landmark", landmark_id)
 
-            bump_location_lore_version(str(history["location_id"]))
+            await invalidate_deep_lore(
+                str(history["location_id"]),
+                self.user_id,
+                self.conversation_id,
+            )
             return connection
 
     async def _update_cross_references(
@@ -1365,8 +1387,17 @@ Be historically plausible and culturally sensitive.
                 if fix not in fixes_applied
             ]
 
-            # Invalidate cache
-            self.invalidate_cache_pattern(f"location_lore_{location_id}")
+            # Invalidate cache and ensure deep lore refresh
+            await asyncio.gather(
+                self.invalidate_cache_pattern_async(
+                    f"location_lore_{location_id}"
+                ),
+                invalidate_deep_lore(
+                    str(location_id),
+                    self.user_id,
+                    self.conversation_id,
+                ),
+            )
 
             return consistency_result
 
@@ -1499,8 +1530,13 @@ Be historically plausible and culturally sensitive.
                 generated_landmarks
             )
 
-            # Invalidate cache
+            # Invalidate cache and ensure deep lore refresh
             self.invalidate_cache(f"location_lore_{location_data.id}")
+            await invalidate_deep_lore(
+                str(location_data.id),
+                self.user_id,
+                self.conversation_id,
+            )
 
             return {
                 "location": location_data.model_dump(),
@@ -1701,7 +1737,11 @@ Return a JSON object with your analysis and specific recommendations.
                         reason=f"Landmark affected by: {themed_event}"
                     )
 
-                    bump_location_lore_version(str(location_id))
+                    await invalidate_deep_lore(
+                        str(location_id),
+                        self.user_id,
+                        self.conversation_id,
+                    )
 
                     evolution_result.updated_landmark = {
                         "id": landmark_to_modify.id,
@@ -1745,8 +1785,13 @@ Return a JSON object with your analysis and specific recommendations.
                     evolution_result.new_history.id
                 )
 
-            # Invalidate cache
+            # Invalidate cache and ensure deep lore refresh
             self.invalidate_cache(f"location_lore_{location_id}")
+            await invalidate_deep_lore(
+                str(location_id),
+                self.user_id,
+                self.conversation_id,
+            )
 
             return evolution_result
 
