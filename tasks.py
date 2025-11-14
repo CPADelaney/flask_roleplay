@@ -1659,36 +1659,17 @@ def update_scene_conflict_context(self, user_id: int, conversation_id: int, scen
         logger.info(f"Starting background conflict context generation for key: {cache_key}")
 
         async def _generate_context():
-            from logic.conflict_system.conflict_synthesizer import (
-                EventType,
-                SubsystemType,
-                SystemEvent,
-                get_synthesizer,
-            )
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            from logic.conflict_system.signal_tasks import generate_scene_conflict_context
+
             synthesizer = await get_synthesizer(user_id, conversation_id)
 
-            event = SystemEvent(
-                event_id=f"scene_analysis_{cache_key}",
-                event_type=EventType.SCENE_ENTER,
-                source_subsystem=SubsystemType.ORCHESTRATOR,
-                payload={'scene_context': scene_info},
-                requires_response=True
+            return await generate_scene_conflict_context(
+                synthesizer,
+                user_id,
+                conversation_id,
+                scene_info,
             )
-            
-            responses = await synthesizer._process_event_parallel(event)
-            
-            context = { 'conflicts': [], 'tensions': {}, 'opportunities': [], 'ambient_effects': [], 'world_tension': 0.0 }
-
-            if responses:
-                for response in responses:
-                    if response.success and response.data:
-                        context['conflicts'].extend(response.data.get('active_conflicts', []))
-                        context['ambient_effects'].extend(response.data.get('ambient_effects', []) or response.data.get('ambient_atmosphere', []))
-                        world_tension = response.data.get('world_tension')
-                        if isinstance(world_tension, (int, float)):
-                            context['world_tension'] = max(context['world_tension'], world_tension)
-            
-            return context
 
         full_context = run_async_in_worker_loop(_generate_context())
 
@@ -2688,19 +2669,14 @@ def update_conflict_tensions_task(params):
                 # Get synthesizer
                 synthesizer = await get_synthesizer(user_id, conversation_id)
                 
-                # Process state sync to update tensions
-                from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
-                
-                event = SystemEvent(
-                    event_id=f"tension_update_{time.time()}",
-                    event_type=EventType.STATE_SYNC,
-                    source_subsystem=SubsystemType.BACKGROUND,
-                    payload={'update_tensions': True},
-                    target_subsystems={SubsystemType.TENSION},
-                    requires_response=False
+                # Process state sync to update tensions via signal
+                from logic.conflict_system.signal_tasks import dispatch_tension_update_signal
+
+                await dispatch_tension_update_signal(
+                    synthesizer,
+                    user_id,
+                    conversation_id,
                 )
-                
-                await synthesizer.emit_event(event)
                 
                 return {
                     "status": "success",

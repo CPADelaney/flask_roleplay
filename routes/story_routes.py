@@ -25,7 +25,12 @@ from logic.narrative_events import (
     initialize_player_stats,
     analyze_narrative_tone
 )
-from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+from logic.conflict_system.conflict_synthesizer import get_synthesizer
+from routes.conflict_signal_helpers import (
+    emit_daily_update_signal,
+    emit_end_of_day_signal,
+    emit_player_action_signal,
+)
 
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation, fetch_row_async, fetch_all_async, execute_async
@@ -1623,6 +1628,7 @@ async def perform_activity_endpoint():
         logging.exception("[perform_activity_endpoint] Error")
         return jsonify({"error": str(e)}), 500
 
+
 @story_bp.route("/currency_info", methods=["GET"])
 @timed_function
 async def get_currency_info():
@@ -1883,43 +1889,24 @@ async def next_storybeat():
                 active_conflicts.append(conflict_state)
             
             # If time advanced, emit a state sync event for daily updates
-            conflict_update = None
-            if time_result.get("time_advanced", False):
-                daily_event = SystemEvent(
-                    event_id=f"daily_update_{conv_id}_{datetime.now().timestamp()}",
-                    event_type=EventType.STATE_SYNC,
-                    source_subsystem=SubsystemType.SLICE_OF_LIFE,
-                    payload={
-                        "type": "daily_update",
-                        "new_day": time_result.get("new_time", {}).get("day"),
-                        "time_of_day": time_result.get("new_time", {}).get("time_of_day")
-                    },
-                    priority=3
-                )
-                await conflict_synthesizer.emit_event(daily_event)
-                conflict_update = {"daily_update_triggered": True}
-            
-            # Process activity impact on conflicts
-            impact_result = None
-            activity_type = action_type if "action_type" in locals() else "conversation"
-            
-            # Emit player action event to the synthesizer
-            player_action_event = SystemEvent(
-                event_id=f"player_action_{conv_id}_{datetime.now().timestamp()}",
-                event_type=EventType.PLAYER_CHOICE,
-                source_subsystem=SubsystemType.SLICE_OF_LIFE,
-                payload={
-                    "activity_type": activity_type,
-                    "user_input": user_input,
-                    "location": context.get("location"),
-                    "involved_npcs": [resp.get("npc_id") for resp in npc_responses] if npc_responses else []
-                },
-                priority=2
+            conflict_update = await emit_daily_update_signal(
+                conflict_synthesizer,
+                user_id,
+                conv_id,
+                time_result,
             )
-            
-            responses = await conflict_synthesizer.emit_event(player_action_event)
-            if responses:
-                impact_result = {"processed": True, "responses": len(responses)}
+
+            # Process activity impact on conflicts
+            activity_type = action_type if "action_type" in locals() else "conversation"
+            impact_result = await emit_player_action_signal(
+                conflict_synthesizer,
+                user_id,
+                conv_id,
+                activity_type,
+                user_input,
+                context,
+                npc_responses,
+            )
             
             # Add conflict info to response
             response["conflicts"] = {
@@ -2731,20 +2718,14 @@ async def end_of_day():
         conflict_synthesizer = await get_synthesizer(user_id, int(conv_id))
         
         # Emit end of day event
-        eod_event = SystemEvent(
-            event_id=f"end_of_day_{conv_id}_{datetime.now().timestamp()}",
-            event_type=EventType.STATE_SYNC,
-            source_subsystem=SubsystemType.SLICE_OF_LIFE,
-            payload={
-                "type": "end_of_day",
-                "year": year,
-                "month": month,
-                "day": day
-            },
-            priority=1
+        await emit_end_of_day_signal(
+            conflict_synthesizer,
+            user_id,
+            conv_id,
+            year,
+            month,
+            day,
         )
-        
-        await conflict_synthesizer.emit_event(eod_event)
         
         # Get updated system state
         system_state = await conflict_synthesizer.get_system_state()
