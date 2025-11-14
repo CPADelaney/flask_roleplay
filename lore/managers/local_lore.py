@@ -42,7 +42,10 @@ from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
-from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
+from lore.cache_version import (
+    bump_location_lore_version,
+    get_lore_db_connection_context as get_db_connection_context,
+)
 from nyx.gateway import llm_gateway
 from lore.utils.llm_gateway import build_llm_request
 
@@ -838,6 +841,8 @@ class LocalLoreManager(BaseLoreManager):
                         "Event occurred at landmark", 8
                     )
 
+            bump_location_lore_version(str(input.location_id))
+
             # Invalidate cache
             self.invalidate_cache_pattern(f"local_history_{input.location_id}")
 
@@ -917,6 +922,8 @@ class LocalLoreManager(BaseLoreManager):
                         ConnectionType.HISTORY_TO_LANDMARK,
                         "Historical event at landmark", 8
                     )
+
+            bump_location_lore_version(str(input.location_id))
 
             # Invalidate cache
             self.invalidate_cache_pattern(f"landmarks_{input.location_id}")
@@ -1171,6 +1178,8 @@ Be specific and compelling in your connection.
                 connection.connection_strength
                 )
                 await self._update_cross_references(conn, "myth", myth_id, "history", history_id)
+
+            bump_location_lore_version(str(history["location_id"]))
             return connection
 
     async def _connect_history_landmark_impl(self, ctx, history_id: int, landmark_id: int) -> NarrativeConnection:
@@ -1229,6 +1238,8 @@ Be historically plausible and culturally sensitive.
                 connection.connection_strength
                 )
                 await self._update_cross_references(conn, "history", history_id, "landmark", landmark_id)
+
+            bump_location_lore_version(str(history["location_id"]))
             return connection
 
     async def _update_cross_references(
@@ -1689,6 +1700,8 @@ Return a JSON object with your analysis and specific recommendations.
                         },
                         reason=f"Landmark affected by: {themed_event}"
                     )
+
+                    bump_location_lore_version(str(location_id))
 
                     evolution_result.updated_landmark = {
                         "id": landmark_to_modify.id,

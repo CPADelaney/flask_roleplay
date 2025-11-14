@@ -15,7 +15,10 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
-from lore.cache_version import get_lore_db_connection_context as get_db_connection_context
+from lore.cache_version import (
+    bump_location_lore_version,
+    get_lore_db_connection_context as get_db_connection_context,
+)
 
 # Agents SDK imports
 from agents import Agent, function_tool
@@ -1534,10 +1537,11 @@ class FactionGenerator(BaseGenerator):
         Args:
             location_data: A dictionary containing the generated location's details.
             city_name: The name of the city this location belongs to.
-        
+
         Returns:
             The integer ID of the newly created or found location record.
         """
+        location_id: Optional[int] = None
         try:
             async with get_db_connection_context() as conn:
                 # Generate embedding for semantic search and context
@@ -1551,13 +1555,14 @@ class FactionGenerator(BaseGenerator):
                 if isinstance(strategic_value, str):
                     try:
                         import re
+
                         numbers = re.findall(r"\d+", strategic_value)
                         if numbers:
                             strategic_value = int(numbers[0])
                             # Ensure it's within a valid range (e.g., 1-10)
                             strategic_value = max(1, min(10, strategic_value))
                         else:
-                            strategic_value = 5 # Default if no number is found
+                            strategic_value = 5  # Default if no number is found
                     except (ValueError, TypeError):
                         strategic_value = 5
                 elif not isinstance(strategic_value, int):
@@ -1570,14 +1575,14 @@ class FactionGenerator(BaseGenerator):
                     "display_name": location_data.get("name"),
                     "description": location_data.get("description"),
                     "location_type": location_data.get("type", "settlement"),
-                    
+
                     # 1. Set the city explicitly. This is the primary fix.
                     "city": city_name,
-                    
+
                     # 2. Set the parent_location. For a top-level venue in a city, the city is its parent.
                     #    This respects an explicit parent from the LLM but falls back to the city.
                     "parent_location": location_data.get("parent_location") or city_name,
-                    
+
                     # 3. Ensure the is_fictional flag is always true for this path.
                     "is_fictional": True,
 
@@ -1620,16 +1625,20 @@ class FactionGenerator(BaseGenerator):
                     )
                     return 0
 
-                logger.info(
-                    "Stored location '%s' with id %s",
-                    location_data["name"],
-                    location_id,
-                )
-                return location_id
-
         except Exception as e:
             logger.error(f"Error storing location '{location_data.get('name')}': {e}", exc_info=True)
             return 0
+
+        if location_id:
+            bump_location_lore_version(str(location_id))
+            logger.info(
+                "Stored location '%s' with id %s",
+                location_data["name"],
+                location_id,
+            )
+            return location_id
+
+        return 0
 
     async def _store_location_lore(
         self,
@@ -1640,13 +1649,14 @@ class FactionGenerator(BaseGenerator):
         historical_significance: str,
     ) -> int:
         """Store location lore in the database."""
+        lore_id = 0
         try:
             async with get_db_connection_context() as conn:
                 # Check if we have an existing LocationLore table or use LocalHistories
                 table_exists = await conn.fetchval(
                     """
                     SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
+                        SELECT FROM information_schema.tables
                         WHERE table_name = 'locationlore'
                     );
                 """
@@ -1733,12 +1743,14 @@ class FactionGenerator(BaseGenerator):
                                 secret_embedding,
                             )
 
-                    logger.info(f"Stored location lore for location {location_id}")
-                    return lore_id
-
         except Exception as e:
             logger.error(f"Error storing location lore: {e}")
             return 0
+
+        if lore_id:
+            bump_location_lore_version(str(location_id))
+            logger.info(f"Stored location lore for location {location_id}")
+        return lore_id
 
     async def _connect_faction_to_location(
         self, location_id: int, faction_name: str
@@ -1750,6 +1762,8 @@ class FactionGenerator(BaseGenerator):
             logger.warning("Empty faction name provided for location linking")
             return False
 
+        success = False
+        canonical_name: Optional[str] = None
         try:
             async with get_db_connection_context() as conn:
                 faction_pk_column = await self._resolve_faction_pk_column(conn)
@@ -1831,14 +1845,20 @@ class FactionGenerator(BaseGenerator):
                         faction_id,
                     )
 
-                logger.info(
-                    f"Connected faction '{canonical_name}' to location {location_id}"
-                )
-                return True
+                success = True
 
         except Exception as e:
             logger.error(f"Error connecting faction to location: {e}")
             return False
+
+        if success:
+            bump_location_lore_version(str(location_id))
+            logger.info(
+                f"Connected faction '{canonical_name}' to location {location_id}"
+            )
+            return True
+
+        return False
 
     async def _store_quest(self, quest_data: Dict[str, Any]) -> int:
         """Store a quest in the database."""
