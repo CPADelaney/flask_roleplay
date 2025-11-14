@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
 from typing import Any, Dict, Optional, Tuple
 
 from nyx.nyx_agent.context import NyxContext
@@ -54,7 +55,13 @@ async def warm_user_context_cache(
     *,
     redis_client: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Warm the Nyx user context cache for a given conversation."""
+    """Warm the Nyx user context cache for a given conversation.
+
+    By default this function executes the minimal warm path, skipping expensive
+    orchestrator bootstraps. Set ``NYX_CONFLICT_EAGER_WARMUP=1`` to opt into the
+    legacy eager warm that fully initializes memory/lore orchestrators and
+    builds a context bundle.
+    """
 
     key = f"ctx:warmed:{user_id}:{conversation_id}"
     promise_key = (user_id, conversation_id)
@@ -97,16 +104,34 @@ async def warm_user_context_cache(
 
     try:
         context = NyxContext(user_id=user_id, conversation_id=conversation_id)
-        await context.initialize()
 
-        for orchestrator in ("memory", "lore"):
-            ready = await _await_orchestrator_with_retry(context, orchestrator)
-            if not ready:
-                raise RuntimeError(
-                    f"Orchestrator '{orchestrator}' did not become ready during warm-up"
-                )
+        eager_flag = os.getenv("NYX_CONFLICT_EAGER_WARMUP", "")
+        eager_conflict = eager_flag.strip().lower() in {"1", "true", "yes"}
 
-        await context.build_context_for_input("", None)
+        await context.initialize(warm_minimal=not eager_conflict)
+
+        if eager_conflict:
+            logger.info(
+                "Eager warm enabled via NYX_CONFLICT_EAGER_WARMUP for user_id=%s conversation_id=%s",
+                user_id,
+                conversation_id,
+            )
+            for orchestrator in ("memory", "lore"):
+                ready = await _await_orchestrator_with_retry(context, orchestrator)
+                if not ready:
+                    raise RuntimeError(
+                        f"Orchestrator '{orchestrator}' did not become ready during warm-up"
+                    )
+
+            await context.build_context_for_input("", None)
+            warm_result: Dict[str, Any] = {
+                "status": "warmed",
+                "mode": "full",
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+            }
+        else:
+            warm_result = await context.warm_minimal_context()
     except Exception as exc:
         logger.exception(
             "Failed context cache warm-up for user_id=%s conversation_id=%s: %s",
@@ -121,10 +146,12 @@ async def warm_user_context_cache(
         raise
 
     result = {
-        "status": "warmed",
+        "status": warm_result.get("status", "warmed"),
         "user_id": user_id,
         "conversation_id": conversation_id,
     }
+    if "mode" in warm_result:
+        result["mode"] = warm_result["mode"]
     if not future.done():
         future.set_result(result)
     if _context_warm_promises.get(promise_key) is future:
