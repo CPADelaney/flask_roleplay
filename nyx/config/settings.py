@@ -6,6 +6,14 @@ import copy
 import os
 from typing import Any, Dict
 
+
+# Model selection defaults
+INTERACTIVE_MODEL = os.getenv("NYX_INTERACTIVE_MODEL", "gpt-5-nano")
+"""Primary model used for interactive, player-facing Nyx turns."""
+
+WARMUP_MODEL = os.getenv("NYX_WARMUP_MODEL", INTERACTIVE_MODEL)
+"""Cheaper model used for warmup/background generation tasks."""
+
 # Default configuration
 DEFAULT_CONFIG: Dict[str, Dict[str, Any]] = {
     # Memory System Configuration

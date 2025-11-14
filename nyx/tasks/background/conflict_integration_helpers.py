@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
@@ -53,6 +54,7 @@ async def run_scene_tension_analysis(
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
     except Exception:
@@ -112,6 +114,7 @@ async def run_contextual_conflict_generation(
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
     except Exception:
@@ -170,6 +173,7 @@ async def run_activity_integration(
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
     except Exception:

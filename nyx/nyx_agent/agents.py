@@ -4,6 +4,8 @@
 import logging
 from agents import Agent, handoff, ModelSettings
 
+from nyx.config import INTERACTIVE_MODEL
+
 from .context import NyxContext
 from .tools import (
     add_memory,
@@ -50,7 +52,7 @@ nyx_defer_agent = Agent[NyxContext](
         " Respond in one or two short sentences, stay playful,"
         " and promise to follow up soon."
     ),
-    model="gpt-5-nano",
+    model=INTERACTIVE_MODEL,
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
@@ -61,7 +63,7 @@ movement_transition_agent = Agent[NyxContext](
         " Maintain sultry noir dominance, weave in the destination's sensory details,"
         " and nod to nearby NPCs or recent exchanges when provided."
     ),
-    model="gpt-5-nano",
+    model=INTERACTIVE_MODEL,
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
@@ -75,7 +77,7 @@ memory_agent = Agent[NyxContext](
 - Provide relevant context from past interactions
 Be precise and thorough in memory management.""",
     tools=[retrieve_memories, add_memory],
-    model="gpt-5-nano",
+    model=INTERACTIVE_MODEL,
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
@@ -363,6 +365,6 @@ Remember: Every response is a single scene. No mechanics visible. Let the player
         lore_handle_operation,
     ],
 
-    model="gpt-5-nano",
+    model=INTERACTIVE_MODEL,
     model_settings=DEFAULT_MODEL_SETTINGS,
 )

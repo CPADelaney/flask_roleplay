@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from logic.conflict_system import conflict_victory_hotpath
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from nyx.tasks.utils import run_coro
@@ -180,6 +181,7 @@ Return JSON:
                 LLMRequest(
                     prompt=prompt,
                     agent=_victory_generator(),
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -234,6 +236,7 @@ Write a powerful 2-3 paragraph narration.
                 LLMRequest(
                     prompt=prompt,
                     agent=_achievement_narrator(),
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -292,6 +295,7 @@ Return JSON:
                 LLMRequest(
                     prompt=prompt,
                     agent=_consequence_calculator(),
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -352,6 +356,7 @@ Write 3-4 paragraphs that feel like the end of a chapter, not the end of the sto
                 LLMRequest(
                     prompt=prompt,
                     agent=_epilogue_writer(),
+                    model_override=WARMUP_MODEL,
                 )
             )
         )
@@ -411,6 +416,7 @@ Write a single encouraging paragraph.
                 LLMRequest(
                     prompt=prompt,
                     agent=_achievement_narrator(),
+                    model_override=WARMUP_MODEL,
                 )
             )
         )

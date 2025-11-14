@@ -21,6 +21,7 @@ from lore.core.canon import log_canonical_event
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
 from nyx.gateway.llm_gateway import execute, execute_stream, LLMRequest, LLMOperation
+from nyx.config import WARMUP_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ Return JSON:
             "operation": LLMOperation.ORCHESTRATION.value,
             "stage": "canon_evaluation",
         },
+        model_override=WARMUP_MODEL,
     )
     result = await execute(request)
     response = result.raw
@@ -187,6 +189,7 @@ Return JSON:
             "operation": LLMOperation.ORCHESTRATION.value,
             "stage": "canon_event",
         },
+        model_override=WARMUP_MODEL,
     )
     result = await execute(request)
     response = result.raw
@@ -283,6 +286,7 @@ Cultural Impact: {json.dumps(cultural_data.get('cultural_impact', {}))}
             "operation": LLMOperation.ORCHESTRATION.value,
             "stage": "canon_legacy",
         },
+        model_override=WARMUP_MODEL,
     )
     result = await execute(request)
     response = result.raw
@@ -344,6 +348,7 @@ Return JSON:
                 "operation": LLMOperation.ORCHESTRATION.value,
                 "stage": "canon_references",
             },
+            model_override=WARMUP_MODEL,
         )
         result = await execute(request)
         response = result.raw
@@ -397,6 +402,7 @@ Write 2-3 paragraphs of authentic folklore.
             "operation": LLMOperation.ORCHESTRATION.value,
             "stage": "canon_mythology",
         },
+        model_override=WARMUP_MODEL,
     )
     result = await execute(request)
     response = result.raw
@@ -544,6 +550,7 @@ Return JSON: {{"suggestions": ["specific player-facing suggestion"]}}
                 "operation": LLMOperation.ORCHESTRATION.value,
                 "stage": "canon_compliance",
             },
+            model_override=WARMUP_MODEL,
         )
         result = await execute(request)
         response = result.raw

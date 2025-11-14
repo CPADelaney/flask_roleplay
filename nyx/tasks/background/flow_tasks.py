@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional
 from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from db.connection import get_db_connection_context
 from infra.cache import set_json
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
@@ -105,6 +106,7 @@ async def _run_prompt(agent: Agent, prompt: str) -> str:
         LLMRequest(
             prompt=prompt,
             agent=agent,
+            model_override=WARMUP_MODEL,
         )
     )
     return extract_runner_response(response)

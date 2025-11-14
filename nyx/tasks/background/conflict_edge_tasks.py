@@ -13,6 +13,7 @@ from nyx.tasks.base import NyxTask, app
 from nyx.tasks.utils import run_coro, with_retry
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from logic.conflict_system.dynamic_conflict_template import (
     extract_runner_response,
 )
@@ -76,6 +77,7 @@ def _run_runner(agent: Agent, prompt: str) -> Any:
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
 

@@ -13,6 +13,7 @@ import asyncpg
 from nyx.tasks.base import NyxTask, app
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from db.connection import get_db_connection_context
 from infra.cache import cache_key, redis_client
 from logic.conflict_system.background_grand_conflicts import (
@@ -286,6 +287,7 @@ async def _generate_background_conflict_async(payload: Dict[str, Any]) -> Dict[s
         LLMRequest(
             prompt=prompt,
             agent=agent,
+            model_override=WARMUP_MODEL,
         )
     )
     data = json.loads(extract_runner_response(response))
@@ -401,6 +403,7 @@ async def _advance_conflict_async(payload: Dict[str, Any]) -> Dict[str, Any]:
         LLMRequest(
             prompt=prompt,
             agent=agent,
+            model_override=WARMUP_MODEL,
         )
     )
     data = json.loads(extract_runner_response(response))
@@ -520,6 +523,7 @@ async def _generate_news_async(payload: Dict[str, Any]) -> Dict[str, Any]:
         LLMRequest(
             prompt=prompt,
             agent=agent,
+            model_override=WARMUP_MODEL,
         )
     )
     news_data = json.loads(extract_runner_response(response))
@@ -591,6 +595,7 @@ async def _generate_ripples_async(payload: Dict[str, Any]) -> Dict[str, Any]:
         LLMRequest(
             prompt=prompt,
             agent=agent,
+            model_override=WARMUP_MODEL,
         )
     )
     ripple_data = json.loads(extract_runner_response(response))
@@ -666,6 +671,7 @@ async def _check_opportunities_async(payload: Dict[str, Any]) -> Dict[str, Any]:
             LLMRequest(
                 prompt=prompt,
                 agent=agent,
+                model_override=WARMUP_MODEL,
             )
         )
         opp_data = json.loads(extract_runner_response(response))

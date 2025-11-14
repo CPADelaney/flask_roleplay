@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from agents import Agent
+from nyx.config import WARMUP_MODEL
 from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 from logic.conflict_system.slice_of_life_conflicts import (
     ConflictIntensity,
@@ -107,6 +108,7 @@ Return a JSON array (1-3 items). Each item:
         LLMRequest(
             prompt=prompt,
             agent=_PATTERN_ANALYZER,
+            model_override=WARMUP_MODEL,
         )
     )
     parsed = extract_runner_response(response)
@@ -177,6 +179,7 @@ Return JSON:
         LLMRequest(
             prompt=prompt,
             agent=_CONFLICT_AGENT,
+            model_override=WARMUP_MODEL,
         )
     )
     parsed = extract_runner_response(response)
@@ -228,6 +231,7 @@ Return JSON:
         LLMRequest(
             prompt=prompt,
             agent=_RESOLUTION_AGENT,
+            model_override=WARMUP_MODEL,
         )
     )
     parsed = extract_runner_response(response)
@@ -264,6 +268,7 @@ Answer just yes or no.
         LLMRequest(
             prompt=prompt,
             agent=_TIME_AGENT,
+            model_override=WARMUP_MODEL,
         )
     )
     text = extract_runner_response(response).strip().lower()

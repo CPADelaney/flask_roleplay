@@ -12,6 +12,7 @@ def build_llm_request(*args: Any, **kwargs: Any) -> LLMRequest:
 
     runner_kwargs = dict(kwargs)
     context = runner_kwargs.pop("context", None)
+    model_override = runner_kwargs.pop("model_override", None)
 
     agent: Any | None = None
     prompt: Any | None = None
@@ -42,4 +43,5 @@ def build_llm_request(*args: Any, **kwargs: Any) -> LLMRequest:
         agent=agent,
         context=context,
         runner_kwargs=runner_kwargs or None,
+        model_override=model_override,
     )
