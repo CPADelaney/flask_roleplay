@@ -249,6 +249,9 @@ except ImportError as e:
 # Section names constant to avoid typos
 SECTION_NAMES = ('npcs', 'memories', 'lore', 'conflicts', 'world', 'narrative')
 
+# Reserved token budget to guarantee canonical lore rules are always included
+CANONICAL_RULES_RESERVED = 500
+
 # ===== New Data Structures for Optimized Context Assembly =====
 
 import re
