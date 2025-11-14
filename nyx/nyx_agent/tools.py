@@ -17,7 +17,7 @@ import time
 import logging
 import uuid
 from typing import Dict, List, Any, Optional, Union, TypedDict
-from typing import NotRequired
+from typing import Mapping, NotRequired
 
 from agents import function_tool, RunContextWrapper
 
@@ -144,13 +144,20 @@ class ScoreDecisionOptionsInput(TypedDict):
     options: List[Union[str, DecisionOptionInput]]
 
 
+class LoreOperationExtraItem(TypedDict):
+    """Key/value entries passed to the lore orchestrator."""
+
+    key: str
+    value: Any
+
+
 class LoreOperationInput(TypedDict, total=False):
     aspects: List[str]
     location_id: Union[int, str]
     location_name: str
     npc_ids: List[Union[int, str]]
     detail_level: str
-    extra: Dict[str, Any]
+    extra: List[LoreOperationExtraItem]
 
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -1074,6 +1081,24 @@ async def lore_handle_operation(
         raise ValueError("Nyx context missing identifiers for lore operation")
 
     forward_payload: Dict[str, Any] = dict(payload) if payload is not None else {}
+
+    # Normalize optional "extra" entries (list of key/value pairs → mapping)
+    raw_extra = forward_payload.pop("extra", None)
+    normalized_extra: Dict[str, Any] = {}
+
+    if isinstance(raw_extra, Mapping):
+        normalized_extra = {str(key): value for key, value in raw_extra.items()}
+    elif isinstance(raw_extra, list):
+        for item in raw_extra:
+            if not isinstance(item, Mapping):
+                continue
+            key = item.get("key")
+            if key is None:
+                continue
+            normalized_extra[str(key)] = item.get("value")
+
+    if normalized_extra:
+        forward_payload["extra"] = normalized_extra
 
     return await lore_handle_operation_tool_wrapper(
         user_id=int(user_id),
