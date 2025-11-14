@@ -39,6 +39,7 @@ from logic.conflict_system.background_processor import (
     get_conflict_scheduler,
     BackgroundConflictProcessor
 )
+from conflict.signals import ConflictSignal, ConflictSignalType
 
 from logic.conflict_system.integration_hooks import ConflictEventHooks
 from agents import function_tool, RunContextWrapper, Runner
@@ -724,11 +725,11 @@ class ConflictSynthesizer:
         Handle game day transitions with background processing.
         """
         logger.info(f"Processing day transition to day {new_day}")
-    
+
         result = await ConflictEventHooks.on_game_day_transition(
             self.user_id, self.conversation_id, new_day
         )
-        
+
         # Kick off processor daily updates so background conflicts tick and queue items (news, etc.)
         try:
             daily = await self.processor.process_daily_updates()
@@ -754,14 +755,143 @@ class ConflictSynthesizer:
             self._event_queue.put_nowait(event)
         except asyncio.QueueFull:
             logger.warning("Event queue full, day transition event dropped")
-    
+
         async with self._bundle_lock:
             self._bundle_cache.clear()
             logger.info(f"Cleared bundle cache for day {new_day}")
-    
+
         return result
-    
-    
+
+
+    async def handle_signal(self, signal: ConflictSignal) -> None:
+        """Route external conflict signals into synthesizer events."""
+
+        if signal.user_id != self.user_id or signal.conversation_id != self.conversation_id:
+            logger.warning(
+                "Signal addressed to different synthesizer: %s/%s", signal.user_id, signal.conversation_id
+            )
+            raise ValueError("Signal target does not match synthesizer identifiers")
+
+        base_payload: Dict[str, Any] = dict(signal.payload or {})
+        base_payload.setdefault('user_id', signal.user_id)
+        base_payload.setdefault('conversation_id', signal.conversation_id)
+        base_payload.setdefault('timestamp', signal.timestamp.isoformat())
+
+        scene_context = None
+        if signal.scene_scope is not None:
+            scene_context = self._scene_scope_to_mapping(signal.scene_scope)
+            if scene_context:
+                base_payload.setdefault('scene_context', scene_context)
+
+        if signal.type is ConflictSignalType.SCENE_ENTERED:
+            new_scene_ctx = scene_context or signal.scene_scope
+            await self._handle_scene_transition(self._last_scene, new_scene_ctx)
+            self._last_scene = new_scene_ctx
+            return
+
+        if signal.type is ConflictSignalType.TIME_TICK:
+            day_value = base_payload.get('day')
+            if day_value is None:
+                day_value = base_payload.get('new_day')
+
+            if day_value is not None:
+                try:
+                    await self.handle_day_transition(int(day_value))
+                    return
+                except (TypeError, ValueError):
+                    logger.debug("Non-numeric day value on tick payload: %s", day_value)
+
+            raw_targets = base_payload.pop('target_subsystems', None)
+            target_subsystems: Optional[Set[SubsystemType]] = None
+            if raw_targets:
+                target_candidates = raw_targets
+                if not isinstance(target_candidates, (list, set, tuple)):
+                    target_candidates = [target_candidates]
+
+                converted_targets: Set[SubsystemType] = set()
+                for candidate in target_candidates:
+                    if isinstance(candidate, SubsystemType):
+                        converted_targets.add(candidate)
+                        continue
+                    if isinstance(candidate, str):
+                        try:
+                            converted_targets.add(SubsystemType(candidate))
+                            continue
+                        except ValueError:
+                            try:
+                                converted_targets.add(SubsystemType[candidate.upper()])
+                                continue
+                            except KeyError:
+                                logger.debug("Unknown subsystem target string on tick payload: %s", candidate)
+                    else:
+                        logger.debug("Unsupported subsystem target type on tick payload: %s", type(candidate))
+
+                if converted_targets:
+                    target_subsystems = converted_targets
+
+            tick_payload: Dict[str, Any] = {
+                'tick': {k: v for k, v in base_payload.items() if k != 'scene_context'}
+            }
+            if scene_context:
+                tick_payload['scene_context'] = scene_context
+
+            event = SystemEvent(
+                event_id=f"signal_tick_{uuid.uuid4()}",
+                event_type=EventType.STATE_SYNC,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload=tick_payload,
+                target_subsystems=target_subsystems or {SubsystemType.BACKGROUND},
+                requires_response=False,
+                priority=8,
+            )
+            await self.emit_event(event)
+            return
+
+        signal_event_map: Dict[ConflictSignalType, tuple[EventType, Optional[Set[SubsystemType]]]] = {
+            ConflictSignalType.PLAYER_ACTION: (
+                EventType.PLAYER_CHOICE,
+                {SubsystemType.TENSION, SubsystemType.STAKEHOLDER, SubsystemType.SOCIAL},
+            ),
+            ConflictSignalType.FACT_BECAME_PUBLIC: (
+                EventType.CANON_ESTABLISHED,
+                {SubsystemType.CANON, SubsystemType.BACKGROUND},
+            ),
+            ConflictSignalType.RELATIONSHIP_CHANGE: (
+                EventType.STAKEHOLDER_ACTION,
+                {SubsystemType.STAKEHOLDER, SubsystemType.SOCIAL},
+            ),
+            ConflictSignalType.CONFLICT_CREATED: (
+                EventType.CONFLICT_CREATED,
+                None,
+            ),
+            ConflictSignalType.CONFLICT_UPDATED: (
+                EventType.CONFLICT_UPDATED,
+                None,
+            ),
+            ConflictSignalType.CONFLICT_RESOLVED: (
+                EventType.CONFLICT_RESOLVED,
+                None,
+            ),
+        }
+
+        mapping = signal_event_map.get(signal.type)
+        if mapping:
+            event_type, target_subsystems = mapping
+            event = SystemEvent(
+                event_id=f"signal_{signal.type.value}_{uuid.uuid4()}",
+                event_type=event_type,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload=base_payload,
+                target_subsystems=set(target_subsystems) if target_subsystems else None,
+                requires_response=False,
+                priority=6,
+            )
+            await self.emit_event(event)
+            return
+
+        logger.debug("Unhandled conflict signal type: %s", signal.type)
+
+
     async def process_background_queue(self, max_items: int = 5) -> List[Dict[str, Any]]:
         """Process items from the background conflict queue."""
         items = await self.processor.process_queued_items(max_items=max_items)

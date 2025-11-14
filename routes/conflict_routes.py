@@ -25,6 +25,7 @@ from logic.conflict_system.conflict_synthesizer import (
     MAX_EVENT_QUEUE,
     MAX_EVENT_HISTORY
 )
+from conflict.signals import ConflictSignal, ConflictSignalType
 
 # Import governance integration
 from nyx.governance import AgentType
@@ -655,26 +656,23 @@ async def handle_scene_transition(user_id):
             user_id, conversation_id, old_scene, new_scene
         )
         
-        # Get synthesizer and emit transition event
-        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
-        
+        # Get synthesizer and emit transition signal
         synthesizer = await get_synthesizer(user_id, conversation_id)
-        
-        event = SystemEvent(
-            event_id=f"scene_transition_{datetime.now().timestamp()}",
-            event_type=EventType.SCENE_ENTER,
-            source_subsystem=SubsystemType.ORCHESTRATOR,
+
+        signal = ConflictSignal(
+            type=ConflictSignalType.SCENE_ENTERED,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            scene_scope=new_scene,
             payload={
-                'old_scene': old_scene, 
-                'new_scene': new_scene, 
-                'context': context
+                'old_scene': old_scene,
+                'new_scene': new_scene,
+                'context': context,
             },
-            requires_response=False,
-            priority=6
         )
-        
-        # Emit the event
-        await synthesizer.emit_event(event)
+
+        # Emit the signal
+        await synthesizer.handle_signal(signal)
         
         # Clear scene-specific caches
         await synthesizer._invalidate_caches_for_scene(new_scene.get("location_id"))

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.pyd
+*.swp
+*.swo
+.pytest_cache/
+htmlcov/
+.coverage*
+*.egg-info/
+.env
+.env.*
+venv/
+.venv/
+*.log
+nyx/core/memory/vector_store.*
