@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -30,6 +31,17 @@ def _compute_scene_hash(scene_context: Dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
+def _is_truthy_env(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    return normalized in {"1", "true", "yes", "on", "enabled"}
+
+
+def _eager_warmup_enabled() -> bool:
+    return _is_truthy_env(os.getenv("NYX_CONFLICT_EAGER_WARMUP"))
+
+
 def get_scene_bundle(
     scene_hash: str,
     *,
@@ -37,6 +49,7 @@ def get_scene_bundle(
     user_id: Optional[int] = None,
     conversation_id: Optional[int] = None,
     target_npcs: Optional[List[int]] = None,
+    eager: bool = False,
 ) -> Dict[str, Any]:
     """Get cached social bundle for a scene (hot path).
 
@@ -56,30 +69,39 @@ def get_scene_bundle(
         logger.debug(f"Cache hit for social bundle: {scene_hash}")
         return cached
 
-    # Cache miss - trigger background generation with lock to prevent stampede
-    lock_key = cache_key("social_bundle", scene_hash, "lock")
-    try:
-        with redis_lock(lock_key, ttl=15, blocking=False):
-            from nyx.tasks.background.social_tasks import generate_social_bundle
+    should_eager = eager or _eager_warmup_enabled()
 
-            context_payload = dict(scene_context or {})
-            payload: Dict[str, Any] = {
-                "scene_hash": scene_hash,
-                "scene_context": context_payload,
-                "user_id": user_id
-                if user_id is not None
-                else context_payload.get("user_id"),
-                "conversation_id": conversation_id
-                if conversation_id is not None
-                else context_payload.get("conversation_id"),
-                "target_npcs": list(target_npcs) if target_npcs is not None else list(context_payload.get("target_npcs", [])),
-            }
+    if should_eager:
+        # Cache miss - trigger background generation with lock to prevent stampede
+        lock_key = cache_key("social_bundle", scene_hash, "lock")
+        try:
+            with redis_lock(lock_key, ttl=15, blocking=False):
+                from nyx.tasks.background.social_tasks import generate_social_bundle
 
-            generate_social_bundle.delay(payload)
-            logger.debug(f"Queued social bundle generation for scene {scene_hash}")
-    except RuntimeError:
-        # Lock already held, another request is generating
-        logger.debug(f"Social bundle generation already in progress: {scene_hash}")
+                context_payload = dict(scene_context or {})
+                payload: Dict[str, Any] = {
+                    "scene_hash": scene_hash,
+                    "scene_context": context_payload,
+                    "user_id": user_id
+                    if user_id is not None
+                    else context_payload.get("user_id"),
+                    "conversation_id": conversation_id
+                    if conversation_id is not None
+                    else context_payload.get("conversation_id"),
+                    "target_npcs": list(target_npcs)
+                    if target_npcs is not None
+                    else list(context_payload.get("target_npcs", [])),
+                }
+
+                generate_social_bundle.delay(payload)
+                logger.debug(f"Queued social bundle generation for scene {scene_hash}")
+        except RuntimeError:
+            # Lock already held, another request is generating
+            logger.debug(f"Social bundle generation already in progress: {scene_hash}")
+        except Exception as exc:  # pragma: no cover - safety log only
+            logger.warning(f"Failed to queue social bundle generation for {scene_hash}: {exc}")
+    else:
+        logger.debug("Skipping eager social bundle warmup for %s", scene_hash)
 
     # Return fallback while generation is in progress
     return {
@@ -219,6 +241,55 @@ def queue_alliance_formation(
         logger.debug(f"Queued alliance formation: {initiator_id} -> {target_id}")
     except Exception as e:
         logger.warning(f"Failed to queue alliance formation: {e}")
+
+
+def schedule_social_bundle_refresh(
+    scene_context: Optional[Dict[str, Any]] = None,
+    *,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
+    target_npcs: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Ensure social bundle generation is queued using eager warmup.
+
+    Args:
+        scene_context: Optional additional context for hashing/idempotency.
+        user_id: Optional user identifier for task payload.
+        conversation_id: Optional conversation identifier for task payload.
+        target_npcs: Optional list of NPC ids to focus refresh on.
+
+    Returns:
+        The cached or placeholder bundle from :func:`get_scene_bundle`.
+    """
+
+    payload_context = dict(scene_context or {})
+
+    # Try to normalise participants for hashing if present.
+    participants = (
+        list(target_npcs)
+        if target_npcs is not None
+        else list(payload_context.get("target_npcs") or payload_context.get("participants") or [])
+    )
+    if participants and "npcs_present" not in payload_context:
+        payload_context.setdefault("npcs_present", participants)
+
+    scene_hash = payload_context.get("scene_hash") or payload_context.get("hash")
+    if not scene_hash:
+        try:
+            scene_hash = _compute_scene_hash(payload_context)
+        except Exception:
+            serialized = json.dumps(payload_context, sort_keys=True)
+            scene_hash = hashlib.sha256(serialized.encode()).hexdigest()[:16]
+        payload_context["scene_hash"] = scene_hash
+
+    return get_scene_bundle(
+        scene_hash,
+        scene_context=payload_context,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        target_npcs=participants or None,
+        eager=True,
+    )
 
 
 async def get_cached_gossip_items(scene_hash: str, limit: int = 5) -> List[Dict[str, Any]]:

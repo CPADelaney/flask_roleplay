@@ -256,6 +256,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             user_id=self.user_id,
             conversation_id=self.conversation_id,
             target_npcs=present_npcs if present_npcs else None,
+            eager=False,
         )
 
         side_effects = []
