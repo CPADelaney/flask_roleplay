@@ -6,6 +6,7 @@ import types
 import typing
 import typing_extensions
 from enum import Enum
+from typing import Any, Dict
 
 import pytest
 
@@ -83,11 +84,13 @@ async def test_nyx_context_initialize_non_blocking(monkeypatch):
     async def _noop_refresh(self, previous_location_id=None):
         return None
 
-    async def _slow_memory(self):
+    async def _slow_memory(self, *, warm_minimal: bool = False):
+        if warm_minimal:
+            return
         await asyncio.sleep(memory_delay)
         self.memory_orchestrator = sentinel_memory
 
-    async def _fast_noop(self):
+    async def _fast_noop(self, *, warm_minimal: bool = False):
         return None
 
     monkeypatch.setattr(context_module, "_SNAPSHOT_STORE", DummyStore())
@@ -453,16 +456,24 @@ async def test_lore_initialization_shielding_allows_retry(monkeypatch):
     async def _noop_refresh(self, previous_location_id=None):
         return None
 
-    async def _fast_memory(self):
+    async def _fast_memory(self, *, warm_minimal: bool = False):
+        if warm_minimal:
+            return
         self.memory_orchestrator = object()
 
-    async def _fast_npc(self):
+    async def _fast_npc(self, *, warm_minimal: bool = False):
+        if warm_minimal:
+            return
         self.npc_orchestrator = object()
 
-    async def _fast_conflict(self):
+    async def _fast_conflict(self, *, warm_minimal: bool = False):
+        if warm_minimal:
+            return
         self.conflict_synthesizer = object()
 
-    async def _slow_lore(self):
+    async def _slow_lore(self, *, warm_minimal: bool = False):
+        if warm_minimal:
+            return
         await lore_ready.wait()
         self.lore_orchestrator = DummyLoreOrchestrator()
 
@@ -511,8 +522,118 @@ async def test_lore_initialization_shielding_allows_retry(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_warm_user_context_waits_for_memory_and_lore(monkeypatch):
+async def test_warm_user_context_minimal_mode(monkeypatch):
     monkeypatch.setattr(cache_warmup, "_context_warm_promises", {})
+
+    memory_event = asyncio.Event()
+    lore_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.05, memory_event.set)
+    loop.call_later(0.1, lore_event.set)
+
+    class DummyRedis:
+        def __init__(self) -> None:
+            self.get_calls = []
+            self.set_calls = []
+            self.delete_calls = []
+
+        def get(self, key):
+            self.get_calls.append(key)
+            return None
+
+        def setex(self, key, ttl, value):
+            self.set_calls.append((key, ttl, value))
+
+        def delete(self, key):
+            self.delete_calls.append(key)
+
+    dummy_redis = DummyRedis()
+
+    class StubNyxContext:
+        instances = []
+
+        def __init__(self, user_id: int, conversation_id: int) -> None:
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+            self.initialized = False
+            self.memory_ready = False
+            self.lore_ready = False
+            self.awaited = []
+            self.build_called = False
+            self.memory_orchestrator = None
+            self.lore_bundle = None
+            StubNyxContext.instances.append(self)
+
+        async def initialize(self, *, warm_minimal: bool = False) -> None:
+            self.initialized = True
+            self.warm_minimal = warm_minimal
+
+        async def await_orchestrator(self, name: str) -> bool:
+            self.awaited.append(name)
+            if name == "memory":
+                await memory_event.wait()
+                self.memory_ready = True
+                self.memory_orchestrator = {"status": "ready"}
+                return True
+            if name == "lore":
+                assert self.memory_ready is True
+                await lore_event.wait()
+                self.lore_ready = True
+                self.lore_bundle = {"status": "ready"}
+                return True
+            if name == "context_broker":
+                return True
+            return False
+
+        async def build_context_for_input(self, *_args):
+            if not (self.memory_ready and self.lore_ready):
+                raise AssertionError("Context built before orchestrators became ready")
+            self.build_called = True
+            return None
+
+        async def warm_minimal_context(self) -> Dict[str, Any]:
+            self.build_called = False
+            await self.await_orchestrator("context_broker")
+            return {
+                "status": "warmed",
+                "mode": "minimal",
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+            }
+
+    monkeypatch.setattr(cache_warmup, "NyxContext", StubNyxContext)
+
+    result = await cache_warmup.warm_user_context_cache(
+        user_id=5,
+        conversation_id=7,
+        redis_client=dummy_redis,
+    )
+
+    assert result == {
+        "status": "warmed",
+        "user_id": 5,
+        "conversation_id": 7,
+        "mode": "minimal",
+    }
+    assert dummy_redis.get_calls == ["ctx:warmed:5:7"]
+    assert dummy_redis.set_calls == [("ctx:warmed:5:7", 600, "1")]
+    assert dummy_redis.delete_calls == []
+
+    context = StubNyxContext.instances[-1]
+    assert context.initialized is True
+    assert context.warm_minimal is True
+    assert context.build_called is False
+    assert context.memory_orchestrator is None
+    assert context.lore_bundle is None
+    assert context.awaited.count("context_broker") >= 1
+    assert context.awaited.count("memory") == 0
+    assert context.awaited.count("lore") == 0
+
+
+@pytest.mark.anyio
+async def test_warm_user_context_eager_opt_in(monkeypatch):
+    monkeypatch.setattr(cache_warmup, "_context_warm_promises", {})
+    monkeypatch.setenv("NYX_CONFLICT_EAGER_WARMUP", "1")
 
     memory_event = asyncio.Event()
     lore_event = asyncio.Event()
@@ -557,8 +678,9 @@ async def test_warm_user_context_waits_for_memory_and_lore(monkeypatch):
             self.lore_bundle = None
             StubNyxContext.instances.append(self)
 
-        async def initialize(self) -> None:
+        async def initialize(self, *, warm_minimal: bool = False) -> None:
             self.initialized = True
+            self.warm_minimal = warm_minimal
 
         async def await_orchestrator(self, name: str) -> bool:
             self.awaited.append(name)
@@ -573,6 +695,8 @@ async def test_warm_user_context_waits_for_memory_and_lore(monkeypatch):
                 self.lore_ready = True
                 self.lore_bundle = {"status": "ready"}
                 return True
+            if name == "context_broker":
+                return True
             return False
 
         async def build_context_for_input(self, *_args):
@@ -581,21 +705,29 @@ async def test_warm_user_context_waits_for_memory_and_lore(monkeypatch):
             self.build_called = True
             return None
 
+        async def warm_minimal_context(self) -> Dict[str, Any]:  # pragma: no cover - should not run
+            raise AssertionError("Minimal warm helper should not be called when eager flag is set")
+
     monkeypatch.setattr(cache_warmup, "NyxContext", StubNyxContext)
 
     result = await cache_warmup.warm_user_context_cache(
-        user_id=5,
-        conversation_id=7,
+        user_id=9,
+        conversation_id=11,
         redis_client=dummy_redis,
     )
 
-    assert result == {"status": "warmed", "user_id": 5, "conversation_id": 7}
-    assert dummy_redis.get_calls == ["ctx:warmed:5:7"]
-    assert dummy_redis.set_calls == [("ctx:warmed:5:7", 600, "1")]
-    assert dummy_redis.delete_calls == []
+    assert result == {
+        "status": "warmed",
+        "user_id": 9,
+        "conversation_id": 11,
+        "mode": "full",
+    }
+    assert dummy_redis.get_calls == ["ctx:warmed:9:11"]
+    assert dummy_redis.set_calls == [("ctx:warmed:9:11", 600, "1")]
 
     context = StubNyxContext.instances[-1]
     assert context.initialized is True
+    assert context.warm_minimal is False
     assert context.build_called is True
     assert context.memory_orchestrator == {"status": "ready"}
     assert context.lore_bundle == {"status": "ready"}

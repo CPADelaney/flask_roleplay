@@ -81,6 +81,7 @@ from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.response_filter import ResponseFilter
 from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.conversation.snapshot_store import ConversationSnapshotStore
+from nyx.integrate import get_central_governance
 from lore.core.canon import ensure_canonical_context
 from logic.aggregator_sdk import get_comprehensive_context
 
@@ -3908,6 +3909,7 @@ class NyxContext:
     last_packed_context: Optional['PackedContext'] = None
     config: Optional[Any] = None  # For model context budget
     last_user_input: Optional[str] = None
+    governance: Optional[Any] = field(default=None, init=False, repr=False)
     
     # ────────── NPC-SPECIFIC STATE ──────────
     npc_snapshots: Dict[int, NPCSnapshot] = field(default_factory=dict)
@@ -3965,20 +3967,36 @@ class NyxContext:
     _init_failures: Dict[str, BaseException] = field(default_factory=dict, init=False, repr=False)
     _is_initialized: bool = field(default=False, init=False)
     _init_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _init_mode: str = field(default="none", init=False, repr=False)
     background_tasks: Set[asyncio.Task] = field(default_factory=set)
     
-    async def initialize(self):
-        """Initialize orchestrators lazily and start subsystem tasks without blocking."""
+    async def initialize(self, *, warm_minimal: bool = False):
+        """Initialize orchestrators lazily.
 
-        if self._is_initialized:
+        Args:
+            warm_minimal: When True, skip heavy orchestrator bootstraps and only
+                perform minimal wiring (governance, location hydration, context
+                broker setup). Passing ``False`` performs the full bootstrap.
+        """
+
+        target_mode = "minimal" if warm_minimal else "full"
+        if self._init_mode == "full" or self._init_mode == target_mode:
             return
 
         async with self._init_lock:
-            if self._is_initialized:
+            if self._init_mode == "full" or self._init_mode == target_mode:
                 return
 
+            upgrade_from_minimal = self._init_mode == "minimal" and not warm_minimal
+
+            mode_label = (
+                "minimal"
+                if warm_minimal and not upgrade_from_minimal
+                else "full (upgrade)" if upgrade_from_minimal else "full"
+            )
             logger.info(
-                "[CONTEXT_INIT] Starting initialization for user %s, conversation %s...",
+                "[CONTEXT_INIT] Starting %s initialization for user %s, conversation %s...",
+                mode_label,
                 self.user_id,
                 self.conversation_id,
             )
@@ -4041,17 +4059,38 @@ class NyxContext:
                     lambda t, task_key=key: self._on_init_task_done(task_key, t)
                 )
 
-            _start_task("memory", "Memory", self._init_memory_orchestrator())
-            _start_task("lore", "Lore", self._init_lore_orchestrator())
-            _start_task("npc", "NPC", self._init_npc_orchestrator())
-            _start_task(
-                "conflict",
-                "Conflict",
-                self._init_conflict_synthesizer(),
-            )
+            if not warm_minimal:
+                _start_task(
+                    "memory",
+                    "Memory",
+                    self._init_memory_orchestrator(warm_minimal=False),
+                )
+                _start_task(
+                    "lore",
+                    "Lore",
+                    self._init_lore_orchestrator(warm_minimal=False),
+                )
+                _start_task(
+                    "npc",
+                    "NPC",
+                    self._init_npc_orchestrator(warm_minimal=False),
+                )
+                _start_task(
+                    "conflict",
+                    "Conflict",
+                    self._init_conflict_synthesizer(warm_minimal=False),
+                )
 
-            if WORLD_SIMULATION_AVAILABLE:
-                _start_task("world", "World", self._init_world_systems())
+                if WORLD_SIMULATION_AVAILABLE:
+                    _start_task(
+                        "world",
+                        "World",
+                        self._init_world_systems(warm_minimal=False),
+                    )
+            else:
+                logger.info(
+                    "[CONTEXT_INIT] Minimal warm requested; skipping heavy orchestrator bootstraps"
+                )
 
             await self._hydrate_location_from_db()
 
@@ -4105,10 +4144,28 @@ class NyxContext:
                 self.context_broker.initialize(),
             )
 
-            self._is_initialized = True
+            governance_ready = False
+            if warm_minimal or upgrade_from_minimal:
+                governance_ready = await self._ensure_governance_ready()
+                if governance_ready:
+                    logger.debug(
+                        "Governance wiring completed during %s initialization for user %s conversation %s",
+                        target_mode,
+                        self.user_id,
+                        self.conversation_id,
+                    )
 
+            self._is_initialized = True
+            self._init_mode = target_mode if not upgrade_from_minimal else "full"
+
+            final_label = (
+                "minimal"
+                if target_mode == "minimal" and not upgrade_from_minimal
+                else "full (upgrade)" if upgrade_from_minimal else "full"
+            )
             logger.info(
-                "NyxContext initialized for user %s, conversation %s",
+                "NyxContext %s initialization finished for user %s, conversation %s",
+                final_label,
                 self.user_id,
                 self.conversation_id,
             )
@@ -4116,6 +4173,43 @@ class NyxContext:
                 "[CONTEXT_INIT] Total initialization took %.3fs",
                 time.time() - init_start_time,
             )
+
+    async def _ensure_governance_ready(self) -> bool:
+        """Best-effort governance wiring for minimal warm flows."""
+
+        if getattr(self, "governance", None) is not None:
+            return True
+
+        try:
+            governance = await get_central_governance(self.user_id, self.conversation_id)
+        except Exception as exc:  # pragma: no cover - governance is optional in tests
+            logger.debug(
+                "Governance wiring skipped for user %s conversation %s: %s",
+                self.user_id,
+                self.conversation_id,
+                exc,
+                exc_info=True,
+            )
+            return False
+
+        self.governance = governance
+
+        attach_hook = getattr(governance, "attach_context", None)
+        if attach_hook is not None:
+            try:
+                maybe = attach_hook(self)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            except Exception as exc:  # pragma: no cover - best effort hook
+                logger.debug(
+                    "Governance attach_context failed for user %s conversation %s: %s",
+                    self.user_id,
+                    self.conversation_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        return self.governance is not None
 
     def _on_init_task_done(self, name: str, task: asyncio.Task[Any]) -> None:
         """Ensure initialization task exceptions are surfaced and recorded."""
@@ -4289,6 +4383,56 @@ class NyxContext:
             self.conversation_id,
             snapshot_cache_hit,
         )
+
+    async def warm_minimal_context(
+        self,
+        *,
+        prime_vector_store: bool = False,
+    ) -> Dict[str, Any]:
+        """Perform the minimal warm path without full bundle fetches."""
+
+        await self.initialize(warm_minimal=True)
+        await self.await_orchestrator("context_broker")
+
+        governance_ready = await self._ensure_governance_ready()
+
+        snapshot_seeded = False
+        try:
+            user_key = str(self.user_id)
+            conversation_key = str(self.conversation_id)
+            snapshot_seeded = bool(
+                _SNAPSHOT_STORE.get(user_key, conversation_key)
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "Snapshot inspection during minimal warm failed for user %s conversation %s: %s",
+                self.user_id,
+                self.conversation_id,
+                exc,
+                exc_info=True,
+            )
+
+        if prime_vector_store:
+            try:
+                await self._init_memory_orchestrator(warm_minimal=False)
+            except Exception as exc:  # pragma: no cover - optional prime
+                logger.warning(
+                    "Vector store prime during minimal warm failed for user %s conversation %s: %s",
+                    self.user_id,
+                    self.conversation_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        return {
+            "status": "warmed",
+            "mode": "minimal",
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "location": self.current_location,
+            "snapshot_seeded": snapshot_seeded,
+            "governance_ready": governance_ready,
+        }
 
     async def _persist_location_to_db(self, canonical_location: str) -> None:
         """Persist the canonical location to the backing CurrentRoleplay row."""
@@ -4642,8 +4786,11 @@ class NyxContext:
                 task_details={"location": canonical_location},
             )
 
-    async def _init_memory_orchestrator(self):
+    async def _init_memory_orchestrator(self, *, warm_minimal: bool = False):
         """Initialize memory orchestrator"""
+        if warm_minimal:
+            logger.info("Skipping memory orchestrator bootstrap during minimal warm phase")
+            return
         try:
             self.memory_orchestrator = await get_memory_orchestrator(
                 self.user_id,
@@ -4652,9 +4799,12 @@ class NyxContext:
             logger.info("Memory Orchestrator initialized")
         except Exception as e:
             logger.error(f"Failed to initialize Memory Orchestrator: {e}")
-    
-    async def _init_lore_orchestrator(self):
+
+    async def _init_lore_orchestrator(self, *, warm_minimal: bool = False):
         """Initialize lore orchestrator"""
+        if warm_minimal:
+            logger.info("Skipping lore orchestrator bootstrap during minimal warm phase")
+            return
         try:
             from lore.lore_orchestrator import OrchestratorConfig, get_lore_orchestrator
 
@@ -4671,8 +4821,11 @@ class NyxContext:
             logger.info("Lore Orchestrator initialized")
         except Exception as e:
             logger.error(f"Failed to initialize Lore Orchestrator: {e}")
-    
-    async def _init_npc_orchestrator(self):
+
+    async def _init_npc_orchestrator(self, *, warm_minimal: bool = False):
+        if warm_minimal:
+            logger.info("Skipping NPC orchestrator bootstrap during minimal warm phase")
+            return
         try:
             self.npc_orchestrator = NPCOrchestrator(
                 self.user_id,
@@ -4683,9 +4836,12 @@ class NyxContext:
             logger.info("NPC Orchestrator initialized")
         except Exception as e:
             logger.error(f"Failed to initialize NPC Orchestrator: {e}")
-    
-    async def _init_conflict_synthesizer(self):
+
+    async def _init_conflict_synthesizer(self, *, warm_minimal: bool = False):
         """Initialize conflict synthesizer"""
+        if warm_minimal:
+            logger.info("Skipping conflict synthesizer bootstrap during minimal warm phase")
+            return
         try:
             self.conflict_synthesizer = await get_conflict_synthesizer(
                 self.user_id,
@@ -4694,9 +4850,12 @@ class NyxContext:
             logger.info("Conflict Synthesizer initialized")
         except Exception as e:
             logger.error(f"Failed to initialize Conflict Synthesizer: {e}")
-    
-    async def _init_world_systems(self):
+
+    async def _init_world_systems(self, *, warm_minimal: bool = False):
         """Initialize world director and narrator"""
+        if warm_minimal:
+            logger.info("Skipping world systems bootstrap during minimal warm phase")
+            return
         try:
             from story_agent.world_director_agent import CompleteWorldDirector
             from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
