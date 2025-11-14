@@ -1107,10 +1107,15 @@ class ConflictSynthesizer:
             # Update metrics
             self._global_metrics['total_conflicts'] += 1
             self._global_metrics['active_conflicts'] += 1
-            
+
             # Invalidate relevant caches
             await self._invalidate_caches_for_conflict(conflict_id)
-        
+
+            self._schedule_social_bundle_refresh(
+                context,
+                result.get('stakeholder_ids') or context.get('participants'),
+            )
+
         return result
     
     async def update_conflict(
@@ -1154,7 +1159,20 @@ class ConflictSynthesizer:
         
         # Invalidate caches
         await self._invalidate_caches_for_conflict(conflict_id)
-        
+
+        participants = []
+        if isinstance(update_data, dict):
+            participants = list(
+                update_data.get('participants')
+                or update_data.get('stakeholder_ids')
+                or []
+            )
+        if not participants:
+            state = self._conflict_states.get(conflict_id, {})
+            participants = list(state.get('stakeholder_ids') or [])
+
+        self._schedule_social_bundle_refresh(update_data, participants)
+
         return result
 
     async def get_system_state(self) -> Dict[str, Any]:
@@ -1755,7 +1773,53 @@ class ConflictSynthesizer:
                 cleared = len(self._bundle_cache)
                 self._bundle_cache.clear()
                 logger.debug(f"Invalidated {cleared} conflict bundle cache entries after conflict {conflict_id} change")
-    
+
+    def _schedule_social_bundle_refresh(
+        self,
+        context: Optional[Dict[str, Any]],
+        participants: Optional[List[int]] = None,
+    ) -> None:
+        """Warm the social circle bundle on conflict mutations."""
+
+        try:
+            from logic.conflict_system.social_circle_hotpath import schedule_social_bundle_refresh
+        except Exception as exc:  # pragma: no cover - defensive import guard
+            logger.debug("Social bundle refresh helper unavailable: %s", exc)
+            return
+
+        candidate_context: Dict[str, Any] = {}
+        if isinstance(context, dict):
+            for key in (None, 'scene_context', 'context', 'data'):
+                source = context if key is None else context.get(key)
+                if isinstance(source, dict) and source:
+                    candidate_context = dict(source)
+                    break
+
+        participant_list = list(participants or [])
+        if not participant_list and candidate_context:
+            participant_list = list(
+                candidate_context.get('participants')
+                or candidate_context.get('npcs_present')
+                or candidate_context.get('stakeholder_ids')
+                or []
+            )
+
+        if not candidate_context and not participant_list:
+            return
+
+        if participant_list:
+            candidate_context.setdefault('participants', participant_list)
+
+        try:
+            schedule_social_bundle_refresh(
+                candidate_context,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                target_npcs=participant_list or None,
+            )
+        except Exception as exc:  # pragma: no cover - guard
+            logger.debug("Failed to schedule social bundle refresh: %s", exc)
+
     async def _periodic_cache_cleanup(self):
         """Background task to clean expired bundle cache entries"""
         while not self._shutdown:

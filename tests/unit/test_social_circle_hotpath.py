@@ -22,7 +22,12 @@ class _DummyTask:
         self.calls.append(payload)
 
 
-def test_get_scene_bundle_queues_enriched_payload(monkeypatch):
+@pytest.fixture(autouse=True)
+def _clear_env(monkeypatch):
+    monkeypatch.delenv("NYX_CONFLICT_EAGER_WARMUP", raising=False)
+
+
+def _configure_hotpath(monkeypatch):
     monkeypatch.setattr(hotpath, "get_json", lambda *args, **kwargs: None)
     monkeypatch.setattr(hotpath, "redis_lock", lambda *args, **kwargs: _DummyLock())
     monkeypatch.setattr(hotpath, "cache_key", lambda *parts: ":".join(str(part) for part in parts))
@@ -30,6 +35,24 @@ def test_get_scene_bundle_queues_enriched_payload(monkeypatch):
     task = _DummyTask()
     fake_module = types.SimpleNamespace(generate_social_bundle=task)
     monkeypatch.setitem(sys.modules, "nyx.tasks.background.social_tasks", fake_module)
+
+    return task
+
+
+def test_get_scene_bundle_skips_dispatch_when_not_eager(monkeypatch):
+    task = _configure_hotpath(monkeypatch)
+
+    scene_hash = "hash123"
+    scene_context = {"scene_id": 99, "location": "market"}
+
+    bundle = hotpath.get_scene_bundle(scene_hash, scene_context=scene_context)
+
+    assert bundle["status"] == "generating"
+    assert task.calls == []
+
+
+def test_get_scene_bundle_dispatches_when_eager_flag(monkeypatch):
+    task = _configure_hotpath(monkeypatch)
 
     scene_hash = "hash123"
     scene_context = {"scene_id": 99, "location": "market"}
@@ -43,6 +66,7 @@ def test_get_scene_bundle_queues_enriched_payload(monkeypatch):
         user_id=user_id,
         conversation_id=conversation_id,
         target_npcs=targets,
+        eager=True,
     )
 
     assert bundle["status"] == "generating"
@@ -54,3 +78,15 @@ def test_get_scene_bundle_queues_enriched_payload(monkeypatch):
     assert payload["user_id"] == user_id
     assert payload["conversation_id"] == conversation_id
     assert payload["target_npcs"] == targets
+
+
+def test_get_scene_bundle_dispatches_when_env_opt_in(monkeypatch):
+    task = _configure_hotpath(monkeypatch)
+    monkeypatch.setenv("NYX_CONFLICT_EAGER_WARMUP", "true")
+
+    scene_hash = "envhash"
+    scene_context = {"scene_id": 7, "location": "plaza"}
+
+    hotpath.get_scene_bundle(scene_hash, scene_context=scene_context)
+
+    assert task.calls, "generate_social_bundle.delay should respect env opt-in"
