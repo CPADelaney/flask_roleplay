@@ -158,10 +158,8 @@ class ConflictCanonSubsystem(ConflictSubsystem):
         # Subscribe to STATE_SYNC so function tools can target requests to CANON
         return {
             EventType.CONFLICT_RESOLVED,
-            EventType.PHASE_TRANSITION,
-            EventType.HEALTH_CHECK,
-            EventType.CANON_ESTABLISHED,
             EventType.STATE_SYNC,
+            EventType.HEALTH_CHECK,
         }
     
     async def initialize(self, synthesizer) -> bool:
@@ -704,181 +702,274 @@ class ConflictCanonSubsystem(ConflictSubsystem):
         )
 
     async def handle_event(self, event) -> SubsystemResponse:
+        handlers = {
+            EventType.CONFLICT_RESOLVED: self._on_conflict_resolved,
+            EventType.STATE_SYNC: self._on_state_sync,
+            EventType.HEALTH_CHECK: self._on_health_check,
+        }
+
+        handler = handlers.get(event.event_type)
+
         try:
-            if event.event_type == EventType.CONFLICT_RESOLVED:
-                conflict_id = event.payload.get('conflict_id')
-                resolution_data = event.payload.get('context', {}) or {}
-
-                # HOT PATH: Fast rule-based canonization check and queue background work
-                from logic.conflict_system.conflict_canon_hotpath import (
-                    should_canonize,
-                    queue_canonization,
-                    get_cached_canon_record,
-                )
-
-                # Fast rule-based check
-                should_canon = should_canonize(
-                    type('Conflict', (), {'intensity': resolution_data.get('intensity', 0.5)}),
-                    resolution_data
-                )
-
-                canonical_event_id = None
-                became_canonical = False
-
-                if should_canon:
-                    # Check cache first
-                    cached_record = await get_cached_canon_record(conflict_id)
-                    if cached_record:
-                        canonical_event_id = cached_record.get('canon_id')
-                        became_canonical = True
-                    else:
-                        # Queue background canonization
-                        queue_canonization(
-                            self.user_id,
-                            self.conversation_id,
-                            conflict_id,
-                            resolution_data,
-                        )
-
-                side_effects = []
-                if became_canonical and canonical_event_id:
-                    side_effects.append(SystemEvent(
-                        event_id=f"canon_{event.event_id}",
-                        event_type=EventType.CANON_ESTABLISHED,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'canonical_event': canonical_event_id,
-                            'name': resolution_data.get('name', 'Unnamed Event'),
-                            'significance': resolution_data.get('significance_score', 0.5),
-                            'creates_precedent': True
-                        },
-                        priority=3
-                    ))
-
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={
-                        'became_canonical': became_canonical,
-                        'canonical_event': canonical_event_id,
-                        'pending': not became_canonical and should_canon,
-                        'reason': 'Canonization queued' if not became_canonical and should_canon else 'Not significant enough',
-                        'significance': float(resolution_data.get('significance_score', 0.0) or 0.0),
-                        'tags': resolution_data.get('tags', []),
-                        'message': 'Canon evaluation fast, LLM work queued' if should_canon else 'Not canonical'
-                    },
-                    side_effects=side_effects
-                )
-
-            elif event.event_type == EventType.PHASE_TRANSITION:
-                if event.payload.get('phase') == 'resolution':
-                    conflict_id = event.payload.get('conflict_id')
-                    # Fast rule-based significance assessment
-                    intensity = event.payload.get('intensity', 0.5)
-                    significance = min(1.0, intensity * 1.2)  # Simple heuristic
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'monitoring': True, 'significance': significance, 'potential_canon': significance > 0.7},
-                        side_effects=[]
-                    )
-            
-            elif event.event_type == EventType.HEALTH_CHECK:
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data=await self.health_check(),
-                    side_effects=[]
-                )
-            
-            elif event.event_type == EventType.STATE_SYNC:
-                # Orchestrator-routed requests (targeted)
-                req = (event.payload or {}).get('request')
-                if req == 'check_lore_compliance':
-                    conflict_type = event.payload.get('conflict_type', 'unknown')
-                    context = {
-                        'participants': event.payload.get('participants', []) or [],
-                        'location': event.payload.get('location', 'unknown'),
-                        'notes': event.payload.get('notes', ''),
-                    }
-
-                    # HOT PATH: Fast compliance check, queue detailed analysis
-                    from logic.conflict_system.conflict_canon_hotpath import check_lore_conflicts_fast
-
-                    content = f"{conflict_type} at {context.get('location')} with {len(context.get('participants', []))} participants"
-                    result = await check_lore_conflicts_fast(content, conflict_type)
-
-                    # Normalize minimal shape for tool
-                    out = {
-                        'is_compliant': bool(result.get('is_compliant', True)),
-                        'conflicts': result.get('conflicts', []),
-                        'matching_event_ids': [],
-                        'matching_tradition_ids': [],
-                        'suggestions': [],
-                        'suggestions_pending': result.get('needs_review', False),
-                        'cache_id': None,
-                        'message': 'Fast check complete, detailed analysis queued' if result.get('needs_review') else 'Compliant'
-                    }
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data=out,
-                        side_effects=[]
-                    )
-                elif req == 'generate_canon_references':
-                    ev_id = int(event.payload.get('event_id', 0) or 0)
-                    context = event.payload.get('context', 'casual') or 'casual'
-                    result = await self.generate_canon_references(ev_id, context)
-
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data=result,
-                        side_effects=[]
-                    )
-                elif req == 'generate_mythology':
-                    conflict_id = int(event.payload.get('conflict_id', 0) or 0)
-                    mythology_result = await self.get_mythological_reinterpretation(conflict_id)
-
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data=mythology_result,
-                        side_effects=[]
-                    )
-                # Unknown STATE_SYNC request
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'status': 'no_action_taken'},
-                    side_effects=[]
-                )
-            
-            # Default no-op
+            if handler:
+                return await handler(event)
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=True,
-                data={},
-                side_effects=[]
+                data={'ignored': True},
+                side_effects=[],
             )
-        
-        except Exception as e:
-            logger.error(f"Canon subsystem error: {e}")
+        except Exception as exc:
+            logger.error("Canon subsystem error while handling %s: %s", event.event_type, exc, exc_info=True)
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=False,
-                data={'error': str(e)},
-                side_effects=[]
+                data={'error': str(exc)},
+                side_effects=[],
             )
+
+    async def _on_conflict_resolved(self, event) -> SubsystemResponse:
+        payload = event.payload or {}
+        conflict_id = int(payload.get('conflict_id') or 0)
+        achievements = payload.get('achievements') or []
+        partial_victories = payload.get('partial_victories') or []
+        context = payload.get('context') or {}
+        stakes_hint = payload.get('stakes') or context.get('stakes')
+
+        if conflict_id <= 0:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': 'missing_conflict_id'},
+                side_effects=[],
+            )
+
+        base_significance = await self._assess_conflict_significance(conflict_id)
+        base_significance += min(0.2, 0.05 * len(achievements))
+        if partial_victories:
+            base_significance += 0.05
+        base_significance = min(1.0, base_significance)
+
+        async with get_db_connection_context() as conn:
+            conflict_row = await conn.fetchrow(
+                """
+                SELECT id, conflict_name, conflict_type, description, stakes
+                FROM Conflicts
+                WHERE id = $1
+                """,
+                conflict_id,
+            )
+
+            stakes = self._normalize_stakes(stakes_hint or ((conflict_row or {}).get('stakes')))
+            event_type = self._select_canon_event_type(achievements, conflict_row, stakes)
+
+            should_canonize = base_significance >= 0.6 or event_type in {
+                CanonEventType.LEGENDARY_MOMENT,
+                CanonEventType.CULTURAL_SHIFT,
+                CanonEventType.SOCIAL_EVOLUTION,
+            }
+            if stakes:
+                should_canonize = should_canonize or base_significance >= 0.5
+
+            event_id: Optional[int] = None
+            reason = 'insufficient_significance'
+            tags: List[str] = []
+            summary_text: Optional[str] = None
+
+            if should_canonize:
+                conflict_name = (conflict_row or {}).get('conflict_name') or f"Conflict #{conflict_id}"
+                summary_text = self._summarize_resolution(conflict_name, event_type, achievements, partial_victories, stakes)
+
+                tags = ['conflict', f'conflict_id_{conflict_id}', event_type.value]
+                conflict_type = (conflict_row or {}).get('conflict_type')
+                if conflict_type:
+                    tags.append(str(conflict_type))
+                tags.extend([f'stake:{s.lower().replace(" ", "_")}' for s in stakes])
+
+                significance_score = max(1, min(10, round(base_significance * 10)))
+                event_id = await log_canonical_event(
+                    self.ctx,
+                    conn,
+                    summary_text,
+                    tags=tags,
+                    significance=significance_score,
+                    persist_memory=True,
+                )
+                reason = 'recorded'
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'conflict_id': conflict_id,
+                'canonical_event_created': event_id is not None,
+                'event_id': event_id,
+                'canonical_event_type': event_type.value if event_id else None,
+                'significance': base_significance,
+                'achievements': achievements,
+                'partial_victories': partial_victories,
+                'stakes': stakes,
+                'reason': reason,
+                'tags': tags,
+                'became_canonical': event_id is not None,
+                'summary': summary_text,
+            },
+            side_effects=[],
+        )
+
+    async def _on_state_sync(self, event) -> SubsystemResponse:
+        req = (event.payload or {}).get('request')
+
+        if req == 'check_lore_compliance':
+            conflict_type = event.payload.get('conflict_type', 'unknown')
+            context = {
+                'participants': event.payload.get('participants', []) or [],
+                'location': event.payload.get('location', 'unknown'),
+                'notes': event.payload.get('notes', ''),
+            }
+
+            from logic.conflict_system.conflict_canon_hotpath import check_lore_conflicts_fast
+
+            content = f"{conflict_type} at {context.get('location')} with {len(context.get('participants', []))} participants"
+            result = await check_lore_conflicts_fast(content, conflict_type)
+
+            out = {
+                'is_compliant': bool(result.get('is_compliant', True)),
+                'conflicts': result.get('conflicts', []),
+                'matching_event_ids': [],
+                'matching_tradition_ids': [],
+                'suggestions': [],
+                'suggestions_pending': result.get('needs_review', False),
+                'cache_id': None,
+                'message': 'Fast check complete, detailed analysis queued' if result.get('needs_review') else 'Compliant',
+            }
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data=out,
+                side_effects=[],
+            )
+
+        if req == 'generate_canon_references':
+            ev_id = int(event.payload.get('event_id', 0) or 0)
+            context = event.payload.get('context', 'casual') or 'casual'
+            result = await self.generate_canon_references(ev_id, context)
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data=result,
+                side_effects=[],
+            )
+
+        if req == 'generate_mythology':
+            conflict_id = int(event.payload.get('conflict_id', 0) or 0)
+            mythology_result = await self.get_mythological_reinterpretation(conflict_id)
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data=mythology_result,
+                side_effects=[],
+            )
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'status': 'no_action_taken'},
+            side_effects=[],
+        )
+
+    async def _on_health_check(self, event) -> SubsystemResponse:
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=await self.health_check(),
+            side_effects=[],
+        )
+
+    def _normalize_stakes(self, raw_stakes: Any) -> List[str]:
+        if raw_stakes is None:
+            return []
+        if isinstance(raw_stakes, str):
+            try:
+                parsed = json.loads(raw_stakes)
+            except json.JSONDecodeError:
+                return [raw_stakes]
+            return self._normalize_stakes(parsed)
+        if isinstance(raw_stakes, dict):
+            return [f"{k}: {v}" for k, v in raw_stakes.items()]
+        if isinstance(raw_stakes, (list, tuple, set)):
+            return [str(item) for item in raw_stakes]
+        return [str(raw_stakes)]
+
+    def _select_canon_event_type(
+        self,
+        achievements: List[Dict[str, Any]],
+        conflict_row: Optional[Any],
+        stakes: List[str],
+    ) -> CanonEventType:
+        victory_types = {str(a.get('victory_type', '')).lower() for a in achievements}
+        if 'transformation' in victory_types:
+            return CanonEventType.SOCIAL_EVOLUTION
+        if 'moral' in victory_types:
+            return CanonEventType.CULTURAL_SHIFT
+        if 'compromise' in victory_types:
+            return CanonEventType.RELATIONSHIP_MILESTONE
+        if 'dominance' in victory_types or 'submission' in victory_types:
+            return CanonEventType.POWER_RESTRUCTURING
+        if any('tradition' in s.lower() or 'culture' in s.lower() for s in stakes):
+            return CanonEventType.CULTURAL_SHIFT
+        conflict_type = (conflict_row or {}).get('conflict_type', '') if conflict_row else ''
+        if isinstance(conflict_type, str) and 'romance' in conflict_type.lower():
+            return CanonEventType.RELATIONSHIP_MILESTONE
+        if 'pyrrhic' in victory_types:
+            return CanonEventType.HISTORICAL_PRECEDENT
+        return CanonEventType.HISTORICAL_PRECEDENT
+
+    def _summarize_resolution(
+        self,
+        conflict_name: str,
+        event_type: CanonEventType,
+        achievements: List[Dict[str, Any]],
+        partial_victories: List[Dict[str, Any]],
+        stakes: List[str],
+    ) -> str:
+        achievement_lines = []
+        for achievement in achievements:
+            narration = achievement.get('narration')
+            if narration:
+                achievement_lines.append(str(narration))
+            else:
+                vtype = achievement.get('victory_type', 'victory')
+                stakeholder = achievement.get('stakeholder_id')
+                achievement_lines.append(f"Stakeholder {stakeholder} achieved a {vtype} outcome")
+
+        if not achievement_lines:
+            achievement_lines.append('Victory conditions were satisfied by key stakeholders.')
+
+        if partial_victories:
+            partial_summary = "; ".join(
+                f"{pv.get('stakeholder_id', 'Unknown')} nearly secured {pv.get('victory_type', 'progress')}"
+                for pv in partial_victories
+            )
+            achievement_lines.append(f"Partial victories: {partial_summary}.")
+
+        if stakes:
+            achievement_lines.append(f"Stakes at play: {', '.join(stakes)}.")
+
+        summary = (
+            f"{conflict_name} entered canon as a {event_type.value.replace('_', ' ')}. "
+            + " ".join(achievement_lines)
+        )
+        return summary
     
     async def health_check(self) -> Dict[str, Any]:
         async with get_db_connection_context() as conn:

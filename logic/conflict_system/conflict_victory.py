@@ -12,9 +12,14 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 
+import nyx.gateway.llm_gateway as llm_gateway
 from agents import Agent, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
 from logic.conflict_system import conflict_victory_hotpath
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+from logic.conflict_system.conflict_synthesizer import EventType, SubsystemResponse, SystemEvent
+from nyx.config import INTERACTIVE_MODEL, WARMUP_MODEL
+from nyx.gateway.llm_gateway import LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -133,15 +138,12 @@ class ConflictVictorySubsystem:
     
     @property
     def event_subscriptions(self) -> Set:
-        from logic.conflict_system.conflict_synthesizer import EventType
         return {
             EventType.CONFLICT_CREATED,
             EventType.CONFLICT_UPDATED,
             EventType.PHASE_TRANSITION,
-            EventType.STAKEHOLDER_ACTION,
-            EventType.CONFLICT_RESOLVED,  # for epilogue on demand
-            EventType.STATE_SYNC,         # targeted requests
-            EventType.HEALTH_CHECK
+            EventType.CONFLICT_RESOLVED,
+            EventType.HEALTH_CHECK,
         }
     
     async def initialize(self, synthesizer) -> bool:
@@ -151,203 +153,192 @@ class ConflictVictorySubsystem:
     
     async def handle_event(self, event) -> Any:
         """Handle an event from the synthesizer"""
-        from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
-        
+
+        handlers = {
+            EventType.CONFLICT_CREATED: self._on_conflict_created,
+            EventType.CONFLICT_UPDATED: self._on_conflict_updated,
+            EventType.PHASE_TRANSITION: self._on_phase_transition,
+            EventType.CONFLICT_RESOLVED: self._on_conflict_resolved,
+            EventType.HEALTH_CHECK: self._on_health_check,
+        }
+
+        handler = handlers.get(event.event_type)
+
         try:
-            if event.event_type == EventType.CONFLICT_CREATED:
-                # Generate initial victory conditions
-                conflict_id = event.payload.get('conflict_id')
-                if conflict_id:
-                    conditions = await self._generate_initial_conditions(conflict_id)
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={
-                            'victory_conditions_created': len(conditions),
-                            'conditions': [c.victory_type.value for c in conditions]
-                        },
-                        side_effects=[]
-                    )
-            
-            elif event.event_type == EventType.CONFLICT_UPDATED:
-                # Check victory conditions
-                conflict_id = event.payload.get('conflict_id')
-                current_state = event.payload.get('state', {}) or {}
-                achievements = await self.check_victory_conditions(conflict_id, current_state)
-                
-                side_effects = []
-                if achievements:
-                    # Notify orchestrator of resolution via side effect
-                    for achievement in achievements:
-                        side_effects.append(SystemEvent(
-                            event_id=f"victory_{event.event_id}_{achievement['condition_id']}",
-                            event_type=EventType.CONFLICT_RESOLVED,
-                            source_subsystem=self.subsystem_type,
-                            payload={
-                                'conflict_id': conflict_id,
-                                'victory_type': achievement['victory_type'],
-                                'stakeholder_id': achievement['stakeholder_id'],
-                                'resolution_type': 'victory',
-                                'context': achievement
-                            },
-                            priority=2
-                        ))
-                
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'victories_achieved': len(achievements), 'achievements': achievements},
-                    side_effects=side_effects
-                )
-            
-            elif event.event_type == EventType.PHASE_TRANSITION:
-                # Update victory condition progress based on phase
-                conflict_id = event.payload.get('conflict_id')
-                new_phase = event.payload.get('to_phase') or event.payload.get('phase')
-                if new_phase == 'climax':
-                    await self._accelerate_victory_progress(conflict_id)
-                elif new_phase == 'resolution':
-                    partial = await self.evaluate_partial_victories(conflict_id)
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'partial_victories': partial},
-                        side_effects=[]
-                    )
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'phase_acknowledged': True},
-                    side_effects=[]
-                )
-            
-            elif event.event_type == EventType.STAKEHOLDER_ACTION:
-                stakeholder_id = event.payload.get('stakeholder_id')
-                action_type = (event.payload.get('action_type') or '').lower()
-                await self._update_stakeholder_progress(stakeholder_id, action_type)
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'progress_updated': True},
-                    side_effects=[]
-                )
-            
-            elif event.event_type == EventType.CONFLICT_RESOLVED:
-                # Support epilogue generation by targeted request
-                if (event.payload or {}).get('request') == 'generate_epilogue':
-                    conflict_id = event.payload.get('conflict_id')
-                    res_data = {
-                        'achievements': event.payload.get('achievements', []),
-                        'context': event.payload.get('context', {})
-                    }
-                    ep = await self.generate_conflict_epilogue(conflict_id, res_data)
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'epilogue': ep},
-                        side_effects=[]
-                    )
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'ack': 'conflict_resolved'},
-                    side_effects=[]
-                )
-            
-            elif event.event_type == EventType.STATE_SYNC:
-                # Targeted requests routed through orchestrator function tools
-                req = (event.payload or {}).get('request')
-                if req == 'generate_victory_conditions':
-                    cid = int(event.payload.get('conflict_id', 0) or 0)
-                    ctype = str(event.payload.get('conflict_type', 'unknown'))
-                    stakeholders = event.payload.get('stakeholders', []) or []
-                    # This writes to DB and returns dataclasses
-                    conds = await self.generate_victory_conditions(cid, ctype, stakeholders)
-                    # Coerce to DTOs for the tool
-                    out = []
-                    for c in conds:
-                        out.append({
-                            'condition_id': c.condition_id,
-                            'stakeholder_id': c.stakeholder_id,
-                            'victory_type': c.victory_type.value,
-                            'description': c.description,
-                            'requirements': list((c.requirements or {}).keys()),
-                            'progress': float(c.progress or 0.0),
-                        })
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'conditions': out},
-                        side_effects=[]
-                    )
-                if req == 'evaluate_partial_victories':
-                    cid = int(event.payload.get('conflict_id', 0) or 0)
-                    partial = await self.evaluate_partial_victories(cid)
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'partial_victories': partial},
-                        side_effects=[]
-                    )
-                if req == 'generate_epilogue':
-                    conflict_id = int(event.payload.get('conflict_id', 0) or 0)
-                    res_data = {
-                        'achievements': event.payload.get('achievements', []),
-                        'context': event.payload.get('context', {})
-                    }
-                    ep = await self.generate_conflict_epilogue(conflict_id, res_data)
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'epilogue': ep},
-                        side_effects=[]
-                    )
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data={'status': 'no_action_taken'},
-                    side_effects=[]
-                )
-            
-            elif event.event_type == EventType.HEALTH_CHECK:
-                return SubsystemResponse(
-                    subsystem=self.subsystem_type,
-                    event_id=event.event_id,
-                    success=True,
-                    data=await self.health_check(),
-                    side_effects=[]
-                )
-            
-            # Default
+            if handler:
+                return await handler(event)
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=True,
-                data={},
-                side_effects=[]
+                data={'ignored': True},
+                side_effects=[],
             )
-            
-        except Exception as e:
-            logger.error(f"Victory subsystem error: {e}")
-            from logic.conflict_system.conflict_synthesizer import SubsystemResponse
+        except Exception as exc:
+            logger.error("Victory subsystem error while handling %s: %s", event.event_type, exc, exc_info=True)
             return SubsystemResponse(
                 subsystem=self.subsystem_type,
                 event_id=event.event_id,
                 success=False,
-                data={'error': str(e)},
-                side_effects=[]
+                data={'error': str(exc)},
+                side_effects=[],
             )
+
+    async def _on_conflict_created(self, event) -> SubsystemResponse:
+        conflict_id = int(event.payload.get('conflict_id') or 0)
+        if conflict_id <= 0:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': 'missing_conflict_id'},
+                side_effects=[],
+            )
+
+        conditions = await self._generate_initial_conditions(conflict_id)
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'conflict_id': conflict_id,
+                'victory_conditions_created': len(conditions),
+                'condition_types': [c.victory_type.value for c in conditions],
+            },
+            side_effects=[],
+        )
+
+    async def _on_conflict_updated(self, event) -> SubsystemResponse:
+        conflict_id = int(event.payload.get('conflict_id') or 0)
+        current_state = (event.payload or {}).get('state') or {}
+        if conflict_id <= 0:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': 'missing_conflict_id'},
+                side_effects=[],
+            )
+
+        achievements = await self.check_victory_conditions(conflict_id, current_state)
+        side_effects: List[SystemEvent] = []
+        if achievements:
+            partial = await self.evaluate_partial_victories(conflict_id)
+            side_effects.append(
+                self._build_resolution_event(
+                    conflict_id,
+                    achievements,
+                    partial,
+                    event.event_id,
+                )
+            )
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'conflict_id': conflict_id,
+                'victories_achieved': len(achievements),
+                'achievements': achievements,
+            },
+            side_effects=side_effects,
+        )
+
+    async def _on_phase_transition(self, event) -> SubsystemResponse:
+        payload = event.payload or {}
+        conflict_id = int(payload.get('conflict_id') or 0)
+        new_phase = (payload.get('to_phase') or payload.get('phase') or '').lower()
+        side_effects: List[SystemEvent] = []
+        data: Dict[str, Any] = {
+            'conflict_id': conflict_id,
+            'phase': new_phase,
+        }
+
+        if conflict_id > 0:
+            if new_phase == 'climax':
+                await self._accelerate_victory_progress(conflict_id)
+            achievements = await self.check_victory_conditions(conflict_id, payload.get('state'))
+            if achievements:
+                partial = await self.evaluate_partial_victories(conflict_id)
+                side_effects.append(
+                    self._build_resolution_event(
+                        conflict_id,
+                        achievements,
+                        partial,
+                        event.event_id,
+                    )
+                )
+                data['victories_achieved'] = len(achievements)
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=data,
+            side_effects=side_effects,
+        )
+
+    async def _on_conflict_resolved(self, event) -> SubsystemResponse:
+        payload = event.payload or {}
+        request_type = payload.get('request')
+        conflict_id = int(payload.get('conflict_id') or 0)
+
+        if request_type == 'generate_epilogue' and conflict_id > 0:
+            interactive = bool(payload.get('interactive', False))
+            resolution_context = payload.get('context') or {}
+            achievements = payload.get('achievements') or []
+            if achievements:
+                resolution_context['achievements'] = achievements
+            epilogue = await self.generate_epilogue(
+                conflict_id,
+                interactive=interactive,
+                resolution_data=resolution_context,
+            )
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'conflict_id': conflict_id, 'epilogue': epilogue, 'interactive': interactive},
+                side_effects=[],
+            )
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'conflict_id': conflict_id, 'ack': 'conflict_resolved'},
+            side_effects=[],
+        )
+
+    async def _on_health_check(self, event) -> SubsystemResponse:
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=await self.health_check(),
+            side_effects=[],
+        )
+
+    def _build_resolution_event(
+        self,
+        conflict_id: int,
+        achievements: List[Dict[str, Any]],
+        partial: List[Dict[str, Any]],
+        source_event_id: str,
+    ) -> SystemEvent:
+        return SystemEvent(
+            event_id=f"victory_resolution_{conflict_id}_{source_event_id}",
+            event_type=EventType.CONFLICT_RESOLVED,
+            source_subsystem=self.subsystem_type,
+            payload={
+                'conflict_id': conflict_id,
+                'achievements': achievements,
+                'partial_victories': partial,
+                'resolution_type': 'victory_conditions_met',
+            },
+            priority=2,
+        )
     
     async def health_check(self) -> Dict[str, Any]:
         async with get_db_connection_context() as conn:
@@ -438,7 +429,7 @@ class ConflictVictorySubsystem:
                 instructions="""
                 Generate nuanced victory conditions for conflicts.
                 """,
-                model="gpt-5-nano",
+                model=WARMUP_MODEL,
             )
         return self._victory_generator
     
@@ -474,7 +465,7 @@ class ConflictVictorySubsystem:
                 instructions="""
                 Write epilogues that provide closure while opening new possibilities.
                 """,
-                model="gpt-5-nano",
+                model=WARMUP_MODEL,
             )
         return self._epilogue_writer
     
@@ -659,11 +650,13 @@ class ConflictVictorySubsystem:
     async def check_victory_conditions(
         self,
         conflict_id: int,
-        current_state: Dict[str, Any]
+        current_state: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Check if any victory conditions have been met (single-connection fix)"""
         achievements: List[Dict[str, Any]] = []
-        
+
+        state_snapshot = current_state or {}
+
         async with get_db_connection_context() as conn:
             conditions = await conn.fetch("""
                 SELECT * FROM victory_conditions
@@ -679,7 +672,7 @@ class ConflictVictorySubsystem:
                 except Exception:
                     requirements = {}
 
-                progress = self._calculate_progress(requirements, current_state or {})
+                progress = self._calculate_progress(requirements, state_snapshot)
 
                 # Update progress
                 await conn.execute("""
@@ -693,7 +686,7 @@ class ConflictVictorySubsystem:
                     condition_data['requirements'] = requirements
                     condition_data['task_metadata'] = metadata
                     condition_data['progress'] = float(progress)
-                    achievement = await self._process_victory_achievement(condition_data, current_state or {})
+                    achievement = await self._process_victory_achievement(condition_data, state_snapshot)
                     # Enrich with a simple DTO shape
                     achievement['id'] = int(condition['condition_id'])
                     achievement['name'] = f"{str(condition['victory_type']).title()} achieved"
@@ -897,6 +890,76 @@ class ConflictVictorySubsystem:
         resolution_data: Dict[str, Any]
     ) -> str:
         return await self._generate_conflict_epilogue(conflict_id, resolution_data)
+
+    async def generate_epilogue(
+        self,
+        conflict_id: int,
+        interactive: bool = False,
+        resolution_data: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        resolution_payload: Dict[str, Any] = dict(resolution_data or {})
+
+        async with get_db_connection_context() as conn:
+            conflict = await conn.fetchrow(
+                """
+                SELECT id, conflict_name, conflict_type, description
+                FROM Conflicts
+                WHERE id = $1
+                """,
+                conflict_id,
+            )
+            achievements = await conn.fetch(
+                """
+                SELECT * FROM victory_conditions
+                WHERE conflict_id = $1 AND is_achieved = true
+                ORDER BY achieved_at NULLS LAST
+                """,
+                conflict_id,
+            )
+
+        if not conflict:
+            return "The conflict fades quietly without a lasting epilogue."
+
+        conflict_dict = dict(conflict)
+        achievement_dicts = [dict(a) for a in achievements]
+        model_override = INTERACTIVE_MODEL if interactive else WARMUP_MODEL
+
+        prompt = (
+            "Write a resonant epilogue for a conflict that has reached resolution.\n\n"
+            f"Conflict: {conflict_dict.get('conflict_name', 'Unnamed Conflict')}\n"
+            f"Type: {conflict_dict.get('conflict_type', 'unknown')}\n"
+            f"Summary: {conflict_dict.get('description', '')}\n"
+            f"Achieved conditions: {json.dumps(achievement_dicts, default=str)}\n"
+            f"Resolution context: {json.dumps(resolution_payload, default=str)}\n\n"
+            "Deliver 2-3 paragraphs that acknowledge triumphs, note lingering tensions, "
+            "and tease future possibilities without reopening the conflict."
+        )
+
+        epilogue_text = ""
+        try:
+            response = await llm_gateway.execute(
+                LLMRequest(
+                    prompt=prompt,
+                    agent=self.epilogue_writer,
+                    model_override=model_override,
+                )
+            )
+            epilogue_text = extract_runner_response(response).strip()
+        except Exception:
+            logger.exception(
+                "Epilogue generation failed for conflict_id=%s (interactive=%s)",
+                conflict_id,
+                interactive,
+            )
+
+        if not epilogue_text:
+            epilogue_text = conflict_victory_hotpath.fallback_conflict_epilogue(
+                conflict_dict,
+                achievement_dicts,
+                resolution_payload,
+            )
+
+        return epilogue_text
 
     async def _generate_conflict_epilogue(
         self,
