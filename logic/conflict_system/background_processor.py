@@ -8,7 +8,7 @@ import logging
 import asyncio
 import json
 from functools import lru_cache
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, TYPE_CHECKING
 from datetime import datetime, timedelta
 from enum import Enum
 from dataclasses import dataclass, field
@@ -23,6 +23,9 @@ from logic.conflict_system.background_grand_conflicts_hotpath import (
 from logic.time_cycle import get_current_game_day
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from logic.conflict_system.background_grand_conflicts import BackgroundConflict
 
 
 @lru_cache(maxsize=1)
@@ -303,7 +306,48 @@ class BackgroundConflictProcessor:
                         'npc_id': item['npc_id'],
                         'result': result
                     })
-                    
+
+                elif item['type'] == 'generate_ripples':
+                    conflict_payload = item.get('conflict')
+                    conflict_obj: Optional['BackgroundConflict'] = None
+
+                    if conflict_payload is not None:
+                        conflict_obj = conflict_payload
+                    else:
+                        conflict_id = item.get('conflict_id')
+                        if conflict_id is not None:
+                            conflict_obj = await self._load_conflict_snapshot(int(conflict_id))
+
+                    if conflict_obj is None:
+                        logger.debug(
+                            "Skipping ripple generation task without conflict snapshot: %s",
+                            item,
+                        )
+                        continue
+
+                    try:
+                        from logic.conflict_system.background_grand_conflicts_hotpath import (
+                            queue_conflict_ripples,
+                        )
+
+                        queued = queue_conflict_ripples(
+                            self.user_id,
+                            self.conversation_id,
+                            conflict_obj,
+                        )
+                        processed.append({
+                            'type': 'ripples',
+                            'conflict_id': conflict_obj.conflict_id,
+                            'queued': queued,
+                            'reason': item.get('reason'),
+                        })
+                    except Exception as exc:  # pragma: no cover - defensive guard
+                        logger.warning(
+                            "Failed to queue ripple generation for conflict=%s: %s",
+                            conflict_obj.conflict_id,
+                            exc,
+                        )
+
                 elif item['type'] == 'generate_initial_conflicts':
                     conflicts_generated = 0
                     async with get_db_connection_context() as conn:
@@ -376,9 +420,42 @@ class BackgroundConflictProcessor:
             })
             
         return True
-    
+
+    def queue_news_generation(
+        self,
+        conflict_id: int,
+        *,
+        priority: ProcessingPriority = ProcessingPriority.NORMAL,
+        reason: str = "threshold_crossed",
+    ) -> None:
+        """Schedule news generation without duplicating inline logic."""
+
+        self._processing_queue.append({
+            'type': 'generate_news',
+            'conflict_id': int(conflict_id),
+            'priority': priority,
+            'reason': reason,
+        })
+
+    def queue_ripple_generation(
+        self,
+        conflict: 'BackgroundConflict',
+        *,
+        priority: ProcessingPriority = ProcessingPriority.NORMAL,
+        reason: str = "intensity_threshold",
+    ) -> None:
+        """Schedule ripple generation for a conflict snapshot."""
+
+        self._processing_queue.append({
+            'type': 'generate_ripples',
+            'conflict': conflict,
+            'conflict_id': int(conflict.conflict_id),
+            'priority': priority,
+            'reason': reason,
+        })
+
     # ========== Private Helper Methods ==========
-    
+
     async def _tick_conflict_progress(self, conn, conflict_id: int, amount: float):
         """Small daily progress update for conflicts"""
         await conn.execute(
@@ -390,7 +467,81 @@ class BackgroundConflictProcessor:
             """,
             amount, conflict_id
         )
-    
+
+    async def _load_conflict_snapshot(
+        self, conflict_id: int
+    ) -> Optional['BackgroundConflict']:
+        """Load a lightweight :class:`BackgroundConflict` instance for queue items."""
+
+        try:
+            from logic.conflict_system.background_grand_conflicts import (
+                BackgroundConflict,
+                BackgroundIntensity,
+                GrandConflictType,
+            )
+        except Exception:  # pragma: no cover - circular import guard
+            logger.debug(
+                "Unable to import conflict dataclasses for ripple snapshot",
+                exc_info=True,
+            )
+            return None
+
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, conflict_type, name, description, intensity, progress,
+                       factions, current_state, metadata, awareness
+                FROM BackgroundConflicts
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+                LIMIT 1
+                """,
+                conflict_id,
+                self.user_id,
+                self.conversation_id,
+            )
+
+        if not row:
+            return None
+
+        try:
+            intensity_value = row.get('intensity')
+            if isinstance(intensity_value, str):
+                intensity = BackgroundIntensity[intensity_value.upper()]
+            else:
+                float_value = resolve_intensity_value(intensity_value)
+                if float_value <= 0.2:
+                    intensity = BackgroundIntensity.DISTANT_RUMOR
+                elif float_value <= 0.4:
+                    intensity = BackgroundIntensity.OCCASIONAL_NEWS
+                elif float_value <= 0.6:
+                    intensity = BackgroundIntensity.REGULAR_TOPIC
+                elif float_value <= 0.8:
+                    intensity = BackgroundIntensity.AMBIENT_TENSION
+                else:
+                    intensity = BackgroundIntensity.VISIBLE_EFFECTS
+
+            metadata = json.loads(row.get('metadata') or '{}')
+            factions = json.loads(row.get('factions') or '[]')
+
+            return BackgroundConflict(
+                conflict_id=int(row['id']),
+                conflict_type=GrandConflictType[row['conflict_type'].upper()],
+                name=row['name'],
+                description=row.get('description') or "",
+                intensity=intensity,
+                progress=float(row.get('progress') or 0.0),
+                factions=factions,
+                current_state=row.get('current_state') or "",
+                recent_developments=metadata.get('recent_developments', []),
+                impact_on_daily_life=metadata.get('daily_life_impacts', []),
+                player_awareness_level=float(row.get('awareness') or 0.1),
+                last_news_generation=metadata.get('last_news_generation'),
+                news_count=int(metadata.get('news_count', 0)),
+            )
+        except Exception:  # pragma: no cover - defensive guard
+            logger.debug("Failed to build conflict snapshot for ripples", exc_info=True)
+            return None
+
     async def _process_npc_daily_schedules(self) -> int:
         """
         Update NPC locations and activities for the new game day.

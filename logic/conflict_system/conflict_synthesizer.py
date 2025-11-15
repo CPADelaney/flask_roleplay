@@ -499,7 +499,7 @@ class ConflictSynthesizer:
         Returns cached data if available, otherwise triggers a background update and
         returns a minimal, fast-path response immediately.
         """
-        
+
         scene_info = self._scene_scope_to_mapping(scene_info) or {}
 
         # 1. Generate a stable cache key
@@ -535,189 +535,251 @@ class ConflictSynthesizer:
             'world_tension': 0.0,
             'metadata': {'status': 'partial_fast_response', 'cache_key': cache_key}
         }
-        
+
         try:
-            # --- START of REFACTORED LOGIC ---
-            valid_npc_ids = [int(nid) for nid in scene_info.get('npcs', []) if nid is not None]
-            
-            # Gracefully handle either a location name (str) or id (int)
-            location_ref = scene_info.get('location_id') or scene_info.get('location')
-            resolved_location_id: Optional[int] = None
-
-            async with get_db_connection_context() as conn:
-                if isinstance(location_ref, int):
-                    location_row = await conn.fetchrow(
-                        """
-                        SELECT location_id AS location_id
-                        FROM locations
-                        WHERE location_id = $1
-                        LIMIT 1
-                        """,
-                        location_ref,
-                    )
-                    if location_row:
-                        resolved_location_id = int(location_row["location_id"])
-                elif isinstance(location_ref, str):
-                    logger.debug(f"Location is a string '{location_ref}', looking up ID.")
-                    location_row = await conn.fetchrow(
-                        """
-                        SELECT location_id
-                        FROM locations
-                        WHERE location_name_lc = LOWER($1)
-                        ORDER BY location_id DESC
-                        LIMIT 1
-                        """,
-                        location_ref,
-                    )
-                    if location_row:
-                        resolved_location_id = int(location_row["location_id"])
-            # --- END of REFACTORED LOGIC ---
-
-            if not valid_npc_ids and not resolved_location_id:
-                return fast_context
-
-            async with get_db_connection_context() as conn:
-                conflict_ids = set()
-                active_conflicts = []
-
-                if valid_npc_ids:
-                    stakeholder_rows = await conn.fetch(
-                        "SELECT DISTINCT conflict_id FROM conflict_stakeholders WHERE npc_id = ANY($1::int[])",
-                        valid_npc_ids
-                    )
-                    conflict_ids.update(row['conflict_id'] for row in stakeholder_rows if row['conflict_id'])
-                
-                if resolved_location_id:
-                    # Query using the resolved integer ID
-                    location_conflict_rows = await conn.fetch(
-                        "SELECT conflict_id FROM conflict_locations WHERE location_id = $1",
-                        resolved_location_id
-                    )
-                    conflict_ids.update(row['conflict_id'] for row in location_conflict_rows)
-
-                if conflict_ids:
-                    conflict_rows = await conn.fetch(
-                        "SELECT conflict_id as id, conflict_name as name, conflict_type as type, intensity FROM conflicts WHERE is_active = TRUE AND conflict_id = ANY($1::int[])",
-                        list(conflict_ids)
-                    )
-                    active_conflicts.extend([dict(row) for row in conflict_rows])
-
-                derived_nation_ids: Set[int] = set()
-
-                raw_scene_nations = scene_info.get("nation_ids")
-                if isinstance(raw_scene_nations, (list, tuple, set)):
-                    for raw in raw_scene_nations:
-                        try:
-                            derived_nation_ids.add(int(raw))
-                        except (TypeError, ValueError):
-                            continue
-                elif raw_scene_nations is not None:
-                    try:
-                        derived_nation_ids.add(int(raw_scene_nations))
-                    except (TypeError, ValueError):
-                        pass
-
-                if resolved_location_id:
-                    try:
-                        lore_rows = await conn.fetch(
-                            """
-                            SELECT source_id
-                            FROM loreconnections
-                            WHERE source_type = 'Nations'
-                              AND target_type = 'Locations'
-                              AND target_id = $1
-                            """,
-                            resolved_location_id,
-                        )
-                        for row in lore_rows:
-                            source_id = row.get("source_id")
-                            if source_id is None:
-                                continue
-                            try:
-                                derived_nation_ids.add(int(source_id))
-                            except (TypeError, ValueError):
-                                continue
-                    except Exception:
-                        logger.debug("LoreConnections nation lookup failed", exc_info=True)
-
-                    try:
-                        reverse_rows = await conn.fetch(
-                            """
-                            SELECT target_id
-                            FROM loreconnections
-                            WHERE source_type = 'Locations'
-                              AND target_type = 'Nations'
-                              AND source_id = $1
-                            """,
-                            resolved_location_id,
-                        )
-                        for row in reverse_rows:
-                            target_id = row.get("target_id")
-                            if target_id is None:
-                                continue
-                            try:
-                                derived_nation_ids.add(int(target_id))
-                            except (TypeError, ValueError):
-                                continue
-                    except Exception:
-                        logger.debug("Reverse LoreConnections nation lookup failed", exc_info=True)
-
-                nation_id_list = sorted(derived_nation_ids)
-
-                if nation_id_list:
-                    try:
-                        national_rows = await conn.fetch(
-                            """
-                            SELECT id, name, conflict_type AS type, (severity / 10.0) AS intensity
-                            FROM nationalconflicts
-                            WHERE status != 'resolved'
-                              AND (
-                                  primary_aggressor = ANY($1::int[])
-                                  OR primary_defender = ANY($1::int[])
-                                  OR EXISTS (
-                                      SELECT 1
-                                      FROM jsonb_array_elements_text(COALESCE(involved_nations, '[]'::jsonb)) AS elem(nation_text)
-                                      WHERE elem.nation_text ~ '^\\d+$'
-                                        AND elem.nation_text::int = ANY($1::int[])
-                                  )
-                              )
-                        """,
-                            nation_id_list,
-                        )
-                        active_conflicts.extend([dict(row) for row in national_rows])
-                    except Exception:
-                        logger.debug("National conflict lookup failed", exc_info=True)
-
-                    try:
-                        domestic_rows = await conn.fetch(
-                            """
-                            SELECT id, name, issue_type AS type, (severity / 10.0) AS intensity
-                            FROM domesticissues
-                            WHERE status = 'active' AND nation_id = ANY($1::int[])
-                        """,
-                            nation_id_list,
-                        )
-                        active_conflicts.extend([dict(row) for row in domestic_rows])
-                    except Exception:
-                        logger.debug("Domestic issue lookup failed", exc_info=True)
-                
-                if active_conflicts:
-                    unique_conflicts = {c['id']: c for c in active_conflicts}.values()
-                    fast_context['conflicts'] = list(unique_conflicts)
-                    total_intensity = sum(c.get('intensity', 0.5) or 0.5 for c in unique_conflicts)
-                    avg_intensity = total_intensity / len(unique_conflicts) if unique_conflicts else 0.0
-                    fast_context['world_tension'] = round(min(1.0, avg_intensity * 1.2), 2)
-                    
-                    if avg_intensity > 0.7:
-                        fast_context['ambient_effects'] = ["A palpable tension hangs in the air, sharp and unseen."]
-                    elif avg_intensity > 0.4:
-                        fast_context['ambient_effects'] = ["There's an undercurrent of unease, a sense that things are not quite settled."]
-
+            fast_context = await self.get_fast_conflict_context_for_scene(scene_info, fast_context)
         except Exception as e:
             logger.error(f"Fast-path conflict context fetch failed: {e}", exc_info=True)
             fast_context['ambient_effects'] = ["An unexpected silence fills the air as the world recalibrates..."]
 
         return fast_context
+
+    async def get_fast_conflict_context_for_scene(
+        self,
+        scene_scope: Dict[str, Any],
+        base_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a fast conflict snapshot enriched with background context."""
+
+        fast_context = base_context if base_context is not None else {
+            'conflicts': [],
+            'tensions': {},
+            'opportunities': [],
+            'ambient_effects': ["The air is still, holding a quiet potential..."],
+            'world_tension': 0.0,
+            'metadata': {'status': 'partial_fast_response'},
+        }
+
+        scope = scene_scope or {}
+        valid_npc_ids = [int(nid) for nid in scope.get('npcs', []) if nid is not None]
+
+        location_ref = scope.get('location_id') or scope.get('location')
+        resolved_location_id: Optional[int] = None
+
+        async with get_db_connection_context() as conn:
+            if isinstance(location_ref, int):
+                location_row = await conn.fetchrow(
+                    """
+                    SELECT location_id AS location_id
+                    FROM locations
+                    WHERE location_id = $1
+                    LIMIT 1
+                    """,
+                    location_ref,
+                )
+                if location_row:
+                    resolved_location_id = int(location_row["location_id"])
+            elif isinstance(location_ref, str):
+                logger.debug(f"Location is a string '{location_ref}', looking up ID.")
+                location_row = await conn.fetchrow(
+                    """
+                    SELECT location_id
+                    FROM locations
+                    WHERE location_name_lc = LOWER($1)
+                    ORDER BY location_id DESC
+                    LIMIT 1
+                    """,
+                    location_ref,
+                )
+                if location_row:
+                    resolved_location_id = int(location_row["location_id"])
+
+        async with get_db_connection_context() as conn:
+            conflict_ids: Set[int] = set()
+            active_conflicts: List[Dict[str, Any]] = []
+
+            if valid_npc_ids:
+                stakeholder_rows = await conn.fetch(
+                    "SELECT DISTINCT conflict_id FROM conflict_stakeholders WHERE npc_id = ANY($1::int[])",
+                    valid_npc_ids,
+                )
+                conflict_ids.update(row['conflict_id'] for row in stakeholder_rows if row['conflict_id'])
+
+            if resolved_location_id:
+                location_conflict_rows = await conn.fetch(
+                    "SELECT conflict_id FROM conflict_locations WHERE location_id = $1",
+                    resolved_location_id,
+                )
+                conflict_ids.update(row['conflict_id'] for row in location_conflict_rows)
+
+            if conflict_ids:
+                conflict_rows = await conn.fetch(
+                    "SELECT conflict_id as id, conflict_name as name, conflict_type as type, intensity FROM conflicts WHERE is_active = TRUE AND conflict_id = ANY($1::int[])",
+                    list(conflict_ids),
+                )
+                active_conflicts.extend([dict(row) for row in conflict_rows])
+
+            derived_nation_ids: Set[int] = set()
+
+            raw_scene_nations = scope.get("nation_ids")
+            if isinstance(raw_scene_nations, (list, tuple, set)):
+                for raw in raw_scene_nations:
+                    try:
+                        derived_nation_ids.add(int(raw))
+                    except (TypeError, ValueError):
+                        continue
+            elif raw_scene_nations is not None:
+                try:
+                    derived_nation_ids.add(int(raw_scene_nations))
+                except (TypeError, ValueError):
+                    pass
+
+            if resolved_location_id:
+                try:
+                    nation_rows = await conn.fetch(
+                        """
+                        SELECT source_id
+                        FROM loreconnections
+                        WHERE source_type = 'Nations'
+                          AND target_type = 'Locations'
+                          AND target_id = $1
+                        """,
+                        resolved_location_id,
+                    )
+                    for row in nation_rows:
+                        source_id = row.get("source_id")
+                        if source_id is None:
+                            continue
+                        try:
+                            derived_nation_ids.add(int(source_id))
+                        except (TypeError, ValueError):
+                            continue
+                except Exception:
+                    logger.debug("LoreConnections nation lookup failed", exc_info=True)
+
+                try:
+                    reverse_rows = await conn.fetch(
+                        """
+                        SELECT target_id
+                        FROM loreconnections
+                        WHERE source_type = 'Locations'
+                          AND target_type = 'Nations'
+                          AND source_id = $1
+                        """,
+                        resolved_location_id,
+                    )
+                    for row in reverse_rows:
+                        target_id = row.get("target_id")
+                        if target_id is None:
+                            continue
+                        try:
+                            derived_nation_ids.add(int(target_id))
+                        except (TypeError, ValueError):
+                            continue
+                except Exception:
+                    logger.debug("Reverse LoreConnections nation lookup failed", exc_info=True)
+
+            nation_id_list = sorted(derived_nation_ids)
+
+            if nation_id_list:
+                try:
+                    national_rows = await conn.fetch(
+                        """
+                        SELECT id, name, conflict_type AS type, (severity / 10.0) AS intensity
+                        FROM nationalconflicts
+                        WHERE status != 'resolved'
+                          AND (
+                              primary_aggressor = ANY($1::int[])
+                              OR primary_defender = ANY($1::int[])
+                              OR EXISTS (
+                                  SELECT 1
+                                  FROM jsonb_array_elements_text(COALESCE(involved_nations, '[]'::jsonb)) AS elem(nation_text)
+                                  WHERE elem.nation_text ~ '^\\d+$'
+                                    AND elem.nation_text::int = ANY($1::int[])
+                              )
+                          )
+                    """,
+                        nation_id_list,
+                    )
+                    active_conflicts.extend([dict(row) for row in national_rows])
+                except Exception:
+                    logger.debug("National conflict lookup failed", exc_info=True)
+
+                try:
+                    domestic_rows = await conn.fetch(
+                        """
+                        SELECT id, name, issue_type AS type, (severity / 10.0) AS intensity
+                        FROM domesticissues
+                        WHERE status = 'active' AND nation_id = ANY($1::int[])
+                    """,
+                        nation_id_list,
+                    )
+                    active_conflicts.extend([dict(row) for row in domestic_rows])
+                except Exception:
+                    logger.debug("Domestic issue lookup failed", exc_info=True)
+
+        if active_conflicts:
+            unique_conflicts = {c['id']: c for c in active_conflicts}.values()
+            fast_context['conflicts'] = list(unique_conflicts)
+            total_intensity = sum(c.get('intensity', 0.5) or 0.5 for c in unique_conflicts)
+            avg_intensity = total_intensity / len(unique_conflicts) if unique_conflicts else 0.0
+            fast_context['world_tension'] = round(min(1.0, avg_intensity * 1.2), 2)
+
+            if avg_intensity > 0.7:
+                fast_context['ambient_effects'] = ["A palpable tension hangs in the air, sharp and unseen."]
+            elif avg_intensity > 0.4:
+                fast_context['ambient_effects'] = ["There's an undercurrent of unease, a sense that things are not quite settled."]
+
+        background_subsystem = self._subsystems.get(SubsystemType.BACKGROUND)
+        if background_subsystem is not None:
+            try:
+                background_bundle = await background_subsystem.get_scene_context(scope)
+                self._merge_background_bundle(fast_context, background_bundle)
+            except Exception:
+                logger.debug("Unable to merge background scene context", exc_info=True)
+
+        return fast_context
+
+    def _merge_background_bundle(
+        self,
+        fast_context: Dict[str, Any],
+        background_bundle: Dict[str, Any],
+    ) -> None:
+        if not isinstance(background_bundle, dict):
+            return
+
+        metadata = fast_context.setdefault('metadata', {})
+        metadata['background_day'] = background_bundle.get('last_updated_day')
+
+        background_conflicts = background_bundle.get('background_conflicts') or background_bundle.get('active_conflicts')
+        if background_conflicts:
+            fast_context['background_conflicts'] = list(background_conflicts)
+
+        ambient = background_bundle.get('ambient_atmosphere') or []
+        if ambient:
+            combined_ambient = list(fast_context.get('ambient_effects', []))
+            for entry in ambient:
+                if entry and entry not in combined_ambient:
+                    combined_ambient.append(entry)
+            fast_context['ambient_effects'] = combined_ambient[:8]
+
+        try:
+            background_tension = float(background_bundle.get('world_tension', 0.0))
+        except (TypeError, ValueError):
+            background_tension = 0.0
+        if background_tension:
+            try:
+                fast_context['world_tension'] = max(float(fast_context.get('world_tension', 0.0)), background_tension)
+            except (TypeError, ValueError):
+                fast_context['world_tension'] = background_tension
+
+        news_items = background_bundle.get('news') or []
+        if news_items:
+            fast_context['background_news'] = list(news_items)
+
+        ripples = background_bundle.get('ripple_effects')
+        if ripples:
+            metadata['background_ripples'] = ripples
     
     
     async def handle_day_transition(self, new_day: int) -> Dict[str, Any]:
