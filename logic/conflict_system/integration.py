@@ -114,7 +114,28 @@ class ResolveActiveConflictResponse(TypedDict, total=False):
     error: str
     queued: bool
     pipeline_status: str | None
+class ConflictSummaryResponse(TypedDict, total=False):
+    conflict_id: int
+    conflict: Dict[str, Any]
+    flow: Dict[str, Any]
+    tension: Dict[str, Any]
+    victory: Dict[str, Any]
+    canon: Dict[str, Any]
+    error: str
 
+
+class ConflictEpilogueResponse(TypedDict, total=False):
+    conflict_id: int
+    interactive: bool
+    epilogue: str
+    error: str
+
+
+class ConflictCanonEntriesResponse(TypedDict, total=False):
+    conflict_id: int
+    canonical_events: List[Dict[str, Any]]
+    precedents: List[Dict[str, Any]]
+    error: str
 
 
 @dataclass
@@ -675,7 +696,7 @@ class ConflictSystemInterface:
         """Heal system issues"""
         synthesizer = await self._get_synthesizer()
         from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
-    
+
         event = SystemEvent(
             event_id=f"heal_{datetime.now().timestamp()}",
             event_type=EventType.HEALTH_CHECK,
@@ -684,6 +705,93 @@ class ConflictSystemInterface:
         )
         await synthesizer.emit_event(event)
         return "System healing initiated"
+
+    # ========== Conflict Insights ==========
+
+    async def get_conflict_summary(self, conflict_id: int) -> ConflictSummaryResponse:
+        """Aggregate subsystem views into a conflict summary."""
+        summary: ConflictSummaryResponse = {'conflict_id': int(conflict_id)}
+
+        async with get_db_connection_context() as conn:
+            conflict_row = await conn.fetchrow(
+                """
+                SELECT id, conflict_name, conflict_type, description, stakes, is_active, progress
+                FROM Conflicts
+                WHERE id = $1
+                """,
+                conflict_id,
+            )
+
+        if not conflict_row:
+            summary['error'] = 'conflict_not_found'
+            return summary
+
+        summary['conflict'] = dict(conflict_row)
+
+        synthesizer = await self._get_synthesizer()
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+
+        subsystems = getattr(synthesizer, '_subsystems', {}) or {}
+
+        flow_subsystem = subsystems.get(SubsystemType.FLOW)
+        if flow_subsystem and hasattr(flow_subsystem, 'get_conflict_data'):
+            summary['flow'] = await flow_subsystem.get_conflict_data(conflict_id)
+
+        tension_subsystem = subsystems.get(SubsystemType.TENSION)
+        if tension_subsystem and hasattr(tension_subsystem, 'get_conflict_data'):
+            summary['tension'] = await tension_subsystem.get_conflict_data(conflict_id)
+
+        victory_subsystem = subsystems.get(SubsystemType.VICTORY)
+        if victory_subsystem and hasattr(victory_subsystem, 'get_conflict_data'):
+            summary['victory'] = await victory_subsystem.get_conflict_data(conflict_id)
+
+        canon_subsystem = subsystems.get(SubsystemType.CANON)
+        if canon_subsystem and hasattr(canon_subsystem, 'get_conflict_data'):
+            summary['canon'] = await canon_subsystem.get_conflict_data(conflict_id)
+
+        return summary
+
+    async def get_conflict_epilogue(
+        self,
+        conflict_id: int,
+        interactive: bool = False,
+    ) -> ConflictEpilogueResponse:
+        """Generate a conflict epilogue on demand."""
+
+        response: ConflictEpilogueResponse = {
+            'conflict_id': int(conflict_id),
+            'interactive': bool(interactive),
+        }
+
+        synthesizer = await self._get_synthesizer()
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+
+        victory_subsystem = getattr(synthesizer, '_subsystems', {}).get(SubsystemType.VICTORY)
+        if not victory_subsystem or not hasattr(victory_subsystem, 'generate_epilogue'):
+            response['error'] = 'victory_subsystem_unavailable'
+            return response
+
+        epilogue_text = await victory_subsystem.generate_epilogue(conflict_id, interactive=interactive)
+        response['epilogue'] = epilogue_text
+        return response
+
+    async def get_conflict_canon_entries(self, conflict_id: int) -> ConflictCanonEntriesResponse:
+        """Return canonical records tied to a conflict."""
+
+        entries: ConflictCanonEntriesResponse = {'conflict_id': int(conflict_id)}
+
+        synthesizer = await self._get_synthesizer()
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+
+        canon_subsystem = getattr(synthesizer, '_subsystems', {}).get(SubsystemType.CANON)
+        if not canon_subsystem or not hasattr(canon_subsystem, 'get_conflict_data'):
+            entries['error'] = 'canon_subsystem_unavailable'
+            return entries
+
+        canon_data = await canon_subsystem.get_conflict_data(conflict_id)
+        entries['canonical_events'] = list(canon_data.get('canonical_events', []))
+        entries['precedents'] = list(canon_data.get('precedents_available', []))
+        return entries
 
 
 # ===============================================================================
