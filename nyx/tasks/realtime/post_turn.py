@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping, TypedDict
 
 from celery import Celery
 from db.connection import AsyncpgConnection, get_db_connection_context, run_async_in_worker_loop
-from nyx.tasks.base import NyxTask, app
+from nyx.tasks.base import NyxTask, app, current_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -201,10 +201,13 @@ def _outbox_entries_from_payload(payload: TurnPayload) -> List[OutboxEntryPayloa
 # --- Celery Tasks ---
 
 @app.task(bind=True, base=NyxTask, name="nyx.tasks.realtime.post_turn.dispatch")
-def dispatch(self, payload: TurnPayload | None = None) -> str:
+def dispatch(self, payload: TurnPayload | None = None, trace_id: str | None = None) -> str:
     """Persists side effects into the outbox and triggers the drain worker."""
     payload = payload or {}
     entries = _outbox_entries_from_payload(payload)
+
+    if trace_id is None:
+        trace_id = current_trace_id()
 
     if not entries:
         logger.debug("TurnPostProcessor no-op (turn_id=%s)", payload.get("turn_id"))
@@ -214,7 +217,11 @@ def dispatch(self, payload: TurnPayload | None = None) -> str:
     inserted = run_async_in_worker_loop(service.insert_entries(entries))
     
     # Trigger the drain task to process the items we just inserted.
-    drain_outbox.apply_async(kwargs={"limit": inserted}, queue="realtime", priority=0)
+    enqueue_kwargs = {"limit": inserted}
+    if trace_id is not None:
+        enqueue_kwargs["trace_id"] = trace_id
+
+    drain_outbox.apply_async(kwargs=enqueue_kwargs, queue="realtime", priority=0)
     
     logger.debug("TurnPostProcessor enqueued %s side effects via outbox", inserted)
     return f"outbox:{inserted}"
@@ -226,7 +233,7 @@ def dispatch(self, payload: TurnPayload | None = None) -> str:
     name="nyx.tasks.realtime.post_turn.drain_outbox",
     acks_late=True,
 )
-def drain_outbox(self, limit: int = 10) -> int:
+def drain_outbox(self, limit: int = 10, trace_id: str | None = None) -> int:
     """Processes a batch of pending entries from the outbox table."""
     service = OutboxService()
     return run_async_in_worker_loop(service.drain(limit=limit))
