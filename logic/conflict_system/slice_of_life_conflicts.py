@@ -5,13 +5,16 @@ Refactored to work as a ConflictSubsystem with the synthesizer (circular-safe).
 """
 
 import logging
+import time
 import weakref
-from typing import Dict, List, Any, Optional, Set, Tuple
+from collections import defaultdict, deque
 from dataclasses import dataclass
-from enum import Enum
 from datetime import datetime
+from enum import Enum
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from db.connection import get_db_connection_context
+from logic.conflict_system.tension import TensionType
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +106,21 @@ class SliceOfLifeConflictSubsystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.synthesizer = None  # weakref set in initialize
-        
+
         # Components
         self.detector = EmergentConflictDetector(user_id, conversation_id)
         self.manager = SliceOfLifeConflictManager(user_id, conversation_id)
         self.resolver = PatternBasedResolution(user_id, conversation_id)
         self.daily_integration = ConflictDailyIntegration(user_id, conversation_id)
+
+        # Local observation buffers (purely numeric/pattern based)
+        self._observations: Deque[Tuple[float, str, str, float, str]] = deque(maxlen=240)
+        self._subject_labels: Dict[str, str] = {}
+        self._active_patterns: Dict[str, Dict[str, Any]] = {}
+        self._pattern_conflict_cooldowns: Dict[str, float] = {}
+        self._recent_memory_ids: Deque[int] = deque(maxlen=400)
+        self._seen_memory_ids: Set[int] = set()
+        self._last_memory_refresh: float = 0.0
     
     # ========== Subsystem Interface ==========
     
@@ -244,93 +256,67 @@ class SliceOfLifeConflictSubsystem:
         SubsystemType, EventType, SystemEvent, SubsystemResponse = _orch()
         payload = event.payload or {}
         scene_context = payload.get('scene_context') or payload
-        
-        # Detect emerging tensions (DB + LLM)
-        tensions = await self.detector.detect_brewing_tensions()
-        
-        activity = scene_context.get('activity', scene_context.get('scene_type', 'daily_routine'))
-        present_npcs = scene_context.get('present_npcs') or scene_context.get('npcs') or []
-        
-        manifestations: List[str] = []
-        side_effects = []
-        
-        # Opportunistically propose a new slice conflict if one looks strong
-        for tension in tensions[:1]:
-            try:
-                level = float(tension.get('tension_level', 0.0) or 0.0)
-                if level > 0.6:
-                    ctype = getattr(tension.get('type'), 'value', str(tension.get('type', 'permission_patterns')))
-                    intensity = getattr(tension.get('intensity'), 'value', str(tension.get('intensity', 'tension')))
-                    side_effects.append(SystemEvent(
-                        event_id=f"create_slice_{datetime.now().timestamp()}",
-                        event_type=EventType.CONFLICT_CREATED,
-                        source_subsystem=self.subsystem_type,
-                        payload={
-                            'conflict_type': ctype,
-                            'context': {
-                                'activity': activity,
-                                'npcs': present_npcs,
-                                'description': tension.get('description'),
-                                'intensity': intensity,
-                                'evidence': tension.get('evidence', [])
-                            }
-                        },
-                        priority=5
-                    ))
-            except Exception:
-                continue
-        
+
+        self._refresh_subject_labels(scene_context)
+        await self._ingest_recent_memories()
+        self._ingest_scene_observations(scene_context)
+
+        evaluation, side_effects = self._evaluate_patterns(scene_context, reason="state_sync")
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={
-                'tensions_detected': len(tensions),
-                'manifestations': manifestations,
-                'slice_of_life_active': bool(manifestations)
-            },
+            data=evaluation,
             side_effects=side_effects
         )
-    
+
     async def _handle_player_choice(self, event):
         """Handle player choices"""
         _, EventType, SystemEvent, SubsystemResponse = _orch()
         payload = event.payload or {}
         conflict_id = payload.get('conflict_id')
-        
-        if not conflict_id:
-            return SubsystemResponse(
-                subsystem=self.subsystem_type,
-                event_id=event.event_id,
-                success=True,
-                data={'no_conflict': True},
-                side_effects=[]
-            )
 
-        await self.detector.detect_brewing_tensions(eager=True)
+        scene_context = payload.get('scene_context') or payload.get('context') or {}
+        self._refresh_subject_labels(scene_context)
 
-        # Check for pattern-based resolution
-        resolution = await self.resolver.check_resolution_by_pattern(int(conflict_id))
-        
-        side_effects = []
-        if resolution:
-            side_effects.append(SystemEvent(
-                event_id=f"resolve_{conflict_id}",
-                event_type=EventType.CONFLICT_RESOLVED,
-                source_subsystem=self.subsystem_type,
-                payload={
-                    'conflict_id': int(conflict_id),
-                    'resolution_type': 'pattern_based',
-                    'context': {'resolution': resolution}
-                },
-                priority=4
-            ))
-        
+        choice_descriptor = str(payload.get('choice') or payload.get('selected_option') or '').lower()
+        choice_tags = payload.get('tags') or payload.get('choice_tags') or []
+        target = payload.get('target_npc') or payload.get('npc_id') or payload.get('npc')
+        if isinstance(target, dict):
+            target = target.get('id') or target.get('npc_id')
+
+        self._ingest_choice_observation(choice_descriptor, choice_tags, target)
+
+        evaluation, pattern_side_effects = self._evaluate_patterns(scene_context, reason="player_choice")
+
+        resolution = None
+        side_effects = list(pattern_side_effects)
+
+        if conflict_id:
+            await self.detector.detect_brewing_tensions(eager=True)
+            resolution = await self.resolver.check_resolution_by_pattern(int(conflict_id))
+            if resolution:
+                side_effects.append(SystemEvent(
+                    event_id=f"resolve_{conflict_id}",
+                    event_type=EventType.CONFLICT_RESOLVED,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'conflict_id': int(conflict_id),
+                        'resolution_type': 'pattern_based',
+                        'context': {'resolution': resolution}
+                    },
+                    priority=4
+                ))
+
+        evaluation.setdefault('choice_processed', True)
+        evaluation['resolution'] = resolution
+
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
-            data={'choice_processed': True, 'resolution': resolution},
+            data=evaluation,
             side_effects=side_effects
         )
     
@@ -396,6 +382,553 @@ class SliceOfLifeConflictSubsystem:
             data={'pending_conflict_embedding': True},
             side_effects=[]
         )
+
+
+    # ========== Observation & Pattern Helpers ==========
+
+    def _normalize_subject(self, raw: Any) -> Optional[str]:
+        if raw is None:
+            return None
+        if isinstance(raw, (int, float)):
+            return str(int(raw))
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if not lowered:
+                return None
+            if lowered in {'player', 'pc', 'you', 'self'}:
+                return 'player'
+            if lowered.startswith('npc:'):
+                token = lowered.split(':', 1)[1]
+                return token or lowered
+            if lowered.isdigit():
+                return lowered
+            return raw
+        if isinstance(raw, dict):
+            for key in ('id', 'npc_id', 'entity_id'):
+                if key in raw and raw[key] is not None:
+                    return self._normalize_subject(raw[key])
+        return None
+
+    def _refresh_subject_labels(self, scene_context: Dict[str, Any]) -> None:
+        if not isinstance(scene_context, dict):
+            return
+
+        mapping: Dict[str, str] = {}
+
+        def register(subject: Any, label: Any) -> None:
+            key = self._normalize_subject(subject)
+            if key is None:
+                return
+            try:
+                mapping[key] = str(label)
+            except Exception:
+                mapping[key] = str(subject)
+
+        candidates = [
+            scene_context.get('present_npcs'),
+            scene_context.get('npcs'),
+            scene_context.get('npc_states'),
+            scene_context.get('actors'),
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                for key, value in candidate.items():
+                    if isinstance(value, dict):
+                        register(value.get('id', key), value.get('name') or value.get('display_name') or key)
+                    else:
+                        register(key, value)
+            elif isinstance(candidate, list):
+                for item in candidate:
+                    if isinstance(item, dict):
+                        register(
+                            item.get('id') or item.get('npc_id') or item.get('entity_id'),
+                            item.get('name') or item.get('display_name') or item.get('alias') or item.get('label')
+                        )
+                    else:
+                        register(item, item)
+
+        names_map = scene_context.get('npc_names')
+        if isinstance(names_map, dict):
+            for subject, label in names_map.items():
+                register(subject, label)
+
+        player_label = scene_context.get('player_name') or scene_context.get('pc_name')
+        if player_label:
+            mapping['player'] = str(player_label)
+
+        if mapping:
+            self._subject_labels.update(mapping)
+
+    async def _ingest_recent_memories(self) -> None:
+        now = time.time()
+        if now - self._last_memory_refresh < 60:
+            return
+
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, entity_id, memory_text, tags, created_at
+                    FROM enhanced_memories
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY created_at DESC
+                    LIMIT 60
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                )
+        except Exception as exc:
+            logger.debug("slice_of_life memory ingest failed: %s", exc)
+            self._last_memory_refresh = now
+            return
+
+        for row in rows or []:
+            memory_id = row.get('id')
+            if memory_id is None:
+                continue
+            if memory_id in self._seen_memory_ids:
+                continue
+            if len(self._recent_memory_ids) == self._recent_memory_ids.maxlen:
+                oldest = self._recent_memory_ids.popleft()
+                self._seen_memory_ids.discard(oldest)
+            self._recent_memory_ids.append(memory_id)
+            self._seen_memory_ids.add(memory_id)
+
+            created_at = row.get('created_at')
+            timestamp = None
+            if hasattr(created_at, 'timestamp'):
+                try:
+                    timestamp = float(created_at.timestamp())
+                except Exception:
+                    timestamp = None
+
+            tags_raw = row.get('tags') or []
+            tag_values: Set[str] = set()
+            if isinstance(tags_raw, (list, tuple, set)):
+                tag_values = {str(tag).lower() for tag in tags_raw if tag is not None}
+            elif isinstance(tags_raw, dict):
+                tag_values = {str(key).lower() for key in tags_raw.keys() if key is not None}
+
+            text = str(row.get('memory_text') or '')
+            subject = row.get('entity_id')
+
+            if self._matches_chore_signal(text, tag_values):
+                self._record_observation(
+                    'routine_dominance',
+                    subject,
+                    weight=1.0,
+                    evidence=text[:160],
+                    timestamp=timestamp,
+                )
+            if self._matches_ignore_signal(text, tag_values):
+                self._record_observation(
+                    'social_isolation',
+                    subject,
+                    weight=1.0,
+                    evidence=text[:160],
+                    timestamp=timestamp,
+                )
+
+        self._last_memory_refresh = now
+
+    @staticmethod
+    def _matches_chore_signal(text: str, tags: Set[str]) -> bool:
+        text_lower = text.lower()
+        keywords = {'chore', 'chores', 'clean', 'cleaning', 'laundry', 'cook', 'cooking', 'errand', 'service', 'task'}
+        if tags & keywords:
+            return True
+        return any(token in text_lower for token in keywords)
+
+    @staticmethod
+    def _matches_ignore_signal(text: str, tags: Set[str]) -> bool:
+        text_lower = text.lower()
+        keywords = {'ignore', 'ignored', 'snub', 'cold shoulder', 'dismiss', 'overlook', 'brush off', 'avoid'}
+        if tags & keywords:
+            return True
+        return any(token in text_lower for token in keywords)
+
+    def _record_observation(
+        self,
+        pattern: str,
+        subject: Any,
+        *,
+        weight: float,
+        evidence: str = '',
+        timestamp: Optional[float] = None,
+    ) -> None:
+        subject_key = self._normalize_subject(subject) or 'unknown'
+        try:
+            weight_value = float(weight)
+        except Exception:
+            weight_value = 0.0
+        if weight_value == 0.0:
+            return
+        ts = float(timestamp) if timestamp is not None else time.time()
+        evidence_str = str(evidence) if evidence is not None else ''
+        self._observations.append((ts, pattern, subject_key, weight_value, evidence_str))
+
+    def _ingest_scene_observations(self, scene_context: Dict[str, Any]) -> None:
+        if not isinstance(scene_context, dict):
+            return
+
+        recent_actions = scene_context.get('recent_actions') or scene_context.get('action_history') or []
+        if isinstance(recent_actions, list):
+            for action in recent_actions[-8:]:
+                if not isinstance(action, dict):
+                    continue
+                actor = action.get('actor_id') or action.get('npc_id') or action.get('actor')
+                action_label = str(action.get('type') or action.get('action') or action.get('name') or '').lower()
+                tags_raw = action.get('tags') or []
+                if isinstance(tags_raw, dict):
+                    tags = {str(k).lower() for k in tags_raw.keys() if k is not None}
+                else:
+                    tags = {str(t).lower() for t in tags_raw} if isinstance(tags_raw, (list, set, tuple)) else set()
+                evidence = action.get('description') or action.get('summary') or action_label
+
+                if self._is_chore_action(action_label, tags):
+                    weight = 1.0
+                    try:
+                        weight += 0.2 * float(action.get('intensity') or 0)
+                    except Exception:
+                        pass
+                    self._record_observation('routine_dominance', actor, weight=weight, evidence=evidence)
+
+                if self._is_ignore_action(action):
+                    target = action.get('target') or action.get('target_id') or actor
+                    self._record_observation('social_isolation', target, weight=1.2, evidence=evidence)
+
+        recent_turns = scene_context.get('recent_turns') or scene_context.get('recent_interactions') or []
+        if isinstance(recent_turns, list):
+            npc_counts: Dict[str, int] = defaultdict(int)
+            player_turns = 0
+            recent_slice = recent_turns[-8:]
+            for turn in recent_slice:
+                if not isinstance(turn, dict):
+                    continue
+                sender = turn.get('sender') or turn.get('speaker')
+                subject_key = self._normalize_subject(sender)
+                if subject_key == 'player':
+                    player_turns += 1
+                elif subject_key:
+                    npc_counts[subject_key] += 1
+
+            for subject_key, count in npc_counts.items():
+                if count < 3:
+                    continue
+                if player_turns >= max(2, count // 2):
+                    continue
+                last_line = ''
+                for turn in reversed(recent_slice):
+                    if not isinstance(turn, dict):
+                        continue
+                    sender = self._normalize_subject(turn.get('sender') or turn.get('speaker'))
+                    if sender == subject_key:
+                        last_line = str(turn.get('content') or turn.get('text') or '')
+                        if last_line:
+                            break
+                evidence = last_line or 'Repeated attempts to engage receive little response.'
+                self._record_observation('social_isolation', subject_key, weight=1.0 + 0.1 * count, evidence=evidence)
+
+    @staticmethod
+    def _is_chore_action(action_label: str, tags: Set[str]) -> bool:
+        keywords = {
+            'chore', 'chores', 'clean', 'cleaning', 'laundry', 'cook', 'cooking',
+            'prepare', 'tidy', 'organize', 'service', 'errand', 'task', 'maintenance', 'serve'
+        }
+        if tags & keywords:
+            return True
+        return any(token in action_label for token in keywords)
+
+    @staticmethod
+    def _is_ignore_action(action: Dict[str, Any]) -> bool:
+        fields = [
+            str(action.get('outcome') or '').lower(),
+            str(action.get('result') or '').lower(),
+            str(action.get('response') or '').lower(),
+            str(action.get('status') or '').lower(),
+        ]
+        keywords = ('ignored', 'ignore', 'dismiss', 'rebuff', 'cold', 'snub', 'brush')
+        return any(any(keyword in field for keyword in keywords) for field in fields)
+
+    def _ingest_choice_observation(self, descriptor: str, tags: List[Any], target: Any) -> None:
+        normalized_descriptor = descriptor.lower() if descriptor else ''
+        tag_set = {str(tag).lower() for tag in tags if tag is not None}
+
+        if not normalized_descriptor and not tag_set:
+            return
+
+        negative_keywords = {'ignore', 'leave', 'avoid', 'refuse', 'dismiss', 'stay quiet', 'silence'}
+        supportive_keywords = {'help', 'assist', 'support', 'apologize', 'listen', 'share load', 'take over', 'pitch in'}
+
+        subject = target or 'player'
+
+        if any(keyword in normalized_descriptor for keyword in negative_keywords) or (tag_set & {'ignore', 'refuse', 'dismiss'}):
+            evidence = descriptor or 'Player declined engagement.'
+            self._record_observation('social_isolation', subject, weight=1.5, evidence=evidence)
+        elif any(keyword in normalized_descriptor for keyword in supportive_keywords) or (tag_set & {'support', 'assist'}):
+            evidence = descriptor or 'Player offered support.'
+            self._record_observation('social_relief', subject, weight=1.2, evidence=evidence)
+            self._record_observation('routine_relief', subject, weight=1.0, evidence=evidence)
+
+    def _aggregate_observations(self, window: float = 900.0) -> Tuple[Dict[str, Dict[str, float]], Dict[Tuple[str, str], List[str]]]:
+        now = time.time()
+        counts: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        evidence_map: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+        filtered: Deque[Tuple[float, str, str, float, str]] = deque(maxlen=self._observations.maxlen)
+
+        while self._observations:
+            ts, pattern, subject, weight, evidence = self._observations.popleft()
+            if now - ts > window:
+                continue
+            filtered.append((ts, pattern, subject, weight, evidence))
+            counts[pattern][subject] += weight
+            if evidence:
+                key = (pattern, subject)
+                bucket = evidence_map[key]
+                if len(bucket) < 5:
+                    bucket.append(evidence)
+
+        self._observations = filtered
+        return counts, evidence_map
+
+    @staticmethod
+    def _pattern_key(pattern: str, subject: str) -> str:
+        return f"{pattern}|{subject}"
+
+    @staticmethod
+    def _is_high_stakes_scene(scene_context: Dict[str, Any]) -> bool:
+        if not isinstance(scene_context, dict):
+            return False
+        phase = str(scene_context.get('phase') or scene_context.get('scene_phase') or scene_context.get('conflict_phase') or '').lower()
+        if not phase:
+            return False
+        high_phases = {'climax', 'finale', 'showdown', 'crisis'}
+        return phase in high_phases
+
+    def _should_escalate_pattern(
+        self,
+        pattern_key: str,
+        details: Dict[str, Any],
+        score: float,
+        scene_context: Dict[str, Any],
+    ) -> bool:
+        now = time.time()
+        if self._is_high_stakes_scene(scene_context):
+            return False
+        cooldown = self._pattern_conflict_cooldowns.get(pattern_key)
+        if cooldown and now - cooldown < 900:
+            return False
+        started_at = details.get('started_at', now)
+        if now - started_at < 600:
+            return False
+        return score >= 6.0
+
+    def _evaluate_patterns(
+        self,
+        scene_context: Dict[str, Any],
+        *,
+        reason: str,
+    ) -> Tuple[Dict[str, Any], List[Any]]:
+        _, EventType, SystemEvent, _ = _orch()
+        counts, evidence_map = self._aggregate_observations()
+
+        routine_counts = counts.get('routine_dominance', {})
+        routine_relief = counts.get('routine_relief', {})
+        social_counts = counts.get('social_isolation', {})
+        social_relief = counts.get('social_relief', {})
+
+        active_patterns: List[Dict[str, Any]] = []
+        resolved_patterns: List[Dict[str, Any]] = []
+        side_effects: List[Any] = []
+        tracked_now = time.time()
+        updated_keys: Set[str] = set()
+
+        def subject_label(subject_key: str) -> str:
+            return self._subject_labels.get(subject_key, subject_key)
+
+        # Routine dominance detection
+        for subject_key, raw_score in routine_counts.items():
+            net_score = max(0.0, raw_score - routine_relief.get(subject_key, 0.0))
+            if net_score <= 1.5:
+                continue
+            pattern_key = self._pattern_key('routine_dominance', subject_key)
+            status = 'sustained' if pattern_key in self._active_patterns else 'new'
+            evidence = evidence_map.get(('routine_dominance', subject_key), [])
+            details = self._active_patterns.get(pattern_key, {})
+            started_at = details.get('started_at', tracked_now)
+            self._active_patterns[pattern_key] = {
+                'pattern': 'routine_dominance',
+                'subject': subject_key,
+                'score': round(net_score, 2),
+                'started_at': started_at,
+                'last_update': tracked_now,
+                'npc_name': subject_label(subject_key),
+                'evidence': evidence,
+            }
+            updated_keys.add(pattern_key)
+            active_patterns.append({
+                'pattern': SliceOfLifeConflictType.ROUTINE_DOMINANCE.value,
+                'subject': subject_key,
+                'npc_name': subject_label(subject_key),
+                'score': round(net_score, 2),
+                'status': status,
+                'evidence': evidence,
+            })
+
+            delta = min(0.08, 0.02 + min(1.0, net_score / 8.0) * 0.06)
+            side_effects.append(SystemEvent(
+                event_id=f"sol_tension_routine_{int(tracked_now * 1000)}_{subject_key}",
+                event_type=EventType.TENSION_CHANGED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'tension_type': TensionType.SOCIAL.value,
+                    'change': float(delta),
+                    'reason': 'slice_of_life_routine_dominance'
+                },
+                priority=3
+            ))
+
+            if self._should_escalate_pattern(pattern_key, self._active_patterns[pattern_key], net_score, scene_context):
+                activity = scene_context.get('activity') or scene_context.get('scene_type') or 'daily_routine'
+                conflict_payload = {
+                    'conflict_type': SliceOfLifeConflictType.ROUTINE_DOMINANCE.value,
+                    'template_hint': 'slice_of_life_low',
+                    'pattern': 'routine_dominance',
+                    'context': {
+                        'activity': activity,
+                        'npc': subject_label(subject_key),
+                        'score': round(net_score, 2),
+                        'evidence': evidence,
+                        'reason': reason,
+                    }
+                }
+                side_effects.append(SystemEvent(
+                    event_id=f"sol_conflict_seed_{int(tracked_now * 1000)}_{subject_key}",
+                    event_type=EventType.CONFLICT_CREATED,
+                    source_subsystem=self.subsystem_type,
+                    payload=conflict_payload,
+                    priority=4
+                ))
+                self._pattern_conflict_cooldowns[pattern_key] = tracked_now
+
+        # Social isolation detection
+        for subject_key, raw_score in social_counts.items():
+            net_score = max(0.0, raw_score - social_relief.get(subject_key, 0.0))
+            if net_score <= 1.0:
+                continue
+            pattern_key = self._pattern_key('social_isolation', subject_key)
+            status = 'sustained' if pattern_key in self._active_patterns else 'new'
+            evidence = evidence_map.get(('social_isolation', subject_key), [])
+            details = self._active_patterns.get(pattern_key, {})
+            started_at = details.get('started_at', tracked_now)
+            self._active_patterns[pattern_key] = {
+                'pattern': 'social_isolation',
+                'subject': subject_key,
+                'score': round(net_score, 2),
+                'started_at': started_at,
+                'last_update': tracked_now,
+                'npc_name': subject_label(subject_key),
+                'evidence': evidence,
+            }
+            updated_keys.add(pattern_key)
+            active_patterns.append({
+                'pattern': SliceOfLifeConflictType.SOCIAL_ISOLATION.value,
+                'subject': subject_key,
+                'npc_name': subject_label(subject_key),
+                'score': round(net_score, 2),
+                'status': status,
+                'evidence': evidence,
+            })
+
+            delta = min(0.07, 0.015 + min(1.0, net_score / 6.0) * 0.05)
+            side_effects.append(SystemEvent(
+                event_id=f"sol_tension_social_{int(tracked_now * 1000)}_{subject_key}",
+                event_type=EventType.TENSION_CHANGED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'tension_type': TensionType.SOCIAL.value,
+                    'change': float(delta),
+                    'reason': 'slice_of_life_social_isolation'
+                },
+                priority=3
+            ))
+
+            if self._should_escalate_pattern(pattern_key, self._active_patterns[pattern_key], net_score, scene_context):
+                conflict_payload = {
+                    'conflict_type': SliceOfLifeConflictType.SOCIAL_ISOLATION.value,
+                    'template_hint': 'slice_of_life_low',
+                    'pattern': 'social_isolation',
+                    'context': {
+                        'npc': subject_label(subject_key),
+                        'score': round(net_score, 2),
+                        'evidence': evidence,
+                        'reason': reason,
+                    }
+                }
+                side_effects.append(SystemEvent(
+                    event_id=f"sol_conflict_hint_{int(tracked_now * 1000)}_{subject_key}",
+                    event_type=EventType.CONFLICT_CREATED,
+                    source_subsystem=self.subsystem_type,
+                    payload=conflict_payload,
+                    priority=4
+                ))
+                self._pattern_conflict_cooldowns[pattern_key] = tracked_now
+
+        # Resolve inactive patterns and ease tension
+        for pattern_key, details in list(self._active_patterns.items()):
+            if pattern_key in updated_keys:
+                continue
+            resolved_patterns.append({
+                'pattern': details.get('pattern'),
+                'subject': details.get('subject'),
+                'npc_name': details.get('npc_name'),
+                'score': details.get('score'),
+                'status': 'resolved',
+                'evidence': details.get('evidence') or [],
+            })
+            side_effects.append(SystemEvent(
+                event_id=f"sol_tension_relief_{int(tracked_now * 1000)}_{pattern_key}",
+                event_type=EventType.TENSION_CHANGED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'tension_type': TensionType.SOCIAL.value,
+                    'change': -0.03,
+                    'reason': 'slice_of_life_relief'
+                },
+                priority=2
+            ))
+            self._active_patterns.pop(pattern_key, None)
+
+        # Cleanup stale cooldowns
+        for pattern_key, ts in list(self._pattern_conflict_cooldowns.items()):
+            if tracked_now - ts > 1800:
+                self._pattern_conflict_cooldowns.pop(pattern_key, None)
+
+        def format_metrics(primary: Dict[str, float], relief: Dict[str, float]) -> List[Dict[str, Any]]:
+            summary: List[Dict[str, Any]] = []
+            for subject_key, value in primary.items():
+                net_value = max(0.0, value - relief.get(subject_key, 0.0))
+                if net_value <= 0.0:
+                    continue
+                summary.append({
+                    'subject': subject_key,
+                    'npc_name': subject_label(subject_key),
+                    'score': round(net_value, 2)
+                })
+            summary.sort(key=lambda item: item['score'], reverse=True)
+            return summary
+
+        evaluation = {
+            'patterns_active': active_patterns,
+            'patterns_resolved': resolved_patterns,
+            'pattern_metrics': {
+                'routine_dominance': format_metrics(routine_counts, routine_relief),
+                'social_isolation': format_metrics(social_counts, social_relief),
+            },
+            'reason': reason,
+        }
+
+        return evaluation, side_effects
 
 
 # ===============================================================================

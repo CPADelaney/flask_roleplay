@@ -7,7 +7,6 @@ Works through ConflictSynthesizer as the central orchestrator.
 import logging
 import json
 import asyncio
-import random
 import time
 import hashlib
 from collections import OrderedDict
@@ -16,6 +15,7 @@ from datetime import datetime, timedelta
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
+from logic.conflict_system.background_processor import BackgroundConflictProcessor
 try:
     from monitoring.metrics import record_cache_operation
 except Exception:  # pragma: no cover - optional in tests
@@ -130,6 +130,10 @@ class EnhancedIntegrationSubsystem:
         self._inflight_tension_requests: Set[str] = set()
         self._inflight_conflict_requests: Set[str] = set()
         self._inflight_activity_requests: Set[str] = set()
+        self._state_sync_sample_rate = 0.18
+        self._player_choice_sample_rate = 0.3
+        self._scope_last_queued: Dict[str, float] = {}
+        self._queue_cooldown = 45.0
 
     @property
     def subsystem_type(self):
@@ -183,43 +187,29 @@ class EnhancedIntegrationSubsystem:
     
         try:
             if event.event_type == EventType.STATE_SYNC:
-                # Accept either raw scene-context shape or {scene_context: {...}}
                 payload = event.payload or {}
                 scene_context = payload.get('scene_context') or payload
+                normalized = self._normalize_scene_context(scene_context or {})
+                scope_key = self._scope_key_from_context(normalized)
+                should_queue, reason_tag = self._should_evaluate_scene('state_sync', normalized, payload)
+                queued = False
+                if should_queue and scope_key:
+                    queued = await self._maybe_queue_scene_analysis(scope_key, normalized, reason_tag or 'state_sync')
+                elif scope_key:
+                    self._remember_scope(scope_key, normalized)
 
-                await self._register_scene_context_for_refresh(scene_context, reason="state_sync")
-                tensions = await self.analyze_scene_tensions(scene_context)
-
-                side_effects = []
-                if tensions and tensions.get('should_generate_conflict'):
-                    # Suggest conflict creation as a side-effect (orchestrator will route)
-                    try:
-                        suggested_type = tensions.get('suggested_type') or 'slice_of_life'
-                        side_effects.append(SystemEvent(
-                            event_id=f"tension_{event.event_id}",
-                            event_type=EventType.CONFLICT_CREATED,
-                            source_subsystem=self.subsystem_type,
-                            payload={
-                                'conflict_type': suggested_type,
-                                'context': tensions.get('context', {}),
-                                'tension_source': tensions.get('tensions', []),
-                            },
-                            priority=6
-                        ))
-                    except Exception:
-                        pass
-    
+                summary = await self._get_cached_tension_summary(scope_key) if scope_key else {}
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
                     data={
-                        'tensions': tensions.get('tensions', []),
-                        'should_generate_conflict': bool(tensions.get('should_generate_conflict', False)),
-                        'suggested_type': tensions.get('suggested_type'),
-                        'manifestations': tensions.get('manifestation', []),
+                        'scope_key': scope_key,
+                        'analysis_enqueued': queued,
+                        'enqueue_reason': reason_tag,
+                        'tension_summary': summary or {},
                     },
-                    side_effects=side_effects
+                    side_effects=[]
                 )
 
             if event.event_type == EventType.DAY_TRANSITION:
@@ -233,7 +223,25 @@ class EnhancedIntegrationSubsystem:
                 )
 
             if event.event_type == EventType.PLAYER_CHOICE:
-                choice_impact = await self._analyze_choice_impact(event.payload or {})
+                payload = event.payload or {}
+                scene_context = payload.get('scene_context') or payload.get('context') or {}
+                normalized = self._normalize_scene_context(scene_context or {}) if scene_context else {}
+                scope_key = self._scope_key_from_context(normalized) if normalized else None
+                if not scope_key:
+                    scope_key, normalized = self._get_recent_scope()
+
+                should_queue, reason_tag = self._should_evaluate_scene('player_choice', normalized or {}, payload)
+                queued = False
+                if should_queue and scope_key and normalized:
+                    queued = await self._maybe_queue_scene_analysis(scope_key, normalized, reason_tag or 'player_choice')
+
+                choice_impact = await self._analyze_choice_impact(payload)
+                choice_impact['analysis_enqueued'] = queued
+                choice_impact['enqueue_reason'] = reason_tag
+                if scope_key:
+                    summary = await self._get_cached_tension_summary(scope_key)
+                    if summary:
+                        choice_impact['tension_summary'] = summary
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
@@ -264,12 +272,24 @@ class EnhancedIntegrationSubsystem:
             if event.event_type == EventType.SCENE_ENTER:
                 payload = event.payload or {}
                 scene_context = payload.get('scene_context') or payload
-                await self._register_scene_context_for_refresh(scene_context, reason="scene_enter")
+                normalized = self._normalize_scene_context(scene_context or {})
+                scope_key = self._scope_key_from_context(normalized)
+                should_queue, reason_tag = self._should_evaluate_scene('scene_enter', normalized, payload)
+                queued = False
+                if scope_key:
+                    if should_queue:
+                        queued = await self._maybe_queue_scene_analysis(scope_key, normalized, reason_tag or 'scene_enter')
+                    else:
+                        self._remember_scope(scope_key, normalized)
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data={'registered': bool(scene_context)},
+                    data={
+                        'registered': bool(scope_key),
+                        'analysis_enqueued': queued,
+                        'enqueue_reason': reason_tag,
+                    },
                     side_effects=[]
                 )
 
@@ -296,15 +316,23 @@ class EnhancedIntegrationSubsystem:
         """
         Provide a small, cheap bundle for the scene. The synthesizer will merge these.
         """
+        raw_scene_context = {
+            'location': getattr(scope, "location_id", None),
+            'present_npcs': getattr(scope, "npc_ids", []) or [],
+            'npcs': getattr(scope, "npc_ids", []) or [],
+            'topics': getattr(scope, "topics", []) or [],
+            'scene_type': getattr(scope, "scene_type", "unknown"),
+            'activity': getattr(scope, "activity", None) or getattr(scope, "current_activity", None),
+        }
+
+        manifestations: List[str] = []
+        ambient: List[str] = []
+        opportunity: List[Dict[str, Any]] = []
+        summary_source = 'pending'
+        cached_at = None
+        cached_summary: Dict[str, Any] = {}
+
         try:
-            raw_scene_context = {
-                'location': getattr(scope, "location_id", None),
-                'present_npcs': getattr(scope, "npc_ids", []) or [],
-                'npcs': getattr(scope, "npc_ids", []) or [],
-                'topics': getattr(scope, "topics", []) or [],
-                'scene_type': getattr(scope, "scene_type", "unknown"),
-                'activity': getattr(scope, "activity", None) or getattr(scope, "current_activity", None),
-            }
             scene_context = self._normalize_scene_context(raw_scene_context)
             scope_key = self._scope_key_from_context(scene_context)
 
@@ -313,6 +341,8 @@ class EnhancedIntegrationSubsystem:
                 mutate_cache=False
             )
             if cached_summary:
+                summary_source = 'cached'
+                cached_at = cached_summary.get('cached_at')
                 await record_cache_operation(
                     cache_type="enhanced_conflict_tension",
                     hit=True,
@@ -326,15 +356,13 @@ class EnhancedIntegrationSubsystem:
                     cache_type="enhanced_conflict_tension",
                     hit=False
                 )
-                cached_summary = {}
+        except Exception as e:
+            logger.debug(f"get_scene_bundle failed: {e}")
 
+        if cached_summary:
             manifestations = list(cached_summary.get('manifestation', []) or [])
-
-            # Surface subtle ambient effects for slice-of-life vibes
-            ambient = []
             for m in manifestations[:3]:
                 ambient.append(f"subtle_{str(m).lower().replace(' ', '_')}")
-            opportunity = []
             if cached_summary.get('should_generate_conflict'):
                 stype = cached_summary.get('suggested_type') or 'slice_of_life'
                 opportunity.append({
@@ -342,17 +370,14 @@ class EnhancedIntegrationSubsystem:
                     'description': 'Emerging tension could become a small conflict',
                 })
 
-            return {
-                'manifestations': manifestations,
-                'ambient_effects': ambient,
-                'opportunities': opportunity,
-                'tension_summary_cached_at': cached_summary.get('cached_at'),
-                'summary_source': 'cached' if cached_summary else 'pending',
-                'last_changed_at': datetime.now().timestamp(),
-            }
-        except Exception as e:
-            logger.debug(f"get_scene_bundle failed: {e}")
-            return {}
+        return {
+            'manifestations': manifestations,
+            'ambient_effects': ambient,
+            'opportunities': opportunity,
+            'tension_summary_cached_at': cached_at,
+            'summary_source': summary_source,
+            'last_changed_at': datetime.now().timestamp(),
+        }
 
     def _normalize_scene_context(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
         present_npcs = scene_context.get('present_npcs') or scene_context.get('npcs') or []
@@ -397,6 +422,178 @@ class EnhancedIntegrationSubsystem:
         self._known_scene_contexts.move_to_end(scope_key)
         while len(self._known_scene_contexts) > self._scope_memory_limit:
             self._known_scene_contexts.popitem(last=False)
+
+    def _get_recent_scope(self) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        if not self._known_scene_contexts:
+            return None, None
+        try:
+            last_key = next(reversed(self._known_scene_contexts))
+        except StopIteration:
+            return None, None
+        return last_key, self._known_scene_contexts.get(last_key)
+
+    def _get_background_processor(self) -> Optional[BackgroundConflictProcessor]:
+        synthesizer = self.synthesizer() if self.synthesizer else None
+        if not synthesizer:
+            return None
+        processor = getattr(synthesizer, 'processor', None)
+        if isinstance(processor, BackgroundConflictProcessor):
+            return processor
+        return None
+
+    async def _maybe_queue_scene_analysis(
+        self,
+        scope_key: str,
+        scene_context: Dict[str, Any],
+        reason: str,
+    ) -> bool:
+        if not scope_key:
+            return False
+
+        now = time.time()
+        last = self._scope_last_queued.get(scope_key)
+        if last and now - last < self._queue_cooldown:
+            self._remember_scope(scope_key, scene_context)
+            return False
+
+        payload_context = dict(scene_context or {})
+        payload_context['trigger_reason'] = reason
+
+        processor = self._get_background_processor()
+        queued = False
+        if processor and hasattr(processor, 'queue_enhanced_scene_analysis'):
+            try:
+                queued = processor.queue_enhanced_scene_analysis(scope_key, payload_context, reason=reason)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("background processor queue failed: %s", exc)
+
+        if not queued:
+            try:
+                from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                    queue_scene_tension_analysis,
+                )
+
+                queue_scene_tension_analysis(
+                    self.user_id,
+                    self.conversation_id,
+                    scope_key,
+                    payload_context,
+                )
+                queued = True
+            except Exception as exc:
+                logger.warning(
+                    "Failed to queue scene tension analysis for scope %s: %s",
+                    scope_key,
+                    exc,
+                )
+
+        if queued:
+            self._scope_last_queued[scope_key] = now
+            self._remember_scope(scope_key, scene_context)
+        return queued
+
+    def _should_sample_scope(self, scope_key: Optional[str], salt: str, rate: float) -> bool:
+        if not scope_key:
+            return False
+        try:
+            digest = hashlib.sha256(f"{scope_key}:{salt}".encode()).digest()
+            sample_value = digest[0] / 255
+            return sample_value <= rate
+        except Exception:
+            return False
+
+    def _is_scene_interesting(
+        self,
+        scene_context: Dict[str, Any],
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        payload = payload or {}
+        npcs = scene_context.get('present_npcs') or []
+        if isinstance(npcs, (set, tuple)):
+            npcs = list(npcs)
+        if len(npcs) >= 3:
+            return True, 'crowded_scene'
+
+        tension_hint = payload.get('tension_level') or scene_context.get('tension_level')
+        try:
+            tension_value = float(tension_hint)
+            if tension_value >= 0.55:
+                return True, 'elevated_tension'
+        except Exception:
+            pass
+
+        if payload.get('conflicts_active') or scene_context.get('conflicts_active'):
+            return True, 'conflicts_active'
+
+        recent_choice = payload.get('recent_major_choice')
+        if recent_choice:
+            return True, 'recent_major_choice'
+
+        return False, None
+
+    def _should_process_choice(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        impact_fields = ('impact', 'impact_score', 'importance', 'branching_factor', 'salience')
+        for field in impact_fields:
+            value = payload.get(field)
+            if value is None:
+                continue
+            try:
+                if float(value) >= 0.45:
+                    return True, f'{field}_high'
+            except Exception:
+                continue
+
+        tags = payload.get('tags') or payload.get('choice_tags') or []
+        if isinstance(tags, (list, tuple, set)):
+            lowered = {str(tag).lower() for tag in tags if tag is not None}
+            if lowered & {'major', 'branching', 'escalation', 'turning_point'}:
+                return True, 'tag_signal'
+
+        descriptor = str(payload.get('choice') or payload.get('selected_option') or '').lower()
+        keywords = {'confront', 'escalate', 'submit', 'defy', 'refuse', 'leave', 'stay'}
+        if any(keyword in descriptor for keyword in keywords):
+            return True, 'descriptor_signal'
+
+        if descriptor:
+            scope_key = descriptor
+            if self._should_sample_scope(scope_key, 'player_choice', self._player_choice_sample_rate):
+                return True, 'sampled_choice'
+
+        return False, None
+
+    def _should_evaluate_scene(
+        self,
+        event_type: str,
+        scene_context: Dict[str, Any],
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        payload = payload or {}
+        scope_key = self._scope_key_from_context(scene_context)
+        if event_type == 'state_sync':
+            interesting, reason = self._is_scene_interesting(scene_context, payload)
+            if interesting:
+                return True, reason
+            if self._should_sample_scope(scope_key, 'state_sync', self._state_sync_sample_rate):
+                return True, 'sampled_state_sync'
+            return False, 'state_sync_skipped'
+
+        if event_type == 'scene_enter':
+            interesting, reason = self._is_scene_interesting(scene_context, payload)
+            if interesting:
+                return True, reason or 'scene_enter_interesting'
+            if self._should_sample_scope(scope_key, 'scene_enter', self._state_sync_sample_rate / 2):
+                return True, 'scene_enter_sampled'
+            return False, 'scene_enter_quiet'
+
+        if event_type == 'player_choice':
+            processed, reason = self._should_process_choice(payload)
+            if processed:
+                return True, reason
+            if self._should_sample_scope(scope_key, 'player_choice_scope', self._player_choice_sample_rate / 2):
+                return True, 'choice_scope_sampled'
+            return False, 'choice_skipped'
+
+        return False, None
 
     async def _register_scene_context_for_refresh(
         self,

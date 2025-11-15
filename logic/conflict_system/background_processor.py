@@ -479,6 +479,40 @@ class BackgroundConflictProcessor:
             'priority': priority,
         })
 
+    def queue_enhanced_scene_analysis(
+        self,
+        scope_key: str,
+        scene_context: Dict[str, Any],
+        *,
+        reason: str = 'state_sync',
+    ) -> bool:
+        """Queue enhanced slice-of-life scene analysis via Celery."""
+
+        if not scope_key:
+            return False
+
+        try:
+            from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+                queue_scene_tension_analysis,
+            )
+
+            payload_context = dict(scene_context or {})
+            payload_context['trigger_reason'] = reason
+            queue_scene_tension_analysis(
+                self.user_id,
+                self.conversation_id,
+                scope_key,
+                payload_context,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Failed to queue enhanced scene analysis for scope %s: %s",
+                scope_key,
+                exc,
+            )
+            return False
+
     # ========== Private Helper Methods ==========
 
     async def _tick_conflict_progress(self, conn, conflict_id: int, amount: float):
