@@ -766,6 +766,43 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         if 'social' in ct:
             return random.choice(['mediator', 'bystander', 'escalator'])
         return 'bystander'
+
+    def _get_leverage_profile(self, stakeholder: Stakeholder) -> Dict[str, float]:
+        profile = {
+            'holder': False,
+            'holder_strength': 0.0,
+            'target': False,
+            'target_strength': 0.0,
+        }
+
+        try:
+            if not self._synthesizer or not self._synthesizer():
+                return profile
+            synth = self._synthesizer()
+            leverage_system = synth._subsystems.get(SubsystemType.LEVERAGE) if synth else None
+            if leverage_system is None:
+                return profile
+            snapshot_getter = getattr(leverage_system, 'get_active_leverage_items', None)
+            if not callable(snapshot_getter):
+                return profile
+            items = snapshot_getter() or []
+            for item in items:
+                try:
+                    holder_id = getattr(item, 'holder_id', None)
+                    target_id = getattr(item, 'target_id', None)
+                    strength = float(getattr(item, 'strength', 0.0) or 0.0)
+                except Exception:
+                    continue
+                if holder_id == stakeholder.npc_id:
+                    profile['holder'] = True
+                    profile['holder_strength'] = max(profile['holder_strength'], strength)
+                if target_id == stakeholder.npc_id:
+                    profile['target'] = True
+                    profile['target_strength'] = max(profile['target_strength'], strength)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Failed to read leverage profile: %s", exc)
+
+        return profile
     
     async def _create_stakeholders_for_npcs(
         self,
@@ -788,9 +825,22 @@ class StakeholderAutonomySystem(ConflictSubsystem):
     def _select_acting_stakeholders(self, update_type: str) -> List[Stakeholder]:
         acting: List[Stakeholder] = []
         for s in self._active_stakeholders.values():
+            leverage_profile = self._get_leverage_profile(s)
+            base_probability = s.commitment_level
+
             if s.current_role in [StakeholderRole.INSTIGATOR, StakeholderRole.ESCALATOR, StakeholderRole.MEDIATOR]:
-                acting.append(s)
-            elif random.random() < s.commitment_level:
+                base_probability = max(base_probability, 0.6)
+
+            if leverage_profile['holder']:
+                base_probability = min(1.0, base_probability + 0.25 + leverage_profile['holder_strength'] * 0.3)
+
+            if leverage_profile['target']:
+                # Targets of leverage become more avoidant.
+                base_probability = max(0.05, base_probability - (0.2 + leverage_profile['target_strength'] * 0.3))
+                if leverage_profile['target_strength'] >= 0.6 and random.random() > 0.2:
+                    continue
+
+            if random.random() < base_probability:
                 acting.append(s)
         return acting[:3]
     
@@ -809,10 +859,18 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         choice_type: Optional[str],
         target_npc: Optional[int]
     ) -> bool:
+        leverage_profile = self._get_leverage_profile(stakeholder)
+
         if target_npc == stakeholder.npc_id:
             return True
         if stakeholder.current_role in [StakeholderRole.MEDIATOR, StakeholderRole.INSTIGATOR]:
             return True
+        if leverage_profile['holder']:
+            boost = min(0.3, leverage_profile['holder_strength'] * 0.3)
+            return random.random() < min(1.0, stakeholder.commitment_level + boost)
+        if leverage_profile['target']:
+            penalty = min(0.3, leverage_profile['target_strength'] * 0.4)
+            return random.random() < max(0.05, stakeholder.commitment_level - penalty)
         return random.random() < stakeholder.commitment_level
     
     def _find_stakeholder_by_npc(self, npc_id: int) -> Optional[Stakeholder]:

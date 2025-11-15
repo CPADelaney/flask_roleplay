@@ -131,10 +131,12 @@ class LeverageSubsystem(ConflictSubsystem):
     def event_subscriptions(self) -> Set[EventType]:
         return {
             EventType.STAKEHOLDER_ACTION,
+            EventType.PLAYER_CHOICE,
             EventType.NPC_REACTION,
             EventType.CONFLICT_UPDATED,
             EventType.STATE_SYNC,
             EventType.CANON_ESTABLISHED,
+            EventType.LEVERAGE_APPLIED,
         }
     
     async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
@@ -150,12 +152,16 @@ class LeverageSubsystem(ConflictSubsystem):
                 return await self._handle_state_sync(event)
             elif event.event_type == EventType.CANON_ESTABLISHED:
                 return await self._handle_fact_became_public(event)
+            elif event.event_type == EventType.PLAYER_CHOICE:
+                return await self._handle_player_choice(event)
             elif event.event_type == EventType.STAKEHOLDER_ACTION:
                 return await self._handle_stakeholder_action(event)
             elif event.event_type == EventType.NPC_REACTION:
                 return await self._handle_npc_reaction(event)
             elif event.event_type == EventType.CONFLICT_UPDATED:
                 return await self._handle_conflict_updated(event)
+            elif event.event_type == EventType.LEVERAGE_APPLIED:
+                return await self._handle_leverage_feedback(event)
             else:
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
@@ -352,6 +358,97 @@ class LeverageSubsystem(ConflictSubsystem):
             },
         )
 
+    async def _handle_player_choice(self, event: SystemEvent) -> SubsystemResponse:
+        """Inspect player actions for leverage usage and update state."""
+
+        payload = event.payload or {}
+        verb_raw = payload.get('verb')
+        verb = str(verb_raw).lower() if isinstance(verb_raw, str) else None
+        leverage_verbs = {
+            'reveal_secret',
+            'threaten',
+            'hint_at_leverage',
+            'press_advantage',
+        }
+
+        if not verb or verb not in leverage_verbs:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'leverage_detected': False},
+            )
+
+        target_id = self._extract_target_id(payload)
+        if target_id is None:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'leverage_detected': False, 'reason': 'no_target'},
+            )
+
+        leverage_type = (
+            LeverageType.INFORMATION
+            if verb in {'reveal_secret', 'hint_at_leverage'}
+            else LeverageType.EMOTIONAL
+        )
+        holder_id = self.user_id
+
+        leverage_item, created = self._create_or_update_leverage(
+            holder_id=holder_id,
+            target_id=target_id,
+            leverage_type=leverage_type,
+            verb=verb,
+            context=payload,
+        )
+
+        snapshot = {
+            'leverage_id': leverage_item.leverage_id,
+            'holder_id': leverage_item.holder_id,
+            'target_id': leverage_item.target_id,
+            'strength': leverage_item.strength,
+            'verb': verb,
+            'description': leverage_item.description,
+        }
+
+        self._queue_counter_analysis(snapshot)
+
+        side_effects = [
+            SystemEvent(
+                event_id=f"leverage_applied_player_{leverage_item.leverage_id}_{event.event_id}",
+                event_type=EventType.LEVERAGE_APPLIED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'leverage_id': leverage_item.leverage_id,
+                    'holder_id': leverage_item.holder_id,
+                    'target_id': leverage_item.target_id,
+                    'verb': verb,
+                    'strength': leverage_item.strength,
+                    'description': leverage_item.description,
+                    'source': 'player_action',
+                },
+                target_subsystems={
+                    SubsystemType.SOCIAL,
+                    SubsystemType.STAKEHOLDER,
+                    SubsystemType.TENSION,
+                },
+                priority=4,
+            )
+        ]
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'leverage_detected': True,
+                'created': created,
+                'leverage_id': leverage_item.leverage_id,
+            },
+            side_effects=side_effects,
+        )
+
     async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
         """Handle stakeholder actions that might involve leverage"""
         stakeholder_id = event.payload.get('stakeholder_id')
@@ -483,6 +580,44 @@ class LeverageSubsystem(ConflictSubsystem):
             data={'leverage_adjusted': True}
         )
 
+    async def _handle_leverage_feedback(self, event: SystemEvent) -> SubsystemResponse:
+        """Process background leverage analysis or external leverage signals."""
+
+        payload = event.payload or {}
+        leverage_id = payload.get('leverage_id')
+        strategies_payload = payload.get('strategies') or []
+
+        updated_count = 0
+        if leverage_id and strategies_payload:
+            normalized: List[CounterStrategy] = []
+            for entry in strategies_payload:
+                if not isinstance(entry, dict):
+                    continue
+                strategy = CounterStrategy(
+                    strategy_id=entry.get('strategy_id') or 0,
+                    leverage_id=int(leverage_id),
+                    strategy_type=str(entry.get('type') or 'counter'),
+                    description=str(entry.get('description') or '').strip() or 'Attempt to neutralize the leverage quietly.',
+                    requirements=[str(req) for req in entry.get('requirements', []) if req],
+                    success_chance=float(entry.get('success_chance') or 0.4),
+                    risks=[str(risk) for risk in entry.get('risks', []) if risk],
+                )
+                normalized.append(strategy)
+            if normalized:
+                self._counter_strategies[int(leverage_id)] = normalized
+                updated_count = len(normalized)
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'strategies_updated': updated_count,
+                'leverage_id': leverage_id,
+                'source': payload.get('source'),
+            },
+        )
+
     # ========== Helper Methods ==========
 
     def _evaluate_fact_for_leverage(
@@ -525,7 +660,118 @@ class LeverageSubsystem(ConflictSubsystem):
                     if leverage.uses_remaining > 0:
                         return leverage
         return None
-    
+
+    def _extract_target_id(self, payload: Dict[str, Any]) -> Optional[int]:
+        """Normalize target hints from a payload into an NPC id."""
+
+        potential = payload.get('target')
+        if isinstance(potential, str):
+            if potential.startswith('npc_'):
+                try:
+                    return int(potential.split('_', 1)[1])
+                except (ValueError, IndexError):
+                    pass
+            else:
+                try:
+                    return int(potential)
+                except ValueError:
+                    pass
+
+        for key in ('target_npc', 'target_npc_id', 'npc_id'):
+            candidate = payload.get(key)
+            try:
+                if candidate is not None:
+                    return int(candidate)
+            except (TypeError, ValueError):
+                continue
+
+        involved = payload.get('involved_npcs') or []
+        if isinstance(involved, list) and involved:
+            try:
+                return int(involved[0])
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                return None
+        return None
+
+    def _create_or_update_leverage(
+        self,
+        holder_id: int,
+        target_id: int,
+        leverage_type: LeverageType,
+        verb: str,
+        context: Dict[str, Any],
+    ) -> tuple[LeverageItem, bool]:
+        """Create a new leverage item or strengthen an existing one."""
+
+        for leverage in self._active_leverage.values():
+            if (
+                leverage.holder_id == holder_id
+                and leverage.target_id == target_id
+                and leverage.leverage_type == leverage_type
+            ):
+                leverage.strength = min(1.0, leverage.strength + 0.1)
+                leverage.description = self._format_leverage_description(verb, target_id, leverage.description)
+                leverage.discovery_context = json.dumps(context)
+                return leverage, False
+
+        leverage_id = max(self._active_leverage.keys(), default=0) + 1
+        description = self._format_leverage_description(verb, target_id)
+        base_strength = 0.6 if verb == 'threaten' else 0.5 if verb == 'press_advantage' else 0.4
+        leverage_item = LeverageItem(
+            leverage_id=leverage_id,
+            leverage_type=leverage_type,
+            target_id=target_id,
+            holder_id=holder_id,
+            description=description,
+            strength=min(1.0, base_strength),
+            evidence=[],
+            expiration=None,
+            uses_remaining=3,
+            counters=[],
+            discovery_context=json.dumps(context),
+        )
+        self._active_leverage[leverage_id] = leverage_item
+        return leverage_item, True
+
+    def _format_leverage_description(
+        self,
+        verb: str,
+        target_id: int,
+        existing: Optional[str] = None,
+    ) -> str:
+        """Generate a concise description for leverage tracking."""
+
+        target_label = f"NPC {target_id}" if target_id != self.user_id else "the player"
+        action_phrase = {
+            'reveal_secret': f"threat of revealing secrets about {target_label}",
+            'hint_at_leverage': f"subtle reminders of hidden leverage over {target_label}",
+            'threaten': f"direct threats applied to {target_label}",
+            'press_advantage': f"pressure tactics aimed at {target_label}",
+        }.get(verb, f"pressure on {target_label}")
+
+        if existing:
+            return existing
+        return f"{action_phrase}".strip()
+
+    def _queue_counter_analysis(self, snapshot: Dict[str, Any]) -> None:
+        """Dispatch background analysis for leverage counter strategies."""
+
+        try:
+            if not snapshot:
+                return
+            if self.synthesizer and self.synthesizer():
+                synth = self.synthesizer()
+                processor = getattr(synth, 'processor', None)
+                if processor and hasattr(processor, 'queue_leverage_counter_analysis'):
+                    processor.queue_leverage_counter_analysis(snapshot)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Failed to queue leverage analysis: %s", exc)
+
+    def get_active_leverage_items(self) -> List[LeverageItem]:
+        """Expose current leverage items for other subsystems."""
+
+        return list(self._active_leverage.values())
+
     def _analyze_power_dynamics(self) -> Dict[str, Any]:
         """Analyze power dynamics based on leverage"""
         dynamics = {

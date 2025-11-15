@@ -156,6 +156,7 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             EventType.STATE_SYNC,
             EventType.CONFLICT_RESOLVED,
             EventType.CANON_ESTABLISHED,
+            EventType.LEVERAGE_APPLIED,
         }
     
     async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
@@ -179,6 +180,8 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
                 return await self._handle_conflict_created(event)
             elif event.event_type == EventType.CONFLICT_RESOLVED:
                 return await self._handle_conflict_resolved(event)
+            elif event.event_type == EventType.LEVERAGE_APPLIED:
+                return await self._handle_leverage_applied(event)
             else:
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
@@ -389,6 +392,113 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
             success=True,
             data={'social_impact_processed': True, 'tasks_dispatched': True},
             side_effects=side_effects
+        )
+
+    async def _handle_leverage_applied(self, event: SystemEvent) -> SubsystemResponse:
+        """React to leverage usage with gossip, reputation shifts, and tension."""
+
+        payload = event.payload or {}
+        verb = str(payload.get('verb') or '').lower()
+        target_id = payload.get('target_id')
+        holder_id = payload.get('holder_id')
+        strength = float(payload.get('strength') or 0.4)
+
+        if target_id is None:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'leverage_processed': False, 'reason': 'no_target'},
+            )
+
+        holder_label = await self._resolve_entity_label(holder_id)
+        target_label = await self._resolve_entity_label(target_id)
+
+        verb_phrase = {
+            'reveal_secret': f"revealed a compromising secret about {target_label}",
+            'hint_at_leverage': f"hinted at hidden leverage over {target_label}",
+            'threaten': f"issued quiet threats to {target_label}",
+            'press_advantage': f"pressed their advantage against {target_label}",
+        }.get(verb, f"applied pressure to {target_label}")
+
+        gossip_type = GossipType.SCANDAL if verb == 'reveal_secret' else GossipType.WARNING
+        truthfulness = max(0.3, min(1.0, 0.6 + strength * 0.2))
+        spread_rate = max(0.2, min(0.8, 0.3 + strength * 0.3))
+
+        gossip_id = 0
+        try:
+            async with get_db_connection_context() as conn:
+                gossip_id = await conn.fetchval(
+                    """
+                    INSERT INTO social_gossip
+                    (user_id, conversation_id, content, truthfulness, created_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                    RETURNING gossip_id
+                    """,
+                    self.user_id,
+                    self.conversation_id,
+                    f"Word spreads that {holder_label} {verb_phrase}.",
+                    truthfulness,
+                )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug("Failed to persist leverage gossip: %s", exc)
+
+        gossip_item = GossipItem(
+            gossip_id=gossip_id or 0,
+            gossip_type=gossip_type,
+            content=f"Word spreads that {holder_label} {verb_phrase}.",
+            about=[target_id],
+            spreaders=set(),
+            believers=set(),
+            deniers=set(),
+            spread_rate=spread_rate,
+            truthfulness=truthfulness,
+            impact={'target_id': target_id, 'holder_id': holder_id},
+        )
+        self._active_gossip[gossip_item.gossip_id] = gossip_item
+
+        self._apply_reputation_delta(
+            target_id,
+            {
+                ReputationType.SUBMISSIVE: strength * 0.1,
+                ReputationType.SCANDALOUS: strength * 0.15,
+            },
+        )
+        if holder_id is not None:
+            self._apply_reputation_delta(
+                holder_id,
+                {
+                    ReputationType.INFLUENTIAL: strength * 0.1,
+                    ReputationType.DANGEROUS: strength * 0.1,
+                },
+            )
+
+        tension_change = min(0.15, 0.05 + strength * 0.1)
+        side_effects = [
+            SystemEvent(
+                event_id=f"tension_leverage_{event.event_id}",
+                event_type=EventType.TENSION_CHANGED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'tension_type': 'social',
+                    'change': tension_change,
+                    'reason': 'leverage_applied',
+                },
+                target_subsystems={SubsystemType.TENSION},
+                priority=6,
+            )
+        ]
+
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'leverage_processed': True,
+                'gossip_id': gossip_item.gossip_id,
+                'reputation_adjusted': True,
+            },
+            side_effects=side_effects,
         )
     
     async def _handle_npc_reaction(self, event: SystemEvent) -> SubsystemResponse:
@@ -889,6 +999,36 @@ class SocialCircleConflictSubsystem(ConflictSubsystem):
         
         self._reputation_cache[entity_id] = new_reputation
         return new_reputation
+
+    async def _resolve_entity_label(self, entity_id: Optional[int]) -> str:
+        """Resolve a friendly label for an entity involved in gossip."""
+
+        if entity_id is None:
+            return "someone"
+        if entity_id == self.user_id:
+            return "the player"
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("SELECT name FROM NPCs WHERE npc_id = $1", entity_id)
+        return row['name'] if row and row.get('name') else f"NPC {entity_id}"
+
+    def _apply_reputation_delta(
+        self,
+        entity_id: Optional[int],
+        deltas: Dict[ReputationType, float],
+    ) -> None:
+        """Apply simple numeric reputation changes."""
+
+        if entity_id is None:
+            return
+
+        current = self._reputation_cache.get(entity_id)
+        if not current:
+            current = {rep: 0.5 for rep in ReputationType}
+        for rep_type, delta in deltas.items():
+            if rep_type not in current:
+                current[rep_type] = 0.5
+            current[rep_type] = max(0.0, min(1.0, current[rep_type] + float(delta)))
+        self._reputation_cache[entity_id] = current
 
 # ===============================================================================
 # ORIGINAL MANAGER CLASS (Preserved with minor modifications)
