@@ -32,7 +32,7 @@ class ConflictEventHooks:
     """
     
     @staticmethod
-    async def on_game_day_transition(user_id: int, conversation_id: int, new_day: int):
+    async def on_game_day_transition(user_id: int, conversation_id: int, new_day: Any):
         """
         Called when the game day changes.
         Primary trigger for background updates.
@@ -43,9 +43,54 @@ class ConflictEventHooks:
             from logic.conflict_system.conflict_synthesizer import get_synthesizer
 
             synthesizer = await get_synthesizer(user_id, conversation_id)
+
+            day_value: Optional[int] = None
+            month_value: Optional[int] = None
+            year_value: Optional[int] = None
+
+            if hasattr(new_day, 'day') and hasattr(new_day, 'month'):
+                try:
+                    day_value = int(getattr(new_day, 'day'))
+                except (TypeError, ValueError):
+                    day_value = None
+                try:
+                    month_value = int(getattr(new_day, 'month'))
+                except (TypeError, ValueError, AttributeError):
+                    month_value = None
+                try:
+                    year_value = int(getattr(new_day, 'year'))
+                except (TypeError, ValueError, AttributeError):
+                    year_value = None
+            elif isinstance(new_day, dict):
+                raw_day = new_day.get('day', new_day.get('new_day'))
+                try:
+                    day_value = int(raw_day)
+                except (TypeError, ValueError):
+                    day_value = None
+                raw_month = new_day.get('month')
+                raw_year = new_day.get('year')
+                try:
+                    month_value = int(raw_month) if raw_month is not None else None
+                except (TypeError, ValueError):
+                    month_value = None
+                try:
+                    year_value = int(raw_year) if raw_year is not None else None
+                except (TypeError, ValueError):
+                    year_value = None
+            else:
+                try:
+                    day_value = int(new_day)
+                except (TypeError, ValueError):
+                    day_value = None
+
+            if day_value is None:
+                day_value = await get_current_game_day(user_id, conversation_id)
+
             tick_payload = {
-                'new_day': datetime.utcnow().isoformat(),
-                'day': new_day,
+                'type': 'day_transition',
+                'new_day': day_value,
+                'month': month_value,
+                'year': year_value,
             }
             signal = ConflictSignal(
                 type=ConflictSignalType.TIME_TICK,
@@ -56,7 +101,12 @@ class ConflictEventHooks:
 
             await synthesizer.handle_signal(signal)
 
-            return {'dispatched': True, 'day': new_day}
+            response = {'dispatched': True, 'day': day_value}
+            if month_value is not None:
+                response['month'] = month_value
+            if year_value is not None:
+                response['year'] = year_value
+            return response
         except Exception as e:
             logger.error(f"Error in game day transition: {e}")
             return {"error": str(e)}

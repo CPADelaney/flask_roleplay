@@ -115,6 +115,13 @@ INTENSITY_TO_FLOAT = {
     BackgroundIntensity.VISIBLE_EFFECTS: 1.0,
 }
 
+PROGRESS_MILESTONES = [
+    (25.0, "emerging"),
+    (50.0, "surging"),
+    (75.0, "critical"),
+    (95.0, "climax"),
+]
+
 
 async def _get_current_game_day(user_id: int, conversation_id: int) -> int:
     """Return the current in-game day stored in CurrentRoleplay.
@@ -560,45 +567,19 @@ class BackgroundConflictSubsystem:
 
     
     async def get_scene_context(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Fast-path for ConflictSynthesizer.get_scene_bundle().
-        Returns:
-          {
-            'active_conflicts': [ { 'id': int, 'type': 'background', 'intensity': float, 'name': str } ],
-            'ambient_atmosphere': [str, ...],
-            'world_tension': float,
-            'last_changed_at': float
-          }
-        """
-        update = await self.daily_background_update(generate_new=False)
-        # Build ambient list from ripples
-        ripples = ((update.get('ripple_effects') or {}).get('ripples') or {})
-        ambient = ripples.get('ambient_mood') or []
-        if not isinstance(ambient, list):
-            ambient = [str(ambient)]
-        
-        # Represent active conflicts lightly for the bundle
-        active_conflicts_list = []
-        conflicts = await self._get_active_background_conflicts()
-        for c in conflicts[:5]:
-            try:
-                intensity_enum = BackgroundIntensity[c['intensity'].upper()]
-                intensity_level = float(INTENSITY_TO_FLOAT[intensity_enum])
-            except Exception:
-                intensity_level = 0.4
-            active_conflicts_list.append({
-                'id': c['id'],
-                'type': 'background',
-                'name': c.get('name', 'Background Conflict'),
-                'intensity': intensity_level
-            })
-        
-        return {
-            'active_conflicts': active_conflicts_list,
-            'ambient_atmosphere': ambient,
-            'world_tension': float(update.get('world_tension') or 0.0),
-            'last_changed_at': datetime.utcnow().timestamp()
-        }
+        """Return a cached bundle for fast scene assembly without generating new LLM text."""
+
+        current_day = await _get_current_game_day(self.user_id, self.conversation_id)
+        bundle_key = self._scene_bundle_cache_key(current_day)
+        now_ts = datetime.utcnow().timestamp()
+
+        cached_bundle = self._context_cache.get(bundle_key)
+        if cached_bundle and now_ts - cached_bundle['timestamp'] < self._cache_ttl:
+            return dict(cached_bundle['data'])
+
+        bundle = await self._build_scene_context_bundle(current_day=current_day)
+        self._context_cache[bundle_key] = {'timestamp': now_ts, 'data': bundle}
+        return dict(bundle)
     
     async def initialize(self, synthesizer) -> bool:
         """Initialize the subsystem with synthesizer reference"""
@@ -742,19 +723,17 @@ class BackgroundConflictSubsystem:
                 )
     
             elif event.event_type == EventType.DAY_TRANSITION:
-                # Advance background world; permit generation
-                await self.daily_background_update(generate_new=True)
-                # Optionally let processor tick asynchronously (kept lightweight)
+                payload, side_effects = await self._on_day_transition(event)
                 try:
                     asyncio.create_task(self.processor.process_queued_items(max_items=5))
                 except Exception:
-                    pass
+                    logger.debug("Background processor tick failed to schedule", exc_info=True)
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
                     event_id=event.event_id,
                     success=True,
-                    data={'day_transition': True},
-                    side_effects=[]
+                    data=payload,
+                    side_effects=side_effects,
                 )
     
             # Default: not handled
@@ -800,103 +779,269 @@ class BackgroundConflictSubsystem:
             }
     
     async def daily_background_update(self, generate_new: bool = False) -> Dict[str, Any]:
-        """Daily update of all background conflicts - optionally generate new content"""
-        
+        """Return the latest background bundle without triggering new generation."""
+
         current_day = await _get_current_game_day(self.user_id, self.conversation_id)
-        cache_key = f"daily_update_{current_day}"
-        if cache_key in self._context_cache and not generate_new:
-            cached = self._context_cache[cache_key]
-            if datetime.utcnow().timestamp() - cached['timestamp'] < self._cache_ttl:
-                return cached['data']
-        
-        # Get active background conflicts
+        cache_key = self._daily_update_cache_key(current_day)
+        now_ts = datetime.utcnow().timestamp()
+
+        cached = self._context_cache.get(cache_key)
+        if cached and not generate_new and now_ts - cached['timestamp'] < self._cache_ttl:
+            return dict(cached['data'])
+
+        bundle_key = self._scene_bundle_cache_key(current_day)
+        bundle_entry = self._context_cache.get(bundle_key)
+        if bundle_entry and not generate_new and now_ts - bundle_entry['timestamp'] < self._cache_ttl:
+            bundle = dict(bundle_entry['data'])
+        else:
+            bundle = await self._build_scene_context_bundle(current_day=current_day)
+            self._context_cache[bundle_key] = {'timestamp': now_ts, 'data': bundle}
+
+        daily_bundle = self._daily_bundle_from_scene(bundle)
+        self._context_cache[cache_key] = {'timestamp': now_ts, 'data': daily_bundle}
+        return dict(daily_bundle)
+
+    async def _on_day_transition(self, event) -> Tuple[Dict[str, Any], List[Any]]:
+        """Advance background conflicts and refresh cached bundles for a new day."""
+
+        from logic.conflict_system.conflict_synthesizer import EventType, SystemEvent
+
+        payload = event.payload or {}
+        tick_payload = payload.get('tick') if isinstance(payload, dict) else None
+        if isinstance(tick_payload, dict):
+            payload = tick_payload
+
+        day_value = payload.get('new_day') or payload.get('day')
+        month_value = payload.get('month')
+        year_value = payload.get('year')
+
+        current_day: Optional[int] = None
+        if isinstance(day_value, dict):
+            try:
+                current_day = int(day_value.get('day'))
+            except (TypeError, ValueError):
+                current_day = None
+            month_value = month_value or day_value.get('month')
+            year_value = year_value or day_value.get('year')
+        elif hasattr(day_value, 'day'):
+            try:
+                current_day = int(day_value.day)
+                month_value = month_value or getattr(day_value, 'month', None)
+                year_value = year_value or getattr(day_value, 'year', None)
+            except Exception:
+                current_day = None
+        elif day_value is not None:
+            try:
+                current_day = int(day_value)
+            except (TypeError, ValueError):
+                current_day = None
+
+        if current_day is None:
+            current_day = await _get_current_game_day(self.user_id, self.conversation_id)
+
         conflicts_data = await self._get_active_background_conflicts()
-        
-        active_conflicts = []
-        active_conflict_summaries = []
-        for conflict_data in conflicts_data:
-            conflict = self._db_to_background_conflict(conflict_data)
-            active_conflicts.append(conflict)
-            active_conflict_summaries.append(self._summarize_conflict(conflict))
+        if not conflicts_data:
+            bundle = await self._build_scene_context_bundle(current_day=current_day)
+            now_ts = datetime.utcnow().timestamp()
+            daily_bundle = self._daily_bundle_from_scene(bundle)
+            self._context_cache[self._scene_bundle_cache_key(current_day)] = {
+                'timestamp': now_ts,
+                'data': bundle,
+            }
+            self._context_cache[self._daily_update_cache_key(current_day)] = {
+                'timestamp': now_ts,
+                'data': daily_bundle,
+            }
+            payload_data = {
+                'day': current_day,
+                'daily_bundle': daily_bundle,
+                'world_tension': bundle.get('world_tension', 0.0),
+                'threshold_crossings': [],
+                'scheduled_news': [],
+                'scheduled_ripples': [],
+            }
+            if month_value is not None:
+                payload_data['month'] = month_value
+            if year_value is not None:
+                payload_data['year'] = year_value
+            return payload_data, []
 
-        active_conflict_ids = [conflict.conflict_id for conflict in active_conflicts]
+        high_threshold = get_high_intensity_threshold()
+        updated_records: List[Dict[str, Any]] = []
+        threshold_crossings: List[int] = []
+        milestone_events: List[Dict[str, Any]] = []
+        news_queued: List[int] = []
+        ripple_scheduled: List[int] = []
 
-        # Only generate new conflicts if needed and allowed
-        if generate_new and len(active_conflicts) < 3:
-            new_conflict = await self.orchestrator.generate_background_conflict()
-            if new_conflict:
-                active_conflicts.append(new_conflict)
-                active_conflict_summaries.append(self._summarize_conflict(new_conflict))
-                active_conflict_ids.append(new_conflict.conflict_id)
-        
-        # Process conflict advances if generating new content
-        events = []
-        if generate_new:
-            for conflict in active_conflicts:
-                if random.random() < 0.3:  # 30% chance each day
-                    event = await self.orchestrator.advance_background_conflict(conflict)
-                    if event:
-                        events.append({
-                            'conflict': conflict.name,
-                            'event': event.description
-                        })
-        
-        # Get existing news (don't generate new unless explicitly in background)
-        news_items = []
-        async with get_db_connection_context() as conn:
-            recent_news = await conn.fetch(
-                """
-                SELECT headline, source FROM backgroundnews
-                WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY game_day DESC
-                LIMIT 3
-                """,
-                self.user_id, self.conversation_id
+        for record in conflicts_data:
+            conflict = self._db_to_background_conflict(record)
+            metadata = json.loads(record.get('metadata', '{}') or '{}')
+
+            previous_progress = float(record.get('progress') or metadata.get('last_progress', conflict.progress))
+            previous_intensity_value = resolve_intensity_value(record.get('intensity'))
+
+            progress_delta = self._compute_progress_delta(previous_intensity_value, metadata)
+            new_progress = max(0.0, min(100.0, previous_progress + progress_delta))
+
+            conflict.progress = new_progress
+            new_intensity_enum = self._intensity_from_progress(new_progress)
+            conflict.intensity = new_intensity_enum
+            new_intensity_value = float(INTENSITY_TO_FLOAT[new_intensity_enum])
+
+            crossed_high = previous_intensity_value < high_threshold <= new_intensity_value
+            milestone = self._detect_progress_milestone(previous_progress, new_progress)
+
+            metadata.update({
+                'last_progress': new_progress,
+                'last_update_day': current_day,
+                'last_intensity_value': new_intensity_value,
+                'last_intensity_label': new_intensity_enum.value,
+            })
+
+            updated_records.append({
+                'conflict': conflict,
+                'metadata': metadata,
+                'new_intensity_value': new_intensity_value,
+                'crossed_high': crossed_high,
+                'milestone': milestone,
+            })
+
+            if crossed_high:
+                threshold_crossings.append(conflict.conflict_id)
+
+            if milestone:
+                milestone_events.append({
+                    'conflict_id': conflict.conflict_id,
+                    'conflict': conflict.name,
+                    'milestone': milestone,
+                    'progress': round(new_progress, 2),
+                    'intensity': new_intensity_enum.value,
+                })
+
+        for record in updated_records:
+            conflict = record['conflict']
+            metadata = record['metadata']
+
+            if (record['crossed_high'] or record['milestone'] in {'critical', 'climax'}) and metadata.get('last_threshold_analysis_day') != current_day:
+                analysis = await self._run_threshold_analysis(
+                    conflict,
+                    metadata,
+                    current_day=current_day,
+                )
+                if analysis:
+                    metadata['threshold_analysis'] = analysis
+                    metadata['last_threshold_analysis_day'] = current_day
+
+            if record['crossed_high']:
+                self.processor.queue_ripple_generation(
+                    conflict,
+                    priority=ProcessingPriority.HIGH,
+                    reason='intensity_threshold',
+                )
+                metadata['last_ripple_day'] = current_day
+                ripple_scheduled.append(conflict.conflict_id)
+
+            if (record['crossed_high'] or record['milestone'] in {'surging', 'critical', 'climax'}) and metadata.get('last_news_day') != current_day:
+                try:
+                    should_news, reason = await self.processor.should_generate_news(conflict.conflict_id)
+                except Exception:
+                    should_news, reason = (False, None)
+
+                if should_news:
+                    self.processor.queue_news_generation(
+                        conflict.conflict_id,
+                        priority=ProcessingPriority.HIGH if record['crossed_high'] else ProcessingPriority.NORMAL,
+                        reason=reason or 'threshold_crossed',
+                    )
+                    metadata['last_news_day'] = current_day
+                    news_queued.append(conflict.conflict_id)
+
+        update_rows = [
+            (
+                record['conflict'].progress,
+                record['new_intensity_value'],
+                json.dumps(record['metadata']),
+                record['conflict'].conflict_id,
+                self.user_id,
+                self.conversation_id,
             )
-            news_items = [dict(n) for n in recent_news]
-        
-        # Get cached ripple effects (normalized object with 'ripples' key)
-        ripples_obj = {'ripples': {}}
-        if active_conflicts:
-            # Use cached ripples if available
-            ripple_key = f"daily_ripples_{current_day}"
-            if ripple_key in self._context_cache:
-                cached_ripple = self._context_cache[ripple_key]
-                if datetime.utcnow().timestamp() - cached_ripple['timestamp'] < 3600:
-                    ripples_obj = cached_ripple['data']
-            elif generate_new: # Only generate new if not in cache and permitted
-                ripple_result = await self.ripple_manager.generate_daily_ripples(active_conflicts)
-                ripples = ripple_result.get('ripples', {})
-                ripples_obj = {'ripples': ripples}
-                self._context_cache[ripple_key] = {
-                    'timestamp': datetime.utcnow().timestamp(),
-                    'data': ripples_obj
-                }
-        
-        # Check for opportunities (rarely)
-        opportunities = []
-        if generate_new and random.random() < 0.1:  # 10% chance
-            opportunities = await self.ripple_manager.check_for_opportunities(
-                active_conflicts, {}  # Would pass actual player skills
+            for record in updated_records
+        ]
+
+        if update_rows:
+            async with get_db_connection_context() as conn:
+                await conn.executemany(
+                    """
+                    UPDATE BackgroundConflicts
+                    SET progress = $1,
+                        intensity = $2,
+                        metadata = COALESCE($3::jsonb, '{}'::jsonb),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $4 AND user_id = $5 AND conversation_id = $6
+                    """,
+                    update_rows,
+                )
+
+        updated_conflicts = [record['conflict'] for record in updated_records]
+        bundle = await self._build_scene_context_bundle(
+            current_day=current_day,
+            conflicts=updated_conflicts,
+        )
+        daily_bundle = self._daily_bundle_from_scene(bundle)
+        daily_bundle['events_today'] = milestone_events
+        daily_bundle['news'] = list(daily_bundle.get('news', []))
+        daily_bundle['ripple_effects'] = bundle.get('ripple_effects', {'ripples': {}})
+        daily_bundle.setdefault('optional_opportunities', [])
+
+        now_ts = datetime.utcnow().timestamp()
+        self._context_cache[self._scene_bundle_cache_key(current_day)] = {
+            'timestamp': now_ts,
+            'data': bundle,
+        }
+        self._context_cache[self._daily_update_cache_key(current_day)] = {
+            'timestamp': now_ts,
+            'data': daily_bundle,
+        }
+
+        ripple_key = self._ripple_cache_key(current_day)
+        if ripple_key not in self._context_cache:
+            self._context_cache[ripple_key] = {
+                'timestamp': now_ts,
+                'data': {'ripples': {}},
+            }
+
+        payload_data = {
+            'day': current_day,
+            'daily_bundle': daily_bundle,
+            'world_tension': bundle.get('world_tension', 0.0),
+            'threshold_crossings': threshold_crossings,
+            'scheduled_news': news_queued,
+            'scheduled_ripples': ripple_scheduled,
+            'milestones': milestone_events,
+        }
+        if month_value is not None:
+            payload_data['month'] = month_value
+        if year_value is not None:
+            payload_data['year'] = year_value
+
+        side_effects: List[SystemEvent] = []
+        for milestone in milestone_events:
+            side_effects.append(
+                SystemEvent(
+                    event_id=f"background_conflict_{milestone['conflict_id']}_{current_day}",
+                    event_type=EventType.CONFLICT_UPDATED,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'conflict_id': milestone['conflict_id'],
+                        'milestone': milestone['milestone'],
+                        'progress': milestone['progress'],
+                        'intensity': milestone['intensity'],
+                    },
+                    priority=6,
+                )
             )
-        
-        result = {
-            'active_conflicts': active_conflict_summaries,
-            'active_conflict_ids': active_conflict_ids,
-            'events_today': events,
-            'news': news_items,
-            'ripple_effects': ripples_obj,
-            'optional_opportunities': opportunities,
-            'world_tension': sum(c.progress for c in active_conflicts) / (len(active_conflicts) * 100) if active_conflicts else 0
-        }
-        
-        # Cache the result
-        self._context_cache[cache_key] = {
-            'timestamp': datetime.utcnow().timestamp(),
-            'data': result
-        }
-        
-        return result
+
+        return payload_data, side_effects
     
     async def get_conversation_topics(self) -> List[str]:
         """Get background conflict topics for NPC conversations"""
@@ -933,6 +1078,203 @@ class BackgroundConflictSubsystem:
                 return True
     
         return random.random() < 0.3
+
+    def _scene_bundle_cache_key(self, day: int) -> str:
+        return f"scene_bundle_{int(day)}"
+
+    def _daily_update_cache_key(self, day: int) -> str:
+        return f"daily_update_{int(day)}"
+
+    def _ripple_cache_key(self, day: int) -> str:
+        return f"daily_ripples_{int(day)}"
+
+    async def _build_scene_context_bundle(
+        self,
+        *,
+        current_day: int,
+        conflicts: Optional[List[BackgroundConflict]] = None,
+    ) -> Dict[str, Any]:
+        if conflicts is None:
+            conflicts_data = await self._get_active_background_conflicts()
+            conflicts = [self._db_to_background_conflict(data) for data in conflicts_data]
+
+        summaries = [self._summarize_conflict(conflict) for conflict in conflicts]
+        conflict_ids = [conflict.conflict_id for conflict in conflicts]
+
+        news_items = await self._fetch_recent_news(limit=5)
+        ripple_effects = self._get_cached_ripples(current_day)
+
+        ambient = ripple_effects.get('ripples', {}).get('ambient_mood') or []
+        if not isinstance(ambient, list):
+            ambient = [str(ambient)] if ambient else []
+        if not ambient:
+            for conflict in conflicts:
+                for impact in conflict.impact_on_daily_life[:2]:
+                    if not impact:
+                        continue
+                    ambient.append(str(impact))
+                    if len(ambient) >= 5:
+                        break
+                if len(ambient) >= 5:
+                    break
+
+        tension_values: List[float] = []
+        for conflict in conflicts:
+            try:
+                tension_values.append(float(INTENSITY_TO_FLOAT[conflict.intensity]))
+            except KeyError:
+                tension_values.append(0.4)
+
+        world_tension = 0.0
+        if tension_values:
+            world_tension = round(sum(tension_values) / len(tension_values), 3)
+
+        bundle = {
+            'background_conflicts': summaries,
+            'conflict_ids': conflict_ids,
+            'ambient_atmosphere': ambient[:5],
+            'world_tension': world_tension,
+            'news': news_items,
+            'ripple_effects': ripple_effects,
+            'last_changed_at': datetime.utcnow().timestamp(),
+            'last_updated_day': current_day,
+        }
+        return bundle
+
+    def _daily_bundle_from_scene(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'active_conflicts': list(bundle.get('background_conflicts', [])),
+            'active_conflict_ids': list(bundle.get('conflict_ids', [])),
+            'events_today': [],
+            'news': list(bundle.get('news', [])),
+            'ripple_effects': dict(bundle.get('ripple_effects', {'ripples': {}})),
+            'optional_opportunities': [],
+            'world_tension': float(bundle.get('world_tension', 0.0)),
+        }
+
+    def _compute_progress_delta(self, intensity_value: float, metadata: Dict[str, Any]) -> float:
+        momentum = metadata.get('momentum', metadata.get('momentum_score', 0.5))
+        volatility = metadata.get('volatility', 0.3)
+        trend = str(metadata.get('trend', metadata.get('direction', 'steady'))).lower()
+
+        try:
+            momentum = float(momentum)
+        except (TypeError, ValueError):
+            momentum = 0.5
+        momentum = max(0.0, min(1.0, momentum))
+
+        try:
+            volatility = float(volatility)
+        except (TypeError, ValueError):
+            volatility = 0.3
+        volatility = max(0.0, min(1.0, volatility))
+
+        base = max(0.4, intensity_value * 10.0)
+        base *= 0.8 + momentum * 0.5
+        base += volatility * 2.0
+
+        if trend in {'escalating', 'rising', 'surging', 'boiling'}:
+            base *= 1.2
+        elif trend in {'cooling', 'declining', 'stabilizing', 'subsiding'}:
+            base *= 0.75
+
+        return max(0.5, min(base, 12.0))
+
+    def _intensity_from_progress(self, progress: float) -> BackgroundIntensity:
+        normalized = max(0.0, min(progress, 100.0)) / 100.0
+        if normalized >= 0.85:
+            return BackgroundIntensity.VISIBLE_EFFECTS
+        if normalized >= 0.65:
+            return BackgroundIntensity.AMBIENT_TENSION
+        if normalized >= 0.45:
+            return BackgroundIntensity.REGULAR_TOPIC
+        if normalized >= 0.25:
+            return BackgroundIntensity.OCCASIONAL_NEWS
+        return BackgroundIntensity.DISTANT_RUMOR
+
+    def _detect_progress_milestone(self, previous: float, current: float) -> Optional[str]:
+        for threshold, label in PROGRESS_MILESTONES:
+            if previous < threshold <= current:
+                return label
+        return None
+
+    async def _run_threshold_analysis(
+        self,
+        conflict: BackgroundConflict,
+        metadata: Dict[str, Any],
+        *,
+        current_day: int,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            from lore.utils.llm_gateway import build_llm_request
+            from nyx.gateway import llm_gateway
+            from nyx.config import WARMUP_MODEL
+        except Exception:
+            logger.debug("Threshold analysis skipped due to missing dependencies", exc_info=True)
+            return None
+
+        context_payload = {
+            'conflict': {
+                'name': conflict.name,
+                'type': conflict.conflict_type.value,
+                'progress': round(conflict.progress, 2),
+                'intensity': conflict.intensity.value,
+                'current_state': conflict.current_state,
+                'factions': conflict.factions[:3],
+            },
+            'metadata': {
+                'momentum': metadata.get('momentum'),
+                'volatility': metadata.get('volatility'),
+                'trend': metadata.get('trend'),
+                'last_analysis': metadata.get('threshold_analysis'),
+            },
+            'day': current_day,
+        }
+
+        prompt = (
+            "Analyze the background conflict state and return JSON with keys "
+            "`risk_tier`, `recommended_ripple`, and `escalation_outlook`."
+        )
+
+        try:
+            request = build_llm_request(
+                self.orchestrator.evolution_agent,
+                prompt,
+                context=context_payload,
+                model_override=WARMUP_MODEL,
+                run_config={'response_format': 'json_object'},
+            )
+            result = await llm_gateway.execute(request)
+            raw_text = (result.text or '').strip()
+            if not raw_text:
+                return None
+            return json.loads(raw_text)
+        except Exception:
+            logger.debug("Background conflict threshold analysis failed", exc_info=True)
+            return None
+
+    async def _fetch_recent_news(self, *, limit: int = 5) -> List[Dict[str, Any]]:
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT headline, source, game_day
+                FROM backgroundnews
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY game_day DESC, id DESC
+                LIMIT $3
+                """,
+                self.user_id,
+                self.conversation_id,
+                limit,
+            )
+        return [dict(row) for row in rows]
+
+    def _get_cached_ripples(self, current_day: int) -> Dict[str, Any]:
+        ripple_key = self._ripple_cache_key(current_day)
+        cached = self._context_cache.get(ripple_key)
+        if cached and datetime.utcnow().timestamp() - cached['timestamp'] < 3600:
+            return dict(cached['data'])
+        return {'ripples': {}}
     
     async def _get_active_background_conflicts(self) -> List[Dict[str, Any]]:
         """Get active background conflicts from database, including recent developments."""
