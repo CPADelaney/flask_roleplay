@@ -84,6 +84,9 @@ async def test_player_action_signal_payload_contains_activity_context():
     assert signal.type is ConflictSignalType.PLAYER_ACTION
     assert signal.payload['activity_type'] == 'conversation'
     assert signal.payload['involved_npcs'] == [9]
+    assert signal.payload['actor'] == 'player'
+    assert signal.payload['verb'] is None
+    assert signal.payload['target'] == 'npc_9'
 
 
 async def test_end_of_day_signal_uses_time_tick():

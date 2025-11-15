@@ -220,6 +220,7 @@ class EventType(Enum):
     INTENSITY_CHANGED = "intensity_changed"
     STAKEHOLDER_ACTION = "stakeholder_action"
     PLAYER_CHOICE = "player_choice"
+    LEVERAGE_APPLIED = "leverage_applied"
     NPC_REACTION = "npc_reaction"
     EDGE_CASE_DETECTED = "edge_case_detected"
     CANON_ESTABLISHED = "canon_established"
@@ -913,7 +914,12 @@ class ConflictSynthesizer:
         signal_event_map: Dict[ConflictSignalType, tuple[EventType, Optional[Set[SubsystemType]]]] = {
             ConflictSignalType.PLAYER_ACTION: (
                 EventType.PLAYER_CHOICE,
-                {SubsystemType.TENSION, SubsystemType.STAKEHOLDER, SubsystemType.SOCIAL},
+                {
+                    SubsystemType.TENSION,
+                    SubsystemType.STAKEHOLDER,
+                    SubsystemType.SOCIAL,
+                    SubsystemType.LEVERAGE,
+                },
             ),
             ConflictSignalType.FACT_BECAME_PUBLIC: (
                 EventType.CANON_ESTABLISHED,
@@ -974,6 +980,26 @@ class ConflictSynthesizer:
                         payload={'news': it['result'].get('news'), 'conflict_id': it.get('conflict_id')},
                         requires_response=False,
                         priority=9
+                    )
+                    try:
+                        self._event_queue.put_nowait(ev)
+                    except asyncio.QueueFull:
+                        pass
+                elif it.get('type') == 'leverage_counter_analysis' and it.get('result'):
+                    leverage_payload = dict(it.get('result') or {})
+                    leverage_payload.setdefault('source', 'background_analysis')
+                    ev = SystemEvent(
+                        event_id=f"bg_leverage_{leverage_payload.get('leverage_id')}_{time.time()}",
+                        event_type=EventType.LEVERAGE_APPLIED,
+                        source_subsystem=SubsystemType.ORCHESTRATOR,
+                        payload=leverage_payload,
+                        target_subsystems={
+                            SubsystemType.LEVERAGE,
+                            SubsystemType.SOCIAL,
+                            SubsystemType.STAKEHOLDER,
+                        },
+                        requires_response=False,
+                        priority=8,
                     )
                     try:
                         self._event_queue.put_nowait(ev)

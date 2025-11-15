@@ -21,6 +21,9 @@ from logic.conflict_system.background_grand_conflicts_hotpath import (
     queue_conflict_news,
 )
 from logic.time_cycle import get_current_game_day
+from agents import Agent
+from nyx.config import WARMUP_MODEL
+from nyx.gateway.llm_gateway import LLMRequest, execute
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,7 @@ class BackgroundConflictProcessor:
         self.limits = ConflictContentLimits()
         self._processing_queue: List[Dict[str, Any]] = []
         self._last_daily_process: Optional[int] = None
+        self._leverage_counter_agent: Optional[Agent] = None
         
     async def should_generate_news(self, conflict_id: int) -> tuple[bool, str]:
         """
@@ -348,6 +352,13 @@ class BackgroundConflictProcessor:
                             exc,
                         )
 
+                elif item['type'] == 'leverage_counter_analysis':
+                    result = await self._generate_leverage_counter_analysis(item.get('payload') or {})
+                    processed.append({
+                        'type': 'leverage_counter_analysis',
+                        'result': result,
+                    })
+
                 elif item['type'] == 'generate_initial_conflicts':
                     conflicts_generated = 0
                     async with get_db_connection_context() as conn:
@@ -454,6 +465,20 @@ class BackgroundConflictProcessor:
             'reason': reason,
         })
 
+    def queue_leverage_counter_analysis(self, payload: Dict[str, Any]) -> None:
+        """Queue leverage counter-strategy generation for background processing."""
+
+        if not isinstance(payload, dict):
+            return
+
+        snapshot = dict(payload)
+        priority = ProcessingPriority.HIGH if float(snapshot.get('strength', 0) or 0) >= 0.6 else ProcessingPriority.NORMAL
+        self._processing_queue.append({
+            'type': 'leverage_counter_analysis',
+            'payload': snapshot,
+            'priority': priority,
+        })
+
     # ========== Private Helper Methods ==========
 
     async def _tick_conflict_progress(self, conn, conflict_id: int, amount: float):
@@ -541,6 +566,125 @@ class BackgroundConflictProcessor:
         except Exception:  # pragma: no cover - defensive guard
             logger.debug("Failed to build conflict snapshot for ripples", exc_info=True)
             return None
+
+    def _get_leverage_counter_agent(self) -> Agent:
+        """Lazy-load an agent tuned for leverage counter-strategy analysis."""
+
+        if self._leverage_counter_agent is None:
+            self._leverage_counter_agent = Agent(
+                name="Leverage Counter Analyst",
+                instructions="""
+                Analyze leverage situations and propose concise counter-strategies.
+
+                Respond with minified JSON: {"strategies": [
+                  {"type": str, "description": str, "requirements": [str],
+                   "success_chance": float, "risks": [str] }
+                ]}
+
+                Keep responses grounded in provided facts. No markdown, no prose.
+                """,
+                model=WARMUP_MODEL,
+            )
+        return self._leverage_counter_agent
+
+    async def _generate_leverage_counter_analysis(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Use WARMUP model in the background to suggest leverage counter moves."""
+
+        if not snapshot:
+            return {}
+
+        leverage_id = snapshot.get('leverage_id')
+        holder_id = snapshot.get('holder_id')
+        target_id = snapshot.get('target_id')
+        context_lines = json.dumps(snapshot, indent=2)
+
+        prompt = (
+            "Leverage situation summary:\n"
+            f"Holder: {holder_id}\n"
+            f"Target: {target_id}\n"
+            f"Verb: {snapshot.get('verb')}\n"
+            f"Strength: {snapshot.get('strength')}\n"
+            f"Details: {context_lines}\n\n"
+            "Provide 2-3 realistic counter-strategies the target could pursue."
+        )
+
+        result = await execute(
+            LLMRequest(
+                prompt=prompt,
+                agent=self._get_leverage_counter_agent(),
+                metadata={
+                    "operation": "leverage_counter_analysis",
+                    "stage": "background",
+                },
+                model_override=WARMUP_MODEL,
+            )
+        )
+
+        strategies_payload: List[Dict[str, Any]] = []
+        try:
+            parsed = json.loads(result.text or "{}")
+            if isinstance(parsed, dict) and isinstance(parsed.get('strategies'), list):
+                strategies_payload = [
+                    entry for entry in parsed['strategies'] if isinstance(entry, dict)
+                ]
+            elif isinstance(parsed, list):
+                strategies_payload = [entry for entry in parsed if isinstance(entry, dict)]
+        except json.JSONDecodeError:
+            strategies_payload = []
+
+        stored: List[Dict[str, Any]] = []
+        if leverage_id and strategies_payload:
+            async with get_db_connection_context() as conn:
+                for entry in strategies_payload:
+                    try:
+                        strategy_id = await conn.fetchval(
+                            """
+                            INSERT INTO counter_strategies
+                            (user_id, conversation_id, leverage_id,
+                             strategy_type, description, success_chance)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING strategy_id
+                            """,
+                            self.user_id,
+                            self.conversation_id,
+                            leverage_id,
+                            str(entry.get('type') or 'counter'),
+                            str(entry.get('description') or '').strip() or 'Counter the leverage discreetly.',
+                            float(entry.get('success_chance') or 0.4),
+                        )
+                    except Exception as exc:  # pragma: no cover - best effort
+                        logger.debug("Failed to persist leverage counter strategy: %s", exc)
+                        strategy_id = None
+
+                    stored.append({
+                        'strategy_id': strategy_id,
+                        'type': entry.get('type') or 'counter',
+                        'description': entry.get('description'),
+                        'success_chance': float(entry.get('success_chance') or 0.4),
+                        'requirements': entry.get('requirements', []),
+                        'risks': entry.get('risks', []),
+                    })
+        else:
+            stored = [
+                {
+                    'strategy_id': None,
+                    'type': entry.get('type') or 'counter',
+                    'description': entry.get('description'),
+                    'success_chance': float(entry.get('success_chance') or 0.4),
+                    'requirements': entry.get('requirements', []),
+                    'risks': entry.get('risks', []),
+                }
+                for entry in strategies_payload
+            ]
+
+        return {
+            'leverage_id': leverage_id,
+            'holder_id': holder_id,
+            'target_id': target_id,
+            'verb': snapshot.get('verb'),
+            'strength': snapshot.get('strength'),
+            'strategies': stored,
+        }
 
     async def _process_npc_daily_schedules(self) -> int:
         """
