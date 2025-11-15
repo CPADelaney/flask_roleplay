@@ -472,6 +472,14 @@ class ConflictSynthesizer:
                                 break
                             try:
                                 self._event_queue.put_nowait(se)
+                                logger.debug(
+                                    "Enqueuing event",
+                                    extra={
+                                        "event_type": se.event_type.value,
+                                        "source_subsystem": se.source_subsystem.value,
+                                        "queue_size": self._event_queue.qsize(),
+                                    },
+                                )
                                 side_count += 1
                             except asyncio.QueueFull:
                                 logger.warning(f"Event queue full, dropping side effect {se.event_id}")
@@ -483,6 +491,14 @@ class ConflictSynthesizer:
             # Async fire-and-forget
             try:
                 self._event_queue.put_nowait(event)
+                logger.debug(
+                    "Enqueuing event",
+                    extra={
+                        "event_type": event.event_type.value,
+                        "source_subsystem": event.source_subsystem.value,
+                        "queue_size": self._event_queue.qsize(),
+                    },
+                )
             except asyncio.QueueFull:
                 logger.warning(f"Event queue full, dropping event {event.event_id}")
                 self._performance_metrics['failures_count'] += 1
@@ -813,9 +829,17 @@ class ConflictSynthesizer:
             requires_response=False,
             priority=7,
         )
-    
+
         try:
             self._event_queue.put_nowait(event)
+            logger.debug(
+                "Enqueuing event",
+                extra={
+                    "event_type": event.event_type.value,
+                    "source_subsystem": event.source_subsystem.value,
+                    "queue_size": self._event_queue.qsize(),
+                },
+            )
         except asyncio.QueueFull:
             logger.warning("Event queue full, day transition event dropped")
 
@@ -828,6 +852,17 @@ class ConflictSynthesizer:
 
     async def handle_signal(self, signal: ConflictSignal) -> None:
         """Route external conflict signals into synthesizer events."""
+
+        logger.info(
+            "Conflict signal received",
+            extra={
+                "user_id": signal.user_id,
+                "conversation_id": signal.conversation_id,
+                "signal_type": signal.type.value,
+                "has_scene_scope": signal.scene_scope is not None,
+                "payload_keys": list((signal.payload or {}).keys()),
+            },
+        )
 
         if signal.user_id != self.user_id or signal.conversation_id != self.conversation_id:
             logger.warning(
@@ -983,6 +1018,14 @@ class ConflictSynthesizer:
                     )
                     try:
                         self._event_queue.put_nowait(ev)
+                        logger.debug(
+                            "Enqueuing event",
+                            extra={
+                                "event_type": ev.event_type.value,
+                                "source_subsystem": ev.source_subsystem.value,
+                                "queue_size": self._event_queue.qsize(),
+                            },
+                        )
                     except asyncio.QueueFull:
                         pass
                 elif it.get('type') == 'leverage_counter_analysis' and it.get('result'):
@@ -1003,6 +1046,14 @@ class ConflictSynthesizer:
                     )
                     try:
                         self._event_queue.put_nowait(ev)
+                        logger.debug(
+                            "Enqueuing event",
+                            extra={
+                                "event_type": ev.event_type.value,
+                                "source_subsystem": ev.source_subsystem.value,
+                                "queue_size": self._event_queue.qsize(),
+                            },
+                        )
                     except asyncio.QueueFull:
                         pass
         except Exception:
@@ -1109,6 +1160,14 @@ class ConflictSynthesizer:
 
         try:
             self._event_queue.put_nowait(event)
+            logger.debug(
+                "Enqueuing event",
+                extra={
+                    "event_type": event.event_type.value,
+                    "source_subsystem": event.source_subsystem.value,
+                    "queue_size": self._event_queue.qsize(),
+                },
+            )
         except asyncio.QueueFull:
             pass
 
@@ -1124,10 +1183,19 @@ class ConflictSynthesizer:
                     self._event_queue.get(),
                     timeout=1.0
                 )
-                
+
+                logger.info(
+                    "Processing event",
+                    extra={
+                        "event_id": event.event_id,
+                        "event_type": event.event_type.value,
+                        "targets": [s.value for s in (event.target_subsystems or [])],
+                    },
+                )
+
                 # Use parallel processing with timeouts for background events too
                 responses = await self._process_event_parallel(event)
-                
+
                 # Track successful event processing
                 self._performance_metrics['events_processed'] += 1
                 
@@ -1143,6 +1211,14 @@ class ConflictSynthesizer:
                                 break
                             try:
                                 self._event_queue.put_nowait(side_effect)
+                                logger.debug(
+                                    "Enqueuing event",
+                                    extra={
+                                        "event_type": side_effect.event_type.value,
+                                        "source_subsystem": side_effect.source_subsystem.value,
+                                        "queue_size": self._event_queue.qsize(),
+                                    },
+                                )
                                 side_count += 1
                             except asyncio.QueueFull:
                                 logger.warning(f"Event queue full, dropping side effect {side_effect.event_id}")
@@ -1258,9 +1334,18 @@ class ConflictSynthesizer:
             try:
                 return await subsystem.handle_event(event)
             except Exception as e:
-                logger.error(f"Error in {subsystem.subsystem_type} handling: {e}")
+                subsystem_type = getattr(subsystem, "subsystem_type", SubsystemType.ORCHESTRATOR)
+                logger.error(
+                    "Subsystem error handling event",
+                    extra={
+                        "event_id": event.event_id,
+                        "event_type": event.event_type.value,
+                        "subsystem": subsystem_type.value,
+                    },
+                    exc_info=True,
+                )
                 return SubsystemResponse(
-                    subsystem=subsystem.subsystem_type,
+                    subsystem=subsystem_type,
                     event_id=event.event_id,
                     success=False,
                     data={'error': str(e)}

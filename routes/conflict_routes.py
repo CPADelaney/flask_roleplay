@@ -25,6 +25,7 @@ from logic.conflict_system.conflict_synthesizer import (
     MAX_EVENT_QUEUE,
     MAX_EVENT_HISTORY
 )
+from logic.conflict_system.integration import ConflictSystemInterface
 from conflict.signals import ConflictSignal, ConflictSignalType
 
 # Import governance integration
@@ -107,21 +108,23 @@ async def validate_request_data(data: Dict[str, Any], required_fields: List[str]
 @require_login
 async def get_system_status(user_id):
     """Get the overall conflict system status."""
-    conversation_id = request.args.get("conversation_id")
-    
-    if not conversation_id:
+    conversation_id_param = request.args.get("conversation_id")
+
+    if not conversation_id_param:
         return jsonify({"error": "Missing conversation_id parameter"}), 400
-    
+
     try:
-        # Get synthesizer instance
-        synthesizer = await get_synthesizer(user_id, int(conversation_id))
-        
-        # Get comprehensive system state
-        state = await synthesizer.get_system_state()
-        
+        conversation_id = int(conversation_id_param)
+    except (TypeError, ValueError):
+        return jsonify({"error": "conversation_id must be an integer"}), 400
+
+    interface = ConflictSystemInterface(user_id, conversation_id)
+
+    try:
+        status = await interface.get_system_status()
         return jsonify({
             "success": True,
-            "system_state": state
+            "status": status,
         })
     except Exception as e:
         logger.error(f"Error getting system state: {e}", exc_info=True)

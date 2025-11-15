@@ -157,9 +157,28 @@ class BackgroundConflictProcessor:
         Called on game day transitions, not every turn.
         """
         current_day = await get_current_game_day(self.user_id, self.conversation_id)
-        
+
+        logger.info(
+            "Background processing started",
+            extra={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "queue_len": len(self._processing_queue),
+                "last_processed_day": str(self._last_daily_process),
+            },
+        )
+
         # Skip if already processed today (unless forced)
         if not force and self._last_daily_process == current_day:
+            logger.info(
+                "Background processing completed",
+                extra={
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id,
+                    "queue_len": len(self._processing_queue),
+                    "items_processed": 0,
+                },
+            )
             return {"status": "already_processed", "day": current_day}
         
         results = {
@@ -212,8 +231,25 @@ class BackgroundConflictProcessor:
         # Check for opportunity windows closing
         opp_count = await self._check_expiring_opportunities()
         results['opportunities_created'] = opp_count
-        
+
         self._last_daily_process = current_day
+
+        items_processed = (
+            results.get("conflicts_updated", 0)
+            + len(results.get("news_generated", []))
+            + results.get("npcs_repositioned", 0)
+            + results.get("opportunities_created", 0)
+        )
+
+        logger.info(
+            "Background processing completed",
+            extra={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "queue_len": len(self._processing_queue),
+                "items_processed": items_processed,
+            },
+        )
         return results
     
     async def process_scene_relevant_updates(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -279,6 +315,16 @@ class BackgroundConflictProcessor:
         Process items from the background queue.
         Called by background workers, not in request path.
         """
+        logger.info(
+            "Background processing started",
+            extra={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "queue_len": len(self._processing_queue),
+                "last_processed_day": str(self._last_daily_process),
+            },
+        )
+
         processed = []
         
         # Sort by priority
@@ -396,7 +442,16 @@ class BackgroundConflictProcessor:
                     
             except Exception as e:
                 logger.error(f"Error processing queued item {item}: {e}")
-                
+
+        logger.info(
+            "Background processing completed",
+            extra={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "queue_len": len(self._processing_queue),
+                "items_processed": len(processed),
+            },
+        )
         return processed
     
     async def trigger_significant_event(self, conflict_id: int, event_data: Dict[str, Any]) -> bool:

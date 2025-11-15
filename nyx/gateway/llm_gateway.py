@@ -300,12 +300,28 @@ async def _run_once(
     metadata = dict(request.metadata or {})
     operation = str(metadata.get("operation") or "unknown")
     trace_id = metadata.get("trace_id")
+    subsystem = str(
+        metadata.get("subsystem")
+        or metadata.get("source_subsystem")
+        or "unknown"
+    )
+
+    model_name: str | None = None
+    run_config = runner_kwargs.get("run_config")
+    if run_config is not None:
+        model_name = getattr(run_config, "model", None)
+    if model_name is None:
+        model_name = request.model_override or metadata.get("model") or getattr(agent, "model", None)
+    model_label = str(model_name) if model_name else "unknown"
 
     log_payload = {
         "agent": getattr(agent, "name", str(agent)),
         "attempt": attempt,
         "fallback": use_fallback,
         "metadata_keys": sorted(str(k) for k in metadata.keys()),
+        "operation": operation,
+        "subsystem": subsystem,
+        "model": model_label,
     }
     logger.info("nyx.gateway.llm.execute.start", extra=log_payload)
 
@@ -363,6 +379,19 @@ async def execute(request: LLMRequest) -> LLMResult:
 
     runner_cls = _lazy_import_runner()
     last_error: BaseException | None = None
+    request_metadata = dict(request.metadata or {})
+    request_operation = str(request_metadata.get("operation") or "unknown")
+    request_subsystem = str(
+        request_metadata.get("subsystem")
+        or request_metadata.get("source_subsystem")
+        or "unknown"
+    )
+    request_model_label = str(
+        request.model_override
+        or request_metadata.get("model")
+        or request_metadata.get("preferred_model")
+        or "unknown"
+    )
 
     for spec, is_fallback in _iter_candidate_agents(request):
         try:
@@ -393,6 +422,9 @@ async def execute(request: LLMRequest) -> LLMResult:
                             "agent": getattr(agent, "name", str(agent)),
                             "attempt": attempt,
                             "fallback": is_fallback,
+                            "operation": request_operation,
+                            "subsystem": request_subsystem,
+                            "model": request_model_label,
                         },
                     )
                     break
@@ -406,6 +438,9 @@ async def execute(request: LLMRequest) -> LLMResult:
                         "attempt": attempt,
                         "fallback": is_fallback,
                         "sleep": round(delay, 3),
+                        "operation": request_operation,
+                        "subsystem": request_subsystem,
+                        "model": request_model_label,
                     },
                 )
                 await asyncio.sleep(delay)
@@ -417,6 +452,9 @@ async def execute(request: LLMRequest) -> LLMResult:
                         "agent": getattr(agent, "name", str(agent)),
                         "attempt": attempt,
                         "fallback": is_fallback,
+                        "operation": request_operation,
+                        "subsystem": request_subsystem,
+                        "model": request_model_label,
                     },
                 )
                 break

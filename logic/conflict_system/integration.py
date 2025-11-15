@@ -75,17 +75,24 @@ class AdjustConflictModeResponse(TypedDict):
     message: str
     error: str
 
-class StatusMetricsDTO(TypedDict):
+class StatusMetricsDTO(TypedDict, total=False):
     conflict_count: int
-    complexity: float
+    complexity_score: float
     coherence: float
     engagement: float
-    health: float
+    system_health: float
+    event_queue_size: int
+    background_queue_size: int
 
-class ConflictSystemStatusResponse(TypedDict):
+
+class ConflictSystemStatusResponse(TypedDict, total=False):
     mode: str
     active_modules: List[str]
+    active_conflicts: List[Dict[str, Any]]
     metrics: StatusMetricsDTO
+    queue_lengths: Dict[str, int]
+    last_event_timestamp: str | None
+    last_tick_timestamp: str | None
     recommendation: str
     error: str
 
@@ -253,7 +260,7 @@ class ConflictSystemInterface:
     async def _compose_system_status(self) -> Dict[str, Any]:
         """Build a synthesizer-like system state without calling get_system_state."""
         synthesizer = await self._get_synthesizer()
-    
+
         # Active subsystems
         subsystems = {}
         try:
@@ -296,6 +303,78 @@ class ConflictSystemInterface:
                 # bubble up original perf metrics for debugging
                 **metrics,
             }
+        }
+
+    async def get_system_status(self) -> ConflictSystemStatusResponse:
+        """Return normalized conflict system status for APIs and tooling."""
+
+        synthesizer = await self._get_synthesizer()
+        state = await synthesizer.get_system_state()
+        metrics = dict(state.get('metrics', {}) or {})
+
+        active_conflicts = list(state.get('active_conflicts', []) or [])
+        active_modules = [
+            getattr(subsystem_type, 'value', str(subsystem_type))
+            for subsystem_type in getattr(synthesizer, '_subsystems', {}).keys()
+        ]
+
+        event_queue_size = 0
+        try:
+            event_queue_size = int(getattr(synthesizer._event_queue, 'qsize', lambda: 0)())
+        except Exception:
+            logger.debug("Failed to read event queue size", exc_info=True)
+
+        background_queue_size = 0
+        processor_queue = getattr(getattr(synthesizer, 'processor', None), '_processing_queue', None)
+        if processor_queue is not None:
+            try:
+                background_queue_size = len(processor_queue)
+            except Exception:
+                logger.debug("Failed to read background queue length", exc_info=True)
+
+        from logic.conflict_system.conflict_synthesizer import EventType
+
+        last_event_timestamp: str | None = None
+        last_tick_timestamp: str | None = None
+        try:
+            history = list(getattr(synthesizer, '_event_history', []) or [])
+            if history:
+                last_event_timestamp = max(history, key=lambda evt: evt.timestamp).timestamp.isoformat()
+                for event in reversed(history):
+                    if event.event_type is EventType.STATE_SYNC and 'tick' in (event.payload or {}):
+                        last_tick_timestamp = event.timestamp.isoformat()
+                        break
+        except Exception:
+            logger.debug("Unable to derive event history metadata", exc_info=True)
+
+        metrics_payload: StatusMetricsDTO = {
+            'conflict_count': len(active_conflicts),
+            'complexity_score': float(metrics.get('complexity_score', metrics.get('complexity', 0.0)) or 0.0),
+            'coherence': float(metrics.get('narrative_coherence', metrics.get('coherence', 0.0)) or 0.0),
+            'engagement': float(metrics.get('player_engagement', metrics.get('engagement', 0.0)) or 0.0),
+            'system_health': float(metrics.get('system_health', metrics.get('health', 1.0)) or 1.0),
+            'event_queue_size': event_queue_size,
+            'background_queue_size': background_queue_size,
+        }
+
+        queue_lengths = {
+            'event': event_queue_size,
+            'background': background_queue_size,
+            'pending_bg_tasks': int(metrics.get('pending_bg_tasks', 0) or 0),
+        }
+
+        recommendation = 'healthy' if metrics_payload['system_health'] > 0.7 else 'needs_attention'
+
+        return {
+            'mode': self.current_mode.value,
+            'active_modules': active_modules,
+            'active_conflicts': active_conflicts,
+            'metrics': metrics_payload,
+            'queue_lengths': queue_lengths,
+            'last_event_timestamp': last_event_timestamp,
+            'last_tick_timestamp': last_tick_timestamp,
+            'recommendation': recommendation,
+            'error': str(state.get('error', '')),
         }
     
     async def process_game_scene(
@@ -935,25 +1014,39 @@ async def get_conflict_system_status(
     conversation_id = ctx.data.get('conversation_id')
 
     interface = ConflictSystemInterface(user_id, conversation_id)
-    state = await interface.get_system_status()
+    status = await interface.get_system_status()
 
-    # Defensive normalization
-    active_modules = [str(m) for m in list(getattr(state, 'active_modules', []))]
-    metrics = {
-        'conflict_count': int(getattr(state, 'conflict_count', 0)),
-        'complexity': float(getattr(state, 'complexity_score', 0.0)),
-        'coherence': float(getattr(state, 'narrative_coherence', 0.0)),
-        'engagement': float(getattr(state, 'player_engagement', 0.0)),
-        'health': float(getattr(state, 'system_health', 1.0)),
+    metrics = status.get('metrics', {})
+    normalized_metrics: StatusMetricsDTO = {
+        'conflict_count': int(metrics.get('conflict_count', 0) or 0),
+        'complexity_score': float(metrics.get('complexity_score', 0.0) or 0.0),
+        'coherence': float(metrics.get('coherence', 0.0) or 0.0),
+        'engagement': float(metrics.get('engagement', 0.0) or 0.0),
+        'system_health': float(metrics.get('system_health', 1.0) or 1.0),
+        'event_queue_size': int(metrics.get('event_queue_size', 0) or 0),
+        'background_queue_size': int(metrics.get('background_queue_size', 0) or 0),
     }
-    recommendation = 'healthy' if metrics['health'] > 0.7 else 'needs_attention'
+
+    queue_lengths = {
+        'event': int(status.get('queue_lengths', {}).get('event', normalized_metrics['event_queue_size'])),
+        'background': int(status.get('queue_lengths', {}).get('background', normalized_metrics['background_queue_size'])),
+        'pending_bg_tasks': int(status.get('queue_lengths', {}).get('pending_bg_tasks', 0)),
+    }
+
+    recommendation = status.get('recommendation') or (
+        'healthy' if normalized_metrics['system_health'] > 0.7 else 'needs_attention'
+    )
 
     return {
-        'mode': str(getattr(getattr(state, 'mode', None), 'value', 'emergent')),
-        'active_modules': active_modules,
-        'metrics': metrics,
+        'mode': status.get('mode', interface.current_mode.value),
+        'active_modules': [str(m) for m in status.get('active_modules', [])],
+        'active_conflicts': list(status.get('active_conflicts', [])),
+        'metrics': normalized_metrics,
+        'queue_lengths': queue_lengths,
+        'last_event_timestamp': status.get('last_event_timestamp'),
+        'last_tick_timestamp': status.get('last_tick_timestamp'),
         'recommendation': recommendation,
-        'error': "",
+        'error': str(status.get('error', '')),
     }
 
 

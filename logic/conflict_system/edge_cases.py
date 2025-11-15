@@ -138,7 +138,30 @@ class ConflictEdgeCaseSubsystem:
         
         # Edge case tracking (lightweight - full data in cache/DB)
         self._recovery_attempts = {}
-    
+
+    def _log_edge_case_detection(self, case: EdgeCase) -> None:
+        """Emit structured warnings whenever an edge case is detected."""
+
+        try:
+            logger.warning(
+                "Edge case detected",
+                extra={
+                    "issue_type": case.case_type.value,
+                    "conflict_ids": case.affected_conflicts,
+                    "severity": case.severity,
+                    "description": case.description,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Edge case detected",
+                extra={
+                    "issue_type": getattr(case.case_type, 'value', str(case.case_type)),
+                    "conflict_ids": getattr(case, 'affected_conflicts', []),
+                    "severity": getattr(case, 'severity', None),
+                },
+            )
+
     @property
     def subsystem_type(self):
         """Return the subsystem type"""
@@ -454,7 +477,7 @@ class ConflictEdgeCaseSubsystem:
                     sev,
                     f"Conflict '{r['conflict_name']}' has no stakeholders"
                 )
-                edge_cases.append(EdgeCase(
+                case = EdgeCase(
                     case_id=case_id,
                     case_type=EdgeCaseType.ORPHANED_CONFLICT,
                     affected_conflicts=[int(r['conflict_id'])],
@@ -462,12 +485,12 @@ class ConflictEdgeCaseSubsystem:
                     description=f"Orphaned conflict: {r['conflict_name']}",
                     detection_context={'conflict': dict(r)},
                     recovery_options=None  # Generated on-demand
-                ))
+                )
+                self._log_edge_case_detection(case)
+                edge_cases.append(case)
         except Exception as e:
             logger.error(f"Error detecting orphaned conflicts: {e}", exc_info=True)
             return [] # POLISH: Always return a list
-        return edge_cases
-        
         return edge_cases
     
     async def _detect_infinite_loops(self) -> List[EdgeCase]:
@@ -507,7 +530,7 @@ class ConflictEdgeCaseSubsystem:
                         f"Infinite loop detected between conflicts"
                     )
                     
-                    edge_cases.append(EdgeCase(
+                    case = EdgeCase(
                         case_id=case_id,
                         case_type=EdgeCaseType.INFINITE_LOOP,
                         affected_conflicts=conflicts,
@@ -515,7 +538,9 @@ class ConflictEdgeCaseSubsystem:
                         description="Conflicts triggering each other infinitely",
                         detection_context={'trigger_count': count},
                         recovery_options=None
-                    ))
+                    )
+                    self._log_edge_case_detection(case)
+                    edge_cases.append(case)
         except Exception as e:
             logger.error(f"Error detecting infinite loops: {e}", exc_info=True)
             return [] # POLISH: Always return a list
@@ -551,7 +576,7 @@ class ConflictEdgeCaseSubsystem:
                     f"Conflict stale for {stale_days} days"
                 )
                 
-                edge_cases.append(EdgeCase(
+                case = EdgeCase(
                     case_id=case_id,
                     case_type=EdgeCaseType.STALE_CONFLICT,
                     affected_conflicts=[int(r['conflict_id'])],
@@ -559,7 +584,9 @@ class ConflictEdgeCaseSubsystem:
                     description=f"Stale conflict: {r['conflict_name']}",
                     detection_context={'stale_days': stale_days, 'conflict': dict(r)},
                     recovery_options=None
-                ))
+                )
+                self._log_edge_case_detection(case)
+                edge_cases.append(case)
         except Exception as e:
             logger.error(f"Error detecting stale conflicts: {e}", exc_info=True)
         
@@ -598,7 +625,7 @@ class ConflictEdgeCaseSubsystem:
                 f"{count} active conflicts causing overload"
             )
             
-            edge_cases.append(EdgeCase(
+            case = EdgeCase(
                 case_id=case_id,
                 case_type=EdgeCaseType.COMPLEXITY_OVERLOAD,
                 affected_conflicts=conflict_ids,
@@ -606,7 +633,9 @@ class ConflictEdgeCaseSubsystem:
                 description=f"System overloaded with {count} active conflicts",
                 detection_context={'active_count': int(count)},
                 recovery_options=None
-            ))
+            )
+            self._log_edge_case_detection(case)
+            edge_cases.append(case)
         except Exception as e:
             logger.error(f"Error detecting complexity overload: {e}", exc_info=True)
         
@@ -657,7 +686,7 @@ class ConflictEdgeCaseSubsystem:
                     "Contradictory NPC positions in conflicts"
                 )
                 
-                edge_cases.append(EdgeCase(
+                case = EdgeCase(
                     case_id=case_id,
                     case_type=EdgeCaseType.CONTRADICTION,
                     affected_conflicts=[int(r["conflict1"]), int(r["conflict2"])],
@@ -665,7 +694,9 @@ class ConflictEdgeCaseSubsystem:
                     description="NPC has contradictory roles in conflicts",
                     detection_context={"conflicts": dict(r)},
                     recovery_options=None
-                ))
+                )
+                self._log_edge_case_detection(case)
+                edge_cases.append(case)
         except Exception as e:
             logger.error(f"Error detecting narrative breaks: {e}", exc_info=True)
         
