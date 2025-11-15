@@ -48,6 +48,9 @@ from lore.version_registry import with_lore_version_suffix
 
 from logic.conflict_system.conflict_synthesizer import get_synthesizer
 from logic.conflict_system.background_processor import get_conflict_scheduler
+from logic.conflict_system.enhanced_conflict_integration_hotpath import (
+    get_cached_tension_result,
+)
 from logic.universal_updater_agent import (
     UniversalUpdaterContext,
     apply_universal_updates_async as _APPLY_UNIVERSAL_UPDATES_ASYNC,
@@ -133,6 +136,14 @@ def build_canonical_snapshot_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]
         payload["participants"] = [str(participants)]
 
     return payload
+
+
+def _compute_enhanced_scope_key(scene_context: Dict[str, Any]) -> str:
+    location = str(scene_context.get('location') or 'unknown')
+    scene_type = str(scene_context.get('scene_type') or 'unknown')
+    npcs = ','.join(str(n) for n in scene_context.get('present_npcs', []))
+    topics = ','.join(str(t) for t in scene_context.get('topics', []))
+    return f"{location}|{scene_type}|{npcs}|{topics}"
 
 
 async def persist_canonical_snapshot(
@@ -4920,7 +4931,116 @@ class NyxContext:
             logger.warning(f"Failed to clear broker caches: {e}")
 
         logger.info("Day transition complete")
-    
+
+    async def _fetch_enhanced_conflict_summary(self, bundle: ContextBundle) -> Optional[Dict[str, Any]]:
+        scene_scope = getattr(bundle, 'scene_scope', None)
+        if scene_scope is None:
+            return None
+
+        present_npcs: List[str] = []
+        npc_ids = getattr(scene_scope, 'npc_ids', None)
+        if npc_ids:
+            try:
+                present_npcs = [str(int(n)) for n in npc_ids]
+            except Exception:
+                present_npcs = [str(n) for n in npc_ids]
+            present_npcs.sort()
+
+        topics: List[str] = []
+        raw_topics = getattr(scene_scope, 'topics', None)
+        if raw_topics:
+            topics = sorted(str(t) for t in raw_topics if t is not None)
+
+        metadata = bundle.metadata if isinstance(bundle.metadata, dict) else {}
+        location = (
+            metadata.get('location')
+            or metadata.get('location_id')
+            or getattr(scene_scope, 'location_name', None)
+            or getattr(scene_scope, 'location_id', None)
+            or self.current_context.get('location_name')
+            or self.current_context.get('location_id')
+        )
+        scene_type = (
+            metadata.get('scene_type')
+            or self.current_context.get('scene_type')
+            or self.current_context.get('scene_descriptor')
+        )
+
+        normalized = {
+            'location': location or 'unknown',
+            'scene_type': scene_type or 'unknown',
+            'present_npcs': present_npcs,
+            'topics': topics,
+        }
+        scope_key = _compute_enhanced_scope_key(normalized)
+        if not scope_key:
+            return None
+
+        summary = get_cached_tension_result(self.user_id, self.conversation_id, scope_key)
+
+        if not summary:
+            try:
+                async with get_db_connection_context() as conn:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT summary
+                        FROM conflict_scene_tension_summaries
+                        WHERE user_id = $1 AND conversation_id = $2 AND scope_key = $3
+                        """,
+                        self.user_id,
+                        self.conversation_id,
+                        scope_key,
+                    )
+            except Exception as exc:
+                logger.debug("Enhanced conflict summary DB fetch failed: %s", exc)
+                row = None
+
+            if row:
+                summary = row.get('summary')
+                if isinstance(summary, str):
+                    try:
+                        summary = json_loads(summary)
+                    except Exception:
+                        summary = None
+
+        if isinstance(summary, dict):
+            summary.setdefault('source', summary.get('source', 'cached'))
+            summary.setdefault('manifestation', summary.get('manifestation', []))
+            summary.setdefault('tensions', summary.get('tensions', []))
+            summary.setdefault('suggested_type', summary.get('suggested_type'))
+            summary.setdefault('should_generate_conflict', summary.get('should_generate_conflict', False))
+            return summary
+        return None
+
+    async def _inject_enhanced_conflict_hints(self, bundle: ContextBundle) -> Optional[Dict[str, Any]]:
+        try:
+            summary = await self._fetch_enhanced_conflict_summary(bundle)
+        except Exception as exc:
+            logger.debug("Failed to fetch enhanced conflict summary: %s", exc)
+            return None
+
+        if not summary:
+            return None
+
+        hints = {
+            'source': summary.get('source', 'cached'),
+            'cached_at': summary.get('cached_at'),
+            'should_generate_conflict': summary.get('should_generate_conflict', False),
+            'suggested_type': summary.get('suggested_type'),
+            'tensions': summary.get('tensions', []),
+        }
+        manifestations = list(summary.get('manifestation', []) or [])
+        if manifestations:
+            hints['manifestation'] = manifestations
+        if isinstance(summary.get('context'), dict):
+            hints['context'] = summary['context']
+        if summary.get('choices'):
+            hints['choices'] = summary['choices']
+
+        bundle.metadata.setdefault('conflict_hints', {})['enhanced_integration'] = hints
+        self.current_context['enhanced_conflict_hints'] = hints
+        return summary
+
     async def build_context_for_input(self, user_input: str, context_data: Dict[str, Any] = None) -> PackedContext:
         """Main entry point: build optimized context for user input"""
         start_time = time.time()
@@ -5068,6 +5188,8 @@ class NyxContext:
         if isinstance(narrative_data, dict) and not narrative_data.get("recent"):
             narrative_data["recent"] = list(canonical_recent)
 
+        enhanced_summary = await self._inject_enhanced_conflict_hints(bundle)
+
         # Determine token budget from config or use default
         token_budget = 8000  # Default
         if hasattr(self, 'config') and hasattr(self.config, 'model_context_budget'):
@@ -5082,10 +5204,21 @@ class NyxContext:
         
         # Pack it for the LLM
         packed = bundle.pack(token_budget=effective_budget)
-        
+
         # Add user input as canonical (will fit in reserved space)
         packed.add_canonical('user_input', user_input)
-        
+
+        if enhanced_summary:
+            enhanced_section = {
+                'ambient': list(enhanced_summary.get('manifestation', []) or []),
+                'tensions': enhanced_summary.get('tensions', []),
+                'suggested_type': enhanced_summary.get('suggested_type'),
+                'should_generate_conflict': enhanced_summary.get('should_generate_conflict', False),
+            }
+            if enhanced_summary.get('choices'):
+                enhanced_section['choices'] = enhanced_summary['choices']
+            packed.try_add('enhanced_conflict', enhanced_section)
+
         # Performance tracking
         elapsed = time.time() - start_time
         self.performance_metrics['response_times'].append(elapsed)
