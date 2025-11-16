@@ -1066,7 +1066,7 @@ async def prefetch_next_context(
     }
 
 
-@function_tool(name_override="lore.handle_operation")
+@function_tool(name_override="lore_handle_operation")
 async def lore_handle_operation(
     ctx: RunContextWrapper,
     payload: LoreOperationInput,

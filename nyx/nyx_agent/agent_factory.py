@@ -227,8 +227,16 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
 
     logger.info(
         "create_nyx_agent_with_prompt: agent=%s strict_tools=%s tools=%d",
-        ag.name, getattr(ag.model_settings, "strict_tools", None), len(ag.tools or [])
+        ag.name,
+        getattr(ag.model_settings, "strict_tools", None),
+        len(ag.tools or []),
     )
+
+    tool_names = []
+    for tool in ag.tools or []:
+        name = getattr(tool, "name", None) or getattr(tool, "__name__", None) or str(tool)
+        tool_names.append(name)
+    logger.info("Nyx tools: %s", tool_names)
 
     return ag
 
