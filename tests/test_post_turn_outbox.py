@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from typing import Any, Dict, List
 import importlib.util
@@ -12,11 +14,34 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
-fake_celery_app = types.SimpleNamespace(send_task=lambda *args, **kwargs: None)
+class _FakeCeleryApp:
+    def task(self, *args, **kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
+    def send_task(self, *args, **kwargs):
+        return None
+
+
+fake_celery_app = _FakeCeleryApp()
+
+nyx_tasks_pkg = types.ModuleType("nyx.tasks")
+nyx_tasks_pkg.__path__ = []  # type: ignore[attr-defined]
+sys.modules["nyx.tasks"] = nyx_tasks_pkg
+
+nyx_tasks_base = types.ModuleType("nyx.tasks.base")
+nyx_tasks_base.NyxTask = object
+nyx_tasks_base.app = fake_celery_app
+nyx_tasks_base.current_trace_id = lambda: None
+sys.modules["nyx.tasks.base"] = nyx_tasks_base
+
 sys.modules["nyx.tasks.celery_app"] = types.SimpleNamespace(app=fake_celery_app)
 
 _db_pkg = types.ModuleType("db")
 _db_connection = types.ModuleType("db.connection")
+_db_connection.AsyncpgConnection = object  # type: ignore[attr-defined]
 _db_connection.get_db_connection_context = lambda *args, **kwargs: None  # patched in tests
 _db_connection.run_async_in_worker_loop = lambda coro: coro
 sys.modules["db"] = _db_pkg
@@ -87,8 +112,7 @@ class FakeConnContext:
         return False
 
 
-@pytest.mark.asyncio
-async def test_outbox_success_deletes_row(monkeypatch):
+def test_outbox_success_deletes_row(monkeypatch):
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     rows = [
         {
@@ -106,12 +130,16 @@ async def test_outbox_success_deletes_row(monkeypatch):
         return FakeConnContext(conn)
 
     monkeypatch.setattr(post_turn, "get_db_connection_context", fake_get_conn)
-    monkeypatch.setattr(post_turn, "_utcnow", lambda: now)
+    monkeypatch.setattr(post_turn.OutboxService, "_utcnow", staticmethod(lambda: now))
 
     sent: List[Dict[str, Any]] = []
-    monkeypatch.setattr(post_turn, "_enqueue_task", lambda payload: sent.append(payload))
 
-    processed = await post_turn._drain_outbox(limit=5)
+    def capture(self, payload):
+        sent.append(payload)
+
+    monkeypatch.setattr(post_turn.OutboxService, "_enqueue_task", capture)
+
+    processed = asyncio.run(post_turn._drain_outbox(limit=5))
 
     assert processed == 1
     assert not rows
@@ -120,8 +148,41 @@ async def test_outbox_success_deletes_row(monkeypatch):
     ]
 
 
-@pytest.mark.asyncio
-async def test_outbox_retry_backoff(monkeypatch):
+def test_outbox_deserializes_string_payloads(monkeypatch):
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    payload = {"task_name": "task.name", "kwargs": {"payload": {"foo": "bar"}}, "queue": "background"}
+    rows = [
+        {
+            "id": 1,
+            "payload": json.dumps(payload),
+            "attempts": 0,
+            "last_error": None,
+            "next_run_at": now,
+            "dead_lettered": False,
+        }
+    ]
+    conn = FakeConn(rows)
+
+    def fake_get_conn():
+        return FakeConnContext(conn)
+
+    monkeypatch.setattr(post_turn, "get_db_connection_context", fake_get_conn)
+    monkeypatch.setattr(post_turn.OutboxService, "_utcnow", staticmethod(lambda: now))
+
+    sent: List[Dict[str, Any]] = []
+
+    def capture(self, entry):
+        sent.append(entry)
+
+    monkeypatch.setattr(post_turn.OutboxService, "_enqueue_task", capture)
+
+    processed = asyncio.run(post_turn._drain_outbox(limit=5))
+
+    assert processed == 1
+    assert sent == [payload]
+
+
+def test_outbox_retry_backoff(monkeypatch):
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     rows = [
         {
@@ -139,14 +200,14 @@ async def test_outbox_retry_backoff(monkeypatch):
         return FakeConnContext(conn)
 
     monkeypatch.setattr(post_turn, "get_db_connection_context", fake_get_conn)
-    monkeypatch.setattr(post_turn, "_utcnow", lambda: now)
+    monkeypatch.setattr(post_turn.OutboxService, "_utcnow", staticmethod(lambda: now))
 
-    def raise_error(_payload):
+    def raise_error(self, _payload):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(post_turn, "_enqueue_task", raise_error)
+    monkeypatch.setattr(post_turn.OutboxService, "_enqueue_task", raise_error)
 
-    processed = await post_turn._drain_outbox(limit=1)
+    processed = asyncio.run(post_turn._drain_outbox(limit=1))
 
     assert processed == 0
     assert rows[0]["attempts"] == 1
@@ -155,8 +216,7 @@ async def test_outbox_retry_backoff(monkeypatch):
     assert rows[0]["next_run_at"] == now + timedelta(seconds=post_turn._INITIAL_BACKOFF_SECONDS)
 
 
-@pytest.mark.asyncio
-async def test_outbox_dead_letters_after_max_attempts(monkeypatch):
+def test_outbox_dead_letters_after_max_attempts(monkeypatch):
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     rows = [
         {
@@ -174,14 +234,14 @@ async def test_outbox_dead_letters_after_max_attempts(monkeypatch):
         return FakeConnContext(conn)
 
     monkeypatch.setattr(post_turn, "get_db_connection_context", fake_get_conn)
-    monkeypatch.setattr(post_turn, "_utcnow", lambda: now)
+    monkeypatch.setattr(post_turn.OutboxService, "_utcnow", staticmethod(lambda: now))
 
-    def raise_error(_payload):
+    def raise_error(self, _payload):
         raise RuntimeError("kaput")
 
-    monkeypatch.setattr(post_turn, "_enqueue_task", raise_error)
+    monkeypatch.setattr(post_turn.OutboxService, "_enqueue_task", raise_error)
 
-    processed = await post_turn._drain_outbox(limit=1)
+    processed = asyncio.run(post_turn._drain_outbox(limit=1))
 
     assert processed == 0
     assert rows[0]["attempts"] == post_turn._MAX_ATTEMPTS
