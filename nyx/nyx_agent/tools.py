@@ -21,8 +21,11 @@ from typing import Mapping, NotRequired
 
 # JSON-friendly value helpers for tool payloads (kept non-recursive so TypedDicts
 # remain fully defined when Pydantic inspects them for tool schemas).
+# NOTE: Avoid Dict[...] here—Pydantic would emit additionalProperties which the
+# agents SDK rejects when building strict JSON schemas for tool inputs.
 JSONPrimitive = Union[str, int, float, bool, None]
-JSONValue = Union[JSONPrimitive, List[Any], Dict[str, Any]]
+JSONSequence = List[JSONPrimitive]
+JSONValue = Union[JSONPrimitive, JSONSequence]
 
 from agents import function_tool, RunContextWrapper
 
