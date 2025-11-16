@@ -2,6 +2,8 @@
 """Agent definitions for Nyx Agent SDK"""
 
 import logging
+from typing import Any
+
 from agents import Agent, handoff, ModelSettings
 
 from nyx.config import INTERACTIVE_MODEL
@@ -37,6 +39,16 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _tool_display_name(tool: Any) -> str:
+    """Best-effort extraction of a readable tool name for logging."""
+
+    for attr in ("name", "__name__"):
+        value = getattr(tool, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return repr(tool)
 
 # Default Model Settings with strict_tools=False
 DEFAULT_MODEL_SETTINGS = ModelSettings(
@@ -368,3 +380,8 @@ Remember: Every response is a single scene. No mechanics visible. Let the player
     model=INTERACTIVE_MODEL,
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
+
+try:
+    logger.info("Nyx tools: %s", [_tool_display_name(t) for t in nyx_main_agent.tools or []])
+except Exception:  # pragma: no cover - defensive logging should never break import
+    logger.exception("Failed to log Nyx tools")
