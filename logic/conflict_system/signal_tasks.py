@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from conflict.signals import ConflictSignal, ConflictSignalType
@@ -42,6 +43,8 @@ else:  # pragma: no cover - runtime fallback for testing environments
 
 SceneScope = SceneScopeType
 
+logger = logging.getLogger(__name__)
+
 
 def _build_scene_scope(raw_scope: Dict[str, Any]) -> SceneScope:
     scope_fields = SceneScope.__dataclass_fields__.keys()
@@ -75,29 +78,30 @@ async def generate_scene_conflict_context(
     conversation_id: int,
     scene_info: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Produce a rich conflict context bundle via scene-entered signal."""
+    """Produce a rich conflict context bundle without emitting signals."""
 
-    scene_scope = _build_scene_scope(scene_info or {})
+    scope_mapping: Dict[str, Any] = scene_info or {}
 
-    signal = ConflictSignal(
-        type=ConflictSignalType.SCENE_ENTERED,
-        user_id=user_id,
-        conversation_id=conversation_id,
-        scene_scope=scene_scope,
-        payload={'scene_context': scene_info},
-    )
+    fast_context = await synthesizer.get_fast_conflict_context_for_scene(scope_mapping)
 
-    await synthesizer.handle_signal(signal)
+    processor = getattr(synthesizer, "processor", None)
+    if processor is not None:
+        try:
+            background_bundle = await processor.process_scene_relevant_updates(scope_mapping)
+        except Exception:  # pragma: no cover - defensive background hook
+            logger.exception(
+                "Conflict background processor failed during scene context refresh",
+                extra={
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                },
+            )
+        else:
+            if background_bundle:
+                metadata = fast_context.setdefault('metadata', {})
+                metadata['background_refresh'] = background_bundle
 
-    bundle = await synthesizer.get_scene_bundle(scene_scope)
-
-    return {
-        'conflicts': bundle.get('conflicts', []),
-        'tensions': bundle.get('active_tensions', {}),
-        'opportunities': bundle.get('opportunities', []),
-        'ambient_effects': bundle.get('ambient_effects', []),
-        'world_tension': bundle.get('world_tension', 0.0),
-    }
+    return fast_context
 
 
 async def dispatch_tension_update_signal(

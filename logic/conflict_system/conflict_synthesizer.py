@@ -378,6 +378,7 @@ class ConflictSynthesizer:
         self._bg_tasks: Dict[str, asyncio.Task] = {}
 
         self._last_scene = None
+        self._in_scene_transition = False
     
     # ========== Subsystem Registration ==========
     
@@ -1133,43 +1134,51 @@ class ConflictSynthesizer:
         """
         Internal method to handle scene transitions.
         """
-        normalized_old = self._scene_scope_to_mapping(old_scene)
-        normalized_new = self._scene_scope_to_mapping(new_scene)
-
-        if (normalized_old or {}) == (normalized_new or {}):
+        if getattr(self, "_in_scene_transition", False):
+            logger.warning("Scene transition reentrancy detected; skipping new transition")
             return
 
-        context = await ConflictEventHooks.on_scene_transition(
-            self.user_id, self.conversation_id, normalized_old, normalized_new
-        )
-
-        event = SystemEvent(
-            event_id=f"scene_transition_{datetime.now().timestamp()}",
-            event_type=EventType.SCENE_ENTER,
-            source_subsystem=SubsystemType.ORCHESTRATOR,
-            payload={
-                'old_scene': normalized_old,
-                'new_scene': normalized_new,
-                'scene_context': normalized_new or {},
-                'context': context
-            },
-            target_subsystems={SubsystemType.BACKGROUND},
-            requires_response=False,
-            priority=6,
-        )
-
+        self._in_scene_transition = True
         try:
-            self._event_queue.put_nowait(event)
-            logger.debug(
-                "Enqueuing event",
-                extra={
-                    "event_type": event.event_type.value,
-                    "source_subsystem": event.source_subsystem.value,
-                    "queue_size": self._event_queue.qsize(),
-                },
+            normalized_old = self._scene_scope_to_mapping(old_scene)
+            normalized_new = self._scene_scope_to_mapping(new_scene)
+
+            if (normalized_old or {}) == (normalized_new or {}):
+                return
+
+            context = await ConflictEventHooks.on_scene_transition(
+                self.user_id, self.conversation_id, normalized_old, normalized_new
             )
-        except asyncio.QueueFull:
-            pass
+
+            event = SystemEvent(
+                event_id=f"scene_transition_{datetime.now().timestamp()}",
+                event_type=EventType.SCENE_ENTER,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload={
+                    'old_scene': normalized_old,
+                    'new_scene': normalized_new,
+                    'scene_context': normalized_new or {},
+                    'context': context
+                },
+                target_subsystems={SubsystemType.BACKGROUND},
+                requires_response=False,
+                priority=6,
+            )
+
+            try:
+                self._event_queue.put_nowait(event)
+                logger.debug(
+                    "Enqueuing event",
+                    extra={
+                        "event_type": event.event_type.value,
+                        "source_subsystem": event.source_subsystem.value,
+                        "queue_size": self._event_queue.qsize(),
+                    },
+                )
+            except asyncio.QueueFull:
+                pass
+        finally:
+            self._in_scene_transition = False
 
     
     async def _process_events(self):
