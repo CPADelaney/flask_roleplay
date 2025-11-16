@@ -112,6 +112,26 @@ class OutboxService:
         self._celery_app = celery_app
         return self._celery_app
 
+    @staticmethod
+    def _deserialize_payload(payload: Any) -> OutboxEntryPayload:
+        """Ensures the stored payload is a mapping before dispatching.
+
+        The outbox table stores JSON strings (see insert_entries). When we
+        read them back via asyncpg we therefore receive a raw string. Celery
+        expects a mapping so we need to deserialize on the way out. To be
+        defensive, we also accept already-parsed mappings and bytes payloads
+        (which can happen depending on the driver configuration).
+        """
+
+        if isinstance(payload, Mapping):
+            return payload  # type: ignore[return-value]
+        if isinstance(payload, (bytes, bytearray)):
+            payload = payload.decode("utf-8")
+        if isinstance(payload, str):
+            return json.loads(payload)
+
+        raise TypeError(f"Unsupported outbox payload type: {type(payload)!r}")
+
     def _enqueue_task(self, entry_payload: OutboxEntryPayload) -> None:
         task_name = entry_payload.get("task_name")
         if not task_name:
@@ -166,9 +186,10 @@ class OutboxService:
                     if not row:
                         break # No more work to do
 
-                    entry_id, payload, attempts = row["id"], row["payload"], row["attempts"]
-                    
+                    entry_id, raw_payload, attempts = row["id"], row["payload"], row["attempts"]
+
                     try:
+                        payload = self._deserialize_payload(raw_payload)
                         self._enqueue_task(payload)
                         await conn.execute(self._DELETE_SQL, entry_id)
                         processed_count += 1
@@ -176,6 +197,13 @@ class OutboxService:
                         logger.exception("Failed to process outbox entry id=%s", entry_id)
                         await self._record_failure(conn, entry_id, attempts, exc)
         return processed_count
+
+
+async def _drain_outbox(limit: int = 10) -> int:
+    """Helper used by tests to run the drain coroutine directly."""
+
+    service = OutboxService()
+    return await service.drain(limit=limit)
 
 def _outbox_entries_from_payload(payload: TurnPayload) -> List[OutboxEntryPayload]:
     """Transforms turn side effects into a list of structured outbox entries."""
