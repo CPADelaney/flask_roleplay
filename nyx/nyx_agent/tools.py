@@ -19,6 +19,10 @@ import uuid
 from typing import Dict, List, Any, Optional, Union, TypedDict
 from typing import Mapping, NotRequired
 
+# JSON-friendly value helpers for tool payloads
+JSONPrimitive = Union[str, int, float, bool, None]
+JSONValue = Union[JSONPrimitive, List["JSONValue"], Dict[str, "JSONValue"]]
+
 from agents import function_tool, RunContextWrapper
 
 from nyx.gateway.lore_tool import handle_lore_operation as gateway_handle_lore_operation
@@ -148,7 +152,7 @@ class LoreOperationExtraItem(TypedDict):
     """Key/value entries passed to the lore orchestrator."""
 
     key: str
-    value: Any
+    value: JSONValue
 
 
 class LoreOperationInput(TypedDict, total=False):
