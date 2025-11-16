@@ -2090,23 +2090,45 @@ def register_expansion_tools(
 # ─── Back-compat: module-level exports expected by __init__.py ────────────────
 from typing import Any, Dict, Optional
 
-_ASSEMBLER_SINGLETON: Optional[NyxResponseAssembler] = None
+_ASSEMBLER_CACHE: Dict[int, NyxResponseAssembler] = {}
+
+
+def _resolve_context_broker(**kwargs) -> ContextBroker:
+    """Resolve (or lazily create) a ContextBroker from kwargs."""
+
+    cb = kwargs.get("context_broker")
+    if cb is not None:
+        return cb
+
+    nyx_context = kwargs.get("nyx_context")
+    if nyx_context is None:
+        raise RuntimeError(
+            "ContextBroker required: pass `context_broker` or `nyx_context`."
+        )
+
+    cb = getattr(nyx_context, "context_broker", None)
+    if cb is None:
+        cb = ContextBroker(nyx_context)
+        nyx_context.context_broker = cb
+    return cb
+
 
 def _get_assembler(**kwargs) -> NyxResponseAssembler:
-    global _ASSEMBLER_SINGLETON
-    if isinstance(kwargs.get("assembler"), NyxResponseAssembler):
-        return kwargs["assembler"]
-    if _ASSEMBLER_SINGLETON is None:
-        cb = kwargs.get("context_broker")
-        if cb is None:
-            # If your ContextBroker requires args, wire them here or raise:
-            cb = ContextBroker()
-        _ASSEMBLER_SINGLETON = create_assembler(
+    assembler = kwargs.get("assembler")
+    if isinstance(assembler, NyxResponseAssembler):
+        return assembler
+
+    cb = _resolve_context_broker(**kwargs)
+    cache_key = id(cb)
+
+    if cache_key not in _ASSEMBLER_CACHE:
+        _ASSEMBLER_CACHE[cache_key] = create_assembler(
             context_broker=cb,
             config=kwargs.get("config"),
             llm_model=kwargs.get("llm_model"),
         )
-    return _ASSEMBLER_SINGLETON
+
+    return _ASSEMBLER_CACHE[cache_key]
 
 async def assemble_nyx_response(
     agent_output=None,

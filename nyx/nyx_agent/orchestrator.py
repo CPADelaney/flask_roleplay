@@ -1216,6 +1216,7 @@ async def process_user_input(
                 },
                 user_input=user_input,
                 conversation_id=str(conversation_id),
+                nyx_context=nyx_context,
             )
 
             final_narrative = assembled.narrative or post_run_narrative
