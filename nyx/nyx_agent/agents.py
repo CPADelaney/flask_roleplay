@@ -308,9 +308,9 @@ TOOL HEURISTICS
 - Always call generate_universal_updates afterward (internally), but never mention it
 
 LORE TOOL FAILURE HANDLING
-- When you call lore.handle_operation, examine its JSON response:
+- When you call lore_handle_operation, examine its JSON response:
   - If it contains an "error" field or "ok" is explicitly false, treat that as a lore-tool failure.
-  - Do NOT retry lore.handle_operation again in the same turn.
+  - Do NOT retry lore_handle_operation again in the same turn.
   - Answer from your baseline context only, and if the user explicitly asked for deep history or lore, you may briefly acknowledge the limitation with a line like:
     "The deeper history of this place is unclear to me right now, but..."
     and then continue the scene using whatever information you already have.
