@@ -296,8 +296,16 @@ class InventoryChange(BaseModel):
     effect: Optional[str] = None
 
 class ChoiceData(BaseModel):
-    """Data representing a player choice and its impacts"""
-    text: Optional[str] = None
+    """Data representing a player choice, its narrative metadata, and impacts"""
+
+    id: Optional[str] = Field(default=None, description="Stable identifier when provided")
+    text: Optional[str] = Field(default=None, description="Renderable choice label")
+    category: Optional[str] = Field(default=None, description="High-level category such as action/conflict")
+    requirements: Dict[str, Any] = Field(default_factory=dict, description="Structured requirements for the choice")
+    consequences: Dict[str, Any] = Field(default_factory=dict, description="Structured consequences emitted by planners")
+    canon_alignment: float = Field(1.0, ge=0.0, le=1.0, description="Pre-computed canon confidence when available")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional opaque metadata for downstream agents")
+
     stat_impacts: List[KVItem] = Field(default_factory=list)
     addiction_impacts: List[KVItem] = Field(default_factory=list)
     npc_id: Optional[int] = None
