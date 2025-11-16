@@ -19,9 +19,10 @@ import uuid
 from typing import Dict, List, Any, Optional, Union, TypedDict
 from typing import Mapping, NotRequired
 
-# JSON-friendly value helpers for tool payloads
+# JSON-friendly value helpers for tool payloads (kept non-recursive so TypedDicts
+# remain fully defined when Pydantic inspects them for tool schemas).
 JSONPrimitive = Union[str, int, float, bool, None]
-JSONValue = Union[JSONPrimitive, List["JSONValue"], Dict[str, "JSONValue"]]
+JSONValue = Union[JSONPrimitive, List[Any], Dict[str, Any]]
 
 from agents import function_tool, RunContextWrapper
 
