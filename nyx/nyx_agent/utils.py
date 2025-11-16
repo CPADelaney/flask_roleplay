@@ -483,16 +483,57 @@ def _extract_last_assistant_text(events: list) -> str:
     
     return ""
 
+def _iter_response_events(resp):
+    """Yield response events as dictionaries regardless of source format."""
+    if not resp:
+        return
+
+    for raw in resp:
+        if isinstance(raw, dict):
+            yield raw
+            continue
+
+        # Some gateways return JSON strings per chunk
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                yield parsed
+            continue
+
+        obj_dict = getattr(raw, "to_dict", None)
+        if callable(obj_dict):
+            try:
+                parsed = obj_dict()
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                yield parsed
+                continue
+
+        data = getattr(raw, "__dict__", None)
+        if isinstance(data, dict):
+            yield data
+
 def _did_call_tool(resp, tool_name: str) -> bool:
     """Check if a specific tool was called in the response"""
-    for c in resp:
-        if c.get("type") in ("function_call", "function_call_output") and c.get("name") == tool_name:
+    for event in _iter_response_events(resp):
+        if (
+            event.get("type") in ("function_call", "function_call_output")
+            and event.get("name") == tool_name
+        ):
             return True
     return False
 
 def _tool_output(resp, name: str):
     """Extract tool output data from response, return {} if not found"""
-    outs = [c for c in resp if c.get("type") == "function_call_output" and c.get("name") == name]
+    outs = [
+        event
+        for event in _iter_response_events(resp)
+        if event.get("type") == "function_call_output" and event.get("name") == name
+    ]
     if not outs:
         return {}
     try:
