@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReadRequest(BaseModel):
-    """Schema for the ``db.read`` tool."""
+    """Schema for the ``db_read`` tool."""
 
     view: Literal["scene_context", "entity_cards", "recent_chunks"]
     user_id: int
@@ -188,7 +188,7 @@ async def read_rows(view: str, **kwargs: Any) -> List[Dict[str, Any]]:
     raise ValueError(f"Unsupported view '{view}'")
 
 
-@function_tool(name_override="db.read")
+@function_tool(name_override="db_read")
 async def read_tool(ctx: RunContextWrapper, request: ReadRequest) -> Dict[str, Any]:
     del ctx  # The DB layer does its own tracing/metrics.
     rows = await read_rows(
