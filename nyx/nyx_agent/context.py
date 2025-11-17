@@ -223,7 +223,7 @@ from npcs.npc_orchestrator import NPCOrchestrator, NPCSnapshot, NPCStatus
 
 # Import Memory orchestrator and related types
 from memory.memory_orchestrator import (
-    MemoryOrchestrator, 
+    MemoryOrchestrator,
     EntityType,
     get_memory_orchestrator
 )
@@ -240,8 +240,15 @@ from logic.conflict_system.conflict_synthesizer import (
 
 if TYPE_CHECKING:
     from lore.lore_orchestrator import LoreOrchestrator, OrchestratorConfig
+    from story_agent.world_director_agent import (
+        CompleteWorldDirector,
+        WorldDirector,
+        CompleteWorldDirectorContext,
+        WorldDirectorContext,
+    )
 
 from .config import Config
+from .world_orchestrator import WorldOrchestrator
 
 try:
     from story_agent.world_simulation_models import (
@@ -251,10 +258,7 @@ try:
         CurrentTimeData, VitalsData, AddictionCravingData,
         DreamData, RevelationData, ChoiceData, ChoiceProcessingResult,
     )
-    from story_agent.world_director_agent import (
-        CompleteWorldDirector, WorldDirector,
-        CompleteWorldDirectorContext, WorldDirectorContext,
-    )
+    from story_agent import world_director_agent as _world_director_agent  # noqa: F401
     WORLD_SIMULATION_AVAILABLE = True
 except ImportError as e:
     import traceback
@@ -1571,28 +1575,45 @@ class ContextBroker:
 
         aspects = aspects or ["time", "mood", "location", "tension"]
 
-        world_director = getattr(self.ctx, "world_director", None)
-        if not world_director:
+        orchestrator = getattr(self.ctx, "world_orchestrator", None)
+        if not orchestrator:
+            return {}
+
+        if not await self.ctx.await_orchestrator("world"):
             return {}
 
         bundle: Dict[str, Any] = {}
         world_state_obj = None
 
         try:
-            ctx_obj = getattr(world_director, "context", None)
-            get_bundle = getattr(ctx_obj, "get_world_bundle", None) if ctx_obj else None
-            if callable(get_bundle):
-                raw_bundle = await get_bundle(fast=True)
-                if isinstance(raw_bundle, dict):
-                    bundle = raw_bundle
-                    world_state_obj = bundle.get("world_state")
-            if world_state_obj is None:
-                world_state_obj = await world_director.get_world_state()
+            expanded = await orchestrator.expand_state(
+                aspects=aspects,
+                depth="full",
+                scope=scene_scope,
+            )
         except Exception:
             logger.debug(
-                "ContextBroker.get_world_state: bundle path failed; using fallback state",
+                "ContextBroker.get_world_state: orchestrator expand failed",
                 exc_info=True,
             )
+            return {}
+
+        if isinstance(expanded, dict):
+            maybe_bundle = expanded.get("bundle")
+            if isinstance(maybe_bundle, dict):
+                bundle = maybe_bundle
+            else:
+                bundle = expanded
+            world_state_obj = expanded.get("world_state")
+
+        if world_state_obj is None and orchestrator.director is not None:
+            try:
+                world_state_obj = await orchestrator.director.get_world_state()
+            except Exception:
+                logger.debug(
+                    "ContextBroker.get_world_state: director fallback failed",
+                    exc_info=True,
+                )
 
         if world_state_obj is None:
             return {}
@@ -2906,26 +2927,28 @@ class ContextBroker:
             elapsed = time.time() - start
             return max(0.1, budget_ms / 1000.0 - elapsed)
 
-        # WORLD (fast snapshot via world director)
+        # WORLD (fast snapshot via world orchestrator)
         world_section = BundleSection(data={}, canonical=False, priority=4,
                                       last_changed_at=time.time(),
                                       ttl=self.section_ttls.get('world', 15.0),
                                       version='world_shallow')
         try:
-            if self.ctx.world_director and _remaining_seconds() > 0.1:
-                world_bundle = await asyncio.wait_for(
-                    self.ctx.world_director.context.get_world_bundle(fast=True),
-                    timeout=min(1.0, _remaining_seconds()),
-                )
-                summary = world_bundle.get('summary', {}) if isinstance(world_bundle, dict) else {}
-                world_section = BundleSection(
-                    data=summary,
-                    canonical=False,
-                    priority=4,
-                    last_changed_at=time.time(),
-                    ttl=self.section_ttls.get('world', 15.0),
-                    version='world_shallow',
-                )
+            orchestrator = getattr(self.ctx, "world_orchestrator", None)
+            if orchestrator and _remaining_seconds() > 0.1:
+                if await self.ctx.await_orchestrator("world"):
+                    world_bundle = await asyncio.wait_for(
+                        orchestrator.get_scene_bundle(scope),
+                        timeout=min(1.0, _remaining_seconds()),
+                    )
+                    summary = world_bundle.get('summary', {}) if isinstance(world_bundle, dict) else {}
+                    world_section = BundleSection(
+                        data=summary,
+                        canonical=False,
+                        priority=4,
+                        last_changed_at=time.time(),
+                        ttl=self.section_ttls.get('world', 15.0),
+                        version='world_shallow',
+                    )
         except Exception:
             logger.debug("Shallow world fetch failed", exc_info=True)
 
@@ -3878,24 +3901,22 @@ class ContextBroker:
             return self._build_section_fallback('world')
 
         async def _fetch() -> BundleSection:
-            if not self.ctx.world_director:
-                raise RuntimeError("World director unavailable")
+            orchestrator = getattr(self.ctx, "world_orchestrator", None)
+            if not orchestrator:
+                raise RuntimeError("World orchestrator unavailable")
+
+            if not await self.ctx.await_orchestrator("world"):
+                raise RuntimeError("World orchestrator not ready")
 
             # Shallow-first: request fast bundle and pull 'summary'
             world_summary: Dict[str, Any] = {}
             try:
-                ctx_obj = getattr(self.ctx.world_director, "context", None)
-                if ctx_obj and hasattr(ctx_obj, "get_world_bundle"):
-                    # Use a tight timeout to avoid blocking on cold starts
-                    bundle = await asyncio.wait_for(
-                        ctx_obj.get_world_bundle(fast=True),
-                        timeout=1.0
-                    )
-                    if isinstance(bundle, dict):
-                        world_summary = bundle.get("summary", {}) or {}
-                else:
-                    # Extremely defensive fallback to keep shape stable
-                    world_summary = {}
+                bundle = await asyncio.wait_for(
+                    orchestrator.get_scene_bundle(scope),
+                    timeout=1.0
+                )
+                if isinstance(bundle, dict):
+                    world_summary = bundle.get("summary", {}) or {}
             except Exception as exc:
                 logger.error("World fetch failed: %s", exc)
                 raise
@@ -4019,7 +4040,7 @@ class NyxContext:
     npc_orchestrator: Optional[NPCOrchestrator] = None
     conflict_synthesizer: Optional[ConflictSynthesizer] = None
     lore_orchestrator: Optional["LoreOrchestrator"] = None
-    world_director: Optional[Any] = None  # CompleteWorldDirector
+    world_orchestrator: Optional[WorldOrchestrator] = None
     slice_of_life_narrator: Optional[Any] = None  # SliceOfLifeNarrator
     
     # ────────── CONTEXT BROKER (NEW) ──────────
@@ -4975,12 +4996,13 @@ class NyxContext:
             logger.error(f"Failed to initialize Conflict Synthesizer: {e}")
 
     async def _init_world_systems(self, *, warm_minimal: bool = False):
-        """Initialize world director and narrator"""
+        """Initialize world orchestrator and slice-of-life narrator."""
+
         if warm_minimal:
             logger.info("Skipping world systems bootstrap during minimal warm phase")
             return
+
         try:
-            from story_agent.world_director_agent import CompleteWorldDirector
             from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
 
             cache_key = f"ctx:warmed:{self.user_id}:{self.conversation_id}"
@@ -5014,8 +5036,15 @@ class NyxContext:
                     self.conversation_id,
                 )
 
-            self.world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
-            await self.world_director.initialize(warmed=warmed)
+            if self.world_orchestrator is not None:
+                try:
+                    await self.world_orchestrator.dispose()
+                except Exception:
+                    logger.debug("Previous world orchestrator dispose failed", exc_info=True)
+
+            orchestrator = WorldOrchestrator(self.user_id, self.conversation_id)
+            await orchestrator.initialize(warmed=warmed)
+            self.world_orchestrator = orchestrator
 
             self.slice_of_life_narrator = SliceOfLifeNarrator(self.user_id, self.conversation_id)
             await self.slice_of_life_narrator.initialize()
@@ -5475,9 +5504,17 @@ class NyxContext:
         else:
             # If metric doesn't exist, create it
             self.performance_metrics[metric_name] = value
-    
+
+    @property
+    def world_director(self) -> Optional["CompleteWorldDirector"]:
+        """Compatibility shim exposing the underlying director instance."""
+
+        if self.world_orchestrator:
+            return self.world_orchestrator.director
+        return None
+
     # ────────── COMPATIBILITY METHODS ──────────
-    
+
     def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
         """Get comprehensive context (compatibility with existing code)"""
         return self.current_context.copy()

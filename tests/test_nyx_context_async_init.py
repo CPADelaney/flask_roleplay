@@ -340,50 +340,47 @@ async def test_world_section_fetch_after_world_ready():
                 thirst=25,
             )
 
-    class DummyWorldDirector:
+    class DummyWorldOrchestrator:
         def __init__(self, state: DummyWorldState) -> None:
             self._state = state
-            self.context = self._build_context(state)
 
-        async def get_world_state(self) -> DummyWorldState:
-            return self._state
+        @property
+        def director(self):  # pragma: no cover - compatibility shim
+            return None
 
-        def _build_context(self, state: DummyWorldState):
-            class _Context:
-                def __init__(self, world_state: DummyWorldState) -> None:
-                    self._world_state = world_state
+        async def get_scene_bundle(self, scope=None) -> typing.Dict[str, typing.Any]:
+            vitals = self._state.player_vitals
+            return {
+                "summary": {
+                    "time": self._state.current_time,
+                    "mood": self._state.world_mood.value,
+                    "weather": self._state.weather.value,
+                    "events": list(self._state.active_events),
+                    "vitals": {
+                        "fatigue": vitals.fatigue,
+                        "hunger": vitals.hunger,
+                        "thirst": vitals.thirst,
+                    },
+                }
+            }
 
-                async def get_world_bundle(self, fast: bool = True) -> typing.Dict[str, typing.Any]:
-                    vitals = self._world_state.player_vitals
-                    return {
-                        "summary": {
-                            "time": self._world_state.current_time,
-                            "mood": self._world_state.world_mood.value,
-                            "weather": self._world_state.weather.value,
-                            "events": list(self._world_state.active_events),
-                            "vitals": {
-                                "fatigue": vitals.fatigue,
-                                "hunger": vitals.hunger,
-                                "thirst": vitals.thirst,
-                            },
-                        }
-                    }
-
-            return _Context(state)
+        async def expand_state(self, **_kwargs):  # pragma: no cover - unused in test
+            bundle = await self.get_scene_bundle()
+            return {"bundle": bundle, "world_state": None}
 
     class BrokerCtx:
         def __init__(self) -> None:
             self.user_id = 1
             self.conversation_id = 2
             self._state = DummyWorldState()
-            self.world_director = None
+            self.world_orchestrator = None
             self._init_tasks = {
                 "world": asyncio.create_task(self._initialize_world())
             }
 
         async def _initialize_world(self) -> None:
             await asyncio.sleep(0)
-            self.world_director = DummyWorldDirector(self._state)
+            self.world_orchestrator = DummyWorldOrchestrator(self._state)
 
         def is_orchestrator_ready(self, name: str) -> bool:
             task = self._init_tasks.get(name)
