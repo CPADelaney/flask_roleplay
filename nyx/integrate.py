@@ -31,6 +31,7 @@ import asyncpg
 from nyx.governance.ids import format_agent_id
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
+from nyx.nyx_agent.world_orchestrator import WorldOrchestrator
 
 # Type checking imports (don't cause circular imports)
 if TYPE_CHECKING:
@@ -407,6 +408,8 @@ def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optio
     if user_id is not None and conversation_id is not None:
         key = f"{user_id}:{conversation_id}"
         _governance_instances.pop(key, None)
+        orchestrator_key = f"world_orchestrator_{user_id}_{conversation_id}"
+        _governance_instances.pop(orchestrator_key, None)
         _governance_locks.pop(key, None)
         _initialization_in_progress.pop(key, None)
         logger.info(f"Cleared governance cache for {key}")
@@ -424,7 +427,7 @@ def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optio
 async def initialize_world_simulation(
     user_id: int,
     conversation_id: int
-) -> Any:  # Returns CompleteWorldDirector but using Any to avoid import
+) -> WorldOrchestrator:
     """
     Initialize the world simulation with governance oversight.
     
@@ -433,16 +436,13 @@ async def initialize_world_simulation(
         conversation_id: Conversation ID
         
     Returns:
-        Initialized CompleteWorldDirector instance
+        Initialized WorldOrchestrator wrapper
     """
     governance = await get_central_governance(user_id, conversation_id)
     
-    # Lazy load CompleteWorldDirector
-    CompleteWorldDirector = _lazy_load_world_director()
-    
-    # Create and initialize world director
-    world_director = CompleteWorldDirector(user_id, conversation_id)
-    await world_director.initialize()
+    orchestrator = WorldOrchestrator(user_id, conversation_id)
+    await orchestrator.initialize()
+    world_director = orchestrator.director
     
     # Lazy load AgentType
     gov_types = _lazy_load_governance()
@@ -456,7 +456,7 @@ async def initialize_world_simulation(
     )
     
     logger.info(f"World simulation initialized for user {user_id}, conversation {conversation_id}")
-    return world_director
+    return orchestrator
 
 
 async def get_world_director(user_id: int, conversation_id: int) -> Any:
@@ -471,13 +471,16 @@ async def get_world_director(user_id: int, conversation_id: int) -> Any:
         CompleteWorldDirector instance
     """
     # Check if we have a cached instance
-    key = f"world_director_{user_id}_{conversation_id}"
-    if key in _governance_instances:
-        return _governance_instances[key]
-    
-    # Create new instance
-    director = await initialize_world_simulation(user_id, conversation_id)
-    _governance_instances[key] = director
+    key = f"world_orchestrator_{user_id}_{conversation_id}"
+    orchestrator = _governance_instances.get(key)
+    if orchestrator is None:
+        orchestrator = await initialize_world_simulation(user_id, conversation_id)
+        _governance_instances[key] = orchestrator
+
+    director = getattr(orchestrator, "director", None)
+    if director is None:
+        await orchestrator.initialize()
+        director = orchestrator.director
     return director
 
 

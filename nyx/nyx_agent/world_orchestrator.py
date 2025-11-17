@@ -28,6 +28,7 @@ class WorldOrchestrator:
         self.conversation_id = int(conversation_id)
         self._cache_ttl = float(cache_ttl)
         self._scene_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
+        self._last_scene_key: Optional[str] = None
         self._init_lock = asyncio.Lock()
         self._initialized = False
         self._director: Optional[Any] = None
@@ -95,9 +96,53 @@ class WorldOrchestrator:
         bundle = await ctx.get_world_bundle(fast=True)
         if isinstance(bundle, dict):
             self._scene_cache[cache_key] = (bundle, now + self._cache_ttl)
+            self._last_scene_key = cache_key
             return bundle
 
         return {}
+
+    def get_cached_state(self) -> Optional[Any]:
+        """Return the most recently cached world_state if available."""
+
+        if self._last_scene_key:
+            cached = self._scene_cache.get(self._last_scene_key)
+            if cached:
+                bundle = cached[0]
+                if isinstance(bundle, dict) and "world_state" in bundle:
+                    return bundle.get("world_state")
+
+        director = self._director
+        ctx = getattr(director, "context", None) if director else None
+        if ctx is not None and getattr(ctx, "current_world_state", None) is not None:
+            return ctx.current_world_state
+
+        return None
+
+    async def get_world_state(self, scope: Optional[Any] = None) -> Optional[Any]:
+        """Fetch the current world state via bundle cache or director."""
+
+        cached = self.get_cached_state()
+        if cached is not None:
+            return cached
+
+        bundle = await self.get_scene_bundle(scope)
+        world_state_obj = bundle.get("world_state") if isinstance(bundle, dict) else None
+        if world_state_obj is not None:
+            return world_state_obj
+
+        director = await self._ensure_ready()
+        if director is None:
+            return None
+
+        getter = getattr(director, "get_world_state", None)
+        if callable(getter):
+            return await getter()
+
+        ctx = getattr(director, "context", None)
+        if ctx is not None:
+            return getattr(ctx, "current_world_state", None)
+
+        return None
 
     async def expand_state(
         self,
@@ -197,6 +242,21 @@ class WorldOrchestrator:
         if not self._initialized or self._director is None:
             await self.initialize(warmed=self._warmed_hint)
         return self._director
+
+    async def advance_time(self, hours: int = 1) -> Optional[Any]:
+        """Advance time via the underlying director if possible."""
+
+        director = await self._ensure_ready()
+        if director is None:
+            return None
+
+        advancer = getattr(director, "advance_time", None)
+        if callable(advancer):
+            result = advancer(hours)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
+        return None
 
     @staticmethod
     def _serialize_world_state(state: Any) -> Dict[str, Any]:

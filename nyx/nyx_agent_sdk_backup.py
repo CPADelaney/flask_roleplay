@@ -4213,22 +4213,25 @@ async def process_user_input(
         # ===== STEP 3: World state integration =====
         logger.debug(f"[{trace_id}] Step 3: Integrating world systems...")
         try:
-            if nyx_context.world_director and nyx_context.world_director.context:
-                # Fixed: Remove 'await' - current_world_state is a regular attribute
+            orchestrator = getattr(nyx_context, "world_orchestrator", None)
+            world_state = None
+            if orchestrator is not None:
+                world_state = orchestrator.get_cached_state()
+                if world_state is None:
+                    world_state = await orchestrator.get_world_state()
+            elif nyx_context.world_director and nyx_context.world_director.context:
                 world_state = nyx_context.world_director.context.current_world_state
+
+            if world_state is not None:
                 nyx_context.current_world_state = world_state
-                
-                if world_state:
-                    if hasattr(world_state, 'model_dump'):
-                        logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.model_dump().keys())}")
-                    elif hasattr(world_state, '__dict__'):
-                        logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.__dict__.keys())}")
-                    else:
-                        logger.debug(f"[{trace_id}] ✓ World state integrated: {type(world_state)}")
+                if hasattr(world_state, 'model_dump'):
+                    logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.model_dump().keys())}")
+                elif hasattr(world_state, '__dict__'):
+                    logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.__dict__.keys())}")
                 else:
-                    logger.debug(f"[{trace_id}] ✓ World state is None/empty")
+                    logger.debug(f"[{trace_id}] ✓ World state integrated: {type(world_state)}")
             else:
-                logger.debug(f"[{trace_id}] - No world director available")
+                logger.debug(f"[{trace_id}] ✓ World state is None/empty")
         except Exception as e:
             logger.error(f"[{trace_id}] ✗ World state integration failed: {e}")
 

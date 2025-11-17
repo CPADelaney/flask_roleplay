@@ -9,6 +9,7 @@ from nyx.nyx_agent.context import NyxContext
 logger = logging.getLogger(__name__)
 
 _context_warm_promises: Dict[Tuple[int, int], asyncio.Future] = {}
+_REDIS_WARM_VALUE = "world_orchestrator"
 
 
 async def _await_orchestrator_with_retry(
@@ -158,7 +159,7 @@ async def warm_user_context_cache(
 
     if redis_client is not None:
         try:
-            redis_client.setex(key, 600, "1")
+            redis_client.setex(key, 600, _REDIS_WARM_VALUE)
         except Exception:
             logger.exception("Redis setex failed for context warm cache key=%s", key)
 
