@@ -346,6 +346,8 @@ class ConflictDetectionResult(ConflictDetection):
 
 class NarrativeResponse(BaseModel):
     """Structured output sometimes used by higher layers (or tests)"""
+    id: Optional[str] = Field(None, description="Unique identifier for this response")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier that this response belongs to")
     narrative: str = Field(..., description="The main narrative response as Nyx")
     tension_level: int = Field(0, description="Current narrative tension level (0-10)")
     generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
@@ -353,10 +355,16 @@ class NarrativeResponse(BaseModel):
     environment_description: Optional[str] = None
     time_advancement: bool = False
     universal_updates: Optional[KVList] = None
+    world_state: Optional[WorldState] = Field(None, description="Updated world-state snapshot when available")
     world_mood: Optional[str] = None
     ongoing_events: Optional[List[str]] = None
     available_activities: Optional[List[str]] = None
     npc_schedules: Optional[KVList] = None
+    npc_dialogues: List[NPCDialogue] = Field(default_factory=list)
+    memory_highlights: List[MemoryHighlight] = Field(default_factory=list)
+    emergent_events: List[EmergentEvent] = Field(default_factory=list)
+    choices: List[Choice] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     time_of_day: Optional[str] = None
     emergent_opportunities: Optional[List[str]] = None
 
