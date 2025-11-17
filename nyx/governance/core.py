@@ -850,6 +850,34 @@ class NyxUnifiedGovernor(
             # No event loop, skip database storage
             logger.warning("No event loop available to store player name in database")
 
+    async def log_context_expansion(
+        self,
+        expansion_type: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record context expansion requests for governance auditing."""
+
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "expansion_type": expansion_type,
+            "metadata": metadata or {},
+        }
+
+        expansion_log = self.action_reports.setdefault("context_expansions", [])
+        expansion_log.append(entry)
+        if len(expansion_log) > 200:
+            expansion_log.pop(0)
+
+        self.coordination_history.append({"type": "context_expansion", **entry})
+        if len(self.coordination_history) > 1000:
+            self.coordination_history.pop(0)
+
+        logger.info(
+            "Recorded context expansion %s (metadata_keys=%s)",
+            expansion_type,
+            sorted(entry["metadata"].keys()),
+        )
+
     @with_request_id
     async def initialize(self) -> "NyxUnifiedGovernor":
         """

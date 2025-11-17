@@ -1566,6 +1566,54 @@ class ContextBroker:
         new_section = await self._fetch_section(normalized, bundle.scene_scope)
         setattr(bundle, normalized, new_section)
 
+    async def expand_world(
+        self,
+        entities: Optional[List[str]] = None,
+        aspects: Optional[List[str]] = None,
+        depth: str = "summary",
+        scene_scope: Optional[SceneScope] = None,
+    ) -> Dict[str, Any]:
+        """Expand world state details via the world orchestrator."""
+
+        orchestrator = getattr(self.ctx, "world_orchestrator", None)
+        if orchestrator is None:
+            return {}
+
+        if not self.ctx.is_orchestrator_ready("world"):
+            return {}
+
+        if not await self.ctx.await_orchestrator("world"):
+            return {}
+
+        base_timeout = getattr(self.ctx, "world_expand_timeout", None)
+        if base_timeout is None:
+            base_timeout = getattr(self.ctx, "world_fetch_timeout", 1.0)
+        timeout_budget = self._get_section_timeout("world", base_timeout)
+
+        try:
+            expanded = await asyncio.wait_for(
+                orchestrator.expand_state(
+                    entities=entities,
+                    aspects=aspects,
+                    depth=depth,
+                    scope=scene_scope,
+                ),
+                timeout=timeout_budget,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "World expand_state timed out after %.2fs", timeout_budget
+            )
+            return {}
+        except Exception:
+            logger.debug(
+                "ContextBroker.expand_world: expand_state failed",
+                exc_info=True,
+            )
+            return {}
+
+        return expanded if isinstance(expanded, dict) else {}
+
     async def get_world_state(
         self,
         aspects: Optional[List[str]] = None,
