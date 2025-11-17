@@ -16,7 +16,9 @@ import asyncio
 import time
 import logging
 import uuid
-from typing import Dict, List, Any, Optional, Union, TypedDict
+from typing import Dict, List, Any, Optional, Union
+
+from typing_extensions import TypedDict
 from typing import Mapping, NotRequired
 
 # JSON-friendly value helpers for tool payloads (kept non-recursive so TypedDicts

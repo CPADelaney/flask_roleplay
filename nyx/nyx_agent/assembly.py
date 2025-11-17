@@ -1525,7 +1525,7 @@ class ExpansionTools:
         self.context_broker = context_broker
         self._expansion_history = []
         self._assembler = assembler  # Reference to assembler for pattern detection
-    
+
     async def expand_npc_details(
         self, 
         npc_id: int,
@@ -1651,7 +1651,50 @@ class ExpansionTools:
             "canonical_facts": lore_data.get("canon", {}),
             "relationships": lore_data.get("relationships", {})
         }
-    
+
+    async def expand_world_state(
+        self,
+        entities: Optional[List[str]] = None,
+        aspects: Optional[List[str]] = None,
+        depth: str = "summary",
+        scene_scope: Optional[SceneScope] = None,
+    ) -> Dict[str, Any]:
+        """Expand structured world state details for the requesting agent."""
+
+        aspects = aspects or ["time", "location", "tension"]
+
+        world_data = await self.context_broker.expand_world(
+            entities=entities,
+            aspects=aspects,
+            depth=depth,
+            scene_scope=scene_scope,
+        )
+
+        requested_entities = entities or []
+
+        self._expansion_history.append({
+            "type": "world_state",
+            "entities": requested_entities,
+            "aspects": aspects,
+            "depth": depth,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
+        await self._log_governance_expansion(
+            "world_state",
+            {
+                "entities": requested_entities,
+                "aspects": aspects,
+                "depth": depth,
+            },
+        )
+
+        return {
+            "world": world_data,
+            "requested_aspects": aspects,
+            "requested_entities": requested_entities,
+        }
+
     async def check_world_state(
         self,
         aspects: List[str] = None,
@@ -1709,6 +1752,28 @@ class ExpansionTools:
                 default=0
             )
         }
+
+    async def _log_governance_expansion(self, expansion_type: str, metadata: Dict[str, Any]) -> None:
+        """Send expansion metadata to governance if available."""
+
+        ctx = getattr(self.context_broker, "ctx", None)
+        governance = getattr(ctx, "governance", None) if ctx else None
+        if not governance:
+            return
+
+        log_method = getattr(governance, "log_context_expansion", None)
+        if not callable(log_method):
+            return
+
+        try:
+            maybe = log_method(expansion_type=expansion_type, metadata=metadata)
+            if asyncio.iscoroutine(maybe):
+                await maybe
+        except Exception:
+            logger.debug(
+                "Governance logging failed for expansion '%s'", expansion_type,
+                exc_info=True,
+            )
     
     async def _detect_patterns(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -2080,10 +2145,11 @@ def register_expansion_tools(
         assembler: Optional reference to the response assembler
     """
     tools = ExpansionTools(context_broker, assembler)
-    
+
     agent.register_tool("expand_npc", tools.expand_npc_details)
     agent.register_tool("get_more_memories", tools.get_additional_memories)
     agent.register_tool("expand_lore", tools.expand_lore_context)
+    agent.register_tool("expand_world", tools.expand_world_state)
     agent.register_tool("check_world_state", tools.check_world_state)
     agent.register_tool("get_conflict_details", tools.get_conflict_details)
 
