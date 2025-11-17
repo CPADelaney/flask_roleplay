@@ -39,7 +39,19 @@ import dataclasses
 import contextlib
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Set, Tuple, Union, TYPE_CHECKING, Callable, Awaitable, Iterable
+from typing import (
+    Dict,
+    List,
+    Any,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    TYPE_CHECKING,
+    Callable,
+    Awaitable,
+    Iterable,
+)
 from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
@@ -50,11 +62,6 @@ from logic.conflict_system.conflict_synthesizer import get_synthesizer
 from logic.conflict_system.background_processor import get_conflict_scheduler
 from logic.conflict_system.enhanced_conflict_integration_hotpath import (
     get_cached_tension_result,
-)
-from logic.universal_updater_agent import (
-    UniversalUpdaterContext,
-    apply_universal_updates_async as _APPLY_UNIVERSAL_UPDATES_ASYNC,
-    convert_updates_for_database,
 )
 from infra.cache import get_redis_client
 
@@ -71,6 +78,37 @@ except ImportError:
 
 # Set up logger FIRST
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from logic.universal_updater_agent import UniversalUpdaterContext
+
+_UNIVERSAL_UPDATER_MODULE = None
+
+
+def _get_universal_updater_module():
+    """Lazily import the universal updater to avoid circular imports."""
+
+    global _UNIVERSAL_UPDATER_MODULE
+    if _UNIVERSAL_UPDATER_MODULE is None:
+        from logic import universal_updater_agent as _universal_updater_module
+
+        _UNIVERSAL_UPDATER_MODULE = _universal_updater_module
+    return _UNIVERSAL_UPDATER_MODULE
+
+
+def _build_universal_updater_context(user_id: int, conversation_id: int):
+    module = _get_universal_updater_module()
+    return module.UniversalUpdaterContext(user_id, conversation_id)
+
+
+def _convert_updates_for_database(updates: Dict[str, Any]):
+    module = _get_universal_updater_module()
+    return module.convert_updates_for_database(updates)
+
+
+async def _apply_universal_updates_async(*args, **kwargs):
+    module = _get_universal_updater_module()
+    return await module.apply_universal_updates_async(*args, **kwargs)
 
 # Schema version for cache invalidation
 SCHEMA_VERSION = 3
@@ -2486,7 +2524,7 @@ class ContextBroker:
             return {}
 
         try:
-            db_ready_updates = convert_updates_for_database(dict(updates))
+            db_ready_updates = _convert_updates_for_database(dict(updates))
         except Exception:
             logger.warning("Failed to normalize universal updates payload", exc_info=True)
             return {}
@@ -2510,7 +2548,9 @@ class ContextBroker:
             return {}
 
         try:
-            updater_context = UniversalUpdaterContext(self.ctx.user_id, self.ctx.conversation_id)
+            updater_context = _build_universal_updater_context(
+                self.ctx.user_id, self.ctx.conversation_id
+            )
             await updater_context.initialize()
         except Exception:
             logger.warning("Failed to initialize UniversalUpdaterContext", exc_info=True)
@@ -2518,7 +2558,7 @@ class ContextBroker:
 
         try:
             async with get_db_connection_context() as conn:
-                result = await _APPLY_UNIVERSAL_UPDATES_ASYNC(
+                result = await _apply_universal_updates_async(
                     updater_context,
                     self.ctx.user_id,
                     self.ctx.conversation_id,
