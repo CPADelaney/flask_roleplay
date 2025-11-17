@@ -8,7 +8,7 @@ from agents import Agent, handoff, ModelSettings
 
 from nyx.config import INTERACTIVE_MODEL
 
-from .context import NyxContext
+from .context import NyxContext, WORLD_SIMULATION_AVAILABLE
 from .tools import (
     add_memory,
     calculate_and_update_emotional_state,
@@ -36,6 +36,7 @@ from .tools import (
     simulate_npc_autonomy,
     tool_narrate_slice_of_life_scene,
     update_relationship_state,
+    world_handle_operation,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,6 +241,28 @@ Be thoughtful and concise.""",
 
 # Updated nyx_main_agent definition with strict output contract and interest scoring
 
+nyx_main_tools = [
+    tool_narrate_slice_of_life_scene,
+    orchestrate_slice_scene,
+    generate_npc_dialogue,
+    check_world_state,
+    generate_emergent_event,
+    simulate_npc_autonomy,
+    narrate_power_exchange,
+    narrate_daily_routine,
+    decide_image_generation,
+    generate_universal_updates,
+    generate_ambient_narration,
+    detect_narrative_patterns,
+    retrieve_memories,
+    detect_user_revelations,
+    calculate_emotional_impact,
+    lore_handle_operation,
+]
+
+if WORLD_SIMULATION_AVAILABLE:
+    nyx_main_tools.append(world_handle_operation)
+
 nyx_main_agent = Agent[NyxContext](
     name="Nyx",
     instructions="""You are Nyx, the AI Dominant hosting an immersive femdom simulation.
@@ -358,24 +381,7 @@ Remember: Every response is a single scene. No mechanics visible. Let the player
         handoff(reflection_agent),
     ],
     
-    tools=[
-        tool_narrate_slice_of_life_scene,
-        orchestrate_slice_scene,
-        generate_npc_dialogue,
-        check_world_state,
-        generate_emergent_event,
-        simulate_npc_autonomy,
-        narrate_power_exchange,
-        narrate_daily_routine,
-        decide_image_generation,
-        generate_universal_updates,
-        generate_ambient_narration,
-        detect_narrative_patterns,
-        retrieve_memories,
-        detect_user_revelations,
-        calculate_emotional_impact,
-        lore_handle_operation,
-    ],
+    tools=nyx_main_tools,
 
     model=INTERACTIVE_MODEL,
     model_settings=DEFAULT_MODEL_SETTINGS,

@@ -28,6 +28,7 @@ class AgentType:
     """Constants for agent types."""
     NPC = "npc"
     WORLD_DIRECTOR = "world_director"
+    WORLD_ORCHESTRATOR = "world_orchestrator"
     # Deprecated alias for backward compatibility with linear story systems
     STORY_DIRECTOR = WORLD_DIRECTOR
     CONFLICT_ANALYST = "conflict_analyst"
