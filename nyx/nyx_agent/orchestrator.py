@@ -948,7 +948,16 @@ async def process_user_input(
         async with _log_step("world_state", trace_id):
             # Await the 'world' subsystem before using it
             if nyx_context and await nyx_context.await_orchestrator("world"):
-                if nyx_context.world_director and getattr(nyx_context.world_director, "context", None):
+                orchestrator = getattr(nyx_context, "world_orchestrator", None)
+                if orchestrator is not None:
+                    cached_state = orchestrator.get_cached_state()
+                    if cached_state is None:
+                        cached_state = await orchestrator.get_world_state()
+                    if cached_state is not None:
+                        nyx_context.current_world_state = cached_state
+                elif nyx_context.world_director and getattr(
+                    nyx_context.world_director, "context", None
+                ):
                     nyx_context.current_world_state = (
                         nyx_context.world_director.context.current_world_state
                     )

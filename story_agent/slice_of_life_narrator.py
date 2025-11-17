@@ -156,38 +156,35 @@ async def _get_ws_prefer_bundle(narr_ctx: "NarratorContext") -> Optional["WorldS
     """
     Prefer a cached/bundled world state on the narrator side:
       1) use narr_ctx.current_world_state if present
-      2) try WorldDirector.get_world_bundle(fast=True) and extract "world_state"
-      3) fallback to WorldDirector.get_world_state()
+      2) check the orchestrator bundle cache
+      3) fallback to the orchestrator's director
     """
     try:
         # 1) use what's already on the context (often set by refresh_context)
         if getattr(narr_ctx, "current_world_state", None) is not None:
             return narr_ctx.current_world_state
 
-        wd = getattr(narr_ctx, "world_director", None)
-        if wd is None:
-            return None
+        orchestrator = getattr(narr_ctx, "world_orchestrator", None)
+        if orchestrator is None:
+            orchestrator = getattr(getattr(narr_ctx, "context", None), "world_orchestrator", None)
 
-        # 2) bundle fast path
-        get_bundle = getattr(wd, "get_world_bundle", None)
-        if callable(get_bundle):
-            try:
-                bundle = await get_bundle(fast=True)
-                if isinstance(bundle, dict) and bundle.get("world_state") is not None:
-                    ws = bundle["world_state"]
-                    # Coerce dict → WorldState if needed
-                    if isinstance(ws, dict):
-                        try:
-                            ws = WorldState(**ws)
-                        except Exception:
-                            pass
-                    narr_ctx.current_world_state = ws
-                    return ws
-            except Exception as be:
-                logger.debug(f"slice_of_life bundle fast path failed: {be}", exc_info=True)
+        if orchestrator is None:
+            wd = getattr(narr_ctx, "world_director", None)
+            return await wd.get_world_state() if wd else None
+
+        # 2) bundle fast path via orchestrator cache
+        cached = orchestrator.get_cached_state()
+        if cached is not None:
+            narr_ctx.current_world_state = cached
+            return cached
 
         # 3) slow path
-        ws = await wd.get_world_state()
+        ws = await orchestrator.get_world_state()
+        if isinstance(ws, dict):
+            try:
+                ws = WorldState(**ws)
+            except Exception:
+                pass
         narr_ctx.current_world_state = ws
         return ws
 
@@ -433,6 +430,7 @@ class NarratorContext:
     
     # Core systems (lazy loaded)
     _world_director: Optional[Any] = None
+    _world_orchestrator: Optional[Any] = None
     _relationship_manager: Optional[Any] = None
     _event_system: Optional[Any] = None
     _currency_generator: Optional[Any] = None
@@ -466,9 +464,25 @@ class NarratorContext:
     @property
     def world_director(self):
         if self._world_director is None:
-            from story_agent.world_director_agent import WorldDirector
-            self._world_director = WorldDirector(self.user_id, self.conversation_id)
+            orchestrator = getattr(self, "_world_orchestrator", None)
+            if orchestrator and getattr(orchestrator, "director", None):
+                self._world_director = orchestrator.director
+            else:
+                from story_agent.world_director_agent import WorldDirector
+
+                self._world_director = WorldDirector(self.user_id, self.conversation_id)
         return self._world_director
+
+    @property
+    def world_orchestrator(self):
+        if self._world_orchestrator is None:
+            from nyx.nyx_agent.world_orchestrator import WorldOrchestrator
+
+            self._world_orchestrator = WorldOrchestrator(
+                self.user_id,
+                self.conversation_id,
+            )
+        return self._world_orchestrator
     
     @property
     def relationship_manager(self):
@@ -502,10 +516,14 @@ class NarratorContext:
         
     async def initialize(self):
         """Initialize all lazy-loaded components"""
-        if self._world_director is None:
-            from story_agent.world_director_agent import WorldDirector
-            self._world_director = WorldDirector(self.user_id, self.conversation_id)
-            await self._world_director.initialize()
+        if self._world_orchestrator is None:
+            self._world_orchestrator = WorldOrchestrator(
+                self.user_id,
+                self.conversation_id,
+            )
+
+        await self._world_orchestrator.initialize()
+        self._world_director = self._world_orchestrator.director
         
         if self._relationship_manager is None:
             self._relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
@@ -533,8 +551,8 @@ class NarratorContext:
         """Refresh context with latest data from all systems"""
         try:
             # Update world state
-            if self._world_director:
-                self.current_world_state = await self._world_director.get_world_state()
+            orchestrator = self.world_orchestrator
+            self.current_world_state = await orchestrator.get_world_state()
     
             # Update player stats
             try:
@@ -710,9 +728,11 @@ async def narrate_slice_of_life_scene(
                                      getattr(op_ctx, "conflict_manifestations", []))
     system_intersections = getattr(context, "system_intersections", 
                                    getattr(op_ctx, "system_intersections", []))
-    active_memories = getattr(context, "active_memories", 
+    active_memories = getattr(context, "active_memories",
                              getattr(op_ctx, "active_memories", []))
-    world_director = getattr(context, "world_director", 
+    world_orchestrator = getattr(context, "world_orchestrator",
+                                 getattr(op_ctx, "world_orchestrator", None))
+    world_director = getattr(context, "world_director",
                             getattr(op_ctx, "world_director", None))
 
     # ---------- helpers (local, no imports needed) ----------
@@ -775,8 +795,11 @@ async def narrate_slice_of_life_scene(
             world_state = None
     if world_state is None:
         world_state = await _get_ws_prefer_bundle(context)
-        if world_state is None and world_director:  # last-ditch fallback
-            world_state = await world_director.get_world_state()
+        if world_state is None:
+            if world_orchestrator:
+                world_state = await world_orchestrator.get_world_state()
+            elif world_director:  # last-ditch fallback
+                world_state = await world_director.get_world_state()
 
     # Synthesize a scene if needed
     if scene is None:
@@ -1069,11 +1092,13 @@ async def generate_npc_dialogue(
                                 getattr(op_ctx, "governance_active", False))
     nyx_governance = getattr(context, "nyx_governance", 
                             getattr(op_ctx, "nyx_governance", None))
-    relationship_manager = getattr(context, "relationship_manager", 
+    relationship_manager = getattr(context, "relationship_manager",
                                   getattr(op_ctx, "relationship_manager", None))
-    memory_manager = getattr(context, "memory_manager", 
+    memory_manager = getattr(context, "memory_manager",
                             getattr(op_ctx, "memory_manager", None))
-    world_director = getattr(context, "world_director", 
+    world_orchestrator = getattr(context, "world_orchestrator",
+                                 getattr(op_ctx, "world_orchestrator", None))
+    world_director = getattr(context, "world_director",
                             getattr(op_ctx, "world_director", None))
     
     logger.info(
@@ -1082,9 +1107,14 @@ async def generate_npc_dialogue(
     )
 
     # If callers don't pass world_state, fetch it.
-    if world_state is None and world_director:
+    if world_state is None:
         try:
-            world_state = await _get_ws_prefer_bundle(context) or await world_director.get_world_state()
+            world_state = await _get_ws_prefer_bundle(context)
+            if world_state is None:
+                if world_orchestrator:
+                    world_state = await world_orchestrator.get_world_state()
+                elif world_director:
+                    world_state = await world_director.get_world_state()
             logger.info("NPC_DIALOGUE[%s]: fetched world_state via fallback ws=%s",
                         call_id, _ws_brief(world_state))
         except Exception as e:
@@ -2263,14 +2293,22 @@ class SliceOfLifeNarrator:
     def world_director(self):
         # convenience passthrough so existing self.world_director references work
         return self.context.world_director
-    
+
+    @property
+    def world_orchestrator(self):
+        return getattr(self.context, "world_orchestrator", None)
+
     async def _get_world_state_fast(self) -> Optional[WorldState]:
         ws = await _get_ws_prefer_bundle(self.context)
         if ws is not None:
             return ws
         try:
-            # fall back to the director, not to ourselves
-            ws = await self.world_director.get_world_state()
+            orchestrator = self.world_orchestrator
+            if orchestrator:
+                ws = await orchestrator.get_world_state()
+            else:
+                # fall back to the director, not to ourselves
+                ws = await self.world_director.get_world_state()
             self.context.current_world_state = ws
             return ws
         except Exception as e:

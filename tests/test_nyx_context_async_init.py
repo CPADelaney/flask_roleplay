@@ -668,7 +668,9 @@ async def test_warm_user_context_minimal_mode(monkeypatch):
         "mode": "minimal",
     }
     assert dummy_redis.get_calls == ["ctx:warmed:5:7"]
-    assert dummy_redis.set_calls == [("ctx:warmed:5:7", 600, "1")]
+    assert dummy_redis.set_calls == [
+        ("ctx:warmed:5:7", 600, cache_warmup._REDIS_WARM_VALUE)
+    ]
     assert dummy_redis.delete_calls == []
 
     context = StubNyxContext.instances[-1]
@@ -775,7 +777,9 @@ async def test_warm_user_context_eager_opt_in(monkeypatch):
         "mode": "full",
     }
     assert dummy_redis.get_calls == ["ctx:warmed:9:11"]
-    assert dummy_redis.set_calls == [("ctx:warmed:9:11", 600, "1")]
+    assert dummy_redis.set_calls == [
+        ("ctx:warmed:9:11", 600, cache_warmup._REDIS_WARM_VALUE)
+    ]
 
     context = StubNyxContext.instances[-1]
     assert context.initialized is True

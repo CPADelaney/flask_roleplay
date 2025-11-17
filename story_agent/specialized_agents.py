@@ -69,6 +69,7 @@ class SliceOfLifeAgentContext:
     
     # System connections (lazy loaded)
     _world_director: Optional[Any] = None
+    _world_orchestrator: Optional[Any] = None
     _npc_handler: Optional[Any] = None
     _relationship_manager: Optional[Any] = None
     _memory_manager: Optional[Any] = None
@@ -91,9 +92,25 @@ class SliceOfLifeAgentContext:
     @property
     def world_director(self):
         if self._world_director is None:
-            from story_agent.world_director_agent import WorldDirector
-            self._world_director = WorldDirector(self.user_id, self.conversation_id)
+            orchestrator = getattr(self, "_world_orchestrator", None)
+            if orchestrator and getattr(orchestrator, "director", None):
+                self._world_director = orchestrator.director
+            else:
+                from story_agent.world_director_agent import WorldDirector
+
+                self._world_director = WorldDirector(self.user_id, self.conversation_id)
         return self._world_director
+
+    @property
+    def world_orchestrator(self):
+        if self._world_orchestrator is None:
+            from nyx.nyx_agent.world_orchestrator import WorldOrchestrator
+
+            self._world_orchestrator = WorldOrchestrator(
+                self.user_id,
+                self.conversation_id,
+            )
+        return self._world_orchestrator
     
     @property
     def npc_handler(self):
@@ -487,7 +504,7 @@ async def coordinate_slice_of_life_scene(
     """
     try:
         # Get current world state
-        world_state = await context.world_director.get_world_state()
+        world_state = await context.world_orchestrator.get_world_state()
         context.current_world_state = world_state
         
         # Get available NPCs for the scene
@@ -612,7 +629,7 @@ async def detect_emergent_stories(
         # Gather context from multiple systems
         relationship_events = await context.relationship_manager.get_recent_events()
         memory_patterns = await analyze_player_behavior(context, [])
-        world_state = context.current_world_state or await context.world_director.get_world_state()
+        world_state = context.current_world_state or await context.world_orchestrator.get_world_state()
         
         # Detect narratives
         narratives = await runner.run(

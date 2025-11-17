@@ -19,6 +19,7 @@ from agents.exceptions import AgentsException, ModelBehaviorError
 from nyx.gateway import llm_gateway
 
 from story_agent.world_simulation_models import PowerDynamicType, TimeOfDay, WorldMood, ActivityType
+from nyx.nyx_agent.world_orchestrator import WorldOrchestrator
 
 # Lazy loading to avoid circular imports
 if TYPE_CHECKING:
@@ -81,6 +82,7 @@ class AgentCoordinationContext:
     
     # World state tracking - lazy loaded
     world_director: Optional[Any] = None  # Will be CompleteWorldDirector
+    world_orchestrator: Optional[WorldOrchestrator] = None
     current_world_state: Optional[Any] = None  # Will be CompleteWorldState
     active_scene: Optional[SliceOfLifeEvent] = None
     
@@ -98,16 +100,10 @@ class AgentCoordinationContext:
     
     async def initialize(self):
         """Initialize all components with lazy loading"""
-        # Lazy import to avoid circular dependency
-        from story_agent.world_director_agent import CompleteWorldDirector
-        
-        # Initialize world director
-        self.world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
-        await self.world_director.initialize()
-        
-        # Get current world state
-        if self.world_director.context:
-            self.current_world_state = self.world_director.context.current_world_state
+        self.world_orchestrator = WorldOrchestrator(self.user_id, self.conversation_id)
+        await self.world_orchestrator.initialize()
+        self.world_director = self.world_orchestrator.director
+        self.current_world_state = await self.world_orchestrator.get_world_state()
         
         # Initialize simulation agents
         self.simulation_agents = initialize_world_simulation_agents()
@@ -808,8 +804,8 @@ async def simulate_autonomous_world(
     
     for hour in range(hours):
         # Advance time
-        if context.world_director:
-            await context.world_director.advance_time(1)
+        if context.world_orchestrator:
+            await context.world_orchestrator.advance_time(1)
         
         # Generate NPC autonomous actions
         if context.current_world_state and hasattr(context.current_world_state, 'active_npcs'):
