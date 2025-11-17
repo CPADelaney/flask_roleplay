@@ -31,9 +31,19 @@ JSONValue = Union[JSONPrimitive, JSONSequence]
 
 from agents import function_tool, RunContextWrapper
 
+from nyx.governance import AgentType
+from nyx.governance.ids import format_agent_id
+from nyx.governance_helpers import check_permission, report_action
 from nyx.gateway.lore_tool import handle_lore_operation as gateway_handle_lore_operation
 
-from .context import NyxContext, ContextBroker, SceneScope, ContextBundle, PackedContext
+from .context import (
+    NyxContext,
+    ContextBroker,
+    SceneScope,
+    ContextBundle,
+    PackedContext,
+    WORLD_SIMULATION_AVAILABLE,
+)
 from .models import (
     # OUTPUT models only (safe to keep as they don't affect tool param schema)
     MemoryItem,
@@ -54,6 +64,10 @@ logger = logging.getLogger(__name__)
 
 LORE_TIMEOUT_ERROR_MESSAGE = "Lore request timed out (Codex Task 7). Please try again."
 LORE_GENERIC_ERROR_MESSAGE = "Lore request failed unexpectedly (Codex Task 7). Please try again later."
+WORLD_SYSTEMS_DISABLED_ERROR_MESSAGE = "World systems are not available in this environment."
+WORLD_SYSTEMS_UNAVAILABLE_ERROR_MESSAGE = "World systems are still initializing. Please try again shortly."
+WORLD_OPERATION_GENERIC_ERROR_MESSAGE = "World operation failed unexpectedly. Please try again later."
+WORLD_GOVERNANCE_DENIED_TEMPLATE = "Governance denied this world action: {reason}"
 
 
 async def lore_handle_operation_tool_wrapper(
@@ -104,6 +118,192 @@ async def lore_handle_operation_tool_wrapper(
         extra={**extra, "duration_ms": duration_ms, "success": True, "error_kind": None},
     )
     return outcome
+
+
+def _normalize_extra_items(items: Any) -> Dict[str, Any]:
+    """Normalize optional key/value pairs coming from tool payloads."""
+
+    if isinstance(items, Mapping):
+        return {str(key): value for key, value in items.items()}
+
+    normalized: Dict[str, Any] = {}
+    if isinstance(items, list):
+        for entry in items:
+            if not isinstance(entry, Mapping):
+                continue
+            key = entry.get("key")
+            if key is None:
+                continue
+            normalized[str(key)] = entry.get("value")
+    return normalized
+
+
+async def _resolve_world_orchestrator(nyx_ctx: NyxContext) -> Optional[Any]:
+    """Ensure the world orchestrator is initialized and ready."""
+
+    orchestrator = getattr(nyx_ctx, "world_orchestrator", None)
+    if orchestrator is not None:
+        return orchestrator
+
+    awaiter = getattr(nyx_ctx, "await_orchestrator", None)
+    if callable(awaiter):
+        try:
+            ready = await awaiter("world")
+        except Exception:  # pragma: no cover - defensive guard
+            logger.debug("World orchestrator await failed", exc_info=True)
+            return None
+        if not ready:
+            return None
+        return getattr(nyx_ctx, "world_orchestrator", None)
+
+    return None
+
+
+async def world_handle_operation_tool_wrapper(
+    *,
+    ctx: RunContextWrapper,
+    action_type: str,
+    payload: Optional[WorldOperationPayload],
+) -> Dict[str, Any]:
+    """Governance-aware bridge for imperative world operations."""
+
+    if not WORLD_SIMULATION_AVAILABLE:
+        return {"ok": False, "error": WORLD_SYSTEMS_DISABLED_ERROR_MESSAGE}
+
+    if not isinstance(action_type, str) or not action_type.strip():
+        raise ValueError("world_handle_operation requires a non-empty action_type string")
+
+    nyx_ctx: Optional[NyxContext]
+    if hasattr(ctx, "context") and isinstance(ctx.context, NyxContext):
+        nyx_ctx = ctx.context
+    elif isinstance(ctx, NyxContext):
+        nyx_ctx = ctx
+    else:
+        nyx_ctx = None
+
+    if nyx_ctx is None:
+        raise ValueError("Nyx context missing for world operation")
+
+    user_id = getattr(nyx_ctx, "user_id", None)
+    conversation_id = getattr(nyx_ctx, "conversation_id", None)
+    if user_id is None or conversation_id is None:
+        raise ValueError("Nyx context missing identifiers for world operation")
+
+    orchestrator = await _resolve_world_orchestrator(nyx_ctx)
+    extra = {
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "action_type": action_type.strip().lower(),
+    }
+    if orchestrator is None:
+        logger.info(
+            "World operation requested before orchestrator ready",
+            extra={**extra, "duration_ms": 0, "success": False, "error_kind": "unavailable"},
+        )
+        return {"ok": False, "error": WORLD_SYSTEMS_UNAVAILABLE_ERROR_MESSAGE}
+
+    forward_payload: Dict[str, Any] = dict(payload or {})
+    scope_payload = forward_payload.get("scope")
+    if isinstance(scope_payload, Mapping):
+        forward_payload["scope"] = dict(scope_payload)
+
+    for field in ("parameters", "extra"):
+        normalized_items = _normalize_extra_items(forward_payload.get(field))
+        if normalized_items:
+            forward_payload[field] = normalized_items
+        else:
+            forward_payload.pop(field, None)
+
+    normalized_action = action_type.strip().lower()
+    forward_payload.setdefault("operation", normalized_action)
+
+    action_details: Dict[str, Any] = {
+        "operation": forward_payload.get("operation"),
+        "handler": forward_payload.get("handler"),
+    }
+    for detail_key in ("scope", "aspects", "entities", "depth"):
+        if forward_payload.get(detail_key) is not None:
+            action_details[detail_key] = forward_payload[detail_key]
+
+    permission = await check_permission(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        agent_type=AgentType.WORLD_ORCHESTRATOR,
+        agent_id=format_agent_id(AgentType.WORLD_ORCHESTRATOR, conversation_id),
+        action_type=normalized_action,
+        action_details=action_details,
+    )
+
+    if not permission.get("approved", True):
+        reason = permission.get("reasoning") or "Not approved"
+        logger.info(
+            "World operation denied by governance",
+            extra={**extra, "duration_ms": 0, "success": False, "error_kind": "governance"},
+        )
+        return {
+            "ok": False,
+            "error": WORLD_GOVERNANCE_DENIED_TEMPLATE.format(reason=reason),
+            "governance_blocked": True,
+        }
+
+    override = permission.get("override_action")
+    if isinstance(override, Mapping):
+        override_payload = override.get("payload")
+        if isinstance(override_payload, Mapping):
+            forward_payload.update(dict(override_payload))
+        for key in ("operation", "handler"):
+            if key in override:
+                forward_payload[key] = override[key]
+
+    start = time.monotonic()
+    try:
+        outcome = await orchestrator.handle_world_operation(forward_payload)
+    except Exception:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.exception(
+            "World operation failed",
+            extra={**extra, "duration_ms": duration_ms, "success": False, "error_kind": "exception"},
+        )
+        return {"ok": False, "error": WORLD_OPERATION_GENERIC_ERROR_MESSAGE}
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "World operation completed",
+        extra={**extra, "duration_ms": duration_ms, "success": True, "error_kind": None},
+    )
+
+    normalized_result: Dict[str, Any]
+    if isinstance(outcome, Mapping):
+        normalized_result = dict(outcome)
+    else:
+        normalized_result = {"result": outcome}
+
+    normalized_result.setdefault("success", normalized_result.get("ok", True))
+    normalized_result.setdefault("ok", bool(normalized_result.get("success", True)))
+
+    tracking_id = permission.get("tracking_id")
+    if tracking_id not in (None, ""):
+        normalized_result["governance_tracking_id"] = tracking_id
+
+    action_record = {
+        "type": normalized_action,
+        "operation": forward_payload.get("operation"),
+        "handler": forward_payload.get("handler"),
+        "scope": forward_payload.get("scope"),
+    }
+    try:
+        await report_action(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.WORLD_ORCHESTRATOR,
+            agent_id=format_agent_id(AgentType.WORLD_ORCHESTRATOR, conversation_id),
+            action=action_record,
+            result=normalized_result,
+        )
+    except Exception:
+        logger.debug("World action report failed", exc_info=True)
+
+    return normalized_result
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮
 # │ TypedDict INPUT MODELS (strict JSON schema–friendly)                         │
@@ -168,6 +368,30 @@ class LoreOperationInput(TypedDict, total=False):
     npc_ids: List[Union[int, str]]
     detail_level: str
     extra: List[LoreOperationExtraItem]
+
+
+class WorldOperationScope(TypedDict, total=False):
+    location_id: Union[int, str]
+    location_name: str
+    npc_ids: List[Union[int, str]]
+    topics: List[str]
+    tags: List[str]
+
+
+class WorldOperationExtraItem(TypedDict):
+    key: str
+    value: JSONValue
+
+
+class WorldOperationPayload(TypedDict, total=False):
+    operation: str
+    handler: str
+    scope: WorldOperationScope
+    entities: List[Union[int, str]]
+    aspects: List[str]
+    depth: str
+    parameters: List[WorldOperationExtraItem]
+    extra: List[WorldOperationExtraItem]
 
 
 # ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -1114,6 +1338,21 @@ async def lore_handle_operation(
         user_id=int(user_id),
         conversation_id=int(conversation_id),
         payload=forward_payload,
+    )
+
+
+@function_tool(name_override="world_handle_operation")
+async def world_handle_operation(
+    ctx: RunContextWrapper,
+    action_type: str,
+    payload: Optional[WorldOperationPayload] = None,
+) -> Dict[str, Any]:
+    """Governed access point for world orchestrator operations."""
+
+    return await world_handle_operation_tool_wrapper(
+        ctx=ctx,
+        action_type=action_type,
+        payload=payload,
     )
 
 
