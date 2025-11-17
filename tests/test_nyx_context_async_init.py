@@ -351,7 +351,7 @@ async def test_world_section_fetch_after_world_ready():
         async def get_scene_bundle(self, scope=None) -> typing.Dict[str, typing.Any]:
             vitals = self._state.player_vitals
             return {
-                "summary": {
+                "data": {
                     "time": self._state.current_time,
                     "mood": self._state.world_mood.value,
                     "weather": self._state.weather.value,
@@ -361,7 +361,10 @@ async def test_world_section_fetch_after_world_ready():
                         "hunger": vitals.hunger,
                         "thirst": vitals.thirst,
                     },
-                }
+                },
+                "canonical": True,
+                "version": "world_bundle_stub",
+                "last_changed_at": time.time(),
             }
 
         async def expand_state(self, **_kwargs):  # pragma: no cover - unused in test
@@ -394,6 +397,7 @@ async def test_world_section_fetch_after_world_ready():
             return True
 
     ctx = BrokerCtx()
+    await ctx.await_orchestrator("world")
     broker = context_module.ContextBroker(ctx)
     scope = context_module.SceneScope()
 
@@ -408,6 +412,56 @@ async def test_world_section_fetch_after_world_ready():
 
     cached_section = await broker._fetch_world_section(scope)
     assert cached_section is section
+
+
+@pytest.mark.anyio
+async def test_world_section_fallback_uses_targeted_calls():
+    class DummyWorldOrchestrator:
+        async def get_scene_bundle(self, scope=None):  # pragma: no cover - forced failure
+            raise RuntimeError("bundle boom")
+
+        async def get_time_snapshot(self, scope=None):
+            return {"clock": "noon"}
+
+        async def get_weather(self, scope=None):
+            return {"status": "sunny"}
+
+        async def get_world_mood(self, scope=None):
+            return "hopeful"
+
+        async def get_active_events(self, scope=None):
+            return ["market", "tournament"]
+
+        async def get_player_vitals(self, scope=None):
+            return {"fatigue": 0.2, "hunger": 0.1}
+
+    class BrokerCtx:
+        def __init__(self) -> None:
+            loop = asyncio.get_running_loop()
+            ready = loop.create_future()
+            ready.set_result(True)
+            self.user_id = 1
+            self.conversation_id = 2
+            self.world_orchestrator = DummyWorldOrchestrator()
+            self._init_tasks = {"world": ready}
+
+        def is_orchestrator_ready(self, name: str) -> bool:
+            return True
+
+        async def await_orchestrator(self, name: str) -> bool:
+            return True
+
+    ctx = BrokerCtx()
+    broker = context_module.ContextBroker(ctx)
+    scope = context_module.SceneScope()
+
+    section = await broker._fetch_world_section(scope)
+
+    assert section.data["time"] == {"clock": "noon"}
+    assert section.data["weather"]["status"] == "sunny"
+    assert section.data["mood"] == "hopeful"
+    assert section.data["events"] == ["market", "tournament"]
+    assert section.data["vitals"]["fatigue"] == 0.2
 
 
 @pytest.mark.anyio
