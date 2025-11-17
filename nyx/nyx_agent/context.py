@@ -3897,6 +3897,15 @@ class ContextBroker:
     async def _fetch_world_section(self, scope: SceneScope) -> BundleSection:
         """Fetch world state with safe field access and enum handling"""
 
+        fallback_section = self._build_section_fallback('world')
+
+        # Align readiness checks with lore orchestration – short circuit when not ready
+        if not self.ctx.is_orchestrator_ready("world"):
+            return fallback_section
+
+        if not await self.ctx.await_orchestrator("world"):
+            return fallback_section
+
         def _empty_section() -> BundleSection:
             return self._build_section_fallback('world')
 
@@ -3905,28 +3914,162 @@ class ContextBroker:
             if not orchestrator:
                 raise RuntimeError("World orchestrator unavailable")
 
-            if not await self.ctx.await_orchestrator("world"):
-                raise RuntimeError("World orchestrator not ready")
+            base_timeout = getattr(self.ctx, 'world_fetch_timeout', 1.0)
+            timeout_budget = self._get_section_timeout('world', base_timeout)
 
-            # Shallow-first: request fast bundle and pull 'summary'
-            world_summary: Dict[str, Any] = {}
+            def _extract_bundle_payload(bundle: Dict[str, Any]) -> Dict[str, Any]:
+                if not isinstance(bundle, dict):
+                    return {}
+                data_block = bundle.get('data')
+                if isinstance(data_block, dict):
+                    return data_block
+                summary = bundle.get('summary')
+                if isinstance(summary, dict):
+                    return summary
+                return {
+                    key: value
+                    for key, value in bundle.items()
+                    if key in {'time', 'mood', 'weather', 'events', 'vitals', 'location'}
+                }
+
+            async def _invoke_targeted(handler: Callable[..., Any], label: str) -> Any:
+                """Invoke targeted orchestrator helper safely."""
+
+                async def _call_with_scope(pass_scope: bool) -> Any:
+                    try:
+                        if pass_scope:
+                            result = handler(scope)
+                        else:
+                            result = handler()
+                    except TypeError as exc:
+                        if pass_scope:
+                            return exc
+                        raise
+                    except Exception:
+                        logger.debug(
+                            "World targeted fetch '%s' failed during call", label,
+                            exc_info=True,
+                        )
+                        return None
+
+                    if isinstance(result, Exception):
+                        # Handler rejected scope argument; try without scope
+                        return result
+
+                    if asyncio.iscoroutine(result):
+                        try:
+                            return await asyncio.wait_for(result, timeout=timeout_budget)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "World targeted fetch '%s' timed out after %.2fs",
+                                label,
+                                timeout_budget,
+                            )
+                            return None
+                        except Exception:
+                            logger.debug(
+                                "World targeted fetch '%s' await failed", label,
+                                exc_info=True,
+                            )
+                            return None
+                    return result
+
+                call_result = await _call_with_scope(True)
+                if isinstance(call_result, Exception):
+                    call_result = await _call_with_scope(False)
+                return call_result
+
+            async def _fetch_via_targeted() -> Dict[str, Any]:
+                targeted_data: Dict[str, Any] = {}
+                targeted_specs = (
+                    ('get_time_snapshot', 'time'),
+                    ('get_weather', 'weather'),
+                    ('get_world_mood', 'mood'),
+                    ('get_active_events', 'events'),
+                    ('get_player_vitals', 'vitals'),
+                )
+
+                tasks: List[Tuple[str, asyncio.Task[Any]]] = []
+                for method_name, field in targeted_specs:
+                    handler = getattr(orchestrator, method_name, None)
+                    if not callable(handler):
+                        continue
+                    task = asyncio.create_task(_invoke_targeted(handler, method_name))
+                    tasks.append((field, task))
+
+                for field, task in tasks:
+                    try:
+                        value = await task
+                    except Exception:
+                        logger.debug(
+                            "World targeted fetch '%s' task failed", field,
+                            exc_info=True,
+                        )
+                        continue
+                    if value is None:
+                        continue
+                    targeted_data[field] = value
+
+                if not targeted_data and hasattr(orchestrator, 'expand_state'):
+                    try:
+                        expanded = await asyncio.wait_for(
+                            orchestrator.expand_state(aspects=['summary'], scope=scope),
+                            timeout=timeout_budget,
+                        )
+                        summary = {}
+                        if isinstance(expanded, dict):
+                            summary = expanded.get('summary') or {}
+                            if not summary:
+                                bundle = expanded.get('bundle') or {}
+                                if isinstance(bundle, dict):
+                                    summary = bundle.get('summary') or {}
+                        if isinstance(summary, dict):
+                            targeted_data.update(summary)
+                    except Exception:
+                        logger.debug("World expand_state fallback failed", exc_info=True)
+
+                return targeted_data
+
+            bundle: Dict[str, Any] = {}
             try:
                 bundle = await asyncio.wait_for(
                     orchestrator.get_scene_bundle(scope),
-                    timeout=1.0
+                    timeout=timeout_budget,
                 )
-                if isinstance(bundle, dict):
-                    world_summary = bundle.get("summary", {}) or {}
-            except Exception as exc:
-                logger.error("World fetch failed: %s", exc)
-                raise
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "World scene bundle fetch timed out after %.2fs; attempting targeted fallback",
+                    timeout_budget,
+                )
+            except Exception:
+                logger.error(
+                    "World scene bundle fetch failed; attempting targeted fallback",
+                    exc_info=True,
+                )
+
+            if isinstance(bundle, dict) and bundle:
+                payload = _extract_bundle_payload(bundle)
+                last_changed = float(bundle.get('last_changed_at', time.time()))
+                version = str(bundle.get('version') or bundle.get('world_version') or f"world_{int(last_changed)}")
+                canonical = bool(bundle.get('canonical'))
+                return BundleSection(
+                    data=payload,
+                    canonical=canonical,
+                    priority=4,
+                    last_changed_at=last_changed,
+                    version=version,
+                )
+
+            targeted_data = await _fetch_via_targeted()
+            if not targeted_data:
+                raise RuntimeError("Targeted world fetch returned no data")
 
             return BundleSection(
-                data=world_summary,
+                data=targeted_data,
                 canonical=False,
                 priority=4,
                 last_changed_at=time.time(),
-                version=f"world_{time.time()}",
+                version=f"world_fallback_{int(time.time())}",
             )
 
         return await self.perform_fetch_and_cache(
