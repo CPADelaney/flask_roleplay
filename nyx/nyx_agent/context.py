@@ -1561,7 +1561,119 @@ class ContextBroker:
         normalized = self._normalize_section_name(section)
         new_section = await self._fetch_section(normalized, bundle.scene_scope)
         setattr(bundle, normalized, new_section)
-        
+
+    async def get_world_state(
+        self,
+        aspects: Optional[List[str]] = None,
+        scene_scope: Optional[SceneScope] = None,
+    ) -> Dict[str, Any]:
+        """Return a structured world snapshot for tools like check_world_state."""
+
+        aspects = aspects or ["time", "mood", "location", "tension"]
+
+        world_director = getattr(self.ctx, "world_director", None)
+        if not world_director:
+            return {}
+
+        bundle: Dict[str, Any] = {}
+        world_state_obj = None
+
+        try:
+            ctx_obj = getattr(world_director, "context", None)
+            get_bundle = getattr(ctx_obj, "get_world_bundle", None) if ctx_obj else None
+            if callable(get_bundle):
+                raw_bundle = await get_bundle(fast=True)
+                if isinstance(raw_bundle, dict):
+                    bundle = raw_bundle
+                    world_state_obj = bundle.get("world_state")
+            if world_state_obj is None:
+                world_state_obj = await world_director.get_world_state()
+        except Exception:
+            logger.debug(
+                "ContextBroker.get_world_state: bundle path failed; using fallback state",
+                exc_info=True,
+            )
+
+        if world_state_obj is None:
+            return {}
+
+        try:
+            if hasattr(world_state_obj, "model_dump"):
+                ws_dict = world_state_obj.model_dump(mode="python")
+            elif isinstance(world_state_obj, dict):
+                ws_dict = dict(world_state_obj)
+            else:
+                ws_dict = {}
+        except Exception:
+            ws_dict = {}
+
+        summary = bundle.get("summary", {}) if isinstance(bundle, dict) else {}
+        conflict_state = bundle.get("conflict_state", {}) if isinstance(bundle, dict) else {}
+
+        output: Dict[str, Any] = {}
+
+        if "time" in aspects:
+            time_obj = ws_dict.get("current_time")
+            if isinstance(time_obj, dict):
+                output["time"] = time_obj
+            elif hasattr(world_state_obj, "current_time") and hasattr(
+                world_state_obj.current_time, "model_dump"
+            ):
+                output["time"] = world_state_obj.current_time.model_dump(mode="python")
+
+        if "mood" in aspects:
+            mood = ws_dict.get("world_mood")
+            if isinstance(mood, str):
+                output["mood"] = mood
+            elif hasattr(getattr(world_state_obj, "world_mood", None), "value"):
+                output["mood"] = world_state_obj.world_mood.value
+
+        if "location" in aspects:
+            location = ws_dict.get("location_data")
+            if isinstance(location, dict):
+                location_value = (
+                    location.get("current_location")
+                    or location.get("name")
+                    or location.get("region")
+                )
+            else:
+                location_value = location
+            if not isinstance(location_value, str):
+                location_value = str(location_value) if location_value is not None else ""
+            output["location"] = location_value or "unknown"
+
+        if "tension" in aspects or "world_tension" in aspects:
+            world_tension = ws_dict.get("world_tension")
+            if isinstance(world_tension, dict):
+                output["world_tension"] = world_tension
+            elif hasattr(getattr(world_state_obj, "world_tension", None), "model_dump"):
+                output["world_tension"] = world_state_obj.world_tension.model_dump(
+                    mode="python"
+                )
+
+        if "activities" in aspects:
+            activities = ws_dict.get("available_activities")
+            if isinstance(activities, list):
+                output["available_activities"] = activities
+            elif hasattr(world_state_obj, "available_activities"):
+                maybe_list = world_state_obj.available_activities
+                if isinstance(maybe_list, list):
+                    output["available_activities"] = maybe_list
+
+        if "conflicts" in aspects:
+            if isinstance(conflict_state, dict):
+                output["conflicts"] = {
+                    "active_conflicts": conflict_state.get("active_conflicts", []),
+                    "metrics": conflict_state.get("metrics", {}),
+                }
+            elif summary and isinstance(summary, dict):
+                output["conflicts"] = summary.get("conflict_snapshot", {})
+
+        if "deep_state" in aspects:
+            output["world_state"] = ws_dict
+
+        return output
+
     async def _try_connect_redis(self):
         """Try to connect to Redis with backoff on failure"""
         if self.redis_client:  # Already connected
