@@ -1118,6 +1118,8 @@ class ScoredOption(BaseModel):
 
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
+    id: Optional[str] = Field(None, description="Unique identifier for this response")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier that this response belongs to")
     narrative: str = Field(..., description="The main narrative response as Nyx")
     tension_level: int = Field(0, description="Current narrative tension level (0-10)")
     generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
@@ -1125,10 +1127,16 @@ class NarrativeResponse(BaseModel):
     environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
     universal_updates: Optional[KVList] = Field(None, description="Universal updates extracted from narrative")
+    world_state: Optional[WorldState] = Field(None, description="Updated world-state snapshot when available")
     world_mood: Optional[str] = Field(None, description="Current world mood")
     ongoing_events: Optional[List[str]] = Field(None, description="Active slice-of-life events")
     available_activities: Optional[List[str]] = Field(None, description="Available player activities")
     npc_schedules: Optional[KVList] = None
+    npc_dialogues: List[NPCDialogue] = Field(default_factory=list, description="NPC dialogue beats included in the response")
+    memory_highlights: List[MemoryItem] = Field(default_factory=list, description="Highlighted memories referenced this turn")
+    emergent_events: List[SliceOfLifeEvent] = Field(default_factory=list, description="Emergent narrative events identified")
+    choices: List[ChoiceData] = Field(default_factory=list, description="Choices presented to the player")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary structured metadata for downstream systems")
     time_of_day: Optional[str] = Field(None, description="Current time period")
     emergent_opportunities: Optional[List[str]] = Field(None, description="Emergent narrative opportunities")
 

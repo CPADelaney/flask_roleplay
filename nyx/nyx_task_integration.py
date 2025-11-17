@@ -23,12 +23,35 @@ logger = logging.getLogger(__name__)
 
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
+    id: Optional[str] = Field(None, description="Unique identifier for this response")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier that this response belongs to")
     narrative: str = Field(..., description="The main narrative response as Nyx")
     tension_level: int = Field(0, description="Current narrative tension level (0-10)")
     generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
     image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
     environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
+    universal_updates: Optional[Dict[str, Any]] = Field(
+        None, description="Universal updates extracted from the narrative"
+    )
+    world_state: Optional[Dict[str, Any]] = Field(
+        None, description="Updated world-state snapshot when available"
+    )
+    npc_dialogues: List[Dict[str, Any]] = Field(
+        default_factory=list, description="NPC dialogue beats included in the response"
+    )
+    memory_highlights: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Highlighted memories referenced this turn"
+    )
+    emergent_events: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Emergent narrative events identified"
+    )
+    choices: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Choices presented to the player"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Arbitrary structured metadata for downstream systems"
+    )
     
 
 class NyxTaskIntegration:
