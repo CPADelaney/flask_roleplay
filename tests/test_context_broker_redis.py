@@ -120,8 +120,26 @@ sys.modules["story_agent.world_simulation_models"] = stub_world_models
 
 
 stub_world_director = types.ModuleType("story_agent.world_director_agent")
-stub_world_director.CompleteWorldDirector = object
-stub_world_director.WorldDirector = object
+
+
+class _StubCompleteWorldDirector:
+    def __init__(self, *args, **kwargs):
+        async def _bundle(*args, **kwargs):
+            return {}
+
+        self.context = types.SimpleNamespace(
+            get_world_bundle=_bundle
+        )
+
+    async def initialize(self, *args, **kwargs):
+        return None
+
+    async def get_world_state(self):  # pragma: no cover - compatibility shim
+        return {}
+
+
+stub_world_director.CompleteWorldDirector = _StubCompleteWorldDirector
+stub_world_director.WorldDirector = _StubCompleteWorldDirector
 stub_world_director.CompleteWorldDirectorContext = object
 stub_world_director.WorldDirectorContext = object
 sys.modules["story_agent.world_director_agent"] = stub_world_director
