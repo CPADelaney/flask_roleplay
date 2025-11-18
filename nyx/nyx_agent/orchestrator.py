@@ -111,8 +111,6 @@ _MOVEMENT_RUN_LIMITS: Dict[str, Any] = {
 
 _MOVEMENT_FAST_PATH_MODEL_SETTINGS = ModelSettings(
     strict_tools=False,
-    temperature=0.55,
-    top_p=0.9,
     max_tokens=600,
 )
 
