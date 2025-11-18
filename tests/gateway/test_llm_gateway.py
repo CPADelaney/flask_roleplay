@@ -60,8 +60,67 @@ async def test_execute_success_returns_raw_and_metadata_and_logs_trace_id(stub_r
 
     start_record = next(r for r in caplog.records if r.message == "nyx.gateway.llm.execute.start")
     assert "trace_id" in start_record.metadata_keys
+    assert start_record.prompt_preview.startswith("Hello there")
+    assert start_record.prompt_length == len("Hello there")
     success_record = next(r for r in caplog.records if r.message == "nyx.gateway.llm.execute.success")
     assert "trace_id" in success_record.metadata_keys
+    assert success_record.prompt_tokens == 5
+    assert success_record.total_tokens == 5
+
+
+@pytest.mark.anyio("asyncio")
+async def test_execute_logs_run_summary_and_guardrail_counts(stub_runner, caplog):
+    fake_result = SimpleNamespace(
+        final_output="details",
+        turns=[{"speaker": "agent"} for _ in range(3)],
+        tool_calls=[{"tool": "search"}],
+        usage={"prompt_tokens": 2, "completion_tokens": 4},
+    )
+
+    async def run_impl(cls, agent, prompt, **kwargs):
+        return fake_result
+
+    stub_runner.run = classmethod(run_impl)
+    caplog.set_level(logging.INFO, logger=llm_gateway.logger.name)
+
+    request = LLMRequest(
+        prompt="Give me a plan",
+        agent=_agent("primary"),
+        metadata={"trace_id": "trace-456", "moderation_pre": {"blocked": False}},
+    )
+
+    await llm_gateway.execute(request)
+
+    success_record = next(r for r in caplog.records if r.message == "nyx.gateway.llm.execute.success")
+    assert success_record.turn_count == 3
+    assert success_record.tool_call_count == 1
+    assert success_record.guardrail_invocations == 1
+    assert success_record.prompt_tokens == 2
+    assert success_record.completion_tokens == 4
+    assert success_record.total_tokens == 6
+
+
+@pytest.mark.anyio("asyncio")
+async def test_execute_start_log_redacts_sensitive_prompt(stub_runner, caplog):
+    fake_result = SimpleNamespace(final_output="hidden")
+
+    async def run_impl(cls, agent, prompt, **kwargs):
+        return fake_result
+
+    stub_runner.run = classmethod(run_impl)
+    caplog.set_level(logging.INFO, logger=llm_gateway.logger.name)
+
+    request = LLMRequest(
+        prompt="Secret mission",
+        agent=_agent("primary"),
+        metadata={"trace_id": "secret", "redact_prompt": True},
+    )
+
+    await llm_gateway.execute(request)
+
+    start_record = next(r for r in caplog.records if r.message == "nyx.gateway.llm.execute.start")
+    assert start_record.prompt_preview == "<redacted>"
+    assert start_record.prompt_length == len("Secret mission")
 
 
 @pytest.mark.anyio("asyncio")
