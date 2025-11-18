@@ -118,6 +118,12 @@ async def test_movement_fast_path_uses_router(monkeypatch):
             {"categories": ["movement"], "feasible": True},
             {"categories": ["mundane_action"], "feasible": True},
         ],
+        "router_result": {
+            "intents": [
+                {"categories": ["movement"], "raw_text": "walk"},
+                {"categories": ["mundane_action"], "raw_text": "open door"},
+            ]
+        },
     }
 
     async def fake_fast(*_args, **_kwargs):
@@ -133,6 +139,7 @@ async def test_movement_fast_path_uses_router(monkeypatch):
     async def fake_assess(*_args, **_kwargs):
         nonlocal assess_calls
         assess_calls += 1
+        assert _kwargs.get("router_result") == fast_payload["router_result"]
         return {"overall": {"feasible": True}}
 
     monkeypatch.setattr(
@@ -208,6 +215,7 @@ async def test_movement_fast_path_uses_router(monkeypatch):
         "location_id": "loc-1",
         "location_name": "Club Atrium",
         "feasibility": fast_payload,
+        "router_result": fast_payload["router_result"],
     }
 
     result = await orchestrator_module.process_user_input(

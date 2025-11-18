@@ -2730,13 +2730,44 @@ except Exception:
         cats = ", ".join(sorted(blocking))
         return f"Reality{loc} doesn’t support that ({cats}). Try something that fits what’s actually present."
 
-async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dict[str, Any]:
+async def assess_action_feasibility(
+    nyx_ctx: NyxContext,
+    user_input: str,
+    router_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Dynamically assess if an action is feasible, prioritizing location resolution for movement.
     Generates unique, contextual responses for every rejection.
     """
     # --- Step 0: Initial Setup (OOC checks, intent parsing) ---
     policy_sources: List[Any] = []
+    router_result_payload: Dict[str, Any] = {}
+    parse_error: Optional[str] = None
+    intents: List[Dict[str, Any]] = []
+    router_supplied = False
+
+    if isinstance(router_result, dict):
+        router_result_payload = dict(router_result)
+        candidate_intents = router_result_payload.get("intents")
+        if isinstance(candidate_intents, list) and all(
+            isinstance(item, dict) for item in candidate_intents
+        ):
+            intents = candidate_intents
+            router_supplied = True
+            parse_error = router_result_payload.get("parse_error")
+            if not router_result_payload.get("source"):
+                router_result_payload["source"] = "fast"
+        else:
+            logger.debug(
+                "[FEASIBILITY] Router result missing valid intents; falling back to parse"
+            )
+
+    if not router_supplied:
+        intents = await parse_action_intents(user_input)
+        router_result_payload.setdefault("source", "full")
+        router_result_payload.setdefault("version", 1)
+    else:
+        router_result_payload.setdefault("version", 1)
 
     def _extend_policy_sources_from(candidate: Any) -> None:
         if not isinstance(candidate, dict):
@@ -2775,6 +2806,17 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
 
     minimal_context: Optional[Dict[str, Any]] = None
 
+    text_l = (user_input or "").lower()
+    router_result_payload.setdefault("text", user_input)
+    router_result_payload.setdefault("normalized_text", text_l)
+
+    def _attach_router_result(target: Dict[str, Any]) -> Dict[str, Any]:
+        router_result_payload["intents"] = intents
+        if parse_error is not None:
+            router_result_payload["parse_error"] = parse_error
+        target["router_result"] = router_result_payload
+        return target
+
     def _stamp_response_meta(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(payload, dict):
             meta = payload.setdefault("meta", {})
@@ -2802,15 +2844,13 @@ async def assess_action_feasibility(nyx_ctx: NyxContext, user_input: str) -> Dic
         final_payload = hardened.get("payload", payload_dict)
         if isinstance(final_payload, dict):
             _stamp_response_meta(final_payload)
-            return final_payload
-        return payload_dict
+            return _attach_router_result(final_payload)
+        return _attach_router_result(payload_dict)
 
     if _is_ooc_request(user_input) and _policy_roleplay_only_enabled(*policy_sources):
         return _finalize_result(_nyx_meta_decline_payload("ooc_request"))
 
     # Parse the intended actions only after early OOC guardrails
-    intents = await parse_action_intents(user_input)
-    text_l = (user_input or "").lower()
 
     if _is_ooc_request(user_input):
         minimal_context = await _load_minimal_context(nyx_ctx)
@@ -4903,6 +4943,12 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     """
     logger.info(f"[FEASIBILITY] Checking: {text[:160]!r}")
     text_l = (text or "").lower()
+    router_result: Dict[str, Any] = {
+        "version": 1,
+        "source": "fast",
+        "text": text,
+        "normalized_text": text_l,
+    }
 
     # ---- 1) Parse intents (never hard-block on parse errors) -----------------
     parse_error: Optional[str] = None
@@ -4921,6 +4967,10 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     # Fallback single-pass intent so we still produce a decision
     if not intents:
         intents = [{"categories": list(_infer_categories_from_text(text_l)) or []}]
+
+    router_result["intents"] = intents
+    if parse_error:
+        router_result["parse_error"] = parse_error
 
     # ---- 2) Load dynamic context ------------------------------------------------
     setting_kind = "modern_realistic"
@@ -5837,6 +5887,7 @@ async def assess_action_feasibility_fast(user_id: int, conversation_id: int, tex
     return {
         "overall": overall,
         "per_intent": per_intent,
+        "router_result": router_result,
     }
 
 
