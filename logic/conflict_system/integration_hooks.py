@@ -13,6 +13,11 @@ from celery.schedules import crontab
 from conflict.signals import ConflictSignal, ConflictSignalType
 from db.connection import get_db_connection_context, run_async_in_worker_loop
 from logic.time_cycle import get_current_game_day
+from logic.conflict_system.background_processor import (
+    get_conflict_scheduler,
+    ProcessingPriority
+)
+from conflict.signals import ConflictSignal, ConflictSignalType
 
 logger = logging.getLogger(__name__)
 
@@ -209,31 +214,41 @@ class ConflictEventHooks:
             if not allowed:
                 return {'triggered': False, 'reason': reason}
     
-            # Use the background processor (owned by orchestrator) to enqueue the event
+            signal = ConflictSignal(
+                type=ConflictSignalType.PLAYER_ACTION,
+                user_id=int(user_id),
+                conversation_id=int(conversation_id),
+                payload={
+                    'conflict_id': int(conflict_id),
+                    'event_type': event_type,
+                    'magnitude': magnitude,
+                    'description': f"Significant {event_type} event",
+                    'timestamp': datetime.utcnow().isoformat()
+                },
+            )
+
+            dispatched = False
+            response: Optional[Any] = None
+
             try:
-                result = await synth.processor.trigger_significant_event(
-                    conflict_id,
-                    {
-                        'event_type': event_type,
-                        'magnitude': magnitude,
-                        'description': f"Significant {event_type} event",
-                        'timestamp': datetime.utcnow().isoformat()
-                    }
-                )
+                response = await synth.handle_signal(signal)
+                dispatched = True
             except Exception as e:
-                logger.debug(f"Processor trigger failed (non-fatal): {e}")
-                result = False
-    
+                logger.debug(f"Signal dispatch failed (non-fatal): {e}")
+
             # Nudge the queue to surface items and emit news state syncs if any
             try:
                 await synth.process_background_queue(max_items=3)
             except Exception:
                 pass
-    
-            return bool(result)
+
+            if response is not None:
+                return response
+
+            return {'triggered': dispatched}
         except Exception as e:
             logger.error(f"Error triggering significant event: {e}")
-            return False
+            return {'triggered': False, 'error': str(e)}
 
 # ===============================================================================
 # CELERY BACKGROUND TASKS
