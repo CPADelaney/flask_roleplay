@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 import types
 import typing
 
@@ -69,6 +70,8 @@ class _StubNyxContext:
                 "name": "Club Atrium",
                 "id": "loc-1",
                 "city": "New Avalon",
+                "lat": 37.7749,
+                "lon": -122.4194,
             },
             "location_id": "loc-1",
             "location_name": "Club Atrium",
@@ -169,6 +172,8 @@ async def test_movement_fast_path_uses_router(monkeypatch):
             region="Central",
             country="Avalon",
             description="Velvet banisters and low amber light.",
+            lat=37.7752,
+            lon=-122.4189,
         )
 
         return types.SimpleNamespace(
@@ -211,6 +216,8 @@ async def test_movement_fast_path_uses_router(monkeypatch):
             "name": "Club Atrium",
             "id": "loc-1",
             "city": "New Avalon",
+            "lat": 37.7749,
+            "lon": -122.4194,
         },
         "location_id": "loc-1",
         "location_name": "Club Atrium",
@@ -232,7 +239,10 @@ async def test_movement_fast_path_uses_router(monkeypatch):
     assert result["metadata"]["location_transition"]["router_called"] is True
     assert result["metadata"]["location_transition"]["location"]["name"] == "Velvet Staircase"
     assert result["response"] == movement_output["final_output"]
-    assert "Velvet Staircase" in fake_run_agent.last_call["prompt"]
+    prompt_text = fake_run_agent.last_call["prompt"]
+    assert "Destination:" in prompt_text
+    assert "- name: Velvet Staircase" in prompt_text
+    assert "Approximate distance:" in prompt_text
     run_config = fake_run_agent.last_call["run_config"]
     expected_limits = orchestrator_module._MOVEMENT_RUN_LIMITS
     assert getattr(run_config, "max_turns", None) == expected_limits["max_turns"]
@@ -243,7 +253,74 @@ async def test_movement_fast_path_uses_router(monkeypatch):
     assert getattr(run_config, "per_step_timeout", None) == pytest.approx(expected_limits["per_step_timeout"])
     assert result["metadata"]["movement_run_limits"]["max_turns"] == expected_limits["max_turns"]
 
+    movement_meta = result["metadata"]["movement_meta"]
+    assert movement_meta["origin"]["name"] == "Club Atrium"
+    assert movement_meta["destination"]["name"] == "Velvet Staircase"
+    assert movement_meta["distance_class"] == "short"
+    assert movement_meta["approx_distance_km"] is not None
+
     stub_ctx = _StubNyxContext.instances[0]
     assert stub_ctx.refreshed is True
     assert stub_ctx.previous_location_id == "loc-1"
-    assert stub_ctx.current_context["location_id"] == "loc-2"
+
+
+@pytest.mark.anyio
+async def test_movement_fast_path_skips_long_distance(monkeypatch):
+    ctx = _StubNyxContext(user_id=42, conversation_id=100)
+    packed = await ctx.build_context_for_input("I head south", dict(ctx.seed_context))
+
+    fast_payload = {
+        "overall": {"feasible": True, "strategy": "allow"},
+        "per_intent": [
+            {"categories": ["movement"], "feasible": True},
+        ],
+    }
+
+    long_location = types.SimpleNamespace(
+        id="loc-remote",
+        location_id="loc-remote",
+        location_name="Distant Haven",
+        city="Anaheim",
+        region="California",
+        country="USA",
+        lat=33.8121,
+        lon=-117.9190,
+    )
+
+    async def fake_resolve(*_args, **_kwargs):
+        return types.SimpleNamespace(
+            status="exact",
+            choices=["Distant Haven"],
+            operations=[],
+            metadata={},
+            location=long_location,
+            candidates=[],
+        )
+
+    monkeypatch.setattr(
+        "nyx.location.router.resolve_place_or_travel",
+        fake_resolve,
+    )
+
+    run_calls: list[typing.Any] = []
+
+    async def fake_run_agent(*args, **kwargs):  # pragma: no cover - should not run
+        run_calls.append((args, kwargs))
+        return {"final_output": "ignored"}
+
+    monkeypatch.setattr(orchestrator_module, "run_agent_safely", fake_run_agent)
+
+    result = await orchestrator_module._run_movement_transition_fast_path(
+        ctx,
+        packed,
+        "I go to Disneyland",
+        fast_payload,
+        trace_id="unit",
+        start_time=time.time(),
+    )
+
+    assert result is None
+    assert not run_calls
+    assert ctx.refreshed is False
+    assert ctx.current_context["current_location"]["name"] == "Club Atrium"
+    assert ctx.current_context["location_id"] == "loc-1"

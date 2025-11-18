@@ -5,9 +5,10 @@ import asyncio
 import dataclasses
 import json
 import logging
+import math
 import time
 import uuid
-from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING, Callable
+from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING, Callable, Mapping
 from contextlib import asynccontextmanager
 
 from agents import Agent, RunConfig, RunContextWrapper, ModelSettings
@@ -88,6 +89,7 @@ DEFAULT_DEFER_RUN_TIMEOUT_SECONDS: float = getattr(
 DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
 
 _MOVEMENT_FAST_PATH_CATEGORIES: set[str] = {"movement", "mundane_action"}
+_MOVEMENT_FAST_PATH_DISTANCE_THRESHOLD_KM: float = 5.0
 
 _MAIN_AGENT_RUN_LIMITS: Dict[str, Any] = {
     "max_turns": 6,
@@ -582,6 +584,8 @@ def _extract_location_payload(resolve_result: Any) -> Dict[str, Any]:
                 "region": getattr(location, "region", None),
                 "country": getattr(location, "country", None),
                 "description": getattr(location, "description", None),
+                "lat": getattr(location, "lat", getattr(location, "latitude", None)),
+                "lon": getattr(location, "lon", getattr(location, "longitude", getattr(location, "lng", None))),
             }
         name = payload.get("location_name") or payload.get("name")
         if name:
@@ -694,6 +698,7 @@ def _build_movement_scene_bundle(
     nyx_context: NyxContext,
     packed_context: Optional[PackedContext],
     location_payload: Dict[str, Any],
+    movement_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compose a compact scene summary for the movement fast path."""
 
@@ -715,28 +720,70 @@ def _build_movement_scene_bundle(
     recent_turns = _extract_recent_turns(nyx_context, packed_context)
     npcs = _compact_npcs(getattr(nyx_context, "current_context", {}).get("present_npcs"))
 
-    return {
+    bundle: Dict[str, Any] = {
         "location": {k: v for k, v in location_info.items() if v not in (None, "")},
         "npcs": npcs,
         "recent_turns": recent_turns,
     }
 
+    if movement_meta:
+        bundle["movement_meta"] = movement_meta
+
+    return bundle
+
 
 def _build_movement_transition_prompt(
     user_input: str,
     scene_bundle: Dict[str, Any],
+    movement_meta: Dict[str, Any],
 ) -> str:
     """Create the lightweight transition prompt for the movement agent."""
 
     bundle_json = json.dumps(scene_bundle, ensure_ascii=False)
-    return "\n".join(
-        [
-            "You are Nyx crafting a quick movement transition.",
-            "Respond in 2-3 sentences max with noir, dominant sensuality. Keep continuity with the provided context.",
-            f"Player intent: {user_input}",
-            f"Scene bundle JSON: {bundle_json}",
-        ]
+
+    origin = movement_meta.get("origin", {})
+    destination = movement_meta.get("destination", {})
+    approx_km = movement_meta.get("approx_distance_km")
+    distance_line = (
+        f"{approx_km:.1f} km" if isinstance(approx_km, (int, float)) else "unknown"
     )
+    distance_class = movement_meta.get("distance_class") or "unknown"
+    world_ctx = movement_meta.get("world", {})
+    world_time = world_ctx.get("local_time") or "unknown"
+    time_of_day = world_ctx.get("time_of_day") or "unknown"
+    world_mood = world_ctx.get("world_mood") or world_ctx.get("mood") or "unknown"
+    feasibility_meta = movement_meta.get("feasibility", {})
+    soft_location_only = movement_meta.get("soft_location_only")
+    teleport_allowed = feasibility_meta.get("teleport_allowed")
+    has_currency = feasibility_meta.get("has_currency")
+
+    def _format_location_block(label: str, payload: Mapping[str, Any]) -> str:
+        lines = [f"{label}:"]
+        for key in ("name", "city", "region", "country", "latitude", "longitude"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                lines.append(f"- {key}: {value}")
+        return "\n".join(lines)
+
+    origin_block = _format_location_block("Origin", origin)
+    destination_block = _format_location_block("Destination", destination)
+
+    prompt_lines = [
+        f"Player input: {user_input}",
+        origin_block,
+        destination_block,
+        f"Approximate distance: {distance_line}",
+        f"Movement scale: {distance_class}",
+        f"Current time: {world_time} ({time_of_day})",
+        f"World mood: {world_mood}",
+        "Feasibility:",
+        f"- soft_location_only: {soft_location_only}",
+        f"- teleport_allowed: {teleport_allowed}",
+        f"- has_currency: {has_currency}",
+        f"Scene bundle JSON: {bundle_json}",
+    ]
+
+    return "\n".join(prompt_lines)
 
 
 def _default_movement_transition_narration(scene_bundle: Dict[str, Any]) -> str:
@@ -749,6 +796,273 @@ def _default_movement_transition_narration(scene_bundle: Dict[str, Any]) -> str:
     )
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _canonicalize_location_token(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip().lower()
+    return str(value).strip().lower()
+
+
+def _normalize_location_dict(location: Any) -> Dict[str, Any]:
+    if not location:
+        return {}
+
+    if dataclasses.is_dataclass(location):
+        raw = dataclasses.asdict(location)
+    elif isinstance(location, Mapping):
+        raw = dict(location)
+    else:
+        raw = {}
+        for attr in (
+            "id",
+            "location_id",
+            "name",
+            "location_name",
+            "location",
+            "city",
+            "region",
+            "country",
+            "description",
+            "lat",
+            "lon",
+            "latitude",
+            "longitude",
+            "g",
+        ):
+            value = getattr(location, attr, None)
+            if value not in (None, ""):
+                raw[attr] = value
+
+    normalized: Dict[str, Any] = {}
+
+    for key in (
+        "id",
+        "location_id",
+        "name",
+        "location_name",
+        "location",
+        "city",
+        "region",
+        "country",
+        "description",
+    ):
+        value = raw.get(key)
+        if value not in (None, ""):
+            normalized[key] = value
+
+    lat = raw.get("lat")
+    if lat is None:
+        lat = raw.get("latitude")
+    if lat is None:
+        lat = raw.get("g")
+    lon = raw.get("lon")
+    if lon is None:
+        lon = raw.get("longitude")
+    if lon is None:
+        lon = raw.get("lng")
+
+    lat_f = _coerce_float(lat)
+    lon_f = _coerce_float(lon)
+    if lat_f is not None:
+        normalized["latitude"] = lat_f
+    if lon_f is not None:
+        normalized["longitude"] = lon_f
+
+    return normalized
+
+
+def _haversine_km(
+    origin_lat: Optional[float],
+    origin_lon: Optional[float],
+    dest_lat: Optional[float],
+    dest_lon: Optional[float],
+) -> Optional[float]:
+    if None in (origin_lat, origin_lon, dest_lat, dest_lon):
+        return None
+
+    lat1, lon1, lat2, lon2 = map(math.radians, [origin_lat, origin_lon, dest_lat, dest_lon])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    c = 2 * math.asin(math.sqrt(a))
+    return 6371.0 * c
+
+
+def _classify_distance(
+    distance_km: Optional[float],
+    origin: Mapping[str, Any],
+    destination: Mapping[str, Any],
+) -> str:
+    if isinstance(distance_km, (int, float)):
+        if distance_km < 1:
+            return "short"
+        if distance_km < 20:
+            return "city"
+        return "long"
+
+    origin_city = _canonicalize_location_token(origin.get("city"))
+    destination_city = _canonicalize_location_token(destination.get("city"))
+    if origin_city and destination_city and origin_city != destination_city:
+        return "long"
+
+    origin_region = _canonicalize_location_token(origin.get("region"))
+    destination_region = _canonicalize_location_token(destination.get("region"))
+    if origin_region and destination_region and origin_region != destination_region:
+        return "city"
+
+    origin_country = _canonicalize_location_token(origin.get("country"))
+    destination_country = _canonicalize_location_token(destination.get("country"))
+    if origin_country and destination_country and origin_country != destination_country:
+        return "long"
+
+    return "unknown"
+
+
+def _locations_look_local(origin: Mapping[str, Any], destination: Mapping[str, Any]) -> bool:
+    origin_city = _canonicalize_location_token(origin.get("city"))
+    destination_city = _canonicalize_location_token(destination.get("city"))
+    if origin_city and destination_city and origin_city != destination_city:
+        return False
+
+    origin_region = _canonicalize_location_token(origin.get("region"))
+    destination_region = _canonicalize_location_token(destination.get("region"))
+    if origin_region and destination_region and origin_region != destination_region:
+        return False
+
+    origin_country = _canonicalize_location_token(origin.get("country"))
+    destination_country = _canonicalize_location_token(destination.get("country"))
+    if origin_country and destination_country and origin_country != destination_country:
+        return False
+
+    return True
+
+
+def _extract_world_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
+    snapshot: Dict[str, Any] = {}
+    world_state = getattr(nyx_context, "current_world_state", None)
+    current_context = getattr(nyx_context, "current_context", {}) or {}
+
+    time_source: Any = None
+    mood_source: Any = None
+
+    if isinstance(world_state, Mapping):
+        time_source = world_state.get("current_time")
+        mood_source = world_state.get("world_mood")
+    elif world_state is not None:
+        time_source = getattr(world_state, "current_time", None)
+        mood_source = getattr(world_state, "world_mood", None)
+
+    if time_source is None:
+        time_source = current_context.get("current_time")
+
+    if mood_source is None:
+        mood_source = current_context.get("world_mood")
+
+    def _extract_time_fields(source: Any) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if not source:
+            return out
+        if isinstance(source, Mapping):
+            hour = source.get("hour")
+            minute = source.get("minute")
+            time_of_day = source.get("time_of_day") or source.get("phase")
+        else:
+            hour = getattr(source, "hour", None)
+            minute = getattr(source, "minute", None)
+            tod = getattr(source, "time_of_day", None)
+            time_of_day = getattr(tod, "value", tod)
+
+        if isinstance(time_of_day, Mapping):
+            time_of_day = time_of_day.get("value") or time_of_day.get("name")
+
+        if hour is not None and minute is not None:
+            try:
+                out["local_time"] = f"{int(hour):02d}:{int(minute):02d}"
+            except (TypeError, ValueError):
+                pass
+        if time_of_day not in (None, ""):
+            out["time_of_day"] = time_of_day
+        return out
+
+    snapshot.update(_extract_time_fields(time_source))
+
+    if mood_source:
+        if isinstance(mood_source, Mapping):
+            mood_value = mood_source.get("value") or mood_source.get("state")
+        else:
+            mood_value = getattr(mood_source, "value", None) or str(mood_source)
+        if mood_value not in (None, ""):
+            snapshot["world_mood"] = mood_value
+
+    return snapshot
+
+
+def _extract_feasibility_caps(fast_result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(fast_result, dict):
+        return {}
+
+    for key in ("capabilities", "caps"):
+        candidate = fast_result.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+
+    setting_context = fast_result.get("setting_context")
+    if isinstance(setting_context, dict):
+        candidate = setting_context.get("capabilities")
+        if isinstance(candidate, dict):
+            return candidate
+
+    return {}
+
+
+def _build_movement_meta(
+    origin_location: Any,
+    destination_payload: Dict[str, Any],
+    nyx_context: NyxContext,
+    fast_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    origin = _normalize_location_dict(origin_location)
+    destination = _normalize_location_dict(destination_payload) or dict(origin)
+
+    origin_lat = origin.get("latitude")
+    origin_lon = origin.get("longitude")
+    dest_lat = destination.get("latitude")
+    dest_lon = destination.get("longitude")
+    approx_distance = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+
+    world_snapshot = _extract_world_snapshot(nyx_context)
+    feasibility_caps = _extract_feasibility_caps(fast_result)
+    soft_location_only = _is_soft_location_only_violation(fast_result)
+
+    return {
+        "origin": origin,
+        "destination": destination,
+        "approx_distance_km": approx_distance,
+        "distance_class": _classify_distance(approx_distance, origin, destination),
+        "world": world_snapshot,
+        "feasibility": feasibility_caps,
+        "soft_location_only": soft_location_only,
+    }
+
+
+def _movement_is_local(movement_meta: Dict[str, Any]) -> bool:
+    distance = movement_meta.get("approx_distance_km")
+    if isinstance(distance, (int, float)):
+        return distance < _MOVEMENT_FAST_PATH_DISTANCE_THRESHOLD_KM
+
+    origin = movement_meta.get("origin") or {}
+    destination = movement_meta.get("destination") or {}
+    return _locations_look_local(origin, destination)
+
+
 async def _run_movement_transition_fast_path(
     nyx_context: NyxContext,
     packed_context: Optional[PackedContext],
@@ -758,7 +1072,7 @@ async def _run_movement_transition_fast_path(
     start_time: float,
     *,
     time_left_fn: Optional[Callable[[], float]] = None,
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     """Execute the streamlined movement transition pipeline."""
 
     logger.info(f"[{trace_id}] Movement-only intents detected; running transition fast path")
@@ -787,11 +1101,24 @@ async def _run_movement_transition_fast_path(
         )
 
     previous_location_id = nyx_context.current_context.get("location_id")
+    existing_location = nyx_context.current_context.get("current_location")
     location_payload = _extract_location_payload(resolve_result)
+    movement_meta = _build_movement_meta(
+        existing_location,
+        location_payload,
+        nyx_context,
+        fast_result,
+    )
+
+    if not _movement_is_local(movement_meta):
+        logger.info(
+            f"[{trace_id}] Movement fast path skipped; distance classification={movement_meta.get('distance_class')} "
+            f"approx_distance={movement_meta.get('approx_distance_km')}"
+        )
+        return None
 
     if location_payload:
-        existing = nyx_context.current_context.get("current_location")
-        merged = dict(existing) if isinstance(existing, dict) else {}
+        merged = dict(existing_location) if isinstance(existing_location, dict) else {}
         merged.update(location_payload)
         name = (
             merged.get("name")
@@ -822,9 +1149,10 @@ async def _run_movement_transition_fast_path(
         nyx_context,
         packed_context,
         location_payload,
+        movement_meta=movement_meta,
     )
 
-    prompt = _build_movement_transition_prompt(user_input, scene_bundle)
+    prompt = _build_movement_transition_prompt(user_input, scene_bundle, movement_meta)
     agent_context = RunContextWrapper(nyx_context) if RunContextWrapper else nyx_context
     time_budget = None
     if callable(time_left_fn):
@@ -884,6 +1212,7 @@ async def _run_movement_transition_fast_path(
             "location_transition": location_transition,
             "scene_bundle": scene_bundle,
             "movement_run_limits": movement_limits,
+            "movement_meta": movement_meta,
         },
         "trace_id": trace_id,
         "processing_time": time.time() - start_time,
@@ -917,12 +1246,13 @@ async def run_agent_safely(
     """Run agent with automatic fallback on strict schema errors"""
     try:
         # First attempt with the agent as-is
-        base_runner_kwargs = {"context": context}
+        base_runner_kwargs: Dict[str, Any] = {}
         if run_config is not None:
             base_runner_kwargs["run_config"] = run_config
         request = LLMRequest(
             prompt=input_data,
             agent=agent,
+            context=context,
             metadata={"operation": LLMOperation.ORCHESTRATION.value},
             runner_kwargs=base_runner_kwargs,
         )
@@ -943,12 +1273,13 @@ async def run_agent_safely(
 
 
             try:
-                fallback_runner_kwargs = {"context": context}
+                fallback_runner_kwargs: Dict[str, Any] = {}
                 if run_config is not None:
                     fallback_runner_kwargs["run_config"] = run_config
                 fallback_request = LLMRequest(
                     prompt=input_data,
                     agent=fallback_agent,
+                    context=context,
                     metadata={
                         "operation": LLMOperation.ORCHESTRATION.value,
                         "fallback": True,
@@ -1199,7 +1530,7 @@ async def process_user_input(
 
         if movement_fast_path and nyx_context is not None:
             nyx_context.current_context["feasibility"] = fast if isinstance(fast, dict) else {}
-            return await _run_movement_transition_fast_path(
+            fast_path_response = await _run_movement_transition_fast_path(
                 nyx_context,
                 packed_context,
                 user_input,
@@ -1207,6 +1538,11 @@ async def process_user_input(
                 trace_id,
                 start_time,
                 time_left_fn=time_left,
+            )
+            if fast_path_response is not None:
+                return fast_path_response
+            logger.info(
+                f"[{trace_id}] Movement fast path declined; continuing with full orchestration",
             )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
