@@ -428,16 +428,12 @@ async def _run_once(
                 runner_kwargs["run_config"] = replace(run_config, model=request.model_override)  # type: ignore[arg-type]
             except Exception:
                 runner_kwargs["run_config"] = run_config_cls(model=request.model_override)
-    context = request.context
-    if "context" in runner_kwargs:
-        runner_context = runner_kwargs.pop("context")
-        if context is not None:
-            logger.warning(
-                "nyx.gateway.llm: runner_kwargs contained 'context'; "
-                "using request.context and dropping the duplicate."
-            )
-        else:
-            context = runner_context
+    runner_context = runner_kwargs.pop("context", None)
+    context = request.context if request.context is not None else runner_context
+    if runner_context is not None and request.context is not None:
+        logger.warning(
+            "nyx.gateway.llm: runner_kwargs contained 'context'; using request.context and dropping the duplicate."
+        )
     metadata = dict(request.metadata or {})
     operation = str(metadata.get("operation") or "unknown")
     trace_id = metadata.get("trace_id")
