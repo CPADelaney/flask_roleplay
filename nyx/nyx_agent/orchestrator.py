@@ -174,6 +174,15 @@ def _log_packed_context_details(packed_context: "PackedContext", trace_id: str) 
     )
 
 
+def _resolve_model_label(model: Any) -> str:
+    if model is None:
+        return "unknown"
+    label = getattr(model, "model", None) or getattr(model, "name", None)
+    if label:
+        return str(label)
+    return str(model)
+
+
 def _is_soft_location_only_violation(fast_result: Dict[str, Any]) -> bool:
     """
     Return True if the fast feasibility result is a deny *only* because
@@ -1241,6 +1250,7 @@ async def process_user_input(
             run_config = RunConfig(model_settings=safe_settings)
 
             agent_model = getattr(nyx_main_agent, "model", None)
+            model_label = _resolve_model_label(agent_model)
             tool_names: List[str] = []
             for tool in getattr(nyx_main_agent, "tools", None) or []:
                 name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
@@ -1260,7 +1270,7 @@ async def process_user_input(
 
             llm_timeout = time_left()
             logger.info(
-                f"[{trace_id}] [agent_run] starting model={agent_model} tools={tool_names} "
+                f"[{trace_id}] [agent_run] starting model={model_label} tools={tool_names} "
                 f"ctx_stats={context_stats} user_input={user_input[:80]!r} "
                 f"enhanced_input={enhanced_input[:80]!r} timeout={llm_timeout:.2f}s"
             )

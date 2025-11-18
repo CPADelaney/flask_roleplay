@@ -553,6 +553,7 @@ async def execute(request: LLMRequest) -> LLMResult:
             continue
 
         for attempt in range(1, max(request.max_attempts, 1) + 1):
+            attempt_start = time.perf_counter()
             try:
                 return await _run_once(
                     agent,
@@ -563,17 +564,22 @@ async def execute(request: LLMRequest) -> LLMResult:
                 )
             except request.retryable_exceptions as exc:  # type: ignore[misc]
                 last_error = exc
+                elapsed = time.perf_counter() - attempt_start
+                attempt_payload = {
+                    "agent": getattr(agent, "name", str(agent)),
+                    "attempt": attempt,
+                    "fallback": is_fallback,
+                    "operation": request_operation,
+                    "subsystem": request_subsystem,
+                    "model": request_model_label,
+                    "duration": elapsed,
+                    "error_type": type(exc).__name__,
+                    "error_str": str(exc)[:300],
+                }
                 if attempt >= request.max_attempts:
                     logger.exception(
                         "nyx.gateway.llm.execute.failed",
-                        extra={
-                            "agent": getattr(agent, "name", str(agent)),
-                            "attempt": attempt,
-                            "fallback": is_fallback,
-                            "operation": request_operation,
-                            "subsystem": request_subsystem,
-                            "model": request_model_label,
-                        },
+                        extra=attempt_payload,
                     )
                     break
                 delay = request.backoff_initial * (request.backoff_multiplier ** (attempt - 1))
@@ -581,19 +587,12 @@ async def execute(request: LLMRequest) -> LLMResult:
                     delay += random.uniform(0, request.backoff_jitter)
                 logger.warning(
                     "nyx.gateway.llm.execute.retry",
-                    extra={
-                        "agent": getattr(agent, "name", str(agent)),
-                        "attempt": attempt,
-                        "fallback": is_fallback,
-                        "sleep": round(delay, 3),
-                        "operation": request_operation,
-                        "subsystem": request_subsystem,
-                        "model": request_model_label,
-                    },
+                    extra={**attempt_payload, "sleep": round(delay, 3)},
                 )
                 await asyncio.sleep(delay)
             except Exception as exc:  # pragma: no cover - safeguard for unexpected errors
                 last_error = exc
+                elapsed = time.perf_counter() - attempt_start
                 logger.exception(
                     "nyx.gateway.llm.execute.unexpected_failure",
                     extra={
@@ -603,6 +602,9 @@ async def execute(request: LLMRequest) -> LLMResult:
                         "operation": request_operation,
                         "subsystem": request_subsystem,
                         "model": request_model_label,
+                        "duration": elapsed,
+                        "error_type": type(exc).__name__,
+                        "error_str": str(exc)[:300],
                     },
                 )
                 break
