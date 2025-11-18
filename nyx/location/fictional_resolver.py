@@ -86,7 +86,7 @@ _DISTRICT_TOOLS = [
     }
 ]
 
-_DISTRICT_TOOL_CHOICE = {"type": "function", "function": {"name": "emit_districts"}}
+_DISTRICT_TOOL_CHOICE = {"type": "function", "name": "emit_districts"}
 
 
 def _extract_district_tool_args(response: Any) -> Optional[Dict[str, Any]]:
@@ -110,7 +110,17 @@ def _extract_district_tool_args(response: Any) -> Optional[Dict[str, Any]]:
 def _call_structured_districts_sync(prompt: str, model: str) -> Dict[str, Any]:
     response = _openai_client.responses.create(
         model=model,
-        input=[{"role": "user", "content": prompt}],
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": prompt,
+                    }
+                ],
+            }
+        ],
         tools=_DISTRICT_TOOLS,
         tool_choice=_DISTRICT_TOOL_CHOICE,
         max_output_tokens=800,
