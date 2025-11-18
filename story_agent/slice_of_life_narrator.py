@@ -517,6 +517,8 @@ class NarratorContext:
     async def initialize(self):
         """Initialize all lazy-loaded components"""
         if self._world_orchestrator is None:
+            from nyx.nyx_agent.world_orchestrator import WorldOrchestrator
+
             self._world_orchestrator = WorldOrchestrator(
                 self.user_id,
                 self.conversation_id,
