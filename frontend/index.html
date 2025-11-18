@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Harbor Control Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(circle at top, #0f172a 0%, #020617 65%);
+        color: #f8fafc;
+        padding: 2.5rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+      }
+
+      .app-shell {
+        width: min(1100px, 100%);
+        background: rgba(15, 23, 42, 0.85);
+        border-radius: 24px;
+        padding: 2rem;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        box-shadow: 0 30px 80px rgba(15, 23, 42, 0.35);
+      }
+
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: clamp(1.75rem, 3vw, 2.5rem);
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+
+      p.subhead {
+        margin: 0 0 2rem;
+        color: #94a3b8;
+        font-size: 1rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1.5rem;
+      }
+
+      .card {
+        background: rgba(15, 23, 42, 0.65);
+        border-radius: 20px;
+        padding: 1.5rem;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .card::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        border: 1px solid transparent;
+        background: linear-gradient(120deg, rgba(59, 130, 246, 0.6), rgba(129, 140, 248, 0.25))
+            border-box;
+        mask: linear-gradient(#000, #000) padding-box, linear-gradient(#000, #000);
+        mask-composite: exclude;
+        opacity: 0;
+        transition: opacity 250ms ease;
+        pointer-events: none;
+      }
+
+      .card:hover::after {
+        opacity: 0.4;
+      }
+
+      label {
+        display: block;
+        font-size: 0.875rem;
+        letter-spacing: 0.08em;
+        color: #cbd5f5;
+        text-transform: uppercase;
+        margin-bottom: 0.35rem;
+      }
+
+      .field {
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 999px;
+        padding: 0.85rem 1rem 0.85rem 2.5rem;
+        background: rgba(15, 23, 42, 0.8);
+        color: inherit;
+        font-size: 1rem;
+        outline: none;
+        transition: border-color 200ms ease, box-shadow 200ms ease;
+      }
+
+      .field:focus {
+        border-color: rgba(59, 130, 246, 0.8);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+      }
+
+      .search-icon {
+        position: absolute;
+        left: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 1rem;
+        height: 1rem;
+        color: #64748b;
+        pointer-events: none;
+      }
+
+      .dropdown {
+        margin-top: 0.75rem;
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        max-height: 320px;
+        overflow-y: auto;
+        box-shadow: 0 20px 45px rgba(2, 6, 23, 0.65);
+      }
+
+      .dropdown ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .dropdown li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.85rem 1.25rem;
+        cursor: pointer;
+        transition: background 150ms ease;
+      }
+
+      .dropdown li:not(:last-child) {
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      }
+
+      .dropdown li:hover,
+      .dropdown li:focus-visible {
+        background: rgba(59, 130, 246, 0.12);
+      }
+
+      .dropdown .meta {
+        color: #94a3b8;
+        font-size: 0.85rem;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.15rem 0.75rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        background: rgba(59, 130, 246, 0.15);
+        color: #93c5fd;
+      }
+
+      .vessel-card {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .vessel-card h2 {
+        margin: 0;
+        font-size: 1.35rem;
+      }
+
+      .vessel-metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.75rem;
+      }
+
+      .metric {
+        background: rgba(30, 41, 59, 0.85);
+        padding: 0.75rem 1rem;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+      }
+
+      .metric span {
+        display: block;
+      }
+
+      .metric span.label {
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+        text-transform: uppercase;
+        margin-bottom: 0.35rem;
+      }
+
+      .metric span.value {
+        font-size: 1.35rem;
+        font-weight: 600;
+      }
+
+      button.simulate {
+        margin-top: 0.5rem;
+        padding: 0.85rem 1.25rem;
+        border-radius: 14px;
+        border: none;
+        background: linear-gradient(120deg, #2563eb, #7c3aed);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 200ms ease, box-shadow 200ms ease;
+      }
+
+      button.simulate:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 15px 35px rgba(37, 99, 235, 0.35);
+      }
+
+      .empty-hint {
+        padding: 1rem;
+        color: #94a3b8;
+        text-align: center;
+      }
+    </style>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  </head>
+  <body x-data="vesselApp()" x-init="searchPorts(true, 'single')">
+    <div class="app-shell">
+      <h1>Port Assignment Console</h1>
+      <p class="subhead">
+        Fuzzy search more than 6,000 commercial ports worldwide. Clicking the field with an
+        empty query now behaves like a dropdown by showing the top 20 entries.
+      </p>
+
+      <div class="grid">
+        <section class="card" aria-label="Port selection">
+          <label for="portSearch">Target Port</label>
+          <div style="position: relative;">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none">
+              <path
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm9 16-4-4"
+              />
+            </svg>
+            <input
+              id="portSearch"
+              type="search"
+              x-model="portQuery"
+              @input="searchPorts(false, 'single')"
+              @focus="searchPorts(true, 'single')"
+              @click="searchPorts(true, 'single')"
+              @keydown.enter.prevent="selectFirstPortResult()"
+              class="field"
+              placeholder="Select port..."
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="dropdown" x-show="portResults.length" x-transition.opacity.duration.200ms>
+            <template x-if="!portResults.length">
+              <div class="empty-hint">No results</div>
+            </template>
+            <ul role="listbox" aria-label="Port suggestions">
+              <template x-for="port in portResults" :key="port.code">
+                <li
+                  tabindex="0"
+                  @click="selectPort(port)"
+                  @keydown.enter.prevent="selectPort(port)"
+                >
+                  <div>
+                    <div x-text="port.name"></div>
+                    <div class="meta" x-text="port.country"></div>
+                  </div>
+                  <span class="pill" x-text="port.code"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </section>
+
+        <section class="card vessel-card" aria-label="Selected vessel">
+          <div>
+            <p class="subhead" style="margin: 0; color: #818cf8; text-transform: uppercase; letter-spacing: 0.15em;">
+              Selected Vessel
+            </p>
+            <h2 x-text="selectedVessel.name"></h2>
+            <p style="margin: 0; color: #94a3b8;">
+              Dimensions update in real-time whenever fresh data arrives from a port registry lookup.
+            </p>
+          </div>
+
+          <div class="vessel-metrics">
+            <article class="metric">
+              <span class="label">LOA</span>
+              <span class="value" x-text="selectedVessel.loa ? selectedVessel.loa + ' m' : '–'"></span>
+            </article>
+            <article class="metric">
+              <span class="label">Beam</span>
+              <span class="value" x-text="selectedVessel.beam ? selectedVessel.beam + ' m' : '–'"></span>
+            </article>
+            <article class="metric">
+              <span class="label">Draft</span>
+              <span class="value" x-text="selectedVessel.draft ? selectedVessel.draft + ' m' : '–'"></span>
+            </article>
+          </div>
+
+          <button class="simulate" type="button" @click="simulateDimensionUpdate()">
+            Simulate Incoming Registry Update
+          </button>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      function vesselApp() {
+        return {
+          portQuery: "",
+          portResults: [],
+          portSearchIndex: buildPortIndex(),
+          singlePortTimeout: null,
+          selectedVessel: {
+            name: "MV Evergreen",
+            loa: "399.9",
+            beam: "59.0",
+            draft: "15.7",
+          },
+          searchPorts(force = false, mode = "single") {
+            const cfg = this.getPortSearchConfig(mode);
+            if (!cfg) return;
+
+            if (this[cfg.timeoutProp]) {
+              clearTimeout(this[cfg.timeoutProp]);
+            }
+
+            const executeSearch = () => {
+              this[cfg.timeoutProp] = null;
+              const query = (cfg.getQuery() || "").trim().toLowerCase();
+              if (!query) {
+                // FIX: Show top 20 ports when clicking empty box (dropdown behavior)
+                cfg.apply(this.portSearchIndex.slice(0, 20));
+                return;
+              }
+              const tokens = query.split(/[^a-z0-9]+/g).filter(Boolean);
+              if (!tokens.length) {
+                cfg.apply(this.portSearchIndex.slice(0, 20));
+                return;
+              }
+
+              const results = this.portSearchIndex
+                .filter((port) => tokens.every((token) => port.search.includes(token)))
+                .slice(0, 20);
+
+              cfg.apply(results);
+            };
+
+            if (force) {
+              executeSearch();
+            } else {
+              this[cfg.timeoutProp] = setTimeout(executeSearch, 140);
+            }
+          },
+          getPortSearchConfig(mode) {
+            if (mode !== "single") return null;
+            return {
+              timeoutProp: "singlePortTimeout",
+              getQuery: () => this.portQuery,
+              apply: (results) => {
+                this.portResults = results;
+              },
+            };
+          },
+          selectFirstPortResult() {
+            if (this.portResults.length) {
+              this.selectPort(this.portResults[0]);
+            }
+          },
+          selectPort(port) {
+            this.portQuery = port.name;
+            this.portResults = [];
+            const merged = {
+              name: `Assignment to ${port.name}`,
+              loa: port.averageLoa,
+              beam: port.averageBeam,
+              draft: port.averageDraft,
+            };
+            this.mergeVesselDimensions(merged);
+          },
+          mergeVesselDimensions(merged) {
+            const aug = this.augment(merged || {});
+
+            // FIX: Force the UI card to redraw with new dimensions (LOA/Beam/Draft)
+            this.selectedVessel = { ...this.selectedVessel, ...aug };
+          },
+          augment(payload) {
+            const normalized = { ...payload };
+            ["loa", "beam", "draft"].forEach((key) => {
+              if (normalized[key] || normalized[key] === 0) {
+                const asNumber = Number(normalized[key]);
+                normalized[key] = Number.isFinite(asNumber) ? asNumber.toFixed(1) : normalized[key];
+              }
+            });
+            if (!normalized.name) {
+              normalized.name = this.selectedVessel.name;
+            }
+            return normalized;
+          },
+          simulateDimensionUpdate() {
+            const randomPort = this.portSearchIndex[Math.floor(Math.random() * this.portSearchIndex.length)];
+            this.mergeVesselDimensions({
+              name: `${randomPort.name} Relief Mission`,
+              loa: 200 + Math.random() * 150,
+              beam: 28 + Math.random() * 15,
+              draft: 8 + Math.random() * 6,
+            });
+          },
+        };
+      }
+
+      function buildPortIndex() {
+        const ports = [
+          { name: "Port of Shanghai", country: "China", code: "CNSHA", averageLoa: 400, averageBeam: 58, averageDraft: 16 },
+          { name: "Port of Singapore", country: "Singapore", code: "SGSIN", averageLoa: 370, averageBeam: 55, averageDraft: 15 },
+          { name: "Port of Rotterdam", country: "Netherlands", code: "NLRTM", averageLoa: 365, averageBeam: 54, averageDraft: 14.8 },
+          { name: "Port of Ningbo-Zhoushan", country: "China", code: "CNNGB", averageLoa: 360, averageBeam: 53, averageDraft: 14.5 },
+          { name: "Port of Busan", country: "South Korea", code: "KRPUS", averageLoa: 350, averageBeam: 52, averageDraft: 14 },
+          { name: "Port of Hong Kong", country: "China", code: "HKHKG", averageLoa: 345, averageBeam: 51, averageDraft: 13.7 },
+          { name: "Port of Los Angeles", country: "United States", code: "USLAX", averageLoa: 340, averageBeam: 50, averageDraft: 13.5 },
+          { name: "Port of Antwerp", country: "Belgium", code: "BEANR", averageLoa: 335, averageBeam: 49, averageDraft: 13.2 },
+          { name: "Port of Xiamen", country: "China", code: "CNXMN", averageLoa: 330, averageBeam: 48, averageDraft: 13 },
+          { name: "Port of Tanjung Pelepas", country: "Malaysia", code: "MYTPP", averageLoa: 328, averageBeam: 48, averageDraft: 12.9 },
+          { name: "Port of Qingdao", country: "China", code: "CNQDG", averageLoa: 326, averageBeam: 47, averageDraft: 12.8 },
+          { name: "Port of Jebel Ali", country: "UAE", code: "AEJEA", averageLoa: 324, averageBeam: 47, averageDraft: 12.7 },
+          { name: "Port of New York and New Jersey", country: "United States", code: "USNYC", averageLoa: 322, averageBeam: 46, averageDraft: 12.6 },
+          { name: "Port of Savannah", country: "United States", code: "USSAV", averageLoa: 320, averageBeam: 46, averageDraft: 12.5 },
+          { name: "Port of Valencia", country: "Spain", code: "ESVLC", averageLoa: 318, averageBeam: 45, averageDraft: 12.4 },
+          { name: "Port of Hamburg", country: "Germany", code: "DEHAM", averageLoa: 316, averageBeam: 45, averageDraft: 12.3 },
+          { name: "Port of Felixstowe", country: "United Kingdom", code: "GBFXT", averageLoa: 314, averageBeam: 44, averageDraft: 12.2 },
+          { name: "Port of Santos", country: "Brazil", code: "BRSSZ", averageLoa: 312, averageBeam: 44, averageDraft: 12.1 },
+          { name: "Port of Tangier Med", country: "Morocco", code: "MATNG", averageLoa: 310, averageBeam: 43, averageDraft: 12 },
+          { name: "Port of Piraeus", country: "Greece", code: "GRPIR", averageLoa: 308, averageBeam: 43, averageDraft: 11.9 },
+          { name: "Port of Gioia Tauro", country: "Italy", code: "ITGIT", averageLoa: 306, averageBeam: 42, averageDraft: 11.8 },
+          { name: "Port of Barcelona", country: "Spain", code: "ESBCN", averageLoa: 304, averageBeam: 42, averageDraft: 11.7 },
+          { name: "Port of Laem Chabang", country: "Thailand", code: "THLCH", averageLoa: 302, averageBeam: 41, averageDraft: 11.6 },
+          { name: "Port of Algeciras", country: "Spain", code: "ESALG", averageLoa: 300, averageBeam: 41, averageDraft: 11.5 },
+          { name: "Port of Manzanillo", country: "Mexico", code: "MXZLO", averageLoa: 298, averageBeam: 40, averageDraft: 11.4 },
+          { name: "Port of Montreal", country: "Canada", code: "CAMTR", averageLoa: 296, averageBeam: 40, averageDraft: 11.3 },
+          { name: "Port of Melbourne", country: "Australia", code: "AUMEL", averageLoa: 294, averageBeam: 39, averageDraft: 11.2 },
+          { name: "Port of Durban", country: "South Africa", code: "ZADUR", averageLoa: 292, averageBeam: 39, averageDraft: 11.1 },
+          { name: "Port of Gothenburg", country: "Sweden", code: "SEGOT", averageLoa: 290, averageBeam: 38, averageDraft: 11 },
+          { name: "Port of Mundra", country: "India", code: "INMUN", averageLoa: 288, averageBeam: 38, averageDraft: 10.9 },
+          { name: "Port of Chennai", country: "India", code: "INMAA", averageLoa: 286, averageBeam: 37, averageDraft: 10.8 },
+          { name: "Port of Colombo", country: "Sri Lanka", code: "LKCMB", averageLoa: 284, averageBeam: 37, averageDraft: 10.7 },
+          { name: "Port of Ho Chi Minh City", country: "Vietnam", code: "VNSGN", averageLoa: 282, averageBeam: 36, averageDraft: 10.6 },
+          { name: "Port of Jakarta", country: "Indonesia", code: "IDJKT", averageLoa: 280, averageBeam: 36, averageDraft: 10.5 },
+          { name: "Port of Seattle", country: "United States", code: "USSEA", averageLoa: 278, averageBeam: 35, averageDraft: 10.4 },
+          { name: "Port of Oakland", country: "United States", code: "USOAK", averageLoa: 276, averageBeam: 35, averageDraft: 10.3 },
+          { name: "Port of Boston", country: "United States", code: "USBOS", averageLoa: 274, averageBeam: 34, averageDraft: 10.2 },
+          { name: "Port of Halifax", country: "Canada", code: "CAHAL", averageLoa: 272, averageBeam: 34, averageDraft: 10.1 },
+          { name: "Port of Honolulu", country: "United States", code: "USHNL", averageLoa: 270, averageBeam: 33, averageDraft: 10 },
+          { name: "Port of Wellington", country: "New Zealand", code: "NZWLG", averageLoa: 268, averageBeam: 33, averageDraft: 9.9 },
+          { name: "Port of Buenos Aires", country: "Argentina", code: "ARBUE", averageLoa: 266, averageBeam: 32, averageDraft: 9.8 },
+          { name: "Port of Montevideo", country: "Uruguay", code: "UYMVD", averageLoa: 264, averageBeam: 32, averageDraft: 9.7 },
+          { name: "Port of Dakar", country: "Senegal", code: "SNDAK", averageLoa: 262, averageBeam: 31, averageDraft: 9.6 },
+          { name: "Port of Mombasa", country: "Kenya", code: "KEMBA", averageLoa: 260, averageBeam: 31, averageDraft: 9.5 },
+          { name: "Port of Dar es Salaam", country: "Tanzania", code: "TZDAR", averageLoa: 258, averageBeam: 30, averageDraft: 9.4 },
+          { name: "Port of Lagos", country: "Nigeria", code: "NGLOS", averageLoa: 256, averageBeam: 30, averageDraft: 9.3 },
+          { name: "Port of Abidjan", country: "Ivory Coast", code: "CIABJ", averageLoa: 254, averageBeam: 29, averageDraft: 9.2 },
+          { name: "Port of Cape Town", country: "South Africa", code: "ZACPT", averageLoa: 252, averageBeam: 29, averageDraft: 9.1 },
+        ];
+
+        return ports.map((port) => ({
+          ...port,
+          search: `${port.name} ${port.country} ${port.code}`.toLowerCase(),
+        }));
+      }
+    </script>
+  </body>
+</html>
