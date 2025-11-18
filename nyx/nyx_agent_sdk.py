@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel
+
 # ── Core modern orchestrator
 from .nyx_agent.orchestrator import (
     process_user_input as _orchestrator_process,
@@ -1858,7 +1860,26 @@ class NyxAgentSDK:
         if isinstance(scene_scope, dict):
             scene_id = scene_scope.get("location_id") or scene_scope.get("scene_id")
 
-        world_state = resp.world_state or {}
+        world_state_raw = resp.world_state or {}
+        if isinstance(world_state_raw, BaseModel):
+            world_state = world_state_raw.model_dump(exclude_none=True)
+        elif hasattr(world_state_raw, "model_dump") and callable(world_state_raw.model_dump):  # type: ignore[attr-defined]
+            try:
+                world_state = world_state_raw.model_dump(exclude_none=True)  # type: ignore[call-arg]
+            except TypeError:
+                world_state = world_state_raw.model_dump()  # type: ignore[attr-defined]
+        elif hasattr(world_state_raw, "dict") and callable(world_state_raw.dict):
+            world_state = world_state_raw.dict()
+        elif hasattr(world_state_raw, "to_dict") and callable(world_state_raw.to_dict):
+            world_state = world_state_raw.to_dict()
+        elif isinstance(world_state_raw, dict):
+            world_state = world_state_raw
+        else:
+            try:
+                world_state = dict(world_state_raw)
+            except Exception:
+                logger.debug("[SDK] Unable to coerce world_state=%r to dict; dropping", world_state_raw)
+                world_state = {}
         next_world_version = current_world_version + 1 if world_state else current_world_version
 
         events: List[SideEffect] = []
