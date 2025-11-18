@@ -792,8 +792,35 @@ class ContextService:
                 query_text=location,
                 limit=5,
             )
+
+            normalized_rows: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
             for entry in rows:
-                card = entry.get("card") or {}
+                if not isinstance(entry, dict):
+                    logger.warning(
+                        "Skipping unexpected non-dict entry in location cards: %r", entry
+                    )
+                    continue
+
+                card_data: Any = entry.get("card") or {}
+                if isinstance(card_data, str):
+                    try:
+                        card_data = json.loads(card_data)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to decode location card JSON for '%s': %s",
+                            location,
+                            card_data,
+                        )
+                        card_data = {}
+                elif not isinstance(card_data, dict):
+                    logger.warning(
+                        "Unexpected card payload type '%s' for location '%s'", type(card_data), location
+                    )
+                    card_data = {}
+
+                normalized_rows.append((entry, card_data))
+
+            for entry, card in normalized_rows:
                 name = card.get("location_name") or card.get("location")
                 if location and name and name.lower() == location.lower():
                     return LocationData(
@@ -803,10 +830,10 @@ class ContextService:
                         connected_locations=card.get("connected_locations"),
                         relevance=1.0,
                     )
-            if rows:
-                card = rows[0].get("card") or {}
+            if normalized_rows:
+                entry, card = normalized_rows[0]
                 return LocationData(
-                    location_id=str(card.get("location_id") or rows[0].get("entity_id") or ""),
+                    location_id=str(card.get("location_id") or entry.get("entity_id") or ""),
                     location_name=card.get("location_name") or location or "Unknown",
                     description=card.get("description"),
                     connected_locations=card.get("connected_locations"),
