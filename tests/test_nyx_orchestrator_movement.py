@@ -233,6 +233,15 @@ async def test_movement_fast_path_uses_router(monkeypatch):
     assert result["metadata"]["location_transition"]["location"]["name"] == "Velvet Staircase"
     assert result["response"] == movement_output["final_output"]
     assert "Velvet Staircase" in fake_run_agent.last_call["prompt"]
+    run_config = fake_run_agent.last_call["run_config"]
+    expected_limits = orchestrator_module._MOVEMENT_RUN_LIMITS
+    assert getattr(run_config, "max_turns", None) == expected_limits["max_turns"]
+    assert getattr(run_config, "max_tool_calls", None) == expected_limits["max_tool_calls"]
+    assert getattr(run_config, "max_auto_messages", None) == expected_limits["max_auto_messages"]
+    assert getattr(run_config, "max_output_tokens", None) == expected_limits["max_output_tokens"]
+    assert getattr(run_config, "per_turn_timeout", None) == pytest.approx(expected_limits["per_turn_timeout"])
+    assert getattr(run_config, "per_step_timeout", None) == pytest.approx(expected_limits["per_step_timeout"])
+    assert result["metadata"]["movement_run_limits"]["max_turns"] == expected_limits["max_turns"]
 
     stub_ctx = _StubNyxContext.instances[0]
     assert stub_ctx.refreshed is True

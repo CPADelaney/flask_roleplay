@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING, Callable
 from contextlib import asynccontextmanager
 
 from agents import Agent, RunConfig, RunContextWrapper, ModelSettings
@@ -88,6 +88,112 @@ DEFAULT_DEFER_RUN_TIMEOUT_SECONDS: float = getattr(
 DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
 
 _MOVEMENT_FAST_PATH_CATEGORIES: set[str] = {"movement", "mundane_action"}
+
+_MAIN_AGENT_RUN_LIMITS: Dict[str, Any] = {
+    "max_turns": 6,
+    "max_tool_calls": 4,
+    "max_auto_messages": 3,
+    "max_output_tokens": 1800,
+    "per_turn_timeout": 18.0,
+    "per_step_timeout": 12.0,
+}
+
+_MOVEMENT_RUN_LIMITS: Dict[str, Any] = {
+    "max_turns": 2,
+    "max_tool_calls": 1,
+    "max_auto_messages": 1,
+    "max_output_tokens": 600,
+    "per_turn_timeout": 8.0,
+    "per_step_timeout": 6.0,
+}
+
+_MOVEMENT_FAST_PATH_MODEL_SETTINGS = ModelSettings(
+    strict_tools=False,
+    temperature=0.55,
+    top_p=0.9,
+    max_tokens=600,
+)
+
+
+def _safe_time_budget(value: Optional[float]) -> Optional[float]:
+    """Return a clamped positive time budget or ``None`` when invalid."""
+
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not parsed or parsed <= 0:
+        return None
+    return max(0.25, parsed)
+
+
+def _derive_run_limit_kwargs(
+    limit_template: Dict[str, Any],
+    *,
+    time_budget: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Merge static run limit defaults with the remaining time budget."""
+
+    limits: Dict[str, Any] = {}
+    for key in (
+        "max_turns",
+        "max_tool_calls",
+        "max_auto_messages",
+        "max_output_tokens",
+    ):
+        value = limit_template.get(key)
+        if value is not None:
+            limits[key] = value
+
+    safe_budget = _safe_time_budget(time_budget)
+    per_turn_default = limit_template.get("per_turn_timeout")
+    per_step_default = limit_template.get("per_step_timeout")
+
+    if safe_budget is not None:
+        limits["total_timeout_budget"] = round(safe_budget, 3)
+        max_turns = max(1, int(limits.get("max_turns") or limit_template.get("max_turns") or 1))
+        per_turn_cap = safe_budget / max_turns
+        per_turn_value = per_turn_default if per_turn_default is not None else per_turn_cap
+        per_turn_timeout = min(per_turn_value, per_turn_cap)
+        per_step_value = per_step_default if per_step_default is not None else per_turn_timeout
+        per_step_timeout = min(per_step_value, per_turn_timeout)
+    else:
+        per_turn_timeout = per_turn_default
+        per_step_timeout = per_step_default if per_step_default is not None else per_turn_timeout
+
+    if per_turn_timeout is not None:
+        limits["per_turn_timeout"] = round(float(per_turn_timeout), 3)
+    if per_step_timeout is not None:
+        limits["per_step_timeout"] = round(float(per_step_timeout), 3)
+
+    return limits
+
+
+def _build_run_config_with_limits(
+    *,
+    base_kwargs: Dict[str, Any],
+    limit_template: Dict[str, Any],
+    time_budget: Optional[float],
+    trace_id: str,
+    log_label: str,
+) -> tuple[RunConfig, Dict[str, Any]]:
+    """Instantiate ``RunConfig`` with explicit limit kwargs and log them."""
+
+    limit_kwargs = _derive_run_limit_kwargs(limit_template, time_budget=time_budget)
+    run_config_kwargs = dict(base_kwargs)
+    try:
+        run_config = RunConfig(**{**run_config_kwargs, **limit_kwargs})
+    except TypeError:
+        run_config = RunConfig(**run_config_kwargs)
+        for key, value in limit_kwargs.items():
+            setattr(run_config, key, value)
+
+    logger.info(
+        f"[{trace_id}] [{log_label}] run_config_limits={_js(limit_kwargs)}",
+    )
+    return run_config, limit_kwargs
 
 
 def _sorted_section_keys(section: Optional[Dict[str, Any]]) -> List[str]:
@@ -650,6 +756,8 @@ async def _run_movement_transition_fast_path(
     fast_result: Dict[str, Any],
     trace_id: str,
     start_time: float,
+    *,
+    time_left_fn: Optional[Callable[[], float]] = None,
 ) -> Dict[str, Any]:
     """Execute the streamlined movement transition pipeline."""
 
@@ -718,9 +826,24 @@ async def _run_movement_transition_fast_path(
 
     prompt = _build_movement_transition_prompt(user_input, scene_bundle)
     agent_context = RunContextWrapper(nyx_context) if RunContextWrapper else nyx_context
-    run_config = RunConfig(
-        workflow_name="Nyx Movement Transition",
-        model_settings=ModelSettings(strict_tools=False),
+    time_budget = None
+    if callable(time_left_fn):
+        try:
+            time_budget = time_left_fn()
+        except Exception:
+            logger.debug(
+                f"[{trace_id}] Failed to compute time budget for movement run",
+                exc_info=True,
+            )
+    run_config, movement_limits = _build_run_config_with_limits(
+        base_kwargs={
+            "workflow_name": "Nyx Movement Transition",
+            "model_settings": _MOVEMENT_FAST_PATH_MODEL_SETTINGS,
+        },
+        limit_template=_MOVEMENT_RUN_LIMITS,
+        time_budget=time_budget,
+        trace_id=trace_id,
+        log_label="movement_fast_path",
     )
 
     try:
@@ -760,6 +883,7 @@ async def _run_movement_transition_fast_path(
             "feasibility": fast_result,
             "location_transition": location_transition,
             "scene_bundle": scene_bundle,
+            "movement_run_limits": movement_limits,
         },
         "trace_id": trace_id,
         "processing_time": time.time() - start_time,
@@ -1082,6 +1206,7 @@ async def process_user_input(
                 fast if isinstance(fast, dict) else {},
                 trace_id,
                 start_time,
+                time_left_fn=time_left,
             )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
@@ -1258,7 +1383,6 @@ async def process_user_input(
         async with _log_step("agent_run", trace_id):
             runner_context = RunContextWrapper(nyx_context)
             safe_settings = ModelSettings(strict_tools=False)
-            run_config = RunConfig(model_settings=safe_settings)
 
             agent_model = getattr(nyx_main_agent, "model", None)
             model_label = _resolve_model_label(agent_model)
@@ -1280,6 +1404,16 @@ async def process_user_input(
                 }
 
             llm_timeout = time_left()
+            run_config, run_limits = _build_run_config_with_limits(
+                base_kwargs={
+                    "model_settings": safe_settings,
+                    "workflow_name": "Nyx Main Orchestrator",
+                },
+                limit_template=_MAIN_AGENT_RUN_LIMITS,
+                time_budget=llm_timeout,
+                trace_id=trace_id,
+                log_label="agent_run",
+            )
             logger.info(
                 f"[{trace_id}] [agent_run] starting model={model_label} tools={tool_names} "
                 f"ctx_stats={context_stats} user_input={user_input[:80]!r} "
@@ -1296,14 +1430,12 @@ async def process_user_input(
                     "operation": LLMOperation.ORCHESTRATION.value,
                     "stream": False,
                     "tags": ["nyx", "orchestrator", "main"],
+                    "run_limits": run_limits,
                 },
             )
             agent_start = time.monotonic()
             try:
-                result = await asyncio.wait_for(
-                    _execute_llm(request),
-                    timeout=llm_timeout,
-                )
+                result = await _execute_llm(request)
             except Exception:
                 elapsed = time.monotonic() - agent_start
                 logger.exception(

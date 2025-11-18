@@ -187,7 +187,8 @@ class _StubRunner:
 
 
 class _StubRunConfig:
-    pass
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = dict(kwargs)
 
 
 class _StubModelSettings:
