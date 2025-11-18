@@ -932,10 +932,14 @@ async def process_user_input(
     logger.info(f"[{trace_id}] user_input={user_input[:200]}")
 
     fast: Optional[Dict[str, Any]] = None
+    router_result: Optional[Dict[str, Any]] = None
     if isinstance(context_data, dict):
         feas_from_context = context_data.get("feasibility")
         if isinstance(feas_from_context, dict):
             fast = feas_from_context
+        router_candidate = context_data.get("router_result")
+        if isinstance(router_candidate, dict):
+            router_result = router_candidate
 
     try:
         # ---- STEP 0: Mandatory fast feasibility (dynamic) ---------------------
@@ -962,6 +966,9 @@ async def process_user_input(
             fast_strategy = (fast_overall.get("strategy") or "").lower()
             fast_feasible_flag = fast_overall.get("feasible")
             soft_location_only = _is_soft_location_only_violation(fast)
+            fast_router = fast.get("router_result") if isinstance(fast.get("router_result"), dict) else None
+            if fast_router is not None:
+                router_result = fast_router
 
             logger.info(
                 f"[{trace_id}] Fast feasibility: feasible={fast_feasible_flag} "
@@ -1112,7 +1119,11 @@ async def process_user_input(
                         f"[{trace_id}] Fast feasibility allowed action; skipping full feasibility assessment"
                     )
                 else:
-                    feas = await assess_action_feasibility_fn(nyx_context, user_input)
+                    feas = await assess_action_feasibility_fn(
+                        nyx_context,
+                        user_input,
+                        router_result=router_result,
+                    )
                     nyx_context.current_context["feasibility"] = feas
                     logger.info(
                         f"[{trace_id}] Full feasibility: {feas.get('overall', {})}"

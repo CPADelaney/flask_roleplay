@@ -679,6 +679,9 @@ class NyxAgentSDK:
                     text=message,
                 )
                 meta["feasibility"] = feas
+                router_blob = feas.get("router_result") if isinstance(feas, dict) else None
+                if isinstance(router_blob, dict):
+                    meta["router_result"] = router_blob
             except ImportError as e:
                 logger.error(f"[SDK-{trace_id}] Feasibility module not found: {e}")
             except Exception as e:
@@ -1710,6 +1713,9 @@ class NyxAgentSDK:
         }
         if feasibility is not None:
             meta["feasibility"] = feasibility
+            router_blob = feasibility.get("router_result") if isinstance(feasibility, dict) else None
+            if isinstance(router_blob, dict):
+                meta["router_result"] = router_blob
 
         response = NyxResponse(
             narrative=narrative,

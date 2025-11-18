@@ -184,6 +184,8 @@ def test_fast_feasibility_blocks_absent_entities(monkeypatch, action_text):
     assert stored_scene["location"]["name"] == "Atrium"
     overall = result.get("overall", {})
     per_intent = (result.get("per_intent") or [])[0]
+    router_payload = result.get("router_result") or {}
+    assert router_payload.get("intents"), "router_result should include parsed intents"
     assert overall.get("feasible") is False
     assert overall.get("strategy") == "deny"
     assert per_intent.get("strategy") == "deny"

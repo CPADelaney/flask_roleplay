@@ -134,6 +134,65 @@ def test_extract_defer_details_empty_for_non_defer():
     assert extra == {}
 
 
+def test_assess_action_feasibility_uses_router_cache(monkeypatch):
+    called = False
+
+    async def fake_parse_action_intents(_):
+        nonlocal called
+        called = True
+        return [{"categories": ["fallback"]}]
+
+    async def fake_load_context(_ctx):
+        return {
+            "caps_loaded": True,
+            "capabilities": {},
+            "available_items": [],
+            "present_entities": [],
+            "location": {"name": "Atrium"},
+            "scene": {},
+            "location_features": [],
+            "current_time": "day",
+            "hard_rules": [],
+            "established_impossibilities": [],
+            "known_location_names": [],
+        }
+
+    monkeypatch.setattr(feasibility, "parse_action_intents", fake_parse_action_intents)
+    monkeypatch.setattr(
+        feasibility,
+        "_load_comprehensive_context",
+        fake_load_context,
+    )
+
+    class DummyCtx:
+        pass
+
+    router_payload = {
+        "intents": [
+            {
+                "categories": ["movement"],
+                "direct_object": ["observation deck"],
+                "raw_text": "walk toward the deck",
+            }
+        ],
+        "parse_error": "ValueError: boom",
+        "source": "fast",
+    }
+
+    async def _run():
+        result = await feasibility.assess_action_feasibility(
+            DummyCtx(),
+            "walk toward the deck",
+            router_result=router_payload,
+        )
+
+        assert result["overall"]["feasible"] is True
+        assert result["router_result"]["intents"] == router_payload["intents"]
+
+    asyncio.run(_run())
+    assert called is False, "parse_action_intents should be skipped when router cache is provided"
+
+
 def test_assess_action_feasibility_defers_for_missing_mundane_prereqs(monkeypatch):
     async def fake_parse_action_intents(_):
         return [
