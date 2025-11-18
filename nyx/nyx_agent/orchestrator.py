@@ -943,6 +943,16 @@ async def process_user_input(
                 base_context,
             )
             nyx_context.last_packed_context = packed_context
+            if packed_context is not None and hasattr(packed_context, "to_dict"):
+                try:
+                    packed_keys = list(packed_context.to_dict().keys())
+                    logger.debug(
+                        f"[{trace_id}] packed_context keys={packed_keys}"
+                    )
+                except Exception:
+                    logger.debug(
+                        f"[{trace_id}] Failed to log packed_context keys", exc_info=True
+                    )
 
         # ---- STEP 2: World state integration ----------------------------------
         async with _log_step("world_state", trace_id):
@@ -1145,6 +1155,31 @@ async def process_user_input(
             safe_settings = ModelSettings(strict_tools=False)
             run_config = RunConfig(model_settings=safe_settings)
 
+            agent_model = getattr(nyx_main_agent, "model", None)
+            tool_names: List[str] = []
+            for tool in getattr(nyx_main_agent, "tools", None) or []:
+                name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
+                if not name and hasattr(tool, "func"):
+                    name = getattr(tool.func, "__name__", None)
+                tool_names.append(name or str(tool))
+
+            context_stats: Dict[str, Any] = {}
+            if packed_context is not None:
+                context_stats = {
+                    "token_budget": getattr(packed_context, "token_budget", None),
+                    "tokens_used": getattr(packed_context, "tokens_used", None),
+                    "canonical": len(getattr(packed_context, "canonical", {}) or {}),
+                    "optional": len(getattr(packed_context, "optional", {}) or {}),
+                    "summarized": len(getattr(packed_context, "summarized", {}) or {}),
+                }
+
+            llm_timeout = time_left()
+            logger.info(
+                f"[{trace_id}] [agent_run] starting model={agent_model} tools={tool_names} "
+                f"ctx_stats={context_stats} user_input={user_input[:80]!r} "
+                f"enhanced_input={enhanced_input[:80]!r} timeout={llm_timeout:.2f}s"
+            )
+
             request = LLMRequest(
                 prompt=enhanced_input,
                 agent=nyx_main_agent,
@@ -1157,9 +1192,22 @@ async def process_user_input(
                     "tags": ["nyx", "orchestrator", "main"],
                 },
             )
-            result = await asyncio.wait_for(
-                _execute_llm(request),
-                timeout=time_left(),
+            agent_start = time.monotonic()
+            try:
+                result = await asyncio.wait_for(
+                    _execute_llm(request),
+                    timeout=llm_timeout,
+                )
+            except Exception:
+                elapsed = time.monotonic() - agent_start
+                logger.exception(
+                    f"[{trace_id}] [agent_run] failed elapsed={elapsed:.2f}s timeout={llm_timeout:.2f}s"
+                )
+                raise
+
+            elapsed = time.monotonic() - agent_start
+            logger.info(
+                f"[{trace_id}] [agent_run] success elapsed={elapsed:.2f}s timeout={llm_timeout:.2f}s"
             )
 
             resp_stream = extract_runner_response(result.raw)
