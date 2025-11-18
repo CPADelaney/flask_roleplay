@@ -63,6 +63,13 @@ def _resolve_role(sender: Optional[str]) -> str:
     return ROLE_MAP.get(key, "user")
 
 
+def _build_content_block(text: Any, *, role: str) -> MutableMapping[str, str]:
+    """Return a Responses-compatible content block for the given role."""
+
+    block_type = "output_text" if role == "assistant" else "input_text"
+    return {"type": block_type, "text": _normalize_text(text)}
+
+
 def _build_responses_input(
     *,
     turns: Sequence[Mapping[str, Any]],
@@ -75,12 +82,7 @@ def _build_responses_input(
         messages.append(
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": _normalize_text(system_prompt),
-                    }
-                ],
+                "content": [_build_content_block(system_prompt, role="system")],
             }
         )
 
@@ -89,15 +91,11 @@ def _build_responses_input(
         content = turn.get("content")
         if content in (None, ""):
             continue
+        role = _resolve_role(str(sender) if sender is not None else None)
         messages.append(
             {
-                "role": _resolve_role(str(sender) if sender is not None else None),
-                "content": [
-                    {
-                        "type": "text",
-                        "text": _normalize_text(content),
-                    }
-                ],
+                "role": role,
+                "content": [_build_content_block(content, role=role)],
             }
         )
 
@@ -137,12 +135,7 @@ async def run_response_for_conversation(
     if context_prompt:
         context_message: MutableMapping[str, Any] = {
             "role": "system",
-            "content": [
-                {
-                    "type": "text",
-                    "text": _normalize_text(context_prompt),
-                }
-            ],
+            "content": [_build_content_block(context_prompt, role="system")],
         }
         insert_index = 0
         if responses_input and responses_input[0].get("role") == "system":
@@ -150,15 +143,11 @@ async def run_response_for_conversation(
         responses_input.insert(insert_index, context_message)
 
     if latest_user_input:
+        role = _resolve_role(latest_user_role)
         responses_input.append(
             {
-                "role": _resolve_role(latest_user_role),
-                "content": [
-                    {
-                        "type": "text",
-                        "text": _normalize_text(latest_user_input),
-                    }
-                ],
+                "role": role,
+                "content": [_build_content_block(latest_user_input, role=role)],
             }
         )
 

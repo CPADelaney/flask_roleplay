@@ -1214,7 +1214,7 @@ async def build_message_history(
         logger.error("Error building message history via ConversationStore: %s", exc)
         turns = []
 
-    chat_history: list[dict[str, str]] = []
+    chat_history: list[dict[str, Any]] = []
     for turn in turns:
         sender = str(turn.get("sender", "")).lower()
         content = turn.get("content")
@@ -1225,15 +1225,29 @@ async def build_message_history(
             role = "user"
         elif sender == "system":
             role = "system"
-        chat_history.append({"role": role, "content": str(content)})
+        chat_history.append(_build_responses_message(role, content))
 
-    messages: list[dict[str, str]] = []
-    messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    messages: list[dict[str, Any]] = []
+    messages.append(_build_responses_message("system", SYSTEM_PROMPT))
     if aggregator_text:
-        messages.append({"role": "system", "content": aggregator_text})
+        messages.append(_build_responses_message("system", aggregator_text))
     messages.extend(chat_history)
-    messages.append({"role": "user", "content": user_input})
+    messages.append(_build_responses_message("user", user_input))
     return messages
+
+
+def _build_responses_message(role: str, content: Any) -> dict[str, Any]:
+    """Return a Responses API message with correctly-typed content."""
+
+    normalized_role = (role or "user").lower()
+    if normalized_role not in {"user", "assistant", "system"}:
+        normalized_role = "user"
+    text = str(content) if content is not None else ""
+    block_type = "output_text" if normalized_role == "assistant" else "input_text"
+    return {
+        "role": normalized_role,
+        "content": [{"type": block_type, "text": text}],
+    }
 
 
 async def _persist_conversation_turns(
@@ -1634,12 +1648,15 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
     else:
         # Step A: Reflection Request (no tools; just text)
         reflection_messages = [
-            {"role": "system", "content": primary_system_prompt},
-            {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
-            {"role": "system", "content": aggregator_text},
-            {
-                "role": "user",
-                "content": f"""
+            _build_responses_message("system", primary_system_prompt),
+            _build_responses_message("system", PRIVATE_REFLECTION_INSTRUCTIONS),
+        ]
+        if aggregator_text:
+            reflection_messages.append(_build_responses_message("system", aggregator_text))
+        reflection_messages.append(
+            _build_responses_message(
+                "user",
+                f"""
 (INTERNAL REFLECTION STEP - DO NOT REVEAL THIS TO THE USER)
 
 Please output a short JSON object with keys:
@@ -1652,10 +1669,10 @@ Discuss {user_input} from Nyx's internal perspective:
 - Outline your next private goals in private_goals.
 - Predict possible user moves or story outcomes in predicted_futures.
 
-DO NOT produce user-facing text here; only the JSON. 
-                """
-            }
-        ]
+DO NOT produce user-facing text here; only the JSON.
+                """,
+            )
+        )
 
         reflection_params = {
             "model": "gpt-5-nano",
@@ -1697,18 +1714,20 @@ DO NOT produce user-facing text here; only the JSON.
             logger.warning(f"Could not store reflection in memory: {e}")
 
         # Step B: Final (Public) Answer (RESPONSES API)
+        hidden_reflection = (
+            f"Hidden Reflection (do not reveal): {reflection_notes}\n"
+            f"Hidden Private Goals: {private_goals}\n"
+            f"Hidden Predicted Futures: {predicted_futures}"
+        )
+
         final_messages = [
-            {"role": "system", "content": primary_system_prompt},
-            {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
-            {"role": "system", "content": aggregator_text},
-            {
-                "role": "system",
-                "content": f"Hidden Reflection (do not reveal): {reflection_notes}\n"
-                           f"Hidden Private Goals: {private_goals}\n"
-                           f"Hidden Predicted Futures: {predicted_futures}"
-            },
-            {"role": "user", "content": user_input}
+            _build_responses_message("system", primary_system_prompt),
+            _build_responses_message("system", PRIVATE_REFLECTION_INSTRUCTIONS),
         ]
+        if aggregator_text:
+            final_messages.append(_build_responses_message("system", aggregator_text))
+        final_messages.append(_build_responses_message("system", hidden_reflection))
+        final_messages.append(_build_responses_message("user", user_input))
 
         model = "gpt-5-nano"
 
@@ -2500,8 +2519,8 @@ async def _responses_json_call(
     params: dict[str, Any] = {
         "model": model,
         "input": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            _build_responses_message("system", system_prompt),
+            _build_responses_message("user", user_prompt),
         ],
         "max_output_tokens": max_output_tokens,
     }

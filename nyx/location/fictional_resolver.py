@@ -86,11 +86,6 @@ _DISTRICT_TOOLS = [
     }
 ]
 
-# Responses API expects the simplified tool_choice format of
-# {"type": "function", "name": "<tool-name>"}. Older structures that
-# nested the name under a "function" key are rejected with
-# "Unknown parameter: 'tool_choice.function'". Align with the new shape to
-# keep district generation requests compatible with current models.
 _DISTRICT_TOOL_CHOICE = {"type": "function", "name": "emit_districts"}
 
 
@@ -115,7 +110,17 @@ def _extract_district_tool_args(response: Any) -> Optional[Dict[str, Any]]:
 def _call_structured_districts_sync(prompt: str, model: str) -> Dict[str, Any]:
     response = _openai_client.responses.create(
         model=model,
-        input=[{"role": "user", "content": prompt}],
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": prompt,
+                    }
+                ],
+            }
+        ],
         tools=_DISTRICT_TOOLS,
         tool_choice=_DISTRICT_TOOL_CHOICE,
         max_output_tokens=800,
