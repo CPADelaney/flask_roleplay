@@ -86,7 +86,12 @@ _DISTRICT_TOOLS = [
     }
 ]
 
-_DISTRICT_TOOL_CHOICE = {"type": "function", "function": {"name": "emit_districts"}}
+# Responses API expects the simplified tool_choice format of
+# {"type": "function", "name": "<tool-name>"}. Older structures that
+# nested the name under a "function" key are rejected with
+# "Unknown parameter: 'tool_choice.function'". Align with the new shape to
+# keep district generation requests compatible with current models.
+_DISTRICT_TOOL_CHOICE = {"type": "function", "name": "emit_districts"}
 
 
 def _extract_district_tool_args(response: Any) -> Optional[Dict[str, Any]]:
