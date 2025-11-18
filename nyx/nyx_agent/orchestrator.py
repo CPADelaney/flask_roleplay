@@ -89,6 +89,91 @@ DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
 
 _MOVEMENT_FAST_PATH_CATEGORIES: set[str] = {"movement", "mundane_action"}
 
+
+def _sorted_section_keys(section: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(section, dict):
+        return []
+    return sorted(section.keys())
+
+
+def _locate_section_value(packed_context: "PackedContext", key: str) -> Any:
+    for attr in ("canonical", "optional", "summarized"):
+        section = getattr(packed_context, attr, None)
+        if isinstance(section, dict) and key in section:
+            return section[key]
+    return None
+
+
+def _count_npcs_from_value(value: Any) -> Optional[int]:
+    if isinstance(value, dict):
+        items = value.get("npcs")
+        if isinstance(items, list):
+            return len(items)
+        # Legacy dict format keyed by npc id/name
+        return len(value) if value else 0
+    if isinstance(value, list):
+        return len(value)
+    return None
+
+
+def _count_memory_snippets(value: Any) -> Optional[int]:
+    if isinstance(value, dict):
+        count_field = value.get("count")
+        if isinstance(count_field, int):
+            return max(count_field, 0)
+        total = 0
+        for item in value.values():
+            if isinstance(item, list):
+                total += len(item)
+        return total if total else None
+    if isinstance(value, list):
+        return len(value)
+    return None
+
+
+def _extract_context_counts(packed_context: "PackedContext") -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    npc_value = _locate_section_value(packed_context, "npcs")
+    npc_count = _count_npcs_from_value(npc_value)
+    if npc_count:
+        counts["npcs"] = npc_count
+
+    memory_value = _locate_section_value(packed_context, "memories")
+    memory_count = _count_memory_snippets(memory_value)
+    if memory_count:
+        counts["memory_snippets"] = memory_count
+
+    return counts
+
+
+def _log_packed_context_details(packed_context: "PackedContext", trace_id: str) -> None:
+    canonical_keys = _sorted_section_keys(getattr(packed_context, "canonical", None))
+    optional_keys = _sorted_section_keys(getattr(packed_context, "optional", None))
+    summarized_keys = _sorted_section_keys(getattr(packed_context, "summarized", None))
+    metadata_keys = _sorted_section_keys(getattr(packed_context, "metadata", None))
+
+    counts = _extract_context_counts(packed_context)
+
+    try:
+        packed_context.to_dict()
+    except Exception:
+        logger.debug(
+            f"[{trace_id}] Failed to serialize packed context for logging",
+            exc_info=True,
+        )
+
+    logger.info(
+        "[%s] Packed context tokens=%s canonical=%s optional=%s summarized=%s metadata=%s counts=%s",
+        trace_id,
+        getattr(packed_context, "tokens_used", "unknown"),
+        canonical_keys,
+        optional_keys,
+        summarized_keys,
+        metadata_keys,
+        counts or {},
+    )
+
+
 def _is_soft_location_only_violation(fast_result: Dict[str, Any]) -> bool:
     """
     Return True if the fast feasibility result is a deny *only* because
