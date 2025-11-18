@@ -117,6 +117,14 @@ class LLMResult:
 _runner: type | None = None
 _run_config_cls: type | None = None
 
+_PROMPT_PREVIEW_MAX_CHARS = 256
+_SENSITIVE_PROMPT_FLAGS = (
+    "redact_prompt",
+    "sensitive_prompt",
+    "contains_sensitive_data",
+    "sensitive",
+)
+
 
 class LLMOperation(str, Enum):
     """Enumerate high-level operations routed through the LLM gateway."""
@@ -248,6 +256,130 @@ def _extract_metadata(result: Any) -> dict[str, Any]:
     return meta
 
 
+def _stringify_prompt(prompt: Any) -> str:
+    if prompt is None:
+        return ""
+    if isinstance(prompt, str):
+        return prompt
+    try:
+        return str(prompt)
+    except Exception:
+        return "<unprintable prompt>"
+
+
+def _build_prompt_preview(
+    prompt: Any, metadata: Mapping[str, Any] | None
+) -> tuple[str, int]:
+    prompt_text = _stringify_prompt(prompt)
+    prompt_length = len(prompt_text)
+    meta = metadata or {}
+    if not prompt_text:
+        return "", prompt_length
+    if meta.get("log_prompt_preview") is False:
+        return "<suppressed>", prompt_length
+    if any(bool(meta.get(flag)) for flag in _SENSITIVE_PROMPT_FLAGS):
+        return "<redacted>", prompt_length
+    sanitized = prompt_text.replace("\n", "\\n").strip()
+    if len(sanitized) > _PROMPT_PREVIEW_MAX_CHARS:
+        sanitized = sanitized[: _PROMPT_PREVIEW_MAX_CHARS - 1] + "…"
+    return sanitized, prompt_length
+
+
+def _coerce_count(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return len(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return len(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _summarize_agents_run(raw_result: Any) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    containers: list[Any] = [raw_result]
+    for attr in ("raw", "metadata", "summary", "stats", "run", "details"):
+        if hasattr(raw_result, attr):
+            candidate = getattr(raw_result, attr)
+            if candidate is not None:
+                containers.append(candidate)
+    if isinstance(raw_result, Mapping):
+        for key in ("summary", "stats", "run", "details"):
+            candidate = raw_result.get(key)
+            if candidate is not None:
+                containers.append(candidate)
+
+    def _lookup(keys: tuple[str, ...]) -> Optional[int]:
+        for container in containers:
+            if container is None:
+                continue
+            for key in keys:
+                value = None
+                if isinstance(container, Mapping) and key in container:
+                    value = container.get(key)
+                elif hasattr(container, key):
+                    value = getattr(container, key)
+                if value is None:
+                    continue
+                count = _coerce_count(value)
+                if count is not None:
+                    return count
+        return None
+
+    turn_count = _lookup(("turn_count", "turns", "turns_taken", "iterations"))
+    if turn_count is not None:
+        summary["turn_count"] = turn_count
+
+    tool_count = _lookup(
+        (
+            "tool_calls",
+            "tool_invocations",
+            "tool_uses",
+            "tools_called",
+            "function_calls",
+        )
+    )
+    if tool_count is not None:
+        summary["tool_call_count"] = tool_count
+
+    return summary
+
+
+def _count_guardrail_invocations(metadata: Mapping[str, Any] | None) -> int:
+    if not metadata:
+        return 0
+    guardrail_keys = (
+        "guardrail",
+        "guardrails",
+        "guardrail_hits",
+        "guardrail_events",
+        "input_guardrails",
+        "output_guardrails",
+        "moderation_pre",
+        "moderation_post",
+    )
+
+    def _count_value(value: Any) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, Mapping):
+            return len(value)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return len(value)
+        if isinstance(value, SimpleNamespace):
+            return len(vars(value)) or 1
+        return 1
+
+    total = 0
+    for key in guardrail_keys:
+        if key in metadata:
+            total += _count_value(metadata.get(key))
+    return total
+
+
 async def _run_once(
     agent: SupportsAgent,
     request: LLMRequest,
@@ -305,6 +437,7 @@ async def _run_once(
         or metadata.get("source_subsystem")
         or "unknown"
     )
+    prompt_preview, prompt_length = _build_prompt_preview(request.prompt, metadata)
 
     model_name: str | None = None
     run_config = runner_kwargs.get("run_config")
@@ -322,6 +455,9 @@ async def _run_once(
         "operation": operation,
         "subsystem": subsystem,
         "model": model_label,
+        "trace_id": trace_id,
+        "prompt_preview": prompt_preview,
+        "prompt_length": prompt_length,
     }
     logger.info("nyx.gateway.llm.execute.start", extra=log_payload)
 
@@ -353,10 +489,16 @@ async def _run_once(
         usage_source = metadata.get("usage")
     prompt_tokens = _lookup_usage(usage_source, "prompt_tokens", "input_tokens")
     completion_tokens = _lookup_usage(usage_source, "completion_tokens", "output_tokens")
+    total_tokens = None
+    if prompt_tokens is not None or completion_tokens is not None:
+        total_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
     if prompt_tokens is not None:
         LLM_TOKENS_IN.labels(operation=operation).inc(prompt_tokens)
     if completion_tokens is not None:
         LLM_TOKENS_OUT.labels(operation=operation).inc(completion_tokens)
+
+    guardrail_invocations = _count_guardrail_invocations(payload_metadata)
+    run_summary = _summarize_agents_run(raw_result)
 
     result = LLMResult(
         text=text,
@@ -367,10 +509,16 @@ async def _run_once(
         used_fallback=use_fallback,
         duration=duration,
     )
-    logger.info(
-        "nyx.gateway.llm.execute.success",
-        extra={**log_payload, "duration": duration, "has_text": bool(text)},
-    )
+    success_payload = {**log_payload, "duration": duration, "has_text": bool(text), **run_summary}
+    if prompt_tokens is not None:
+        success_payload["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        success_payload["completion_tokens"] = completion_tokens
+    if total_tokens is not None:
+        success_payload["total_tokens"] = total_tokens
+    if guardrail_invocations:
+        success_payload["guardrail_invocations"] = guardrail_invocations
+    logger.info("nyx.gateway.llm.execute.success", extra=success_payload)
     return result
 
 
