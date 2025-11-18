@@ -31,10 +31,10 @@ import asyncpg
 from nyx.governance.ids import format_agent_id
 from nyx.gateway import llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
-from nyx.nyx_agent.world_orchestrator import WorldOrchestrator
 
 # Type checking imports (don't cause circular imports)
 if TYPE_CHECKING:
+    from nyx.nyx_agent.world_orchestrator import WorldOrchestrator as _WorldOrchestratorType
     from story_agent.world_director_agent import (
         CompleteWorldDirector,
         CompleteWorldState,
@@ -131,6 +131,7 @@ _governance_instances: Dict[str, Any] = {}
 _governance_locks: Dict[str, asyncio.Lock] = {}
 _initialization_in_progress: Dict[str, bool] = {}
 _global_lock = asyncio.Lock()  # Global lock for creating per-instance locks
+_WORLD_ORCHESTRATOR_CLS = None
 
 # ===============================================================================
 # LAZY LOADING FUNCTIONS FOR STORY AGENTS
@@ -203,6 +204,17 @@ def _lazy_load_activity():
         'RecommendedActivity': RecommendedActivity,
         'ActivityPriority': ActivityPriority
     }
+
+
+def _get_world_orchestrator_cls():
+    """Lazy load WorldOrchestrator to avoid package-level import loops."""
+
+    global _WORLD_ORCHESTRATOR_CLS
+    if _WORLD_ORCHESTRATOR_CLS is None:
+        from nyx.nyx_agent.world_orchestrator import WorldOrchestrator as _WorldOrchestrator
+
+        _WORLD_ORCHESTRATOR_CLS = _WorldOrchestrator
+    return _WORLD_ORCHESTRATOR_CLS
 
 def _lazy_load_task_generator():
     """Lazy load task generator components"""
@@ -427,7 +439,7 @@ def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optio
 async def initialize_world_simulation(
     user_id: int,
     conversation_id: int
-) -> WorldOrchestrator:
+) -> "WorldOrchestrator":
     """
     Initialize the world simulation with governance oversight.
     
@@ -440,7 +452,8 @@ async def initialize_world_simulation(
     """
     governance = await get_central_governance(user_id, conversation_id)
     
-    orchestrator = WorldOrchestrator(user_id, conversation_id)
+    WorldOrchestratorCls = _get_world_orchestrator_cls()
+    orchestrator = WorldOrchestratorCls(user_id, conversation_id)
     await orchestrator.initialize()
     world_director = orchestrator.director
     
