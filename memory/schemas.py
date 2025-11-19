@@ -8,6 +8,8 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
 
+from openai_integration.message_utils import build_responses_message
+
 from db.connection import get_db_connection_context
 from .connection import TransactionContext, with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -339,8 +341,13 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You detect patterns in memories to form schemas.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You detect patterns in memories to form schemas.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
                 text={"format": {"type": "json_object"}},
             )
             result = json.loads(resp.output_text)
@@ -869,8 +876,13 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You rate memory/schema relevance.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You rate memory/schema relevance.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             score = float(resp.output_text.strip())
             return max(0.0, min(1.0, score))
@@ -1052,8 +1064,13 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You interpret memories through cognitive schemas.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You interpret memories through cognitive schemas.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             return resp.output_text.strip()
     
@@ -1220,8 +1237,13 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You calculate schema/memory conflict.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You calculate schema/memory conflict.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             score = float(resp.output_text.strip())
             return max(0.0, min(1.0, score))
@@ -1256,8 +1278,13 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You explain memory/schema conflicts.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You explain memory/schema conflicts.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             return resp.output_text.strip()
         except Exception as e:
@@ -1401,8 +1428,13 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You evolve schemas to handle conflicts.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You evolve schemas to handle conflicts.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
                 text={"format": {"type": "json_object"}},
             )
             return json.loads(resp.output_text)
@@ -1563,8 +1595,10 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You merge schemas.",
-                input=prompt,
+                input=[
+                    build_responses_message("system", "You merge schemas."),
+                    build_responses_message("user", prompt),
+                ],
                 text={"format": {"type": "json_object"}},
             )
             return json.loads(resp.output_text)
@@ -1767,8 +1801,10 @@ class MemorySchemaManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You rate schema similarity.",
-                input=prompt,
+                input=[
+                    build_responses_message("system", "You rate schema similarity."),
+                    build_responses_message("user", prompt),
+                ],
             )
             score = float(resp.output_text.strip())
             return max(0.0, min(1.0, score))

@@ -4,6 +4,8 @@ import asyncio
 import datetime
 import openai
 
+from openai_integration.message_utils import build_responses_message
+
 DEFAULT_MODEL = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-5-nano")
 
 from nyx.core.memory.memory_manager import MemoryManager
@@ -19,10 +21,14 @@ async def _summarise(text: str) -> str:
     """
     client = get_openai_client()
 
+    messages = [
+        build_responses_message("system", SYSTEM_PROMPT),
+        build_responses_message("user", text),
+    ]
+
     stream = await client.responses.create(
         model=DEFAULT_MODEL,
-        instructions=SYSTEM_PROMPT,   # ← old “system” role
-        input=text,                   # ← old “user” role
+        input=messages,
         max_tokens=250,
         stream=True,
     )

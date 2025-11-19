@@ -40,6 +40,7 @@ from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 from nyx.conversation.store import ConversationStore
 from nyx.gateway.openai_responses import run_response_for_conversation
+from openai_integration.message_utils import build_responses_message
 
 
 # Configure module logger
@@ -1225,29 +1226,15 @@ async def build_message_history(
             role = "user"
         elif sender == "system":
             role = "system"
-        chat_history.append(_build_responses_message(role, content))
+        chat_history.append(build_responses_message(role, content))
 
     messages: list[dict[str, Any]] = []
-    messages.append(_build_responses_message("system", SYSTEM_PROMPT))
+    messages.append(build_responses_message("system", SYSTEM_PROMPT))
     if aggregator_text:
-        messages.append(_build_responses_message("system", aggregator_text))
+        messages.append(build_responses_message("system", aggregator_text))
     messages.extend(chat_history)
-    messages.append(_build_responses_message("user", user_input))
+    messages.append(build_responses_message("user", user_input))
     return messages
-
-
-def _build_responses_message(role: str, content: Any) -> dict[str, Any]:
-    """Return a Responses API message with correctly-typed content."""
-
-    normalized_role = (role or "user").lower()
-    if normalized_role not in {"user", "assistant", "system"}:
-        normalized_role = "user"
-    text = str(content) if content is not None else ""
-    block_type = "output_text" if normalized_role == "assistant" else "input_text"
-    return {
-        "role": normalized_role,
-        "content": [{"type": block_type, "text": text}],
-    }
 
 
 async def _persist_conversation_turns(
@@ -1648,13 +1635,13 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
     else:
         # Step A: Reflection Request (no tools; just text)
         reflection_messages = [
-            _build_responses_message("system", primary_system_prompt),
-            _build_responses_message("system", PRIVATE_REFLECTION_INSTRUCTIONS),
+            build_responses_message("system", primary_system_prompt),
+            build_responses_message("system", PRIVATE_REFLECTION_INSTRUCTIONS),
         ]
         if aggregator_text:
-            reflection_messages.append(_build_responses_message("system", aggregator_text))
+            reflection_messages.append(build_responses_message("system", aggregator_text))
         reflection_messages.append(
-            _build_responses_message(
+            build_responses_message(
                 "user",
                 f"""
 (INTERNAL REFLECTION STEP - DO NOT REVEAL THIS TO THE USER)
@@ -1721,13 +1708,13 @@ DO NOT produce user-facing text here; only the JSON.
         )
 
         final_messages = [
-            _build_responses_message("system", primary_system_prompt),
-            _build_responses_message("system", PRIVATE_REFLECTION_INSTRUCTIONS),
+            build_responses_message("system", primary_system_prompt),
+            build_responses_message("system", PRIVATE_REFLECTION_INSTRUCTIONS),
         ]
         if aggregator_text:
-            final_messages.append(_build_responses_message("system", aggregator_text))
-        final_messages.append(_build_responses_message("system", hidden_reflection))
-        final_messages.append(_build_responses_message("user", user_input))
+            final_messages.append(build_responses_message("system", aggregator_text))
+        final_messages.append(build_responses_message("system", hidden_reflection))
+        final_messages.append(build_responses_message("user", user_input))
 
         model = "gpt-5-nano"
 
@@ -2519,8 +2506,8 @@ async def _responses_json_call(
     params: dict[str, Any] = {
         "model": model,
         "input": [
-            _build_responses_message("system", system_prompt),
-            _build_responses_message("user", user_prompt),
+            build_responses_message("system", system_prompt),
+            build_responses_message("user", user_prompt),
         ],
         "max_output_tokens": max_output_tokens,
     }

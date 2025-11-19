@@ -6,6 +6,7 @@ import uuid
 import datetime
 import logging
 import re # Import re
+from openai_integration.message_utils import build_responses_message
 from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 
 # Adapt these imports to your db wrapper
@@ -259,8 +260,10 @@ class DistributedCheckpointMixin:
         try:
             params = {
                 "model": "gpt-5-nano",
-                "instructions": merge_instr,
-                "input": user_input,
+                "input": [
+                    build_responses_message("system", merge_instr),
+                    build_responses_message("user", user_input),
+                ],
                 "max_tokens": 800,
                 "text": {"format": {"type": "json_object"}},  # force JSON mode
             }

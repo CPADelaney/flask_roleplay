@@ -12,6 +12,7 @@ import numpy as np
 from .connection import with_transaction, TransactionContext
 from db.connection import get_db_connection_context
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
+from openai_integration.message_utils import build_responses_message
 
 logger = logging.getLogger("memory_interference")
 
@@ -517,7 +518,6 @@ class MemoryInterferenceManager:
         """
         Blend two memories via Responses API.
         """
-        from logic.chatgpt_integration import get_openai_client
         client = get_openai_client()
     
         prompt = f"""
@@ -532,8 +532,13 @@ class MemoryInterferenceManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You create blended false memories.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You create blended false memories.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             return resp.output_text.strip()
         except Exception as e:
@@ -564,8 +569,13 @@ class MemoryInterferenceManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You create temporally-confused false memories.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You create temporally-confused false memories.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             return resp.output_text.strip()
     
@@ -603,8 +613,13 @@ class MemoryInterferenceManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You craft emotionally weighted blended memories.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You craft emotionally weighted blended memories.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             return resp.output_text.strip()
     
@@ -634,8 +649,13 @@ class MemoryInterferenceManager:
         try:
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You produce generic blended false memories.",
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You produce generic blended false memories.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
             return resp.output_text.strip()
     

@@ -41,6 +41,7 @@ from logic.calendar import load_calendar_names
 from memory.memory_nyx_integration import remember_through_nyx
 from openai import AsyncOpenAI
 from pydantic import ValidationError
+from openai_integration.message_utils import build_responses_message
 
 # Import the new dynamic relationships system
 from logic.dynamic_relationships import (
@@ -96,10 +97,14 @@ async def _responses_json_call(
     client = get_async_openai_client()
 
     # --- assemble request -----------------------------------------------
+    messages = [
+        build_responses_message("system", system_prompt),
+        build_responses_message("user", user_prompt),
+    ]
+
     params: Dict[str, Any] = {
         "model": model,
-        "instructions": system_prompt,                     # system prompt lives here
-        "input": [{"role": "user", "content": user_prompt}],
+        "input": messages,
         "max_output_tokens": max_output_tokens,
     }
     if previous_response_id:
@@ -4416,8 +4421,8 @@ class NPCCreationHandler:
                 params = {
                     "model": model,
                     "input": [
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_msg},
+                        build_responses_message("system", system_msg),
+                        build_responses_message("user", user_msg),
                     ],
                     "max_output_tokens": max_output_tokens,
                 }

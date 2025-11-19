@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Callable, Optional
 from logic.chatgpt_integration import get_openai_client
+from openai_integration.message_utils import build_responses_message
 from agents import (
     Agent,
     ModelSettings,
@@ -163,8 +164,13 @@ async def call_llm(prompt: str, model: str = "gpt-4o"):
     # Create the base parameters
     params = {
         "model": model,
-        "input": prompt,
-        "instructions": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."
+        "input": [
+            build_responses_message(
+                "system",
+                "You are an autonomous repo steward AI that suggests minimal, high‑impact patches.",
+            ),
+            build_responses_message("user", prompt),
+        ],
     }
     
     # Only add temperature for models that support it

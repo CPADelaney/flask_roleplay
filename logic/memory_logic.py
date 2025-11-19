@@ -414,6 +414,7 @@ async def get_shared_memory(
     Returns JSON string with {"memory": [str, str, str]} or None on failure.
     """
     from logic.chatgpt_integration import get_openai_client
+    from openai_integration.message_utils import build_responses_message
 
     logger.info(
         f"Starting get_shared_memory for NPC '{npc_name}' with relationship: {relationship}"
@@ -496,8 +497,13 @@ Return ONLY a valid JSON object exactly like:
             # Use Responses API; request JSON object
             resp = client.responses.create(
                 model="gpt-5-nano",
-                instructions="You generate exactly three JSON-formatted first-person memories for the NPC.",
-                input=system_instructions,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You generate exactly three JSON-formatted first-person memories for the NPC.",
+                    ),
+                    build_responses_message("user", system_instructions),
+                ],
                 text={"format": {"type": "json_object"}},
             )
 

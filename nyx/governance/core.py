@@ -18,6 +18,7 @@ import importlib.resources
 from collections import defaultdict
 
 from .ids import legacy_agent_ids, parse_agent_id
+from openai_integration.message_utils import build_responses_message
 
 # Helper functions for OpenAI integration
 RESPONSES_ALLOWED_KEYS = {
@@ -138,9 +139,14 @@ class ResponsesAgent:
     ) -> Dict[str, Any]:
         client = await self._client()
         prompt = self._compose_prompt(op, context, capabilities)
+        messages: List[Dict[str, Any]] = []
+        if self.instructions:
+            messages.append(build_responses_message("system", self.instructions))
+        messages.append(build_responses_message("user", prompt))
+
         params: Dict[str, Any] = {
             "model": self.model,
-            "input": prompt,
+            "input": messages,
         }
         if self.temperature is not None:
             params["temperature"] = self.temperature
