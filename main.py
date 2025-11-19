@@ -128,6 +128,7 @@ from middleware.validation import validate_request
 from logic.aggregator_sdk import init_singletons, build_aggregator_text
 
 from tasks import background_chat_task_with_memory, warm_user_context_cache_task
+from nyx.tasks.background.world_tasks import enqueue_background_universal_updates
 
 logger = logging.getLogger(__name__)
 
@@ -473,64 +474,25 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         
         # Apply universal update if provided
         if universal_update:
-            logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
-            update_result: Optional[Dict[str, Any]] = None
-
-            async def emit_universal_update_error() -> None:
-                await sio.emit(
-                    'error',
-                    {
-                        'error': 'Failed to apply world updates.',
-                        'openai_conversation_id': conversation_identifier_for_emit,
-                    },
-                    room=str(conversation_id),
+            queued = enqueue_background_universal_updates(
+                {
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                    "updates": universal_update,
+                    "request_id": request_id,
+                    "source": "background_chat_task",
+                }
+            )
+            if queued:
+                logger.info(
+                    "[BG Task %s] Queued universal updates for async application",
+                    conversation_id,
                 )
-                if request_id:
-                    await clear_request_processing(request_id, redis_pool)
-
-            try:
-                from logic.universal_updater_agent import apply_universal_updates_async, UniversalUpdaterContext
-
-                updater_context = UniversalUpdaterContext(user_id, conversation_id)
-                await updater_context.initialize()
-
-                async with get_db_connection_context() as conn:
-                    update_result = await apply_universal_updates_async(
-                        updater_context,
-                        user_id,
-                        conversation_id,
-                        universal_update,
-                        conn,
-                    )
-
-                if not update_result or not update_result.get("success") or update_result.get("error"):
-                    error_detail = ""
-                    if isinstance(update_result, dict):
-                        error_detail = update_result.get("error", "")
-                    logger.error(
-                        f"[BG Task {conversation_id}] Universal updates reported failure: {error_detail or 'unknown error.'}"
-                    )
-                    await emit_universal_update_error()
-                    return
-
-                logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
-
-                # Refresh aggregator data post-update
-                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
-                context["aggregator_data"] = aggregator_data
-                context["recent_turns"] = await conversation_store.fetch_recent_turns(
-                    user_id=user_id,
-                    conversation_id=conversation_id,
+            else:
+                logger.warning(
+                    "[BG Task %s] Failed to enqueue universal updates; continuing without immediate apply",
+                    conversation_id,
                 )
-
-            except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
-                logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
-                await emit_universal_update_error()
-                return
-            except Exception as update_err:
-                logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                await emit_universal_update_error()
-                return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
         from nyx.nyx_agent_sdk import process_user_input
