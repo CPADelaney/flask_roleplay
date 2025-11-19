@@ -4263,6 +4263,7 @@ class NyxContext:
     
     # ────────── CURRENT STATE ──────────
     current_context: Dict[str, Any] = field(default_factory=dict)
+    scenario_state: Dict[str, Any] = field(default_factory=dict)
     current_location: Optional[str] = None
     current_world_state: Optional[Any] = None
     last_packed_context: Optional['PackedContext'] = None
@@ -4329,6 +4330,16 @@ class NyxContext:
     _init_mode: str = field(default="none", init=False, repr=False)
     background_tasks: Set[asyncio.Task] = field(default_factory=set)
     _governance_pending_minimal: bool = field(default=False, init=False, repr=False)
+    _tables_available: Dict[str, bool] = field(default_factory=lambda: {"scenario_states": True})
+
+    def __post_init__(self):
+        if self.scenario_state is None:
+            self.scenario_state = {}
+
+        if self._tables_available is None or not isinstance(self._tables_available, dict):
+            self._tables_available = {"scenario_states": True}
+        else:
+            self._tables_available.setdefault("scenario_states", True)
     
     async def initialize(self, *, warm_minimal: bool = False):
         """Initialize orchestrators lazily.
