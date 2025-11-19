@@ -421,7 +421,7 @@ async def _get_bundle(ctx: RunContextWrapper, expand_sections: Optional[List[str
 
     # Cache on the actual NyxContext, not the wrapper
     if not hasattr(nyx_ctx, '_current_bundle'):
-        scene_scope = broker.compute_scene_scope(
+        scene_scope = await broker.compute_scene_scope(
             getattr(nyx_ctx, 'last_user_input', ''),
             getattr(nyx_ctx, 'current_state', {})
         )
@@ -621,7 +621,7 @@ async def orchestrate_slice_scene(
     nyx_ctx = ctx.context if hasattr(ctx, 'context') else ctx
 
     # Compute scene scope from current state
-    scene_scope = broker.compute_scene_scope(
+    scene_scope = await broker.compute_scene_scope(
         getattr(nyx_ctx, 'last_user_input', ''),
         {'scene_type': scene_type}
     )
