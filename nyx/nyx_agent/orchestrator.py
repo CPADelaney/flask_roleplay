@@ -794,6 +794,35 @@ def _default_movement_transition_narration(scene_bundle: Dict[str, Any]) -> str:
     )
 
 
+def _movement_requires_clarification(text: str) -> bool:
+    """
+    Heuristic to decide if the Movement Transition agent is asking the player
+    to choose HOW they travel (e.g. “fly or drive?”), instead of treating travel
+    as already resolved.
+    """
+
+    if not text:
+        return False
+
+    lowered = text.strip().lower()
+    # If there is a question mark toward the end AND we see mode-choice language,
+    # treat this as a clarification turn.
+    if "?" in lowered[-200:]:
+        mode_keywords = [
+            "how do you get",
+            "how are you getting",
+            "fly", "flight", "plane",
+            "drive", "road trip", "car",
+            "train", "bus",
+            "which do you choose",
+            "would you rather",
+        ]
+        if any(kw in lowered for kw in mode_keywords):
+            return True
+
+    return False
+
+
 def _coerce_float(value: Any) -> Optional[float]:
     try:
         return float(value)
@@ -1191,6 +1220,10 @@ async def _run_movement_transition_fast_path(
         or _default_movement_transition_narration(scene_bundle)
     )
 
+    mode = "movement_and_scene"
+    if _movement_requires_clarification(narration):
+        mode = "movement_only"
+
     location_transition = {
         "router_called": resolve_result is not None,
         "router_status": getattr(resolve_result, "status", None) if resolve_result else None,
@@ -1203,8 +1236,11 @@ async def _run_movement_transition_fast_path(
     return {
         "success": True,
         "response": narration,
+        "narration": narration,
+        "mode": mode,
         "metadata": {
             "movement_fast_path": True,
+            "movement_mode": mode,
             "universal_updates": False,
             "feasibility": fast_result,
             "location_transition": location_transition,
@@ -1379,6 +1415,7 @@ async def process_user_input(
 
     nyx_context: Optional[NyxContext] = None
     packed_context: Optional[PackedContext] = None
+    movement_prelude: Optional[str] = None
 
     logger.info(f"[{trace_id}] ========== PROCESS START ==========")
     logger.info(f"[{trace_id}] user_id={user_id} conversation_id={conversation_id}")
@@ -1538,10 +1575,18 @@ async def process_user_input(
                 time_left_fn=time_left,
             )
             if fast_path_response is not None:
-                return fast_path_response
-            logger.info(
-                f"[{trace_id}] Movement fast path declined; continuing with full orchestration",
-            )
+                mode = fast_path_response.get("mode") or fast_path_response.get("metadata", {}).get("movement_mode")
+                if mode == "movement_only":
+                    return fast_path_response
+                elif mode == "movement_and_scene":
+                    movement_prelude = fast_path_response.get("narration") or fast_path_response.get("response")
+
+            if movement_prelude:
+                logger.info(f"[{trace_id}] Movement fast path produced arrival prelude; continuing with main agent.")
+            else:
+                logger.info(
+                    f"[{trace_id}] Movement fast path declined; continuing with full orchestration",
+                )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")
@@ -1707,6 +1752,9 @@ async def process_user_input(
                     "[REALITY CHECK: Action is feasible within universe laws.]\n\n"
                     f"{user_input}"
                 )
+
+        if movement_prelude:
+            enhanced_input = f"{movement_prelude.strip()}\n\n{enhanced_input}"
 
         # ---- STEP 4: Tool sanitization ----------------------------------------
         async with _log_step("tool_sanitization", trace_id):
