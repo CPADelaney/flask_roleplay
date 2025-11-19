@@ -345,6 +345,24 @@ async def create_all_tables():
                 ON conversation_scenes (conversation_id, is_active)
                 WHERE is_active = TRUE;
                 ''',
+                '''
+                CREATE TABLE IF NOT EXISTS conversation_items (
+                    id SERIAL PRIMARY KEY,
+                    conversation_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    item_type TEXT NOT NULL,
+                    content JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE (conversation_id, item_type)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conversation_items_conversation
+                ON conversation_items (conversation_id);
+                ''',
 
                 # ======================================
                 # GAME STATE AND SETTINGS
