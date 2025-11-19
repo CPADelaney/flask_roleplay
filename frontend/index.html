@@ -232,64 +232,6 @@
         color: #94a3b8;
         text-align: center;
       }
-
-      .itinerary-header {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-      }
-
-      @media (min-width: 640px) {
-        .itinerary-header {
-          flex-direction: row;
-          align-items: center;
-          justify-content: space-between;
-        }
-      }
-
-      .itinerary-summary {
-        font-size: 0.8rem;
-        color: #cbd5f5;
-      }
-
-      .itinerary-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.9rem;
-      }
-
-      .itinerary-table th {
-        background: rgba(148, 163, 184, 0.12);
-        color: #cbd5f5;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        font-size: 0.7rem;
-        padding: 0.65rem 0.75rem;
-        text-align: left;
-      }
-
-      .itinerary-table td {
-        padding: 0.65rem 0.75rem;
-        border-top: 1px solid rgba(148, 163, 184, 0.18);
-      }
-
-      .itinerary-table tr:hover {
-        background: rgba(148, 163, 184, 0.06);
-      }
-
-      .money {
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-        text-align: right;
-      }
-
-      .optimization-notes {
-        margin-top: 0.5rem;
-        color: #cbd5f5;
-      }
-
-      .optimization-notes ul {
-        margin: 0.35rem 0 0;
-      }
     </style>
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
   </head>
@@ -398,80 +340,6 @@
           </button>
         </section>
       </div>
-
-      <section class="card" aria-label="Voyage itinerary" x-show="mpResult?.legs?.length">
-        <div class="itinerary-header">
-          <div>
-            <div style="font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: #a5b4fc;">
-              Voyage Itinerary
-            </div>
-            <div class="itinerary-summary" x-show="mpResult?.voyage_summary">
-              <span x-text="mpResult.voyage_summary.start_date"></span>
-              <span>→</span>
-              <span x-text="mpResult.voyage_summary.end_date"></span>
-              <span style="opacity: 0.6;"> · </span>
-              <span x-text="(mpResult.voyage_summary.total_legs || 0) + ' legs'"></span>
-            </div>
-          </div>
-          <div style="text-align: right; color: #cbd5f5; font-size: 0.85rem;">
-            <div style="font-weight: 600; color: #e2e8f0;" x-text="mpResult?.vessel_name"></div>
-            <div x-text="'Type: ' + vesselType"></div>
-          </div>
-        </div>
-
-        <div style="overflow: hidden; border-radius: 14px; border: 1px solid rgba(148, 163, 184, 0.2); margin-top: 1rem;">
-          <table class="itinerary-table">
-            <thead>
-              <tr>
-                <th>Leg</th>
-                <th>Route</th>
-                <th>ETA</th>
-                <th style="text-align: right;">Mandatory</th>
-                <th style="text-align: right;">With Optional</th>
-                <th style="text-align: right;">Flags</th>
-              </tr>
-            </thead>
-            <tbody>
-              <template x-for="leg in mpResult.legs" :key="leg.leg">
-                <tr>
-                  <td style="color: #cbd5f5; font-size: 0.85rem;" x-text="'Leg ' + leg.leg"></td>
-                  <td style="font-weight: 600; color: #e2e8f0;" x-text="`${leg.from_port} → ${leg.to_port}`"></td>
-                  <td style="color: #cbd5f5; font-size: 0.85rem;" x-text="(leg.eta || '').split('T')[0]"></td>
-                  <td class="money" x-text="formatCurrency(leg.fees?.mandatory || 0)"></td>
-                  <td class="money" style="color: #93c5fd; font-weight: 700;" x-text="formatCurrency((Number(leg.fees?.mandatory||0) + Number(leg.fees?.optional_high||0)) || 0)"></td>
-                  <td style="color: #cbd5f5; font-size: 0.8rem; text-align: right;">
-                    <span x-text="leg.arrival_type === 'COASTWISE' ? 'Coastwise' : 'Foreign'"></span>
-                    <span x-show="leg.weekend_arrival" style="color: #f59e0b; margin-left: 0.35rem;">· Wknd</span>
-                    <span x-show="leg.documents_required" style="opacity: 0.7; margin-left: 0.35rem;" x-text="`· Docs: ${leg.documents_required}`"></span>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
-
-        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.75rem;">
-          <div style="color: #cbd5f5; font-size: 0.9rem;" x-show="mpResult?.total_voyage_cost">
-            <div>
-              <span style="font-weight: 700; color: #e2e8f0;">Voyage mandatory total:</span>
-              <span class="money" x-text="formatCurrency(mpResult.total_voyage_cost.mandatory || 0)"></span>
-            </div>
-            <div style="opacity: 0.8; margin-top: 0.2rem;">
-              <span>With optional:</span>
-              <span class="money" x-text="formatCurrency(mpResult.total_voyage_cost.with_optional || 0)"></span>
-            </div>
-          </div>
-
-          <div class="optimization-notes" x-show="mpResult?.optimization_suggestions?.length">
-            <div style="font-weight: 700; color: #e2e8f0;">Optimization notes</div>
-            <ul>
-              <template x-for="(note, idx) in mpResult.optimization_suggestions" :key="idx">
-                <li x-text="note"></li>
-              </template>
-            </ul>
-          </div>
-        </div>
-      </section>
     </div>
 
     <script>
@@ -488,48 +356,6 @@
             loa: "399.9",
             beam: "59.0",
             draft: "15.7",
-          },
-          vesselType: "general_cargo",
-          mpResult: {
-            vessel_name: "MV Evergreen",
-            voyage_summary: { start_date: "2024-03-02", end_date: "2024-03-14", total_legs: 3 },
-            legs: [
-              {
-                leg: 1,
-                from_port: "Port of Shanghai",
-                to_port: "Port of Singapore",
-                eta: "2024-03-05T12:00:00Z",
-                arrival_type: "FOREIGN",
-                weekend_arrival: false,
-                documents_required: "Bunkering cert",
-                fees: { mandatory: 78000, optional_high: 12000 },
-              },
-              {
-                leg: 2,
-                from_port: "Port of Singapore",
-                to_port: "Port of Colombo",
-                eta: "2024-03-09T16:00:00Z",
-                arrival_type: "FOREIGN",
-                weekend_arrival: true,
-                documents_required: "Pilot waiver",
-                fees: { mandatory: 64000, optional_high: 9000 },
-              },
-              {
-                leg: 3,
-                from_port: "Port of Colombo",
-                to_port: "Port of Mombasa",
-                eta: "2024-03-13T18:00:00Z",
-                arrival_type: "COASTWISE",
-                weekend_arrival: false,
-                documents_required: "Harbor security pass",
-                fees: { mandatory: 54000, optional_high: 7000 },
-              },
-            ],
-            total_voyage_cost: { mandatory: 196000, with_optional: 230000 },
-            optimization_suggestions: [
-              "Avoid weekend arrival at Colombo to trim surcharge by ~12%",
-              "Combine document runs for final two ports to reduce agent fees",
-            ],
           },
           searchPorts(force = false, mode = "single") {
             const cfg = this.getPortSearchConfig(mode);
@@ -621,13 +447,6 @@
               beam: 28 + Math.random() * 15,
               draft: 8 + Math.random() * 6,
             });
-          },
-          formatCurrency(value) {
-            return new Intl.NumberFormat("en-US", {
-              style: "currency",
-              currency: "USD",
-              maximumFractionDigits: 0,
-            }).format(value || 0);
           },
         };
       }
