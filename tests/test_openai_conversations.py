@@ -352,7 +352,7 @@ async def test_rotate_scene_updates_previous_scene_and_inserts_active_scene():
     assert insert_params[9] == {"music": "calm"}
 
     seal_query, seal_params = conn.queries[2]
-    assert "conversations.items" in seal_query
+    assert "conversation_items" in seal_query
     assert seal_params[0] == 123
 
 
@@ -414,7 +414,7 @@ async def test_rotate_scene_persists_scene_seal_system_message():
 
     assert len(conn.queries) == 3
     seal_query, seal_params = conn.queries[2]
-    assert "conversations.items" in seal_query
+    assert "conversation_items" in seal_query
 
     payload = seal_params[1]
     metadata = seal_params[2]
