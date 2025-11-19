@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 from db.connection import get_db_connection_context
 from nyx.tasks.utils import run_coro, with_retry
 from nyx.utils.idempotency import idempotent
+from openai_integration.message_utils import build_responses_message
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,10 @@ def _extract_json(text: str) -> str:
 async def llm_json(prompt: str) -> Dict[str, Any]:
     try:
         client = _get_client()
-        response = await client.responses.create(model="gpt-5-nano", input=prompt)
+        response = await client.responses.create(
+            model="gpt-5-nano",
+            input=[build_responses_message("user", prompt)],
+        )
         text = getattr(response, "output_text", None)
         if not text:
             try:

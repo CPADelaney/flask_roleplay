@@ -14,6 +14,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
+from openai_integration.message_utils import build_responses_message
 from pydantic import BaseModel, Field, ValidationError
 
 # Import our memory service
@@ -119,8 +120,8 @@ class MemoryRetrieverAgent:
             response = self._openai.responses.create(
                 model=self.config.get("openai_model_name", "gpt-5-nano"),
                 input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    build_responses_message("system", system_prompt),
+                    build_responses_message("user", user_prompt),
                 ],
             )
             return response.output_text

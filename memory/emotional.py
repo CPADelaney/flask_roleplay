@@ -293,6 +293,7 @@ class EmotionalMemoryManager:
     
         try:
             from logic.chatgpt_integration import get_openai_client
+            from openai_integration.message_utils import build_responses_message
             client = get_openai_client()
     
             prompt = dedent(f"""
@@ -322,11 +323,13 @@ class EmotionalMemoryManager:
             # ---- Responses API call (no response_format; SDKs differ) ----
             resp = client.responses.create(
                 model=model,
-                instructions=(
-                    "You are an emotion-analysis engine. "
-                    "Return ONLY the JSON object described—no extra text."
-                ),
-                input=prompt,
+                input=[
+                    build_responses_message(
+                        "system",
+                        "You are an emotion-analysis engine. Return ONLY the JSON object described—no extra text.",
+                    ),
+                    build_responses_message("user", prompt),
+                ],
             )
 
             # Parse and validate with Pydantic

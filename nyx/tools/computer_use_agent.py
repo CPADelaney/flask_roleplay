@@ -4,6 +4,7 @@ import base64
 import time
 from openai import OpenAI
 from playwright.sync_api import sync_playwright
+from openai_integration.message_utils import build_responses_message
 
 client = OpenAI()
 
@@ -26,10 +27,7 @@ class ComputerUseAgent:
                 "display_height": 768,
                 "environment": "browser"
             }],
-            input=[{
-                "role": "user",
-                "content": initial_prompt
-            }],
+            input=[build_responses_message("user", initial_prompt)],
             reasoning={"generate_summary": "detailed"},
             truncation="auto"
         )
