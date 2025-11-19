@@ -1468,7 +1468,7 @@ class NyxContext:
     error_counts: Dict[str, int] = field(default_factory=dict)
     
     # ────────── FEATURE FLAGS ──────────
-    _tables_available: Dict[str, bool] = field(default_factory=dict)
+    _tables_available: Dict[str, bool] = field(default_factory=lambda: {"scenario_states": True})
 
     # ────────── TASK SCHEDULING ──────────
     last_task_runs: Dict[str, datetime] = field(default_factory=dict)
