@@ -13,6 +13,7 @@ import time
 import traceback
 import re
 import hashlib
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from nyx.tasks.celery_app import app as celery_app
@@ -122,13 +123,36 @@ async def is_app_initialized() -> bool:
 
 def serialize_for_celery(obj: Any) -> Any:
     """Make pydantic/objects JSON-serializable for Celery results."""
+
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+
+    if isinstance(obj, Enum):
+        return serialize_for_celery(obj.value)
+
+    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+        return obj.isoformat()
+
+    if isinstance(obj, dict):
+        return {str(k): serialize_for_celery(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple, set)):
+        return [serialize_for_celery(v) for v in obj]
+
     if hasattr(obj, "model_dump"):
-        return obj.model_dump()
+        try:
+            dumped = obj.model_dump(mode="json")
+        except TypeError:
+            dumped = obj.model_dump()
+        return serialize_for_celery(dumped)
+
     if hasattr(obj, "dict"):
-        return obj.dict()
+        return serialize_for_celery(obj.dict())
+
     if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    return obj
+        return serialize_for_celery(vars(obj))
+
+    return str(obj)
 
 
 def get_preset_id(d: Dict[str, Any]) -> Optional[str]:
@@ -634,7 +658,8 @@ def background_chat_task_with_memory(
                 if full_response_payload and redis_publisher:
                     channel = "chat-responses"
                     try:
-                        payload_json = json.dumps(full_response_payload)
+                        safe_payload = serialize_for_celery(full_response_payload)
+                        payload_json = json.dumps(safe_payload)
                         redis_publisher.publish(channel, payload_json)
                         logger.info(
                             "[BG Task %s] Published result to '%s' for request_id=%s",
