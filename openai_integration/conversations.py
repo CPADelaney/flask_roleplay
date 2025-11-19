@@ -325,7 +325,7 @@ async def ensure_scene_seal_item(
 
     record = await conn.fetchrow(
         """
-        INSERT INTO conversations.items (
+        INSERT INTO conversation_items (
             conversation_id,
             role,
             item_type,
@@ -333,8 +333,9 @@ async def ensure_scene_seal_item(
             metadata
         )
         VALUES ($1, 'system', 'scene_seal', $2::jsonb, $3::jsonb)
-        ON CONFLICT (conversation_id, role, item_type) DO UPDATE
+        ON CONFLICT (conversation_id, item_type) DO UPDATE
         SET
+            role = EXCLUDED.role,
             content = EXCLUDED.content,
             metadata = EXCLUDED.metadata,
             updated_at = NOW()
