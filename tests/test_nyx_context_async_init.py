@@ -643,7 +643,8 @@ async def test_warm_user_context_minimal_mode(monkeypatch):
             self.build_called = True
             return None
 
-        async def warm_minimal_context(self) -> Dict[str, Any]:
+        async def warm_minimal_context(self, *, minimal_warm: bool = True) -> Dict[str, Any]:
+            assert minimal_warm is True
             self.build_called = False
             await self.await_orchestrator("context_broker")
             return {
@@ -759,7 +760,7 @@ async def test_warm_user_context_eager_opt_in(monkeypatch):
             self.build_called = True
             return None
 
-        async def warm_minimal_context(self) -> Dict[str, Any]:  # pragma: no cover - should not run
+        async def warm_minimal_context(self, *, minimal_warm: bool = True) -> Dict[str, Any]:  # pragma: no cover - should not run
             raise AssertionError("Minimal warm helper should not be called when eager flag is set")
 
     monkeypatch.setattr(cache_warmup, "NyxContext", StubNyxContext)
@@ -789,3 +790,40 @@ async def test_warm_user_context_eager_opt_in(monkeypatch):
     assert context.lore_bundle == {"status": "ready"}
     assert context.awaited.count("memory") >= 1
     assert context.awaited.count("lore") >= 1
+
+
+@pytest.mark.anyio
+async def test_governance_deferred_until_full_init(monkeypatch):
+    ctx = context_module.NyxContext(user_id=22, conversation_id=33)
+
+    governance_calls = []
+
+    class StubGovernance:
+        def __init__(self):
+            self.attached = False
+
+        def attach_context(self, incoming_ctx):
+            governance_calls.append(("attach", incoming_ctx))
+            self.attached = True
+
+    async def fake_get_central_governance(user_id, conversation_id):
+        governance_calls.append(("get", user_id, conversation_id))
+        return StubGovernance()
+
+    monkeypatch.setattr(context_module, "get_central_governance", fake_get_central_governance)
+
+    # Minimal warm should defer governance wiring entirely.
+    ready = await ctx._ensure_governance_ready(minimal_warm=True)
+    assert ready is False
+    assert governance_calls == []
+    assert ctx.governance is None
+    assert ctx._governance_pending_minimal is True
+
+    # When the full path runs, the governance object should be fetched and attached exactly once.
+    ready = await ctx._ensure_governance_ready(minimal_warm=False)
+    assert ready is True
+    assert governance_calls[0] == ("get", 22, 33)
+    assert governance_calls[1][0] == "attach"
+    assert governance_calls[1][1] is ctx
+    assert ctx.governance is not None
+    assert ctx._governance_pending_minimal is False

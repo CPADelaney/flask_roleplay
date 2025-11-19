@@ -131,7 +131,7 @@ async def warm_user_context_cache(
                 "conversation_id": conversation_id,
             }
         else:
-            warm_result = await context.warm_minimal_context()
+            warm_result = await context.warm_minimal_context(minimal_warm=True)
     except Exception as exc:
         logger.exception(
             "Failed context cache warm-up for user_id=%s conversation_id=%s: %s",

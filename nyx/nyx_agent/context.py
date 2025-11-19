@@ -4328,6 +4328,7 @@ class NyxContext:
     _init_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _init_mode: str = field(default="none", init=False, repr=False)
     background_tasks: Set[asyncio.Task] = field(default_factory=set)
+    _governance_pending_minimal: bool = field(default=False, init=False, repr=False)
     
     async def initialize(self, *, warm_minimal: bool = False):
         """Initialize orchestrators lazily.
@@ -4505,7 +4506,9 @@ class NyxContext:
 
             governance_ready = False
             if warm_minimal or upgrade_from_minimal:
-                governance_ready = await self._ensure_governance_ready()
+                governance_ready = await self._ensure_governance_ready(
+                    minimal_warm=warm_minimal and not upgrade_from_minimal
+                )
                 if governance_ready:
                     logger.debug(
                         "Governance wiring completed during %s initialization for user %s conversation %s",
@@ -4533,11 +4536,21 @@ class NyxContext:
                 time.time() - init_start_time,
             )
 
-    async def _ensure_governance_ready(self) -> bool:
+    async def _ensure_governance_ready(self, *, minimal_warm: bool = False) -> bool:
         """Best-effort governance wiring for minimal warm flows."""
 
         if getattr(self, "governance", None) is not None:
+            self._governance_pending_minimal = False
             return True
+
+        if minimal_warm:
+            self._governance_pending_minimal = True
+            logger.debug(
+                "Governance wiring deferred during minimal warm for user %s conversation %s",
+                self.user_id,
+                self.conversation_id,
+            )
+            return False
 
         try:
             governance = await get_central_governance(self.user_id, self.conversation_id)
@@ -4552,6 +4565,7 @@ class NyxContext:
             return False
 
         self.governance = governance
+        self._governance_pending_minimal = False
 
         attach_hook = getattr(governance, "attach_context", None)
         if attach_hook is not None:
@@ -4747,13 +4761,16 @@ class NyxContext:
         self,
         *,
         prime_vector_store: bool = False,
+        minimal_warm: bool = True,
     ) -> Dict[str, Any]:
         """Perform the minimal warm path without full bundle fetches."""
 
         await self.initialize(warm_minimal=True)
         await self.await_orchestrator("context_broker")
 
-        governance_ready = await self._ensure_governance_ready()
+        governance_ready = await self._ensure_governance_ready(
+            minimal_warm=minimal_warm
+        )
 
         snapshot_seeded = False
         try:
