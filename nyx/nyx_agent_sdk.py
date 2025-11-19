@@ -23,6 +23,7 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -155,6 +156,20 @@ _LOCATION_KEYS = (
 _LOCATION_ID_KEYS = (
     "CurrentLocationId", "current_location_id", "currentLocationId", "location_id", "LocationId",
 )
+
+
+def _coerce_enums_to_primitives(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {k: _coerce_enums_to_primitives(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_coerce_enums_to_primitives(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_coerce_enums_to_primitives(v) for v in value)
+    if isinstance(value, set):
+        return [_coerce_enums_to_primitives(v) for v in value]
+    return value
 
 def _slugify_location(value: str) -> str:
     if not isinstance(value, str):
@@ -1862,12 +1877,15 @@ class NyxAgentSDK:
 
         world_state_raw = resp.world_state or {}
         if isinstance(world_state_raw, BaseModel):
-            world_state = world_state_raw.model_dump(exclude_none=True)
+            world_state = world_state_raw.model_dump(mode="json", exclude_none=True)
         elif hasattr(world_state_raw, "model_dump") and callable(world_state_raw.model_dump):  # type: ignore[attr-defined]
             try:
-                world_state = world_state_raw.model_dump(exclude_none=True)  # type: ignore[call-arg]
+                world_state = world_state_raw.model_dump(mode="json", exclude_none=True)  # type: ignore[call-arg]
             except TypeError:
-                world_state = world_state_raw.model_dump()  # type: ignore[attr-defined]
+                try:
+                    world_state = world_state_raw.model_dump(exclude_none=True)  # type: ignore[call-arg]
+                except TypeError:
+                    world_state = world_state_raw.model_dump()  # type: ignore[attr-defined]
         elif hasattr(world_state_raw, "dict") and callable(world_state_raw.dict):
             world_state = world_state_raw.dict()
         elif hasattr(world_state_raw, "to_dict") and callable(world_state_raw.to_dict):
@@ -1880,6 +1898,15 @@ class NyxAgentSDK:
             except Exception:
                 logger.debug("[SDK] Unable to coerce world_state=%r to dict; dropping", world_state_raw)
                 world_state = {}
+
+        if not isinstance(world_state, dict):
+            try:
+                world_state = dict(world_state)
+            except Exception:
+                logger.debug("[SDK] Unable to coerce world_state=%r to dict; dropping", world_state)
+                world_state = {}
+
+        world_state = _coerce_enums_to_primitives(world_state)
         next_world_version = current_world_version + 1 if world_state else current_world_version
 
         events: List[SideEffect] = []
