@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Any, AsyncIterator, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
 try:  # pragma: no cover - optional dependency guard
@@ -342,8 +343,8 @@ async def ensure_scene_seal_item(
         RETURNING id, conversation_id, role, item_type, content, metadata, created_at, updated_at
         """,
         conversation_id,
-        content,
-        metadata,
+        json.dumps(content),
+        json.dumps(metadata),
     )
 
     return dict(record) if record else None
