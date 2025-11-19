@@ -747,7 +747,7 @@ async def _apply_universal_updates_impl(ctx: RunContextWrapper, updates_json: st
 
 @function_tool
 async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> ApplyUpdatesResult:
-    """Tool wrapper; delegates to the implementation."""
+    """Tool wrapper for immediate world writes; use only when synchronous canon updates are required."""
     return await _apply_universal_updates_impl(ctx, updates_json)
 
 # ------------------------------------------------------------------------------

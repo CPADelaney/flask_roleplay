@@ -23,6 +23,7 @@ from agents import trace, custom_span, RunContextWrapper
 from agents.tracing import get_current_trace
 from context.cache_warmup import warm_user_context_cache
 from infra.cache import get_redis_client
+from nyx.tasks.background.world_tasks import enqueue_background_universal_updates
 
 # --- DB utils (async loop + connection mgmt) ---
 from db.connection import (
@@ -133,6 +134,40 @@ def serialize_for_celery(obj: Any) -> Any:
 def get_preset_id(d: Dict[str, Any]) -> Optional[str]:
     """Extract preset story ID from various possible keys."""
     return d.get("preset_story_id") or d.get("story_id") or d.get("presetStoryId")
+
+
+def _schedule_universal_updates(
+    *,
+    user_id: int,
+    conversation_id: int,
+    updates: Optional[Dict[str, Any]],
+    request_id: Optional[str],
+    source: str,
+) -> None:
+    if not updates:
+        return
+
+    payload = {
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "updates": updates,
+        "request_id": request_id,
+        "source": source,
+    }
+    scheduled = enqueue_background_universal_updates(payload)
+    if scheduled:
+        logger.info(
+            "[UniversalUpdate] Scheduled async apply for conv=%s request_id=%s source=%s",
+            conversation_id,
+            request_id,
+            source,
+        )
+    else:
+        logger.warning(
+            "[UniversalUpdate] Failed to enqueue updates for conv=%s request_id=%s",  # pragma: no cover
+            conversation_id,
+            request_id,
+        )
 
 
 def _normalize_nation_pair(nation1_id: int, nation2_id: int) -> Tuple[int, int]:
@@ -501,68 +536,13 @@ def background_chat_task_with_memory(
 
                 # 2) Apply universal updates if provided
                 if universal_update:
-                    logger.info("[BG Task %s] Applying universal updates...", conversation_id)
-                    try:
-                        from logic.universal_updater_agent import (
-                            UniversalUpdaterContext,
-                            apply_universal_updates_async,
-                        )
-
-                        updater_context = UniversalUpdaterContext(user_id, conversation_id)
-                        await asyncio.wait_for(
-                            updater_context.initialize(),
-                            timeout=min(5.0, time_left()),
-                        )
-
-                        async with get_db_connection_context() as conn:
-                            await asyncio.wait_for(
-                                apply_universal_updates_async(
-                                    updater_context,
-                                    user_id=user_id,
-                                    conversation_id=conversation_id,
-                                    updates=universal_update,
-                                    conn=conn,
-                                ),
-                                timeout=min(STEP_MAX["updates"], time_left()),
-                            )
-
-                        logger.info("[BG Task %s] Applied universal updates.", conversation_id)
-
-                        # Refresh context after updates
-                        aggregator_data = await asyncio.wait_for(
-                            get_aggregated_roleplay_context(
-                                user_id,
-                                conversation_id,
-                                context["player_name"],
-                            ),
-                            timeout=min(10.0, time_left()),
-                        )
-                        context["aggregator_data"] = aggregator_data
-
-                        # Recent turns again, but still non-fatal on timeout
-                        try:
-                            context["recent_turns"] = await asyncio.wait_for(
-                                _conversation_store.fetch_recent_turns(
-                                    user_id=user_id,
-                                    conversation_id=conversation_id,
-                                ),
-                                timeout=min(6.0, time_left()),
-                            )
-                        except (asyncio.TimeoutError, asyncio.CancelledError):
-                            logger.warning(
-                                "[BG Task %s] recent_turns refresh timed out/cancelled after updates; "
-                                "proceeding without refreshed history",
-                                conversation_id,
-                            )
-                            # Keep whatever was already in context["recent_turns"]
-                    except Exception as update_err:
-                        logger.error(
-                            "[BG Task %s] Error applying universal updates: %s",
-                            conversation_id,
-                            update_err,
-                            exc_info=True,
-                        )
-                        raise Exception("Failed to apply world updates") from update_err
+                    _schedule_universal_updates(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        updates=universal_update,
+                        request_id=request_id,
+                        source="background_chat_task_with_memory",
+                    )
 
                 # 3) Enrich context with memories
                 try:
