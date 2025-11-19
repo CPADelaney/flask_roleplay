@@ -290,6 +290,23 @@
               </template>
             </ul>
           </div>
+
+          <div
+            class="meta"
+            style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;"
+          >
+            <span>Effective arrival code:</span>
+            <span class="pill" style="text-transform: uppercase;">
+              <!-- Effective arrival code precedence:
+                   1) selectedPort (internal code used by estimator)
+                   2) portCode from context
+                   3) zoneCode from context
+              -->
+              <span
+                x-text="selectedPort || selectedPortContext?.portCode || selectedPortContext?.zoneCode || 'ARR'"
+              ></span>
+            </span>
+          </div>
         </section>
 
         <section class="card vessel-card" aria-label="Selected vessel">
@@ -332,6 +349,8 @@
           portResults: [],
           portSearchIndex: buildPortIndex(),
           singlePortTimeout: null,
+          selectedPort: "",
+          selectedPortContext: { portCode: "", zoneCode: "" },
           selectedVessel: {
             name: "MV Evergreen",
             loa: "399.9",
@@ -391,6 +410,8 @@
           selectPort(port) {
             this.portQuery = port.name;
             this.portResults = [];
+            this.selectedPort = port.code;
+            this.selectedPortContext = { ...this.selectedPortContext, portCode: port.code };
             const merged = {
               name: `Assignment to ${port.name}`,
               loa: port.averageLoa,
