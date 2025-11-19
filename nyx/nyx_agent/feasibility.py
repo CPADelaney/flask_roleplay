@@ -14,7 +14,18 @@ import re
 import unicodedata
 from copy import deepcopy
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from agents import Agent
 from db.connection import get_db_connection_context
@@ -956,6 +967,70 @@ def _normalize_location_phrase(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).replace("_", " ").split()).strip().lower()
+
+
+def _normalize_scene_location_value(location_value: Any) -> Dict[str, Any]:
+    """Coerce a stored scene location payload into a mapping."""
+
+    if not location_value:
+        return {}
+
+    if isinstance(location_value, Mapping):
+        return dict(location_value)
+
+    if isinstance(location_value, str):
+        normalized = location_value.strip()
+        return {"name": normalized} if normalized else {}
+
+    if isinstance(location_value, Sequence) and not isinstance(
+        location_value, (str, bytes, bytearray)
+    ):
+        mapping_items: Dict[str, Any] = {}
+
+        # Merge explicit mappings if they exist (e.g., [{"name": "Atrium"}, ...])
+        for item in location_value:
+            if isinstance(item, Mapping):
+                mapping_items.update(dict(item))
+
+        if mapping_items:
+            return mapping_items
+
+        if all(
+            isinstance(item, Sequence)
+            and not isinstance(item, (str, bytes, bytearray))
+            and len(item) == 2
+        for item in location_value
+        ):
+            normalized_pairs: Dict[str, Any] = {}
+            for key, value in location_value:
+                if key in (None, ""):
+                    continue
+                normalized_pairs[str(key)] = value
+            if normalized_pairs:
+                return normalized_pairs
+
+        flattened_tokens = [
+            str(item).strip()
+            for item in location_value
+            if item not in (None, "")
+        ]
+        flattened_tokens = [token for token in flattened_tokens if token]
+
+        if flattened_tokens:
+            normalized_location: Dict[str, Any] = {"name": flattened_tokens[-1]}
+            if len(flattened_tokens) > 1:
+                normalized_location["breadcrumbs"] = flattened_tokens
+            return normalized_location
+
+    fallback_name = getattr(location_value, "name", None) or getattr(
+        location_value, "location_name", None
+    )
+    if isinstance(fallback_name, str):
+        normalized = fallback_name.strip()
+        if normalized:
+            return {"name": normalized}
+
+    return {}
 
 
 def _normalize_self_reference_phrase(value: Any) -> str:
@@ -3471,7 +3546,11 @@ async def _load_comprehensive_context(nyx_ctx: NyxContext) -> Dict[str, Any]:
         if scene and scene["value"]:
             scene_data = json.loads(scene["value"])
             context["scene"] = scene_data
-            context["location"].update(scene_data.get("location", {}))
+            normalized_scene_location = _normalize_scene_location_value(
+                scene_data.get("location")
+            )
+            if normalized_scene_location:
+                context["location"].update(normalized_scene_location)
             context["available_items"] = scene_data.get("items", [])
             context["present_entities"] = scene_data.get("npcs", [])
             context["location_features"] = scene_data.get("location_features", [])
