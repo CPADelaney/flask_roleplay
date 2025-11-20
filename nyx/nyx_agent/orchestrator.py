@@ -795,8 +795,10 @@ def _build_movement_transition_prompt(
         f"{approx_km:.1f} km" if isinstance(approx_km, (int, float)) else "unknown"
     )
     distance_class = movement_meta.get("distance_class") or "unknown"
-    movement_kind = movement_meta.get("movement_kind") or "travel"
+    movement_kind = movement_meta.get("movement_kind") or "movement"
     same_place = movement_meta.get("destination_same_as_origin")
+    travel_mode = movement_meta.get("travel_mode") or "unknown"
+    travel_minutes = movement_meta.get("travel_duration_min")
     world_ctx = movement_meta.get("world", {})
     world_time = world_ctx.get("local_time") or "unknown"
     time_of_day = world_ctx.get("time_of_day") or "unknown"
@@ -857,6 +859,10 @@ def _build_movement_transition_prompt(
 
     target_line = "Target: already at destination; move within the location." if same_place else "Target: new location"
 
+    travel_time_line = (
+        f"{int(travel_minutes)} minutes" if isinstance(travel_minutes, (int, float)) else "unknown"
+    )
+
     prompt_lines = [
         f"Player input: {user_input}",
         origin_block,
@@ -864,6 +870,8 @@ def _build_movement_transition_prompt(
         f"Approximate distance: {distance_line}",
         f"Movement scale: {distance_class}",
         f"Movement kind: {movement_kind} (same_place={same_place})",
+        f"Inferred travel mode: {travel_mode}",
+        f"Estimated travel time: {travel_time_line}",
         target_line,
         f"Current time: {world_time} ({time_of_day})",
         f"World mood: {world_mood}",
@@ -877,7 +885,12 @@ def _build_movement_transition_prompt(
         f"- soft_location_only: {soft_location_only}",
         f"- teleport_allowed: {teleport_allowed}",
         f"- has_currency: {has_currency}",
-        "Instructions: respect feasibility and realism, keep narration in character, and write vivid movement with awareness of current NPCs/conflict/lore. If already at the destination, describe movement deeper inside or shifting focus within the same location.",
+        "Instructions:",
+        "- If the player clearly specified how they travel (e.g., 'I drive', 'I fly'), keep that mode.",
+        "- If travel_mode is 'unknown' AND distance_class is 'city' or 'long', ask the player how they travel instead of assuming.",
+        "- When you ask, respond with an in-character question ONLY (no arrival yet).",
+        "- Otherwise, narrate the movement and arrival with vivid, in-character description.",
+        "- Keep the narration compact but flavorful (1–3 paragraphs, not a single generic sentence).",
         f"Scene bundle JSON: {bundle_json}",
     ]
 
@@ -888,9 +901,16 @@ def _default_movement_transition_narration(scene_bundle: Dict[str, Any]) -> str:
     """Fallback narration if the movement agent output is empty."""
 
     location = scene_bundle.get("location") or {}
+    movement_meta = scene_bundle.get("movement_meta") or {}
+
     location_name = location.get("name") or "the next space"
+    world = movement_meta.get("world") or {}
+    tod = world.get("time_of_day") or "timeless"
+    mood = world.get("world_mood") or "neutral"
+
     return (
-        f"You move toward {location_name}, the world adjusting around your stride."
+        f"You set off toward {location_name}. "
+        f"The {tod} air carries a {mood} energy as the world shifts around your steps."
     )
 
 
@@ -1061,6 +1081,87 @@ def _classify_distance(
     return "unknown"
 
 
+_TRAVEL_SPEED_KMH = {
+    "walk": 4.0,
+    "bike": 15.0,
+    "car": 50.0,
+    "bus": 35.0,
+    "train": 90.0,
+    "metro": 40.0,
+    "air": 750.0,
+    "teleport": 999999.0,
+}
+
+
+def _extract_travel_mode_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    lowered = text.lower()
+
+    keyword_map = {
+        "walk": ["walk", "on foot", "stroll", "wander"],
+        "bike": ["bike", "bicycle", "cycle"],
+        "car": ["drive", "car", "uber", "lyft", "taxi"],
+        "bus": ["bus", "coach"],
+        "train": ["train", "rail", "subway", "metro", "tube"],
+        "air": ["fly", "plane", "flight", "airport"],
+        "teleport": ["teleport", "portal", "instant transmission"],
+    }
+
+    for mode, keywords in keyword_map.items():
+        if any(k in lowered for k in keywords):
+            return mode
+    return None
+
+
+def _infer_travel_mode(user_text: str, distance_km: Optional[float], distance_class: str) -> Optional[str]:
+    explicit = _extract_travel_mode_from_text(user_text)
+    if explicit:
+        return explicit
+
+    if not isinstance(distance_km, (int, float)):
+        return None
+
+    if distance_km < 1:
+        return "walk"
+    if distance_km < 20:
+        return "walk"
+    if distance_km < 300:
+        return "car"
+    if distance_km < 1200:
+        return "train"
+    return "air"
+
+
+def _estimate_travel_duration_minutes(
+    mode: Optional[str],
+    distance_km: Optional[float],
+    *,
+    movement_kind: str = "new_location",
+) -> Optional[int]:
+    if mode == "teleport":
+        return 0
+
+    if not isinstance(distance_km, (int, float)) or distance_km <= 0:
+        if movement_kind == "within_location":
+            return 5
+        return None
+
+    speed = _TRAVEL_SPEED_KMH.get(mode or "", 50.0)
+    if speed <= 0:
+        speed = 50.0
+
+    hours = distance_km / speed
+    minutes = max(1, int(hours * 60))
+
+    if mode == "air":
+        minutes += 90
+    elif mode in ("car", "bus", "train", "metro"):
+        minutes += 10
+
+    return min(minutes, 24 * 60)
+
+
 def _locations_look_local(origin: Mapping[str, Any], destination: Mapping[str, Any]) -> bool:
     origin_city = _canonicalize_location_token(origin.get("city"))
     destination_city = _canonicalize_location_token(destination.get("city"))
@@ -1171,6 +1272,58 @@ def _extract_world_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
     return snapshot
 
 
+def _advance_world_time(nyx_context: NyxContext, minutes: Optional[int]) -> None:
+    if not isinstance(minutes, (int, float)) or minutes <= 0:
+        return
+
+    world_state = getattr(nyx_context, "current_world_state", None)
+    ctx = getattr(nyx_context, "current_context", {}) or {}
+
+    time_source: Any = None
+    if isinstance(world_state, Mapping):
+        time_source = world_state.get("current_time")
+
+    if not isinstance(time_source, Mapping):
+        time_source = ctx.get("current_time") or {}
+
+    hour = int(time_source.get("hour", 12))
+    minute = int(time_source.get("minute", 0))
+
+    total = hour * 60 + minute + int(minutes)
+    total %= 24 * 60
+
+    new_hour = total // 60
+    new_minute = total % 60
+
+    time_source = dict(time_source)
+    time_source["hour"] = new_hour
+    time_source["minute"] = new_minute
+
+    if 5 <= new_hour < 12:
+        time_source["time_of_day"] = "morning"
+    elif 12 <= new_hour < 17:
+        time_source["time_of_day"] = "afternoon"
+    elif 17 <= new_hour < 21:
+        time_source["time_of_day"] = "evening"
+    else:
+        time_source["time_of_day"] = "night"
+
+    if isinstance(world_state, dict):
+        world_state["current_time"] = time_source
+        nyx_context.current_world_state = world_state
+
+    ctx["current_time"] = time_source
+    nyx_context.current_context = ctx
+
+
+def _apply_travel_time_to_world(nyx_context: NyxContext, movement_meta: Dict[str, Any]) -> None:
+    minutes = movement_meta.get("travel_duration_min")
+    try:
+        _advance_world_time(nyx_context, minutes)
+    except Exception:
+        logger.debug("Failed to advance world time for movement", exc_info=True)
+
+
 def _extract_current_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
     current_context = getattr(nyx_context, "current_context", {}) or {}
     snapshot_candidates = []
@@ -1259,16 +1412,29 @@ def _build_movement_meta(
     destination_same_as_origin = _locations_same_place(origin, destination)
     movement_kind = "within_location" if destination_same_as_origin else "new_location"
 
+    ctx = getattr(nyx_context, "current_context", {}) or {}
+    user_text = ctx.get("user_input") or getattr(nyx_context, "last_user_input", "") or ""
+    distance_class = _classify_distance(approx_distance, origin, destination)
+
+    travel_mode = _infer_travel_mode(str(user_text), approx_distance, distance_class)
+    travel_minutes = _estimate_travel_duration_minutes(
+        travel_mode,
+        approx_distance,
+        movement_kind=movement_kind,
+    )
+
     return {
         "origin": origin,
         "destination": destination,
         "approx_distance_km": approx_distance,
-        "distance_class": _classify_distance(approx_distance, origin, destination),
+        "distance_class": distance_class,
         "world": world_snapshot,
         "feasibility": feasibility_caps,
         "soft_location_only": soft_location_only,
         "destination_same_as_origin": destination_same_as_origin,
         "movement_kind": movement_kind,
+        "travel_mode": travel_mode,
+        "travel_duration_min": travel_minutes,
     }
 
 
@@ -1346,35 +1512,6 @@ async def _run_movement_transition_fast_path(
         )
         return None
 
-    if location_payload and not destination_same:
-        merged = dict(existing_location) if isinstance(existing_location, dict) else {}
-        merged.update(location_payload)
-        name = (
-            merged.get("name")
-            or merged.get("location_name")
-            or merged.get("location")
-        )
-        if name:
-            merged["name"] = name
-            nyx_context.current_context["location_name"] = name
-        location_id = (
-            merged.get("id")
-            or merged.get("location_id")
-        )
-        if location_id is not None:
-            nyx_context.current_context["location_id"] = location_id
-        nyx_context.current_context["current_location"] = merged
-        _preserve_hydrated_location(nyx_context.current_context, merged)
-
-    if not destination_same:
-        try:
-            await nyx_context._refresh_location_from_context(previous_location_id)
-        except Exception:
-            logger.debug(
-                f"[{trace_id}] Movement fast path location refresh failed softly",
-                exc_info=True,
-            )
-
     scene_bundle = _build_movement_scene_bundle(
         nyx_context,
         packed_context,
@@ -1423,9 +1560,42 @@ async def _run_movement_transition_fast_path(
         or _default_movement_transition_narration(scene_bundle)
     )
 
-    mode = "movement_only" if movement_only else "movement_and_scene"
-    if not movement_only and _movement_requires_clarification(narration):
+    needs_clarification = _movement_requires_clarification(narration)
+    if movement_only:
         mode = "movement_only"
+    else:
+        mode = "movement_only" if needs_clarification else "movement_and_scene"
+
+    if not needs_clarification and location_payload:
+        merged = dict(existing_location) if isinstance(existing_location, dict) else {}
+        merged.update(location_payload)
+        name = (
+            merged.get("name")
+            or merged.get("location_name")
+            or merged.get("location")
+        )
+        if name:
+            merged["name"] = name
+            nyx_context.current_context["location_name"] = name
+        location_id = (
+            merged.get("id")
+            or merged.get("location_id")
+        )
+        if location_id is not None:
+            nyx_context.current_context["location_id"] = location_id
+        nyx_context.current_context["current_location"] = merged
+        _preserve_hydrated_location(nyx_context.current_context, merged)
+
+        if not destination_same:
+            try:
+                await nyx_context._refresh_location_from_context(previous_location_id)
+            except Exception:
+                logger.debug(
+                    f"[{trace_id}] Movement fast path location refresh failed softly",
+                    exc_info=True,
+                )
+
+        _apply_travel_time_to_world(nyx_context, movement_meta)
 
     location_transition = {
         "router_called": resolve_result is not None,
@@ -1445,6 +1615,7 @@ async def _run_movement_transition_fast_path(
             "movement_fast_path": True,
             "movement_mode": mode,
             "movement_only_intent": movement_only,
+            "needs_travel_mode_choice": needs_clarification,
             "universal_updates": False,
             "feasibility": fast_result,
             "location_transition": location_transition,
@@ -1811,16 +1982,29 @@ async def process_user_input(
                 time_left_fn=time_left,
             )
             if fast_path_response is not None:
-                mode = fast_path_response.get("mode") or fast_path_response.get("metadata", {}).get("movement_mode")
+                metadata = fast_path_response.get("metadata") or {}
+                mode = fast_path_response.get("mode") or metadata.get("movement_mode")
+                narration = fast_path_response.get("narration") or fast_path_response.get("response")
+                needs_clarification = bool(metadata.get("needs_travel_mode_choice"))
+
+                if needs_clarification:
+                    logger.info(
+                        f"[{trace_id}] Movement fast path produced clarifying question; returning without main agent."
+                    )
+                    return fast_path_response
+
                 if mode == "movement_only":
-                    if not enrichment_enabled:
+                    if not enrichment_enabled or movement_only_intents:
+                        logger.info(
+                            f"[{trace_id}] Movement fast path satisfied turn; returning movement-only response."
+                        )
                         return fast_path_response
-                    movement_prelude = fast_path_response.get("narration") or fast_path_response.get("response")
+                    movement_prelude = narration
                     logger.info(
                         f"[{trace_id}] Movement fast path produced prelude; main agent enrichment enabled, continuing."
                     )
                 elif mode == "movement_and_scene":
-                    movement_prelude = fast_path_response.get("narration") or fast_path_response.get("response")
+                    movement_prelude = narration
 
             if movement_prelude:
                 logger.info(f"[{trace_id}] Movement fast path produced arrival prelude; continuing with main agent.")
