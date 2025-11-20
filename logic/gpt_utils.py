@@ -6,6 +6,8 @@ import logging
 import asyncio
 from typing import Any, Dict, List, Optional
 
+from openai import AsyncOpenAI
+
 from logic.chatgpt_integration import get_chatgpt_response
 
 
@@ -323,3 +325,28 @@ def extract_json_from_text(text: str) -> dict:
     """
     # For backward compatibility if needed
     return parse_json_str(text)
+
+
+async def call_gpt_text(
+    prompt: str,
+    *,
+    model: str = "gpt-5-nano",
+    max_output_tokens: int = 200,
+    temperature: float | None = 0.8,
+    client: AsyncOpenAI | None = None,
+) -> str:
+    """Lightweight helper to fetch plain-text completions via the Responses API."""
+
+    openai_client = client or AsyncOpenAI()
+
+    try:
+        response = await openai_client.responses.create(
+            model=model,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        )
+        return (response.output_text or "").strip()
+    except Exception:
+        logging.exception("[call_gpt_text] Text-only GPT call failed")
+        return ""
