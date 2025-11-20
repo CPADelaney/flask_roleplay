@@ -124,7 +124,6 @@ def _call_structured_districts_sync(prompt: str, model: str) -> Dict[str, Any]:
         tools=_DISTRICT_TOOLS,
         tool_choice=_DISTRICT_TOOL_CHOICE,
         max_output_tokens=800,
-        temperature=0.6,
     )
 
     args = _extract_district_tool_args(response)
