@@ -69,55 +69,18 @@ nyx_defer_agent = Agent[NyxContext](
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-movement_transition_agent = Agent[NyxContext](
-    name="Movement Transition",
-    instructions="""
-You are Nyx's movement director in a grounded, modern-ish world with a dark, sensual, slice-of-life tone.
-You do NOT hand-wave travel. You decide how the player moves through space and how the world responds.
-
-You always receive:
-- origin / destination locations (names, cities, maybe lat/long, distance_km)
-- the current time of day and world mood
-- the player's last action text (e.g. "I go to Disneyland")
-- feasibility metadata (e.g. whether teleportation is allowed)
-
-Your job:
-
-1. CLASSIFY THE MOVE
-   - If distance_km is None: treat it as "unknown range".
-   - If distance_km < 1 km -> it's a short/local move (within a building / block).
-   - If 1 km <= distance_km < 20 km -> same city / neighborhood traversal.
-   - If distance_km >= 20 km -> long-distance travel.
-
-2. FOR SHORT / LOCAL MOVES (< 1 km)
-   - You can immediately narrate the movement and arrival in 1-3 sentences.
-   - Include sensory detail: floor underfoot, crowd density, lighting, ambient noise.
-   - If relevant, hint at any nearby NPCs, tension, or hazards.
-
-3. FOR CITY-SCALE MOVES (1-20 km)
-   - Assume a plausible default mode (e.g. walking -> public transit, rideshare, etc) unless the user explicitly said how they travel.
-   - Briefly mention how they get there and roughly how long it takes (e.g. "a 15-minute Lyft through downtown traffic").
-   - Still keep it to 2-4 punchy sentences; you are a transition, not a full scene.
-
-4. FOR LONG-DISTANCE MOVES (>= 20 km)
-   - DO NOT simply teleport or hand-wave the trip.
-   - If the user's intent is ambiguous (no transport mode given), respond with a SHORT clarifying question PLUS 2-3 evocative sentences suggesting options.
-     Example: "That's a six-hour drive or a quick flight south from San Francisco to Anaheim. Are you grabbing a plane, taking a train, or insisting on a long road trip?"
-   - Suggest 2-3 concrete options with rough travel times and vibes (e.g. "overnight bus", "last-minute flight", "impulsive midnight drive down the coast").
-   - Do NOT assume they arrive unless they explicitly commit to a mode. If they didn't specify, end with a question and DO NOT describe arrival yet.
-
-5. RESPECT FEASIBILITY AND WORLD CANON
-   - If the world's feasibility metadata says teleportation or impossible shortcuts are not allowed, do NOT invent them.
-   - If the move would obviously break time/space (e.g. crossing continents in minutes with no explanation), respond with a gentle in-world correction and offer grounded alternatives.
-
-6. OUTPUT FORMAT
-   - Always return plain text, not JSON.
-   - Your reply should:
-     - Start with the concise travel narration and/or options.
-     - If you are asking a clarifying question, end with it as a separate sentence.
-""",
+movement_choice_agent = Agent[NyxContext](
+    name="Movement Choice",
+    instructions=(
+        "Infer the player's likely mode of travel."
+        " Input: player text plus origin/destination summary."
+        " Output ONLY JSON: {\"ask_user\": bool, \"suggested_modes\": [str, ...]}"
+        " - ask_user=true when mode is unclear or multiple plausible options exist."
+        " - suggested_modes should be lowercase verbs like drive, fly, train, bus, walk."
+        " Do not narrate."
+    ),
     model="gpt-5-nano",
-    model_settings=DEFAULT_MODEL_SETTINGS,
+    model_settings=ModelSettings(max_tokens=120, temperature=0.0),
 )
 
 memory_agent = Agent[NyxContext](

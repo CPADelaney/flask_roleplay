@@ -45,7 +45,7 @@ from .agents import (
     nyx_main_agent,
     nyx_defer_agent,
     reflection_agent,
-    movement_transition_agent,
+    movement_choice_agent,
     DEFAULT_MODEL_SETTINGS,
 )
 from .assembly import assemble_nyx_response, resolve_scene_requests
@@ -89,18 +89,17 @@ DEFAULT_DEFER_RUN_TIMEOUT_SECONDS: float = getattr(
 DEFER_RUN_TIMEOUT_SECONDS: float = DEFAULT_DEFER_RUN_TIMEOUT_SECONDS
 
 _MOVEMENT_FAST_PATH_CATEGORIES: set[str] = {"movement", "mundane_action"}
-_MOVEMENT_FAST_PATH_DISTANCE_THRESHOLD_KM: float = 5.0
 
 _MAIN_AGENT_RUN_LIMITS: Dict[str, Any] = {
     "max_turns": 6,
     "max_tool_calls": 4,
     "max_auto_messages": 3,
     "max_output_tokens": 1800,
-    "default_total_timeout_budget": 4.0,
-    "min_total_timeout_budget": 3.0,
-    "max_total_timeout_budget": 12.0,
-    "per_turn_timeout": 1.0,
-    "per_step_timeout": 0.5,
+    "default_total_timeout_budget": 6.0,
+    "min_total_timeout_budget": 4.0,
+    "max_total_timeout_budget": 10.0,
+    "per_turn_timeout": 1.25,
+    "per_step_timeout": 0.75,
 }
 
 _MOVEMENT_RUN_LIMITS: Dict[str, Any] = {
@@ -139,6 +138,32 @@ def _safe_time_budget(
     if maximum is not None:
         parsed = min(parsed, maximum)
     return parsed
+
+
+async def _execute_llm(request: LLMRequest):
+    """Execute an LLM request via the Nyx gateway."""
+
+    return await execute(request)
+
+
+def _safe_json_object(text: str) -> Dict[str, Any]:
+    """Parse a JSON object from loose text/code-fence wrappers safely."""
+
+    if not isinstance(text, str):
+        return {}
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        parts = cleaned.split("\n", 1)
+        cleaned = parts[1] if len(parts) > 1 else parts[0]
+
+    try:
+        data = json.loads(cleaned)
+    except Exception:
+        return {}
+
+    return data if isinstance(data, dict) else {}
 
 
 def _derive_run_limit_kwargs(
@@ -523,13 +548,6 @@ def _normalize_scene_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any
 
     return normalized
 
-
-async def _execute_llm(request: LLMRequest):
-    """Execute an LLM request via the Nyx gateway."""
-
-    return await execute(request)
-
-
 def _preserve_hydrated_location(target: Dict[str, Any], location: Any) -> None:
     """Ensure hydrated location metadata survives context merges."""
 
@@ -900,6 +918,42 @@ def _build_movement_transition_prompt(
     ]
 
     return "\n".join(prompt_lines)
+
+
+def _movement_prompt_block(
+    nyx_context: NyxContext, movement_meta: Optional[Dict[str, Any]]
+) -> str:
+    if not movement_meta:
+        return ""
+
+    current_location = _normalize_location_dict(
+        (getattr(nyx_context, "current_context", {}) or {}).get("current_location")
+        or getattr(nyx_context, "current_location", {})
+        or {}
+    )
+    world = movement_meta.get("world") or _extract_world_snapshot(nyx_context)
+    last_action = movement_meta.get("last_action") or (
+        (getattr(nyx_context, "current_context", {}) or {}).get("last_action")
+    )
+
+    loc_name = current_location.get("name") or current_location.get("location_name") or "unknown location"
+    city = current_location.get("city")
+    location_line = f"{loc_name}{f' in {city}' if city else ''}"
+
+    world_time = world.get("local_time") or "unknown"
+    time_of_day = world.get("time_of_day") or world.get("phase") or "unknown"
+
+    movement_meta_json = json.dumps(movement_meta, ensure_ascii=False)
+
+    return (
+        "SYSTEM:\n"
+        "You are Nyx, a narrative engine continuing the roleplay turn."
+        f"\n- Current location: {location_line}."
+        f"\n- World time: {time_of_day} at {world_time}."
+        f"\n- Last action: {last_action or 'move'}."
+        f"\n- Movement meta: {movement_meta_json}."
+        "\nIncorporate the movement into the next scene and respond in character with concise, vivid narration."
+    )
 
 
 async def _llm_fallback_movement_narration(movement_meta: Dict[str, Any]) -> str:
@@ -1422,11 +1476,16 @@ def _build_movement_meta(
     soft_location_only = _is_soft_location_only_violation(fast_result)
 
     destination_same_as_origin = _locations_same_place(origin, destination)
-    movement_kind = "within_location" if destination_same_as_origin else "new_location"
+    distance_class = _classify_distance(approx_distance, origin, destination)
+    if destination_same_as_origin:
+        movement_kind = "within_location"
+    elif distance_class == "long":
+        movement_kind = "long"
+    else:
+        movement_kind = "new_location"
 
     ctx = getattr(nyx_context, "current_context", {}) or {}
     user_text = ctx.get("user_input") or getattr(nyx_context, "last_user_input", "") or ""
-    distance_class = _classify_distance(approx_distance, origin, destination)
 
     travel_mode = _infer_travel_mode(str(user_text), approx_distance, distance_class)
     travel_minutes = _estimate_travel_duration_minutes(
@@ -1435,10 +1494,22 @@ def _build_movement_meta(
         movement_kind=movement_kind,
     )
 
+    if destination_same_as_origin and (travel_minutes is None or travel_minutes > 2):
+        travel_minutes = 2
+
     require_travel_choice = (
-        travel_mode is None
-        and distance_class in {"city", "long"}
-        and movement_kind != "within_location"
+        movement_kind == "long"
+        and travel_mode is None
+    )
+
+    last_action = (
+        "reposition_within_location"
+        if destination_same_as_origin
+        else "travel_to_new_city"
+        if distance_class == "long"
+        else "move_within_city"
+        if distance_class == "city"
+        else "move_to_new_location"
     )
 
     return {
@@ -1451,20 +1522,12 @@ def _build_movement_meta(
         "soft_location_only": soft_location_only,
         "destination_same_as_origin": destination_same_as_origin,
         "movement_kind": movement_kind,
+        "movement_mode": travel_mode,
         "travel_mode": travel_mode,
         "travel_duration_min": travel_minutes,
         "require_travel_choice": require_travel_choice,
+        "last_action": last_action,
     }
-
-
-def _movement_is_local(movement_meta: Dict[str, Any]) -> bool:
-    distance = movement_meta.get("approx_distance_km")
-    if isinstance(distance, (int, float)):
-        return distance < _MOVEMENT_FAST_PATH_DISTANCE_THRESHOLD_KM
-
-    origin = movement_meta.get("origin") or {}
-    destination = movement_meta.get("destination") or {}
-    return _locations_look_local(origin, destination)
 
 
 async def _run_movement_transition_fast_path(
@@ -1515,6 +1578,10 @@ async def _run_movement_transition_fast_path(
         fast_result,
     )
 
+    nyx_context.current_context["movement_meta"] = movement_meta
+    if movement_meta.get("last_action"):
+        nyx_context.current_context["last_action"] = movement_meta.get("last_action")
+
     destination_same = movement_meta.get("destination_same_as_origin")
     if destination_same:
         origin_name = movement_meta.get("origin", {}).get("name") or movement_meta.get("origin", {}).get("location_name")
@@ -1524,13 +1591,6 @@ async def _run_movement_transition_fast_path(
             f"(origin={origin_name}, destination={destination_name})"
         )
 
-    if not _movement_is_local(movement_meta):
-        logger.info(
-            f"[{trace_id}] Movement fast path skipped; distance classification={movement_meta.get('distance_class')} "
-            f"approx_distance={movement_meta.get('approx_distance_km')}"
-        )
-        return None
-
     scene_bundle = _build_movement_scene_bundle(
         nyx_context,
         packed_context,
@@ -1538,8 +1598,6 @@ async def _run_movement_transition_fast_path(
         movement_meta=movement_meta,
     )
 
-    prompt = _build_movement_transition_prompt(user_input, scene_bundle, movement_meta)
-    agent_context = RunContextWrapper(nyx_context) if RunContextWrapper else nyx_context
     time_budget = None
     if callable(time_left_fn):
         try:
@@ -1549,44 +1607,93 @@ async def _run_movement_transition_fast_path(
                 f"[{trace_id}] Failed to compute time budget for movement run",
                 exc_info=True,
             )
-    run_config, movement_limits = _build_run_config_with_limits(
-        base_kwargs={
-            "workflow_name": "Nyx Movement Transition",
-            "model_settings": _MOVEMENT_FAST_PATH_MODEL_SETTINGS,
-        },
-        limit_template=_MOVEMENT_RUN_LIMITS,
-        time_budget=time_budget,
-        trace_id=trace_id,
-        log_label="movement_fast_path",
+
+    travel_mode = movement_meta.get("travel_mode") or movement_meta.get("movement_mode")
+    requires_choice = bool(
+        movement_meta.get("require_travel_choice")
+        or (movement_meta.get("movement_kind") == "long" and not travel_mode)
     )
+    movement_limits: Dict[str, Any] = {}
 
-    try:
-        agent_result = await run_agent_safely(
-            movement_transition_agent,
-            prompt,
-            agent_context,
-            run_config=run_config,
+    if requires_choice:
+        origin_name = movement_meta.get("origin", {}).get("name") or movement_meta.get("origin", {}).get("location_name")
+        destination_name = movement_meta.get("destination", {}).get("name") or movement_meta.get("destination", {}).get("location_name")
+        choice_prompt = (
+            f"The player said: {user_input!r}\n"
+            f"Origin: {origin_name or 'unknown'} -> Destination: {destination_name or 'unknown'}.\n"
+            f"Distance class: {movement_meta.get('distance_class')} (approx {movement_meta.get('approx_distance_km')} km).\n"
+            "Decide likely travel mode. Return JSON: {\"ask_user\": bool, \"suggested_modes\": [str, ...]}."
         )
-    except Exception as exc:
-        logger.warning(
-            f"[{trace_id}] Movement transition agent failed softly: {exc}",
-            exc_info=True,
-        )
-        agent_result = None
 
-    narration = coalesce_agent_output_text(agent_result)
-    if not narration:
-        narration = await _llm_fallback_movement_narration(movement_meta)
+        choice_timeout = _safe_time_budget(time_budget, minimum=0.75, maximum=1.5) or 1.5
+        try:
+            choice_result = await asyncio.wait_for(
+                _execute_llm(
+                    LLMRequest(
+                        prompt=choice_prompt,
+                        agent=movement_choice_agent,
+                        metadata={"operation": "movement_choice", "trace_id": trace_id},
+                        max_attempts=1,
+                    )
+                ),
+                timeout=choice_timeout,
+            )
+            choice_text = getattr(choice_result, "text", "") or ""
+            if not choice_text and getattr(choice_result, "raw", None) is not None:
+                choice_text = coalesce_agent_output_text(choice_result.raw) or ""
+            choice_payload = _safe_json_object(choice_text)
+        except Exception as exc:
+            logger.debug(f"[{trace_id}] Movement choice agent failed softly: {exc}")
+            choice_payload = {}
 
-    require_travel_choice = movement_meta.get("require_travel_choice", False)
-    needs_clarification = bool(require_travel_choice)
-    if not needs_clarification:
-        needs_clarification = _movement_requires_clarification(narration)
+        ask_user = bool(choice_payload.get("ask_user"))
+        suggested_modes = [m for m in choice_payload.get("suggested_modes", []) if isinstance(m, str) and m]
 
-    if movement_only:
-        mode = "movement_only"
-    else:
-        mode = "movement_only" if needs_clarification else "movement_and_scene"
+        if ask_user:
+            question = "How are you getting there – driving, flying, or something else?"
+            if suggested_modes:
+                joined = ", ".join(suggested_modes[:3])
+                question = f"How are you getting there – {joined}, or something else?"
+            movement_meta["suggested_modes"] = suggested_modes
+            return {
+                "success": True,
+                "response": question,
+                "narration": question,
+                "mode": "movement_only",
+                "metadata": {
+                    "movement_fast_path": True,
+                    "movement_mode": "movement_only",
+                    "movement_only_intent": movement_only,
+                    "needs_travel_mode_choice": True,
+                    "universal_updates": False,
+                    "feasibility": fast_result,
+                    "location_transition": {},
+                    "scene_bundle": scene_bundle,
+                    "movement_run_limits": movement_limits,
+                    "movement_meta": movement_meta,
+                },
+                "trace_id": trace_id,
+                "processing_time": time.time() - start_time,
+            }
+
+        if not travel_mode and suggested_modes:
+            travel_mode = suggested_modes[0]
+            movement_meta["travel_mode"] = travel_mode
+            movement_meta["movement_mode"] = travel_mode
+            movement_meta["require_travel_choice"] = False
+            movement_meta["suggested_modes"] = suggested_modes
+
+    updated_duration = _estimate_travel_duration_minutes(
+        movement_meta.get("travel_mode"),
+        movement_meta.get("approx_distance_km"),
+        movement_kind=movement_meta.get("movement_kind", "new_location"),
+    )
+    if updated_duration is not None:
+        existing_duration = movement_meta.get("travel_duration_min")
+        if isinstance(existing_duration, (int, float)):
+            movement_meta["travel_duration_min"] = min(updated_duration, existing_duration)
+        else:
+            movement_meta["travel_duration_min"] = updated_duration
 
     location_transition = {
         "router_called": resolve_result is not None,
@@ -1596,28 +1703,6 @@ async def _run_movement_transition_fast_path(
         "router_metadata": getattr(resolve_result, "metadata", {}) if resolve_result else {},
         "location": scene_bundle.get("location", {}),
     }
-
-    if needs_clarification:
-        return {
-            "success": True,
-            "response": narration,
-            "narration": narration,
-            "mode": "movement_only",
-            "metadata": {
-                "movement_fast_path": True,
-                "movement_mode": "movement_only",
-                "movement_only_intent": movement_only,
-                "needs_travel_mode_choice": True,
-                "universal_updates": False,
-                "feasibility": fast_result,
-                "location_transition": location_transition,
-                "scene_bundle": scene_bundle,
-                "movement_run_limits": movement_limits,
-                "movement_meta": movement_meta,
-            },
-            "trace_id": trace_id,
-            "processing_time": time.time() - start_time,
-        }
 
     if location_payload:
         merged = dict(existing_location) if isinstance(existing_location, dict) else {}
@@ -1649,17 +1734,19 @@ async def _run_movement_transition_fast_path(
                 )
 
     _apply_travel_time_to_world(nyx_context, movement_meta)
+    movement_prelude = _movement_prompt_block(nyx_context, movement_meta)
 
     return {
         "success": True,
-        "response": narration,
-        "narration": narration,
-        "mode": mode,
+        "response": movement_prelude,
+        "narration": movement_prelude,
+        "mode": "movement_context",
+        "movement_prelude": movement_prelude,
         "metadata": {
             "movement_fast_path": True,
-            "movement_mode": mode,
+            "movement_mode": "movement_context",
             "movement_only_intent": movement_only,
-            "needs_travel_mode_choice": needs_clarification,
+            "needs_travel_mode_choice": False,
             "universal_updates": False,
             "feasibility": fast_result,
             "location_transition": location_transition,
@@ -1823,7 +1910,7 @@ async def process_user_input(
     record_queue_delay_from_context(context_data, queue="orchestrator")
 
     # Adopt a single absolute deadline from the SDK or create a reasonable one
-    default_deadline_budget = max(8.0, min(get_defer_run_timeout_seconds(), 20.0))
+    default_deadline_budget = max(8.0, min(get_defer_run_timeout_seconds(), 10.0))
     deadline = None
     if isinstance(context_data, dict):
         deadline = context_data.get("_deadline") or context_data.get("deadline")
@@ -1838,7 +1925,7 @@ async def process_user_input(
         deadline = now + default_deadline_budget
     else:
         remaining = deadline_value - now
-        if remaining < 4.0:
+        if remaining < 6.0:
             logger.info(
                 f"[{trace_id}] Provided deadline is too tight (remaining={remaining:.3f}s); "
                 f"resetting to {default_deadline_budget:.1f}s budget",
@@ -1852,6 +1939,16 @@ async def process_user_input(
         if remaining_budget <= 0:
             return floor
         return remaining_budget
+
+    def main_agent_budget() -> float:
+        """Reserve a healthy slice of time for the primary narrative agent."""
+
+        remaining_budget = time_left()
+        if remaining_budget >= 6.0:
+            return 6.0
+        if remaining_budget >= 4.0:
+            return remaining_budget
+        return max(remaining_budget, 0.5)
 
     nyx_context: Optional[NyxContext] = None
     packed_context: Optional[PackedContext] = None
@@ -1969,7 +2066,7 @@ async def process_user_input(
         # ---- STEP 1: Context initialization -----------------------------------
         async with _log_step("context_init", trace_id):
             nyx_context = NyxContext(user_id, conversation_id)
-            await nyx_context.initialize()
+            await nyx_context.initialize(warm_minimal=True)
 
             base_context = _normalize_scene_context(context_data or {})
             base_context["_deadline"] = deadline
@@ -1995,23 +2092,63 @@ async def process_user_input(
                         f"[{trace_id}] Failed to log packed_context keys", exc_info=True
                     )
 
+        if nyx_context and getattr(nyx_context, "_init_mode", "") == "minimal":
+            try:
+                background_init = asyncio.create_task(
+                    nyx_context.initialize(warm_minimal=False)
+                )
+                nyx_context._track_background_task(
+                    background_init, task_name="nyx_context_full_boot"
+                )
+            except Exception:
+                logger.debug(
+                    f"[{trace_id}] Failed to schedule full NyxContext warmup", exc_info=True
+                )
+
         # ---- STEP 2: World state integration ----------------------------------
         async with _log_step("world_state", trace_id):
-            # Await the 'world' subsystem before using it
-            if nyx_context and await nyx_context.await_orchestrator("world"):
+            orchestrator_ready = False
+            orchestrator = None
+
+            if nyx_context:
                 orchestrator = getattr(nyx_context, "world_orchestrator", None)
-                if orchestrator is not None:
-                    cached_state = orchestrator.get_cached_state()
-                    if cached_state is None:
-                        cached_state = await orchestrator.get_world_state()
-                    if cached_state is not None:
-                        nyx_context.current_world_state = cached_state
-                elif nyx_context.world_director and getattr(
-                    nyx_context.world_director, "context", None
-                ):
-                    nyx_context.current_world_state = (
-                        nyx_context.world_director.context.current_world_state
+                try:
+                    orchestrator_ready = nyx_context.is_orchestrator_ready("world")
+                except Exception:
+                    logger.debug(
+                        f"[{trace_id}] Failed to check world orchestrator readiness",
+                        exc_info=True,
                     )
+
+                if not orchestrator_ready:
+                    wait_budget = _safe_time_budget(time_left(), minimum=0.1, maximum=0.75)
+                    try:
+                        orchestrator_ready = await asyncio.wait_for(
+                            nyx_context.await_orchestrator("world"),
+                            timeout=wait_budget or 0.25,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.debug(
+                            f"[{trace_id}] World orchestrator await timed out; using cached state if present"
+                        )
+                    except Exception:
+                        logger.debug(
+                            f"[{trace_id}] World orchestrator await failed softly",
+                            exc_info=True,
+                        )
+
+            if orchestrator is not None:
+                cached_state = orchestrator.get_cached_state()
+                if cached_state is None and orchestrator_ready:
+                    cached_state = await orchestrator.get_world_state()
+                if cached_state is not None and nyx_context:
+                    nyx_context.current_world_state = cached_state
+            elif nyx_context and nyx_context.world_director and getattr(
+                nyx_context.world_director, "context", None
+            ):
+                nyx_context.current_world_state = (
+                    nyx_context.world_director.context.current_world_state
+                )
 
         if movement_fast_path and nyx_context is not None:
             nyx_context.current_context["feasibility"] = fast if isinstance(fast, dict) else {}
@@ -2027,8 +2164,9 @@ async def process_user_input(
             )
             if fast_path_response is not None:
                 metadata = fast_path_response.get("metadata") or {}
-                mode = fast_path_response.get("mode") or metadata.get("movement_mode")
                 narration = (
+                    fast_path_response.get("movement_prelude")
+                    or
                     fast_path_response.get("narration")
                     or fast_path_response.get("response")
                     or ""
@@ -2041,25 +2179,29 @@ async def process_user_input(
                     )
                     return fast_path_response
 
-                if mode == "movement_only":
-                    if not enrichment_enabled or movement_only_intents:
-                        logger.info(
-                            f"[{trace_id}] Movement fast path satisfied turn; returning movement-only response."
-                        )
-                        return fast_path_response
+                if not narration and metadata.get("movement_meta"):
+                    narration = _movement_prompt_block(
+                        nyx_context, metadata.get("movement_meta")
+                    )
+
+                if narration:
                     movement_prelude = narration
                     logger.info(
-                        f"[{trace_id}] Movement fast path produced prelude; main agent enrichment enabled, continuing."
+                        f"[{trace_id}] Movement fast path produced movement context; continuing with main agent."
                     )
-                elif mode == "movement_and_scene":
-                    movement_prelude = narration
+                else:
+                    logger.info(
+                        f"[{trace_id}] Movement fast path returned without prelude; continuing with full orchestration",
+                    )
 
-            if movement_prelude:
-                logger.info(f"[{trace_id}] Movement fast path produced arrival prelude; continuing with main agent.")
-            else:
-                logger.info(
-                    f"[{trace_id}] Movement fast path declined; continuing with full orchestration",
-                )
+        if (
+            movement_prelude is None
+            and nyx_context is not None
+            and nyx_context.current_context.get("movement_meta")
+        ):
+            movement_prelude = _movement_prompt_block(
+                nyx_context, nyx_context.current_context.get("movement_meta")
+            )
 
         # ---- STEP 3: Full feasibility (dynamic) --------------------------------
         logger.info(f"[{trace_id}] Running full feasibility assessment")
@@ -2259,7 +2401,7 @@ async def process_user_input(
                     "summarized": len(getattr(packed_context, "summarized", {}) or {}),
                 }
 
-            llm_timeout = time_left()
+            llm_timeout = main_agent_budget()
             run_config, run_limits = _build_run_config_with_limits(
                 base_kwargs={
                     "model_settings": safe_settings,
