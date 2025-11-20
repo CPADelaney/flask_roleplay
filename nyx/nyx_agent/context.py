@@ -128,6 +128,38 @@ from logic.aggregator_sdk import get_comprehensive_context
 
 _SNAPSHOT_STORE = ConversationSnapshotStore()
 
+_SESSION_STATE_LOCK = asyncio.Lock()
+_SESSION_STATE: Dict[tuple[int, int], Dict[str, Any]] = {}
+
+
+def _session_cache_key(user_id: int, conversation_id: int) -> tuple[int, int]:
+    return int(user_id), int(conversation_id)
+
+
+async def _get_cached_session_state(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
+    """Return the cached per-session state for this worker, if any."""
+
+    async with _SESSION_STATE_LOCK:
+        return _SESSION_STATE.get(_session_cache_key(user_id, conversation_id))
+
+
+async def _update_session_state(
+    user_id: int,
+    conversation_id: int,
+    **components: Any,
+) -> Dict[str, Any]:
+    """Persist heavy orchestrator handles for reuse within the worker."""
+
+    filtered = {k: v for k, v in components.items() if v is not None}
+    if not filtered:
+        return _SESSION_STATE.get(_session_cache_key(user_id, conversation_id), {})
+
+    async with _SESSION_STATE_LOCK:
+        key = _session_cache_key(user_id, conversation_id)
+        state = _SESSION_STATE.setdefault(key, {})
+        state.update(filtered)
+        return state
+
 _PLACEHOLDER_LOCATION_TOKENS = {
     "unknown",
     "n/a",
@@ -4340,6 +4372,60 @@ class NyxContext:
             self._tables_available = {"scenario_states": True}
         else:
             self._tables_available.setdefault("scenario_states", True)
+
+        self._session_cache_key = _session_cache_key(self.user_id, self.conversation_id)
+
+    def _register_ready_task(self, name: str) -> None:
+        """Mark an orchestrator task as already ready for awaiters."""
+
+        loop = asyncio.get_running_loop()
+        ready_task: asyncio.Future[Any] = loop.create_future()
+        ready_task.set_result(True)
+        self._init_tasks[name] = ready_task
+        self._init_failures.pop(name, None)
+
+    def _apply_cached_session_state(self, state: Dict[str, Any]) -> Set[str]:
+        """Reuse heavy orchestrator instances that were initialized earlier."""
+
+        ready_tasks: Set[str] = set()
+        mapping = {
+            "memory_orchestrator": "memory",
+            "lore_orchestrator": "lore",
+            "npc_orchestrator": "npc",
+            "conflict_synthesizer": "conflict",
+            "world_orchestrator": "world",
+            "context_broker": "context_broker",
+        }
+
+        for attr, task_name in mapping.items():
+            cached = state.get(attr)
+            if cached is None:
+                continue
+
+            setattr(self, attr, cached)
+            if attr == "context_broker":
+                try:
+                    cached.ctx = self
+                except Exception:
+                    logger.debug("Failed to rebind cached context broker", exc_info=True)
+
+            if task_name:
+                ready_tasks.add(task_name)
+                self._register_ready_task(task_name)
+
+        if state.get("governance"):
+            self.governance = state.get("governance")
+
+        return ready_tasks
+
+    async def _cache_session_state(self, **components: Any) -> None:
+        """Persist any newly initialized orchestrators into the worker cache."""
+
+        await _update_session_state(
+            self.user_id,
+            self.conversation_id,
+            **components,
+        )
     
     async def initialize(self, *, warm_minimal: bool = False):
         """Initialize orchestrators lazily.
@@ -4372,6 +4458,20 @@ class NyxContext:
                 self.conversation_id,
             )
             init_start_time = time.time()
+
+            self._init_tasks.clear()
+
+            cached_ready: Set[str] = set()
+            cached_state = await _get_cached_session_state(self.user_id, self.conversation_id)
+            if cached_state:
+                cached_ready = self._apply_cached_session_state(cached_state)
+                if cached_ready:
+                    logger.info(
+                        "[CONTEXT_INIT] Reusing cached orchestrators for user %s conversation %s: %s",
+                        self.user_id,
+                        self.conversation_id,
+                        sorted(cached_ready),
+                    )
 
             # Try to load config if available
             try:
@@ -4417,8 +4517,6 @@ class NyxContext:
                     )
                     raise
 
-            self._init_tasks.clear()
-
             def _start_task(key: str, label: str, coro: Any) -> None:
                 task = asyncio.create_task(
                     timed_init(label, coro),
@@ -4431,28 +4529,32 @@ class NyxContext:
                 )
 
             if not warm_minimal:
-                _start_task(
-                    "memory",
-                    "Memory",
-                    self._init_memory_orchestrator(warm_minimal=False),
-                )
-                _start_task(
-                    "lore",
-                    "Lore",
-                    self._init_lore_orchestrator(warm_minimal=False),
-                )
-                _start_task(
-                    "npc",
-                    "NPC",
-                    self._init_npc_orchestrator(warm_minimal=False),
-                )
-                _start_task(
-                    "conflict",
-                    "Conflict",
-                    self._init_conflict_synthesizer(warm_minimal=False),
-                )
+                if "memory" not in cached_ready:
+                    _start_task(
+                        "memory",
+                        "Memory",
+                        self._init_memory_orchestrator(warm_minimal=False),
+                    )
+                if "lore" not in cached_ready:
+                    _start_task(
+                        "lore",
+                        "Lore",
+                        self._init_lore_orchestrator(warm_minimal=False),
+                    )
+                if "npc" not in cached_ready:
+                    _start_task(
+                        "npc",
+                        "NPC",
+                        self._init_npc_orchestrator(warm_minimal=False),
+                    )
+                if "conflict" not in cached_ready:
+                    _start_task(
+                        "conflict",
+                        "Conflict",
+                        self._init_conflict_synthesizer(warm_minimal=False),
+                    )
 
-                if WORLD_SIMULATION_AVAILABLE:
+                if WORLD_SIMULATION_AVAILABLE and "world" not in cached_ready:
                     _start_task(
                         "world",
                         "World",
@@ -4508,13 +4610,16 @@ class NyxContext:
                                     snapshot_exc,
                                 )
 
-            self.context_broker = ContextBroker(self)
-            _start_task(
-                "context_broker",
-                "ContextBroker",
-                self.context_broker.initialize(),
-            )
-
+            if self.context_broker is None:
+                self.context_broker = ContextBroker(self)
+            if "context_broker" in cached_ready:
+                self.context_broker.ctx = self
+            else:
+                _start_task(
+                    "context_broker",
+                    "ContextBroker",
+                    self.context_broker.initialize(),
+                )
             governance_ready = False
             if warm_minimal or upgrade_from_minimal:
                 governance_ready = await self._ensure_governance_ready(
@@ -4527,6 +4632,16 @@ class NyxContext:
                         self.user_id,
                         self.conversation_id,
                     )
+
+            await self._cache_session_state(
+                memory_orchestrator=self.memory_orchestrator,
+                lore_orchestrator=self.lore_orchestrator,
+                npc_orchestrator=self.npc_orchestrator,
+                conflict_synthesizer=self.conflict_synthesizer,
+                world_orchestrator=self.world_orchestrator,
+                context_broker=self.context_broker,
+                governance=self.governance,
+            )
 
             self._is_initialized = True
             self._init_mode = target_mode if not upgrade_from_minimal else "full"
@@ -5184,6 +5299,7 @@ class NyxContext:
                 self.conversation_id
             )
             logger.info("Memory Orchestrator initialized")
+            await self._cache_session_state(memory_orchestrator=self.memory_orchestrator)
         except Exception as e:
             logger.error(f"Failed to initialize Memory Orchestrator: {e}")
 
@@ -5206,6 +5322,7 @@ class NyxContext:
                 lore_config
             )
             logger.info("Lore Orchestrator initialized")
+            await self._cache_session_state(lore_orchestrator=self.lore_orchestrator)
         except Exception as e:
             logger.error(f"Failed to initialize Lore Orchestrator: {e}")
 
@@ -5293,6 +5410,7 @@ class NyxContext:
             await self.slice_of_life_narrator.initialize()
 
             logger.info("World systems initialized")
+            await self._cache_session_state(world_orchestrator=self.world_orchestrator)
         except Exception as e:
             logger.error(f"Failed to initialize world systems: {e}")
 
