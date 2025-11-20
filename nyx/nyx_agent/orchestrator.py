@@ -1511,6 +1511,12 @@ async def process_user_input(
                 and fast_strategy == "deny"
                 and soft_location_only
             ):
+                if not movement_fast_path:
+                    movement_fast_path = _intents_are_movement_only(fast)
+                if movement_fast_path:
+                    logger.info(
+                        f"[{trace_id}] Soft location-only violation with movement intents; enabling fast path."
+                    )
                 logger.info(
                     f"[{trace_id}] Fast feasibility DENY is soft location-only; "
                     "continuing to orchestrator + location resolver."
@@ -1754,6 +1760,7 @@ async def process_user_input(
                 )
 
         if movement_prelude:
+            logger.info(f"[{trace_id}] Movement prelude injected into enhanced_input.")
             enhanced_input = f"{movement_prelude.strip()}\n\n{enhanced_input}"
 
         # ---- STEP 4: Tool sanitization ----------------------------------------
