@@ -602,11 +602,13 @@ def _extract_location_payload(resolve_result: Any) -> Dict[str, Any]:
                 "location_id": getattr(location, "location_id", None),
                 "name": getattr(location, "location_name", getattr(location, "name", None)),
                 "location_name": getattr(location, "location_name", None),
+                "location_name_lc": getattr(location, "location_name_lc", None),
                 "location_type": getattr(location, "location_type", None),
                 "city": getattr(location, "city", None),
                 "region": getattr(location, "region", None),
                 "country": getattr(location, "country", None),
                 "description": getattr(location, "description", None),
+                "external_place_id": getattr(location, "external_place_id", None),
                 "lat": getattr(location, "lat", getattr(location, "latitude", None)),
                 "lon": getattr(location, "lon", getattr(location, "longitude", getattr(location, "lng", None))),
             }
@@ -740,13 +742,35 @@ def _build_movement_scene_bundle(
     if name:
         location_info["name"] = name
 
+    current_context = getattr(nyx_context, "current_context", {}) or {}
     recent_turns = _extract_recent_turns(nyx_context, packed_context)
-    npcs = _compact_npcs(getattr(nyx_context, "current_context", {}).get("present_npcs"))
+    npcs = _compact_npcs(current_context.get("present_npcs"))
+
+    npc_context = nyx_context.get_npc_context_for_response()
+    conflict_context = nyx_context.get_conflict_context_for_response()
+    lore_context = nyx_context.get_lore_context_for_response()
+
+    snapshot = _extract_current_snapshot(nyx_context)
+    canonical_location = _normalize_location_dict(
+        current_context.get("current_location") or nyx_context.current_location
+    )
+
+    style_hints = {}
+    for key in ("roleplay_config", "roleplay_style", "player_profile"):
+        value = current_context.get(key)
+        if value:
+            style_hints[key] = value
 
     bundle: Dict[str, Any] = {
         "location": {k: v for k, v in location_info.items() if v not in (None, "")},
+        "canonical_location": canonical_location,
         "npcs": npcs,
         "recent_turns": recent_turns,
+        "npc_context": npc_context,
+        "conflict_context": conflict_context,
+        "lore_context": lore_context,
+        "snapshot": snapshot,
+        "style": style_hints,
     }
 
     if movement_meta:
@@ -771,6 +795,8 @@ def _build_movement_transition_prompt(
         f"{approx_km:.1f} km" if isinstance(approx_km, (int, float)) else "unknown"
     )
     distance_class = movement_meta.get("distance_class") or "unknown"
+    movement_kind = movement_meta.get("movement_kind") or "travel"
+    same_place = movement_meta.get("destination_same_as_origin")
     world_ctx = movement_meta.get("world", {})
     world_time = world_ctx.get("local_time") or "unknown"
     time_of_day = world_ctx.get("time_of_day") or "unknown"
@@ -788,8 +814,48 @@ def _build_movement_transition_prompt(
                 lines.append(f"- {key}: {value}")
         return "\n".join(lines)
 
+    def _summarize_context(label: str, payload: Mapping[str, Any], keys: Iterable[str]) -> str:
+        if not isinstance(payload, Mapping) or not payload:
+            return f"{label}: none"
+        fragments = []
+        for key in keys:
+            value = payload.get(key)
+            if value:
+                fragments.append(f"{key}={value}")
+        if not fragments:
+            return f"{label}: none"
+        return f"{label}: " + "; ".join(fragments)
+
     origin_block = _format_location_block("Origin", origin)
     destination_block = _format_location_block("Destination", destination)
+
+    npc_context = scene_bundle.get("npc_context") or {}
+    conflict_context = scene_bundle.get("conflict_context") or {}
+    lore_context = scene_bundle.get("lore_context") or {}
+    snapshot = scene_bundle.get("snapshot") or {}
+    style_hints = scene_bundle.get("style") or {}
+    canonical_location = scene_bundle.get("canonical_location") or {}
+
+    npc_summary = _summarize_context(
+        "NPCs",
+        npc_context,
+        ("scene_npcs", "npcs"),
+    )
+    conflict_summary = _summarize_context(
+        "Conflict",
+        conflict_context,
+        ("active", "tensions"),
+    )
+    lore_summary = _summarize_context("Lore", lore_context, ("world", "nations"))
+    style_summary = _summarize_context("Style", style_hints, style_hints.keys()) if style_hints else "Style: default"
+
+    current_location_line = _summarize_context(
+        "Canonical location",
+        canonical_location,
+        ("name", "city", "region", "country"),
+    )
+
+    target_line = "Target: already at destination; move within the location." if same_place else "Target: new location"
 
     prompt_lines = [
         f"Player input: {user_input}",
@@ -797,12 +863,21 @@ def _build_movement_transition_prompt(
         destination_block,
         f"Approximate distance: {distance_line}",
         f"Movement scale: {distance_class}",
+        f"Movement kind: {movement_kind} (same_place={same_place})",
+        target_line,
         f"Current time: {world_time} ({time_of_day})",
         f"World mood: {world_mood}",
+        current_location_line,
+        npc_summary,
+        conflict_summary,
+        lore_summary,
+        style_summary,
+        "Snapshot summary: " + json.dumps(snapshot) if snapshot else "Snapshot summary: none",
         "Feasibility:",
         f"- soft_location_only: {soft_location_only}",
         f"- teleport_allowed: {teleport_allowed}",
         f"- has_currency: {has_currency}",
+        "Instructions: respect feasibility and realism, keep narration in character, and write vivid movement with awareness of current NPCs/conflict/lore. If already at the destination, describe movement deeper inside or shifting focus within the same location.",
         f"Scene bundle JSON: {bundle_json}",
     ]
 
@@ -867,7 +942,9 @@ def _normalize_location_dict(location: Any) -> Dict[str, Any]:
     if not location:
         return {}
 
-    if dataclasses.is_dataclass(location):
+    if isinstance(location, str):
+        raw = {"name": location, "location_name": location}
+    elif dataclasses.is_dataclass(location):
         raw = dataclasses.asdict(location)
     elif isinstance(location, Mapping):
         raw = dict(location)
@@ -888,6 +965,9 @@ def _normalize_location_dict(location: Any) -> Dict[str, Any]:
             "latitude",
             "longitude",
             "g",
+            "external_place_id",
+            "location_type",
+            "location_name_lc",
         ):
             value = getattr(location, attr, None)
             if value not in (None, ""):
@@ -905,6 +985,9 @@ def _normalize_location_dict(location: Any) -> Dict[str, Any]:
         "region",
         "country",
         "description",
+        "external_place_id",
+        "location_type",
+        "location_name_lc",
     ):
         value = raw.get(key)
         if value not in (None, ""):
@@ -997,6 +1080,37 @@ def _locations_look_local(origin: Mapping[str, Any], destination: Mapping[str, A
     return True
 
 
+def _locations_same_place(origin: Mapping[str, Any], destination: Mapping[str, Any]) -> bool:
+    if not origin or not destination:
+        return False
+
+    origin_ext = origin.get("external_place_id") or origin.get("external_id")
+    destination_ext = destination.get("external_place_id") or destination.get("external_id")
+    if origin_ext and destination_ext and origin_ext == destination_ext:
+        return True
+
+    def _extract_name(payload: Mapping[str, Any]) -> str:
+        for key in ("location_name_lc", "location_name", "name", "location"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return _canonicalize_location_token(value)
+        return ""
+
+    origin_name = _extract_name(origin)
+    destination_name = _extract_name(destination)
+
+    if origin_name and destination_name and origin_name == destination_name:
+        # Require that any overlapping geo descriptors do not conflict
+        for key in ("city", "region", "country", "location_type"):
+            origin_val = _canonicalize_location_token(origin.get(key))
+            destination_val = _canonicalize_location_token(destination.get(key))
+            if origin_val and destination_val and origin_val != destination_val:
+                return False
+        return True
+
+    return False
+
+
 def _extract_world_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
     snapshot: Dict[str, Any] = {}
     world_state = getattr(nyx_context, "current_world_state", None)
@@ -1057,6 +1171,54 @@ def _extract_world_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
     return snapshot
 
 
+def _extract_current_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
+    current_context = getattr(nyx_context, "current_context", {}) or {}
+    snapshot_candidates = []
+
+    for key in ("CurrentSnapshot", "current_snapshot", "currentSnapshot"):
+        candidate = current_context.get(key)
+        if isinstance(candidate, Mapping):
+            snapshot_candidates.append(candidate)
+
+    aggregator_data = current_context.get("aggregator_data")
+    if isinstance(aggregator_data, Mapping):
+        for nested_key in ("currentRoleplay", "current_roleplay"):
+            nested = aggregator_data.get(nested_key)
+            if not isinstance(nested, Mapping):
+                continue
+            candidate = (
+                nested.get("CurrentSnapshot")
+                or nested.get("currentSnapshot")
+                or nested.get("current_snapshot")
+            )
+            if isinstance(candidate, Mapping):
+                snapshot_candidates.append(candidate)
+
+    snapshot: Dict[str, Any] = {}
+    for candidate in snapshot_candidates:
+        snapshot = dict(candidate)
+
+    current_location = current_context.get("current_location") or nyx_context.current_location
+    location_fallback = None
+    if isinstance(current_location, Mapping):
+        location_fallback = (
+            current_location.get("location_name")
+            or current_location.get("name")
+            or current_location.get("location")
+        )
+    elif isinstance(current_location, str):
+        location_fallback = current_location
+
+    snapshot_location = snapshot.get("location_name") or snapshot.get("location")
+    if (
+        location_fallback
+        and (snapshot_location is None or str(snapshot_location).strip().lower() in {"", "unknown", "n/a", "na"})
+    ):
+        snapshot["location_name"] = location_fallback
+
+    return snapshot
+
+
 def _extract_feasibility_caps(fast_result: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(fast_result, dict):
         return {}
@@ -1094,6 +1256,9 @@ def _build_movement_meta(
     feasibility_caps = _extract_feasibility_caps(fast_result)
     soft_location_only = _is_soft_location_only_violation(fast_result)
 
+    destination_same_as_origin = _locations_same_place(origin, destination)
+    movement_kind = "within_location" if destination_same_as_origin else "new_location"
+
     return {
         "origin": origin,
         "destination": destination,
@@ -1102,6 +1267,8 @@ def _build_movement_meta(
         "world": world_snapshot,
         "feasibility": feasibility_caps,
         "soft_location_only": soft_location_only,
+        "destination_same_as_origin": destination_same_as_origin,
+        "movement_kind": movement_kind,
     }
 
 
@@ -1163,6 +1330,15 @@ async def _run_movement_transition_fast_path(
         fast_result,
     )
 
+    destination_same = movement_meta.get("destination_same_as_origin")
+    if destination_same:
+        origin_name = movement_meta.get("origin", {}).get("name") or movement_meta.get("origin", {}).get("location_name")
+        destination_name = movement_meta.get("destination", {}).get("name") or movement_meta.get("destination", {}).get("location_name")
+        logger.info(
+            f"[{trace_id}] [ROUTER] Same-place movement detected; treating as within-location "
+            f"(origin={origin_name}, destination={destination_name})"
+        )
+
     if not _movement_is_local(movement_meta):
         logger.info(
             f"[{trace_id}] Movement fast path skipped; distance classification={movement_meta.get('distance_class')} "
@@ -1170,7 +1346,7 @@ async def _run_movement_transition_fast_path(
         )
         return None
 
-    if location_payload:
+    if location_payload and not destination_same:
         merged = dict(existing_location) if isinstance(existing_location, dict) else {}
         merged.update(location_payload)
         name = (
@@ -1190,13 +1366,14 @@ async def _run_movement_transition_fast_path(
         nyx_context.current_context["current_location"] = merged
         _preserve_hydrated_location(nyx_context.current_context, merged)
 
-    try:
-        await nyx_context._refresh_location_from_context(previous_location_id)
-    except Exception:
-        logger.debug(
-            f"[{trace_id}] Movement fast path location refresh failed softly",
-            exc_info=True,
-        )
+    if not destination_same:
+        try:
+            await nyx_context._refresh_location_from_context(previous_location_id)
+        except Exception:
+            logger.debug(
+                f"[{trace_id}] Movement fast path location refresh failed softly",
+                exc_info=True,
+            )
 
     scene_bundle = _build_movement_scene_bundle(
         nyx_context,
@@ -1264,13 +1441,13 @@ async def _run_movement_transition_fast_path(
         "response": narration,
         "narration": narration,
         "mode": mode,
-            "metadata": {
-                "movement_fast_path": True,
-                "movement_mode": mode,
-                "movement_only_intent": movement_only,
-                "universal_updates": False,
-                "feasibility": fast_result,
-                "location_transition": location_transition,
+        "metadata": {
+            "movement_fast_path": True,
+            "movement_mode": mode,
+            "movement_only_intent": movement_only,
+            "universal_updates": False,
+            "feasibility": fast_result,
+            "location_transition": location_transition,
             "scene_bundle": scene_bundle,
             "movement_run_limits": movement_limits,
             "movement_meta": movement_meta,
@@ -1464,6 +1641,7 @@ async def process_user_input(
     nyx_context: Optional[NyxContext] = None
     packed_context: Optional[PackedContext] = None
     movement_prelude: Optional[str] = None
+    enrichment_enabled = getattr(Config, "ENABLE_MOVEMENT_MAIN_AGENT_ENRICHMENT", True)
 
     logger.info(f"[{trace_id}] ========== PROCESS START ==========")
     logger.info(f"[{trace_id}] user_id={user_id} conversation_id={conversation_id}")
@@ -1635,7 +1813,12 @@ async def process_user_input(
             if fast_path_response is not None:
                 mode = fast_path_response.get("mode") or fast_path_response.get("metadata", {}).get("movement_mode")
                 if mode == "movement_only":
-                    return fast_path_response
+                    if not enrichment_enabled:
+                        return fast_path_response
+                    movement_prelude = fast_path_response.get("narration") or fast_path_response.get("response")
+                    logger.info(
+                        f"[{trace_id}] Movement fast path produced prelude; main agent enrichment enabled, continuing."
+                    )
                 elif mode == "movement_and_scene":
                     movement_prelude = fast_path_response.get("narration") or fast_path_response.get("response")
 

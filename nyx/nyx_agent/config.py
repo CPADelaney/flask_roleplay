@@ -54,3 +54,6 @@ class Config:
     # Conflict detection
     POWER_CONFLICT_THRESHOLD = 0.7
     MAX_STABILITY_ISSUES = 10
+
+    # Feature flags
+    ENABLE_MOVEMENT_MAIN_AGENT_ENRICHMENT: bool = True
