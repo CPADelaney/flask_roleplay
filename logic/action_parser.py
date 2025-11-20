@@ -1,11 +1,12 @@
 # logic/action_parser.py
+import asyncio
 import json
 import logging
 from typing import List, Dict, Any, Tuple
 
 from pydantic import BaseModel, Field, ValidationError
 
-from agents import Agent
+from agents import Agent, ModelSettings
 
 import nyx.gateway.llm_gateway as llm_gateway
 from nyx.gateway.llm_gateway import LLMRequest
@@ -21,32 +22,25 @@ class ActionIntent(BaseModel):
     categories: List[str] = Field(default_factory=list)
     confidence: float = 0.0
 
+ACTION_INTENT_TIMEOUT_SEC = 2.0
+ACTION_INTENT_MAX_TOKENS = 240
+
 INTENT_AGENT = Agent(
     name="ActionIntentExtractor",
-    instructions="""
-    Extract intended actions. Output ONLY JSON: {"intents":[
-      {"verb":"...", "direct_object":["..."], "instruments":["..."], "method":"...", "location_context":"...",
-       "categories":["..."], "confidence":0.0}
-    ]}
-    Categories (choose any that apply):
-      [
-        "mundane_action","dialogue","movement","trade","social",
-        "violence","self_harm","theft","vandalism",
-        "illegal_firearm_use","firearm_use","melee_weapon_use","explosive_use",
-        "unaided_flight","physics_violation",
-        "spontaneous_body_morph","grotesque_body_horror",
-        "ex_nihilo_conjuration","weapon_conjuration","projectile_creation_from_body",
-        "spellcasting","ritual_magic","psionics",
-        "public_magic","summoning","necromancy",
-        "biotech_modification","cybernetic_hack","ai_system_access","drone_control",
-        "vehicle_operation_ground","vehicle_operation_air","vehicle_operation_water","vehicle_operation_space",
-        "spacewalk","vacuum_exposure","airlock_open","hull_breach",
-        "underwater_breathing","deep_dive","pressure_breach",
-        "animal_misuse","transmutation_of_animals",
-        "surreal_transformation","dream_sequence","vr_only_action"
-      ]
-    """,
+    instructions=(
+        "Extract action intents and return ONLY JSON: {\"intents\":[{\"verb\":str,"
+        " \"direct_object\":[str], \"instruments\":[str], \"method\":str,"
+        " \"location_context\":str, \"categories\":[str], \"confidence\":0.0}]}"
+        " Categories: mundane_action, dialogue, movement, trade, social, violence,"
+        " self_harm, theft, vandalism, firearm_use, melee_weapon_use, explosive_use,"
+        " unaided_flight, physics_violation, biotech_modification, cybernetic_hack,"
+        " ai_system_access, drone_control, vehicle_operation_ground/air/water/space,"
+        " spacewalk, underwater_breathing, spellcasting, ritual_magic, psionics,"
+        " summoning, necromancy, surreal_transformation, dream_sequence, vr_only_action."
+        " Keep responses terse."
+    ),
     model="gpt-5-nano",
+    model_settings=ModelSettings(max_tokens=ACTION_INTENT_MAX_TOKENS, temperature=0.0),
 )
 
 def _strip_code_fences(s: str) -> str:
@@ -84,8 +78,16 @@ def _loads_maybe_double(s: str) -> Dict[str, Any]:
 async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
     # Ask Runner to enforce JSON via whatever schema tooling it supports; otherwise the request is still safe to ignore.
     try:
-        result = await llm_gateway.execute(
-            LLMRequest(agent=INTENT_AGENT, prompt=user_input)
+        result = await asyncio.wait_for(
+            llm_gateway.execute(
+                LLMRequest(
+                    agent=INTENT_AGENT,
+                    prompt=user_input,
+                    metadata={"operation": "intent_extraction", "timeout_s": ACTION_INTENT_TIMEOUT_SEC},
+                    max_attempts=1,
+                )
+            ),
+            timeout=ACTION_INTENT_TIMEOUT_SEC,
         )
     except Exception:
         logger.exception("ActionIntent extractor agent run failed")
