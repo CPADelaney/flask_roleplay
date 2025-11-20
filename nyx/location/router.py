@@ -1170,6 +1170,72 @@ def _has_grounded_results(result: ResolveResult) -> bool:
     )
 
 
+def _extract_external_place_id(result: ResolveResult) -> str:
+    """Attempt to pull an external place identifier from the result payload."""
+
+    if getattr(result, "external_place_id", None):
+        return str(result.external_place_id)
+
+    location = getattr(result, "location", None)
+    if location and getattr(location, "external_place_id", None):
+        return str(location.external_place_id)
+
+    for candidate in getattr(result, "candidates", []) or []:
+        place = getattr(candidate, "place", None)
+        meta = place.meta if place and isinstance(place.meta, dict) else {}
+        if meta.get("external_place_id"):
+            return str(meta["external_place_id"])
+
+    metadata = getattr(result, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("external_place_id"):
+        return str(metadata["external_place_id"])
+
+    return ""
+
+
+def _should_skip_fictional_for_real_place(
+    real_result: Optional[ResolveResult],
+    query: PlaceQuery,
+    anchor: Anchor,
+    meta: Optional[dict] = None,
+) -> bool:
+    """
+    Decide whether to skip the fictional resolver when a strong real-world
+    resolution already exists.
+
+    Intention:
+    - If we already have a strongly grounded real-world place (e.g. Disneyland
+      Park), do NOT call resolve_fictional in the main path, unless explicitly
+      overridden via metadata.
+    """
+
+    if real_result is None:
+        return False
+
+    if getattr(real_result, "status", None) != STATUS_EXACT:
+        return False
+
+    if getattr(real_result, "scope", None) != "real":
+        return False
+
+    meta = meta or {}
+
+    if meta.get("force_fictional_overlay"):
+        return False
+
+    external_id = _extract_external_place_id(real_result)
+    if external_id.startswith("real::"):
+        return True
+
+    if _has_grounded_results(real_result):
+        return True
+
+    if getattr(real_result, "metadata", {}).get("has_maps_grounding"):
+        return True
+
+    return False
+
+
 def _normalize_city_name(value: Optional[str]) -> Optional[str]:
     """Normalize city strings for comparison."""
     if not value:
@@ -1538,75 +1604,100 @@ async def resolve_place_or_travel(
         # FICTIONAL RESOLUTION CHAIN
         # ============================================================
         logger.info("[ROUTER] Using fictional resolution chain")
+        real_anchor = Anchor(
+            scope="real",
+            focus=anchor.focus,
+            label=anchor.label,
+            lat=anchor.lat,
+            lon=anchor.lon,
+            primary_city=anchor.primary_city,
+            region=anchor.region,
+            country=anchor.country,
+            world_name=anchor.world_name,
+            hints=anchor.hints,
+        )
 
-        # Try fictional resolver first
-        res_fictional = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
-
-        # If fictional search fails, fall back to real-world search (mixed worlds)
-        if res_fictional.status in {STATUS_NOT_FOUND, STATUS_ASK}:
-            logger.info(
-                f"[ROUTER] Fictional resolve failed for '{q.target}'. "
-                f"Falling back to real-world search (mixed world scenario)..."
+        gemini_result: Optional[ResolveResult] = None
+        try:
+            gemini_result = await resolve_location_with_gemini(
+                q, real_anchor, afc_max_calls=REAL_WORLD_AFC_MAX_CALLS
             )
+        except Exception as e:
+            logger.error(f"[ROUTER] Gemini resolution failed in fictional chain: {e}", exc_info=True)
+            gemini_result = None
 
-            # Try real-world search with Gemini first
-            try:
-                real_anchor = Anchor(
-                    scope="real",
-                    focus=anchor.focus,
-                    label=anchor.label,
-                    lat=anchor.lat,
-                    lon=anchor.lon,
-                    primary_city=anchor.primary_city,
-                    region=anchor.region,
-                    country=anchor.country,
-                    world_name=anchor.world_name,
-                    hints=anchor.hints,
-                )
-                
-                gemini_result = await resolve_location_with_gemini(
-                    q,
-                    real_anchor,
-                    afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
-                )
-                
-                if _has_grounded_results(gemini_result):
-                    logger.info(
-                        f"[ROUTER] ✓ Found real-world match via Gemini Maps for '{q.target}' "
-                        f"in fictional world"
-                    )
-                    gemini_result.metadata = gemini_result.metadata or {}
-                    gemini_result.metadata["mixed_world"] = True
-                    gemini_result.metadata["base_scope"] = "fictional"
-                    gemini_result.metadata["real_element"] = q.target
-                    res = gemini_result
-                else:
-                    # Try Overpass/Nominatim
-                    res_real = await resolve_real(q, real_anchor, meta, skip_gemini=True)
-
-                    if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
-                        logger.info(
-                            f"[ROUTER] ✓ Found real-world match via Overpass/Nominatim "
-                            f"for '{q.target}' in fictional world"
-                        )
-                        res_real.metadata = res_real.metadata or {}
-                        res_real.metadata["mixed_world"] = True
-                        res_real.metadata["base_scope"] = "fictional"
-                        res_real.metadata["real_element"] = q.target
-                        res = res_real
-                    else:
-                        # Both fictional and real searches failed
-                        logger.warning(
-                            f"[ROUTER] All resolution methods failed for '{q.target}'"
-                        )
-                        res = res_fictional
-
-            except Exception as e:
-                logger.error(f"[ROUTER] Real-world fallback failed: {e}", exc_info=True)
-                res = res_fictional
+        if _should_skip_fictional_for_real_place(gemini_result, q, anchor, meta):
+            res = gemini_result
         else:
-            # Fictional search succeeded
-            res = res_fictional
+            # Try fictional resolver first
+            res_fictional = await resolve_fictional(q, anchor, meta, store, user_id, conversation_id)
+
+            # If fictional search fails, fall back to real-world search (mixed worlds)
+            if res_fictional.status in {STATUS_NOT_FOUND, STATUS_ASK}:
+                logger.info(
+                    f"[ROUTER] Fictional resolve failed for '{q.target}'. "
+                    f"Falling back to real-world search (mixed world scenario)..."
+                )
+
+                # Try real-world search with Gemini first (reuse probe if available)
+                try:
+                    if gemini_result and _has_grounded_results(gemini_result):
+                        logger.info(
+                            f"[ROUTER] ✓ Found real-world match via Gemini Maps for '{q.target}' "
+                            f"in fictional world"
+                        )
+                        gemini_result.metadata = gemini_result.metadata or {}
+                        gemini_result.metadata["mixed_world"] = True
+                        gemini_result.metadata["base_scope"] = "fictional"
+                        gemini_result.metadata["real_element"] = q.target
+                        res = gemini_result
+                    else:
+                        if gemini_result is None:
+                            gemini_result = await resolve_location_with_gemini(
+                                q,
+                                real_anchor,
+                                afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
+                            )
+
+                        if _has_grounded_results(gemini_result):
+                            logger.info(
+                                f"[ROUTER] ✓ Found real-world match via Gemini Maps for '{q.target}' "
+                                f"in fictional world"
+                            )
+                            gemini_result.metadata = gemini_result.metadata or {}
+                            gemini_result.metadata["mixed_world"] = True
+                            gemini_result.metadata["base_scope"] = "fictional"
+                            gemini_result.metadata["real_element"] = q.target
+                            res = gemini_result
+                        else:
+                            # Try Overpass/Nominatim
+                            res_real = gemini_result or await resolve_real(
+                                q, real_anchor, meta, skip_gemini=True
+                            )
+
+                            if res_real.status in {STATUS_EXACT, STATUS_MULTIPLE}:
+                                logger.info(
+                                    f"[ROUTER] ✓ Found real-world match via Overpass/Nominatim "
+                                    f"for '{q.target}' in fictional world"
+                                )
+                                res_real.metadata = res_real.metadata or {}
+                                res_real.metadata["mixed_world"] = True
+                                res_real.metadata["base_scope"] = "fictional"
+                                res_real.metadata["real_element"] = q.target
+                                res = res_real
+                            else:
+                                # Both fictional and real searches failed
+                                logger.warning(
+                                    f"[ROUTER] All resolution methods failed for '{q.target}'"
+                                )
+                                res = res_fictional
+
+                except Exception as e:
+                    logger.error(f"[ROUTER] Real-world fallback failed: {e}", exc_info=True)
+                    res = res_fictional
+            else:
+                # Fictional search succeeded
+                res = res_fictional
 
     # Ensure the final result has the anchor and scope attached
     if res.anchor is None:
