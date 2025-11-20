@@ -96,8 +96,11 @@ _MAIN_AGENT_RUN_LIMITS: Dict[str, Any] = {
     "max_tool_calls": 4,
     "max_auto_messages": 3,
     "max_output_tokens": 1800,
-    "per_turn_timeout": 18.0,
-    "per_step_timeout": 12.0,
+    "default_total_timeout_budget": 4.0,
+    "min_total_timeout_budget": 3.0,
+    "max_total_timeout_budget": 12.0,
+    "per_turn_timeout": 1.0,
+    "per_step_timeout": 0.5,
 }
 
 _MOVEMENT_RUN_LIMITS: Dict[str, Any] = {
@@ -105,8 +108,11 @@ _MOVEMENT_RUN_LIMITS: Dict[str, Any] = {
     "max_tool_calls": 1,
     "max_auto_messages": 1,
     "max_output_tokens": 600,
-    "per_turn_timeout": 8.0,
-    "per_step_timeout": 6.0,
+    "default_total_timeout_budget": 3.0,
+    "min_total_timeout_budget": 1.5,
+    "max_total_timeout_budget": 8.0,
+    "per_turn_timeout": 0.9,
+    "per_step_timeout": 0.4,
 }
 
 _MOVEMENT_FAST_PATH_MODEL_SETTINGS = ModelSettings(
@@ -115,7 +121,9 @@ _MOVEMENT_FAST_PATH_MODEL_SETTINGS = ModelSettings(
 )
 
 
-def _safe_time_budget(value: Optional[float]) -> Optional[float]:
+def _safe_time_budget(
+    value: Optional[float], *, minimum: float = 0.25, maximum: Optional[float] = None
+) -> Optional[float]:
     """Return a clamped positive time budget or ``None`` when invalid."""
 
     if value is None:
@@ -126,7 +134,11 @@ def _safe_time_budget(value: Optional[float]) -> Optional[float]:
         return None
     if not parsed or parsed <= 0:
         return None
-    return max(0.25, parsed)
+
+    parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
 
 
 def _derive_run_limit_kwargs(
@@ -147,7 +159,20 @@ def _derive_run_limit_kwargs(
         if value is not None:
             limits[key] = value
 
-    safe_budget = _safe_time_budget(time_budget)
+    minimum_budget = float(limit_template.get("min_total_timeout_budget")) if limit_template.get("min_total_timeout_budget") else 0.25
+    maximum_budget = (
+        float(limit_template.get("max_total_timeout_budget"))
+        if limit_template.get("max_total_timeout_budget")
+        else None
+    )
+    default_budget = limit_template.get("default_total_timeout_budget")
+    budget_source = time_budget if time_budget is not None else default_budget
+
+    safe_budget = _safe_time_budget(
+        budget_source,
+        minimum=minimum_budget,
+        maximum=maximum_budget,
+    )
     per_turn_default = limit_template.get("per_turn_timeout")
     per_step_default = limit_template.get("per_step_timeout")
 
@@ -1098,6 +1123,7 @@ async def _run_movement_transition_fast_path(
     trace_id: str,
     start_time: float,
     *,
+    movement_only: bool = False,
     time_left_fn: Optional[Callable[[], float]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Execute the streamlined movement transition pipeline."""
@@ -1220,8 +1246,8 @@ async def _run_movement_transition_fast_path(
         or _default_movement_transition_narration(scene_bundle)
     )
 
-    mode = "movement_and_scene"
-    if _movement_requires_clarification(narration):
+    mode = "movement_only" if movement_only else "movement_and_scene"
+    if not movement_only and _movement_requires_clarification(narration):
         mode = "movement_only"
 
     location_transition = {
@@ -1238,12 +1264,13 @@ async def _run_movement_transition_fast_path(
         "response": narration,
         "narration": narration,
         "mode": mode,
-        "metadata": {
-            "movement_fast_path": True,
-            "movement_mode": mode,
-            "universal_updates": False,
-            "feasibility": fast_result,
-            "location_transition": location_transition,
+            "metadata": {
+                "movement_fast_path": True,
+                "movement_mode": mode,
+                "movement_only_intent": movement_only,
+                "universal_updates": False,
+                "feasibility": fast_result,
+                "location_transition": location_transition,
             "scene_bundle": scene_bundle,
             "movement_run_limits": movement_limits,
             "movement_meta": movement_meta,
@@ -1404,14 +1431,35 @@ async def process_user_input(
     record_queue_delay_from_context(context_data, queue="orchestrator")
 
     # Adopt a single absolute deadline from the SDK or create a reasonable one
+    default_deadline_budget = max(8.0, min(get_defer_run_timeout_seconds(), 20.0))
     deadline = None
     if isinstance(context_data, dict):
         deadline = context_data.get("_deadline") or context_data.get("deadline")
-    if deadline is None:
-        deadline = monotonic() + get_defer_run_timeout_seconds()
 
-    def time_left(floor: float = 0.25) -> float:
-        return max(floor, deadline - monotonic())
+    now = monotonic()
+    try:
+        deadline_value = float(deadline) if deadline is not None else None
+    except (TypeError, ValueError):
+        deadline_value = None
+
+    if deadline_value is None:
+        deadline = now + default_deadline_budget
+    else:
+        remaining = deadline_value - now
+        if remaining < 4.0:
+            logger.info(
+                f"[{trace_id}] Provided deadline is too tight (remaining={remaining:.3f}s); "
+                f"resetting to {default_deadline_budget:.1f}s budget",
+            )
+            deadline = now + default_deadline_budget
+        else:
+            deadline = deadline_value
+
+    def time_left(floor: float = 0.5) -> float:
+        remaining_budget = deadline - monotonic()
+        if remaining_budget <= 0:
+            return floor
+        return remaining_budget
 
     nyx_context: Optional[NyxContext] = None
     packed_context: Optional[PackedContext] = None
@@ -1450,6 +1498,7 @@ async def process_user_input(
         fast_strategy = ""
         fast_feasible_flag: Optional[bool] = None
         movement_fast_path = False
+        movement_only_intents = False
 
         if isinstance(fast, dict):
             fast_overall = (fast or {}).get("overall", {}) or {}
@@ -1466,9 +1515,10 @@ async def process_user_input(
             )
 
             if fast_feasible_flag is True and fast_strategy == "allow":
-                movement_fast_path = _intents_are_movement_only(fast)
+                movement_only_intents = _intents_are_movement_only(fast)
+                movement_fast_path = movement_only_intents
                 logger.info(
-                    f"[{trace_id}] Movement-only intents detected? {movement_fast_path}"
+                    f"[{trace_id}] Movement-only intents detected? {movement_only_intents}"
                 )
 
             # Hard-block ONLY when it's a real impossibility, not a location-only miss
@@ -1512,7 +1562,8 @@ async def process_user_input(
                 and soft_location_only
             ):
                 if not movement_fast_path:
-                    movement_fast_path = _intents_are_movement_only(fast)
+                    movement_only_intents = _intents_are_movement_only(fast)
+                    movement_fast_path = movement_only_intents
                 if movement_fast_path:
                     logger.info(
                         f"[{trace_id}] Soft location-only violation with movement intents; enabling fast path."
@@ -1578,6 +1629,7 @@ async def process_user_input(
                 fast if isinstance(fast, dict) else {},
                 trace_id,
                 start_time,
+                movement_only=movement_only_intents,
                 time_left_fn=time_left,
             )
             if fast_path_response is not None:
