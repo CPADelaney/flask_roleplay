@@ -1173,16 +1173,27 @@ def _has_grounded_results(result: ResolveResult) -> bool:
 def _extract_external_place_id(result: ResolveResult) -> str:
     """Attempt to pull an external place identifier from the result payload."""
 
+    # Direct field on the result itself
     if getattr(result, "external_place_id", None):
         return str(result.external_place_id)
 
+    # Result-level location object
     location = getattr(result, "location", None)
     if location and getattr(location, "external_place_id", None):
         return str(location.external_place_id)
 
+    # Walk candidates: prefer a dedicated attribute on the Place
     for candidate in getattr(result, "candidates", []) or []:
         place = getattr(candidate, "place", None)
-        meta = place.meta if place and isinstance(place.meta, dict) else {}
+        if place is None:
+            continue
+
+        # Hydrated from DB or Maps → often stored directly on the place
+        attr_id = getattr(place, "external_place_id", None)
+        if attr_id:
+            return str(attr_id)
+
+        meta = place.meta if isinstance(getattr(place, "meta", None), dict) else {}
         if meta.get("external_place_id"):
             return str(meta["external_place_id"])
 
@@ -1212,26 +1223,29 @@ def _should_skip_fictional_for_real_place(
     if real_result is None:
         return False
 
-    if getattr(real_result, "status", None) != STATUS_EXACT:
-        return False
-
+    # Only care about genuinely real results.
     if getattr(real_result, "scope", None) != "real":
         return False
 
     meta = meta or {}
-
     if meta.get("force_fictional_overlay"):
+        # Explicit override: caller really wants fictional overlay.
         return False
 
     external_id = _extract_external_place_id(real_result)
-    if external_id.startswith("real::"):
+    if isinstance(external_id, str) and external_id.startswith("real::"):
+        # Canonical real-world place id, e.g. from your Places hierarchy.
         return True
 
+    # Any candidate explicitly marked as grounded / Google-verified is “real enough”.
     if _has_grounded_results(real_result):
         return True
 
-    if getattr(real_result, "metadata", {}).get("has_maps_grounding"):
-        return True
+    # Some adapters attach Maps grounding at the result level.
+    meta_dict = getattr(real_result, "metadata", None) or {}
+    if isinstance(meta_dict, dict):
+        if meta_dict.get("gmaps") or meta_dict.get("has_maps_grounding"):
+            return True
 
     return False
 
