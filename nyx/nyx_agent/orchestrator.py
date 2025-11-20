@@ -799,6 +799,7 @@ def _build_movement_transition_prompt(
     same_place = movement_meta.get("destination_same_as_origin")
     travel_mode = movement_meta.get("travel_mode") or "unknown"
     travel_minutes = movement_meta.get("travel_duration_min")
+    require_travel_choice = movement_meta.get("require_travel_choice", False)
     world_ctx = movement_meta.get("world", {})
     world_time = world_ctx.get("local_time") or "unknown"
     time_of_day = world_ctx.get("time_of_day") or "unknown"
@@ -886,10 +887,14 @@ def _build_movement_transition_prompt(
         f"- teleport_allowed: {teleport_allowed}",
         f"- has_currency: {has_currency}",
         "Instructions:",
-        "- If the player clearly specified how they travel (e.g., 'I drive', 'I fly'), keep that mode.",
-        "- If travel_mode is 'unknown' AND distance_class is 'city' or 'long', ask the player how they travel instead of assuming.",
-        "- When you ask, respond with an in-character question ONLY (no arrival yet).",
-        "- Otherwise, narrate the movement and arrival with vivid, in-character description.",
+        f"REQUIRE_TRAVEL_CHOICE: {require_travel_choice}",
+        "- If REQUIRE_TRAVEL_CHOICE is true:",
+        "  - Do NOT narrate arrival.",
+        "  - Ask the player, in character, how they are traveling (e.g., by car, train, on foot).",
+        "  - Do not assume a mode.",
+        "- If REQUIRE_TRAVEL_CHOICE is false:",
+        "  - Do NOT ask any travel-mode questions.",
+        "  - Narrate the movement and arrival using travel_mode and travel_duration_min.",
         "- Keep the narration compact but flavorful (1–3 paragraphs, not a single generic sentence).",
         f"Scene bundle JSON: {bundle_json}",
     ]
@@ -897,21 +902,28 @@ def _build_movement_transition_prompt(
     return "\n".join(prompt_lines)
 
 
-def _default_movement_transition_narration(scene_bundle: Dict[str, Any]) -> str:
-    """Fallback narration if the movement agent output is empty."""
-
-    location = scene_bundle.get("location") or {}
-    movement_meta = scene_bundle.get("movement_meta") or {}
-
-    location_name = location.get("name") or "the next space"
+async def _llm_fallback_movement_narration(movement_meta: Dict[str, Any]) -> str:
+    location = movement_meta.get("destination") or movement_meta.get("origin") or {}
+    loc_name = location.get("name") or location.get("location_name") or "your destination"
     world = movement_meta.get("world") or {}
     tod = world.get("time_of_day") or "timeless"
     mood = world.get("world_mood") or "neutral"
 
-    return (
-        f"You set off toward {location_name}. "
-        f"The {tod} air carries a {mood} energy as the world shifts around your steps."
+    prompt = (
+        "Write a single short, vivid description of the player moving toward a place.\n\n"
+        f"Destination name: {loc_name}\n"
+        f"Time of day: {tod}\n"
+        f"World mood: {mood}\n\n"
+        "Keep it in second person, one paragraph, no inner monologue, no dialogue."
     )
+
+    from logic.gpt_utils import call_gpt_text
+
+    try:
+        text = await call_gpt_text(prompt, model="gpt-5-nano")
+        return text.strip() or f"You head toward {loc_name}."
+    except Exception:
+        return f"You head toward {loc_name}."
 
 
 def _movement_requires_clarification(text: str) -> bool:
@@ -1081,7 +1093,7 @@ def _classify_distance(
     return "unknown"
 
 
-_TRAVEL_SPEED_KMH = {
+_TRAVEL_SPEED_KMH: Dict[str, float] = {
     "walk": 4.0,
     "bike": 15.0,
     "car": 50.0,
@@ -1089,7 +1101,7 @@ _TRAVEL_SPEED_KMH = {
     "train": 90.0,
     "metro": 40.0,
     "air": 750.0,
-    "teleport": 999999.0,
+    "teleport": 999_999.0,
 }
 
 
@@ -1423,6 +1435,12 @@ def _build_movement_meta(
         movement_kind=movement_kind,
     )
 
+    require_travel_choice = (
+        travel_mode is None
+        and distance_class in {"city", "long"}
+        and movement_kind != "within_location"
+    )
+
     return {
         "origin": origin,
         "destination": destination,
@@ -1435,6 +1453,7 @@ def _build_movement_meta(
         "movement_kind": movement_kind,
         "travel_mode": travel_mode,
         "travel_duration_min": travel_minutes,
+        "require_travel_choice": require_travel_choice,
     }
 
 
@@ -1555,18 +1574,52 @@ async def _run_movement_transition_fast_path(
         )
         agent_result = None
 
-    narration = (
-        coalesce_agent_output_text(agent_result)
-        or _default_movement_transition_narration(scene_bundle)
-    )
+    narration = coalesce_agent_output_text(agent_result)
+    if not narration:
+        narration = await _llm_fallback_movement_narration(movement_meta)
 
-    needs_clarification = _movement_requires_clarification(narration)
+    require_travel_choice = movement_meta.get("require_travel_choice", False)
+    needs_clarification = bool(require_travel_choice)
+    if not needs_clarification:
+        needs_clarification = _movement_requires_clarification(narration)
+
     if movement_only:
         mode = "movement_only"
     else:
         mode = "movement_only" if needs_clarification else "movement_and_scene"
 
-    if not needs_clarification and location_payload:
+    location_transition = {
+        "router_called": resolve_result is not None,
+        "router_status": getattr(resolve_result, "status", None) if resolve_result else None,
+        "router_choices": getattr(resolve_result, "choices", []),
+        "router_operations": getattr(resolve_result, "operations", []),
+        "router_metadata": getattr(resolve_result, "metadata", {}) if resolve_result else {},
+        "location": scene_bundle.get("location", {}),
+    }
+
+    if needs_clarification:
+        return {
+            "success": True,
+            "response": narration,
+            "narration": narration,
+            "mode": "movement_only",
+            "metadata": {
+                "movement_fast_path": True,
+                "movement_mode": "movement_only",
+                "movement_only_intent": movement_only,
+                "needs_travel_mode_choice": True,
+                "universal_updates": False,
+                "feasibility": fast_result,
+                "location_transition": location_transition,
+                "scene_bundle": scene_bundle,
+                "movement_run_limits": movement_limits,
+                "movement_meta": movement_meta,
+            },
+            "trace_id": trace_id,
+            "processing_time": time.time() - start_time,
+        }
+
+    if location_payload:
         merged = dict(existing_location) if isinstance(existing_location, dict) else {}
         merged.update(location_payload)
         name = (
@@ -1595,16 +1648,7 @@ async def _run_movement_transition_fast_path(
                     exc_info=True,
                 )
 
-        _apply_travel_time_to_world(nyx_context, movement_meta)
-
-    location_transition = {
-        "router_called": resolve_result is not None,
-        "router_status": getattr(resolve_result, "status", None) if resolve_result else None,
-        "router_choices": getattr(resolve_result, "choices", []),
-        "router_operations": getattr(resolve_result, "operations", []),
-        "router_metadata": getattr(resolve_result, "metadata", {}) if resolve_result else {},
-        "location": scene_bundle.get("location", {}),
-    }
+    _apply_travel_time_to_world(nyx_context, movement_meta)
 
     return {
         "success": True,
@@ -1984,7 +2028,11 @@ async def process_user_input(
             if fast_path_response is not None:
                 metadata = fast_path_response.get("metadata") or {}
                 mode = fast_path_response.get("mode") or metadata.get("movement_mode")
-                narration = fast_path_response.get("narration") or fast_path_response.get("response")
+                narration = (
+                    fast_path_response.get("narration")
+                    or fast_path_response.get("response")
+                    or ""
+                )
                 needs_clarification = bool(metadata.get("needs_travel_mode_choice"))
 
                 if needs_clarification:
