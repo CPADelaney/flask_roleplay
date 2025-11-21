@@ -91,6 +91,14 @@ async def parse_action_intents(user_input: str) -> List[Dict[str, Any]]:
             ),
             timeout=ACTION_INTENT_TIMEOUT_SEC,
         )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "ActionIntent extractor timed out after %.2fs for input=%r; "
+            "falling back to empty intent list.",
+            ACTION_INTENT_TIMEOUT_SEC,
+            user_input[:120],
+        )
+        return []
     except Exception:
         logger.exception("ActionIntent extractor agent run failed")
         raise
