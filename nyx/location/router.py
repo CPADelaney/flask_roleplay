@@ -2047,6 +2047,7 @@ async def resolve_place_or_travel(
                 anchor=anchor,
                 result=res,
                 afc_max_calls=REAL_WORLD_AFC_MAX_CALLS,
+                meta=meta,
             )
         except Exception:
             logger.warning(

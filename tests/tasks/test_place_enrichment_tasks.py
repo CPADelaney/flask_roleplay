@@ -199,6 +199,7 @@ def test_enqueue_serializes_dataclass_hints(monkeypatch: pytest.MonkeyPatch):
         query=query,
         anchor=anchor,
         result=result,
+        meta={"allow_fictional_overlay": True},
     )
 
     assert hasattr(module.enrich, "last_call")
@@ -213,3 +214,61 @@ def test_enqueue_serializes_dataclass_hints(monkeypatch: pytest.MonkeyPatch):
     assert hints_payload["geo"]["lat"] == 10.0
     assert hints_payload["geo"]["lon"] == 20.0
     assert hints_payload["geo"]["label"] == "Park"
+
+
+def test_enqueue_skips_real_world_without_overlay(monkeypatch: pytest.MonkeyPatch):
+    module = _load_place_enrichment(monkeypatch)
+
+    types_mod = sys.modules["nyx.location.types"]
+    query_mod = sys.modules["nyx.location.query"]
+
+    query = query_mod.PlaceQuery(
+        raw_text="Take me to Disneyland",
+        normalized="take me to disneyland",
+        is_travel=False,
+        target="Disneyland",
+        transport_hint=None,
+    )
+
+    anchor = types_mod.Anchor(scope="real", label="Disneyland")
+    result = types_mod.ResolveResult(status="ok", candidates=[])
+
+    module.enqueue(
+        user_id="user-1",
+        conversation_id="conv-1",
+        query=query,
+        anchor=anchor,
+        result=result,
+        meta={},
+    )
+
+    assert not hasattr(module.enrich, "last_call")
+
+
+def test_fictional_fallback_skips_real_world_without_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    module = _load_place_enrichment(monkeypatch)
+
+    types_mod = sys.modules["nyx.location.types"]
+    query_mod = sys.modules["nyx.location.query"]
+
+    query = query_mod.PlaceQuery(
+        raw_text="Stay in Anaheim",
+        normalized="stay in anaheim",
+        is_travel=False,
+        target="Anaheim",
+        transport_hint=None,
+    )
+
+    anchor = types_mod.Anchor(scope="real", label="Anaheim")
+
+    module.enqueue_fictional_fallback(
+        user_id="user-1",
+        conversation_id="conv-1",
+        query=query,
+        anchor=anchor,
+        meta={},
+    )
+
+    assert not hasattr(module.fictional_fallback, "last_call")
