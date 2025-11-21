@@ -998,6 +998,141 @@ def _build_disneyland_shortcut_result(anchor: Anchor) -> ResolveResult:
     return result
 
 
+def _maybe_short_circuit_real_anchor(
+    query: PlaceQuery, anchor: Anchor, meta: Dict[str, Any]
+) -> Optional[ResolveResult]:
+    """Short-circuit to a known real anchor without fictional POI generation.
+
+    If the current anchor represents a canonical real-world location and the
+    player issues a basic move intent that matches that anchor, we should snap
+    directly to it. This avoids unnecessary fictional POI synthesis and keeps
+    movement within the real-world scope.
+    """
+
+    # Only bother for simple movement-like input
+    if not _is_basic_move_intent(query.raw_text or query.target or "", query):
+        return None
+
+    anchor_payload = _extract_current_location_payload(meta)
+    if not anchor_payload:
+        return None
+
+    def _coerce_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "1", "y"}:
+                return True
+            if lowered in {"false", "no", "0", "n"}:
+                return False
+        return None
+
+    is_fictional_flag = _coerce_bool(anchor_payload.get("is_fictional"))
+    anchor_scope = str(anchor_payload.get("scope") or "").strip().lower()
+    anchor_is_real = (
+        anchor.scope == "real"
+        or anchor_scope == "real"
+        or (is_fictional_flag is False)
+    )
+    if not anchor_is_real:
+        return None
+
+    normalized_target = _normalize_location_token(getattr(query, "target", None))
+    if not normalized_target:
+        return None
+
+    def _matches(value: Any) -> bool:
+        return _normalize_location_token(value) == normalized_target
+
+    candidate_label = (
+        anchor_payload.get("name")
+        or anchor_payload.get("label")
+        or anchor_payload.get("display_name")
+        or anchor_payload.get("location_name")
+        or anchor.label
+        or (anchor.focus.name if anchor.focus else None)
+    )
+
+    if not candidate_label or not _matches(candidate_label):
+        # Also allow matching against explicit ids/slugs if provided.
+        slug_matches = any(
+            _matches(anchor_payload.get(key))
+            for key in ("slug", "id", "location_id", "key")
+        )
+        if not slug_matches:
+            return None
+
+    lat = anchor_payload.get("lat") if anchor_payload.get("lat") is not None else anchor.lat
+    lon = anchor_payload.get("lon") if anchor_payload.get("lon") is not None else anchor.lon
+
+    address: Dict[str, Any] = {}
+    for key, fallback in (
+        ("city", anchor.primary_city),
+        ("region", anchor.region),
+        ("country", anchor.country),
+    ):
+        value = anchor_payload.get(key) or fallback
+        if isinstance(value, str) and value.strip():
+            address[key] = value
+
+    location_type = anchor_payload.get("location_type") or anchor_payload.get("level")
+    level_label = str(location_type).strip().lower() if location_type else "venue"
+    if level_label not in _ALLOWED_PLACE_LEVELS:
+        level_label = "venue"
+
+    candidate = Candidate(
+        place=Place(
+            name=str(candidate_label),
+            level=level_label,
+            key=str(
+                anchor_payload.get("location_id")
+                or anchor_payload.get("slug")
+                or candidate_label
+            ),
+            lat=lat,
+            lon=lon,
+            address=address,
+            meta={
+                "source": "real_anchor_short_circuit",
+                "router_skip": True,
+                "match_reason": "anchor_scope_real",
+            },
+        ),
+        confidence=0.99,
+    )
+
+    operations: List[Dict[str, Any]] = []
+    if lat is not None and lon is not None:
+        operations.append(
+            {
+                "op": "poi.navigate",
+                "label": candidate.place.name,
+                "lat": lat,
+                "lon": lon,
+                "context_hint": {
+                    "use_geo_anchor": True,
+                    "source": "real_anchor_short_circuit",
+                },
+            }
+        )
+
+    logger.info(
+        "[ROUTER] Short-circuiting to real anchor '%s' (target=%s)",
+        candidate.place.name,
+        query.target,
+    )
+
+    return ResolveResult(
+        status=STATUS_EXACT,
+        candidates=[candidate],
+        operations=operations,
+        anchor=anchor,
+        scope="real",
+        message=f"Continuing at {candidate.place.name}.",
+    )
+
+
 def _should_skip_maps(
     query: PlaceQuery,
     anchor: Anchor,
@@ -1463,6 +1598,10 @@ async def resolve_place_or_travel(
                         ),
                     )
 
+    if res is None:
+        # Basic movement to an already-known real anchor? Just snap to it.
+        res = _maybe_short_circuit_real_anchor(q, anchor, meta)
+
     if res is None and anchor.scope == "real":
         # ============================================================
         # REAL WORLD RESOLUTION CHAIN
@@ -1613,7 +1752,7 @@ async def resolve_place_or_travel(
                 message="Working on it…",
             )
 
-    else:
+    elif res is None:
         # ============================================================
         # FICTIONAL RESOLUTION CHAIN
         # ============================================================
