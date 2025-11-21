@@ -64,6 +64,7 @@ from logic.conflict_system.enhanced_conflict_integration_hotpath import (
     get_cached_tension_result,
 )
 from infra.cache import get_redis_client
+from utils.cache_manager import CacheManager
 
 # Try to use faster JSON library
 try:
@@ -129,7 +130,21 @@ from logic.aggregator_sdk import get_comprehensive_context
 _SNAPSHOT_STORE = ConversationSnapshotStore()
 
 _SESSION_STATE_LOCK = asyncio.Lock()
-_SESSION_STATE: Dict[tuple[int, int], Dict[str, Any]] = {}
+_SESSION_STATE_MAX = 256
+_SESSION_STATE: "OrderedDict[tuple[int, int], Dict[str, Any]]" = OrderedDict()
+
+_ORCHESTRATOR_CACHE = CacheManager(
+    name="nyx_orchestrators",
+    max_size=128,
+    ttl=1800,
+)
+# Heavy orchestrators must stay process-local. If CacheManager is ever swapped for
+# a remote backend, skip orchestrator caching to avoid serialization or cross-
+# worker leakage.
+_ORCHESTRATOR_CACHE_IN_MEMORY = isinstance(
+    getattr(_ORCHESTRATOR_CACHE, "cache", None), dict
+)
+_ORCHESTRATOR_CACHE_BACKEND_WARNED = False
 
 
 def _session_cache_key(user_id: int, conversation_id: int) -> tuple[int, int]:
@@ -139,8 +154,25 @@ def _session_cache_key(user_id: int, conversation_id: int) -> tuple[int, int]:
 async def _get_cached_session_state(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """Return the cached per-session state for this worker, if any."""
 
+    cache_key = _session_cache_key(user_id, conversation_id)
     async with _SESSION_STATE_LOCK:
-        return _SESSION_STATE.get(_session_cache_key(user_id, conversation_id))
+        in_memory_state = _SESSION_STATE.get(cache_key)
+        if in_memory_state is not None:
+            _SESSION_STATE.move_to_end(cache_key)
+
+    cached_orchestrators = await _ORCHESTRATOR_CACHE.get(
+        f"{cache_key[0]}:{cache_key[1]}"
+    )
+
+    if not in_memory_state and not cached_orchestrators:
+        return None
+
+    merged: Dict[str, Any] = {}
+    if cached_orchestrators:
+        merged.update(cached_orchestrators)
+    if in_memory_state:
+        merged.update(in_memory_state)
+    return merged
 
 
 async def _update_session_state(
@@ -152,13 +184,46 @@ async def _update_session_state(
 
     filtered = {k: v for k, v in components.items() if v is not None}
     if not filtered:
-        return _SESSION_STATE.get(_session_cache_key(user_id, conversation_id), {})
+        async with _SESSION_STATE_LOCK:
+            state = _SESSION_STATE.get(_session_cache_key(user_id, conversation_id), {})
+            if state:
+                _SESSION_STATE.move_to_end(_session_cache_key(user_id, conversation_id))
+            return state
 
     async with _SESSION_STATE_LOCK:
         key = _session_cache_key(user_id, conversation_id)
+        heavy_keys = {"lore_orchestrator", "world_orchestrator"}
+        light_components = {k: v for k, v in filtered.items() if k not in heavy_keys}
+
         state = _SESSION_STATE.setdefault(key, {})
-        state.update(filtered)
-        return state
+        if light_components:
+            state.update(light_components)
+        _SESSION_STATE.move_to_end(key)
+        while len(_SESSION_STATE) > _SESSION_STATE_MAX:
+            _SESSION_STATE.popitem(last=False)
+
+    orchestrator_components = {
+        k: v
+        for k, v in filtered.items()
+        if k in {"lore_orchestrator", "world_orchestrator"}
+    }
+    cache_state: Dict[str, Any] = {}
+    if orchestrator_components:
+        cache_key = f"{user_id}:{conversation_id}"
+        if _ORCHESTRATOR_CACHE_IN_MEMORY:
+            cached = await _ORCHESTRATOR_CACHE.get(cache_key) or {}
+            cached.update(orchestrator_components)
+            await _ORCHESTRATOR_CACHE.set(cache_key, cached)
+            cache_state.update(cached)
+        else:
+            global _ORCHESTRATOR_CACHE_BACKEND_WARNED
+            if not _ORCHESTRATOR_CACHE_BACKEND_WARNED:
+                logger.warning(
+                    "Orchestrator cache backend is not in-memory; skipping heavy cache entries"
+                )
+                _ORCHESTRATOR_CACHE_BACKEND_WARNED = True
+
+    return {**state, **cache_state}
 
 _PLACEHOLDER_LOCATION_TOKENS = {
     "unknown",
@@ -169,6 +234,16 @@ _PLACEHOLDER_LOCATION_TOKENS = {
     "undefined",
     "tbd",
     "-",
+}
+
+_MOVEMENT_KEYWORDS = {
+    "walk", "move", "head", "go", "travel", "run", "arrive", "leave", "exit",
+    "enter", "toward", "towards", "step", "approach",
+}
+
+_SLICE_OF_LIFE_HINTS = {
+    "chat", "talk", "catch up", "small talk", "relax", "hang out", "daily",
+    "casual", "slice of life",
 }
 
 
@@ -3660,11 +3735,19 @@ class ContextBroker:
             data=LoreSectionData(location={}, world={}, canonical_rules=[])
         )
 
+        if (
+            getattr(self.ctx, "_deferred_lore_bootstrap", False)
+            and not self.ctx.get_init_task("lore")
+        ):
+            self.ctx._schedule_deferred_bootstrap(reason="lore-section-request")
+
         if not self.ctx.is_orchestrator_ready("lore"):
             return fallback_section
 
         if not await self.ctx.await_orchestrator("lore"):
             return fallback_section
+
+        await self.ctx._ensure_lore_initialized(reason="lore-section-fetch")
 
         if not self.ctx.lore_orchestrator:
             return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
@@ -4002,6 +4085,12 @@ class ContextBroker:
         """Fetch world state with safe field access and enum handling"""
 
         fallback_section = self._build_section_fallback('world')
+
+        if (
+            getattr(self.ctx, "_deferred_world_bootstrap", False)
+            and not self.ctx.get_init_task("world")
+        ):
+            self.ctx._schedule_deferred_bootstrap(reason="world-section-request")
 
         # Align readiness checks with lore orchestration – short circuit when not ready
         if not self.ctx.is_orchestrator_ready("world"):
@@ -4363,10 +4452,166 @@ class NyxContext:
     background_tasks: Set[asyncio.Task] = field(default_factory=set)
     _governance_pending_minimal: bool = field(default=False, init=False, repr=False)
     _tables_available: Dict[str, bool] = field(default_factory=lambda: {"scenario_states": True})
+    _deferred_lore_bootstrap: bool = field(default=False, init=False, repr=False)
+    _deferred_world_bootstrap: bool = field(default=False, init=False, repr=False)
+    _pending_lore_initialize: bool = field(default=False, init=False, repr=False)
+    _first_turn_completed: bool = field(default=False, init=False, repr=False)
+    _init_started_at: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self):
         if self.scenario_state is None:
             self.scenario_state = {}
+
+    def _intent_labels(self) -> Set[str]:
+        intents = self.current_context.get("intents") or self.current_context.get("intent")
+        labels: Set[str] = set()
+        if isinstance(intents, dict):
+            intents = [intents]
+        if isinstance(intents, (list, tuple)):
+            for item in intents:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("intent", "label", "name", "type"):
+                    value = item.get(key)
+                    if value:
+                        labels.add(str(value).lower())
+        return labels
+
+    def _is_first_turn_hint(self) -> bool:
+        snapshot = _SNAPSHOT_STORE.get(str(self.user_id), str(self.conversation_id))
+        turns_at_location = None
+        if isinstance(snapshot, dict):
+            turns_at_location = snapshot.get("turns_at_location")
+
+        if turns_at_location is None:
+            turns_at_location = self.current_context.get("turns_at_location")
+
+        try:
+            return int(turns_at_location or 0) == 0
+        except Exception:
+            return False
+
+    def _is_movement_or_slice_of_life_intent(self) -> bool:
+        normalized_input = (self.last_user_input or "").lower()
+        tokens = set(re.findall(r"\b\w+\b", normalized_input))
+
+        if tokens.intersection(_MOVEMENT_KEYWORDS):
+            return True
+
+        joined = " ".join(sorted(tokens))
+        if any(hint in normalized_input for hint in _SLICE_OF_LIFE_HINTS):
+            return True
+        if any(hint in joined for hint in _SLICE_OF_LIFE_HINTS):
+            return True
+
+        labels = self._intent_labels()
+        if labels.intersection({"movement", "travel", "relocation", "slice_of_life", "ambient"}):
+            return True
+
+        return False
+
+    def _should_defer_lore_bootstrap(self) -> bool:
+        if self.current_context.get("force_lore_bootstrap"):
+            return False
+
+        budget_elapsed = time.time() - self._init_started_at if self._init_started_at else 0
+        if self._is_first_turn_hint() and budget_elapsed < 2.5:
+            return True
+
+        return self._is_movement_or_slice_of_life_intent()
+
+    def _should_defer_world_bootstrap(self) -> bool:
+        if self.current_context.get("force_world_bootstrap"):
+            return False
+
+        budget_elapsed = time.time() - self._init_started_at if self._init_started_at else 0
+        if self._is_first_turn_hint() and budget_elapsed < 2.5:
+            return True
+
+        return self._is_movement_or_slice_of_life_intent()
+
+    def _launch_init_task(self, key: str, label: str, coro: Any) -> None:
+        async def timed_init() -> None:
+            t0 = time.time()
+            logger.info("[CONTEXT_INIT] Starting sub-task '%s'...", label)
+            try:
+                await coro
+                logger.info(
+                    "[CONTEXT_INIT] ✔ Sub-task '%s' finished in %.3fs",
+                    label,
+                    time.time() - t0,
+                )
+            except Exception as exc:
+                logger.error(
+                    "[CONTEXT_INIT] ✖ Sub-task '%s' failed after %.3fs: %s",
+                    label,
+                    time.time() - t0,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+
+        task = asyncio.create_task(
+            timed_init(),
+            name=f"nyx_init_{key}",
+        )
+        self._init_failures.pop(key, None)
+        self._init_tasks[key] = task
+        task.add_done_callback(
+            lambda t, task_key=key: self._on_init_task_done(task_key, t)
+        )
+
+    async def _bootstrap_after_delay(self, delay_seconds: float, reason: str) -> None:
+        await asyncio.sleep(delay_seconds)
+        self._schedule_deferred_bootstrap(reason=reason)
+
+    def _schedule_deferred_bootstrap(self, *, reason: str) -> None:
+        if self._deferred_lore_bootstrap and not self.get_init_task("lore"):
+            logger.info(
+                "[CONTEXT_INIT] Scheduling deferred lore bootstrap (%s) for user %s conversation %s",
+                reason,
+                self.user_id,
+                self.conversation_id,
+            )
+            self._deferred_lore_bootstrap = False
+            self._launch_init_task(
+                "lore",
+                "Lore (deferred)",
+                self._init_lore_orchestrator(warm_minimal=False, lazy_initialize=True),
+            )
+
+        if (
+            self._deferred_world_bootstrap
+            and WORLD_SIMULATION_AVAILABLE
+            and not self.get_init_task("world")
+        ):
+            logger.info(
+                "[CONTEXT_INIT] Scheduling deferred world bootstrap (%s) for user %s conversation %s",
+                reason,
+                self.user_id,
+                self.conversation_id,
+            )
+            self._deferred_world_bootstrap = False
+            self._launch_init_task(
+                "world",
+                "World (deferred)",
+                self._init_world_systems(warm_minimal=False),
+            )
+
+    async def _ensure_lore_initialized(self, *, reason: str) -> None:
+        if not self.lore_orchestrator or not self._pending_lore_initialize:
+            return
+
+        self._pending_lore_initialize = False
+        init_hook = getattr(self.lore_orchestrator, "initialize", None)
+        if callable(init_hook):
+            try:
+                await init_hook()
+            except Exception:
+                self._pending_lore_initialize = True
+                raise
+
+        await self._ensure_governance_ready(minimal_warm=False)
 
         if self._tables_available is None or not isinstance(self._tables_available, dict):
             self._tables_available = {"scenario_states": True}
@@ -4496,70 +4741,46 @@ class NyxContext:
                         canonical_snapshot,
                     )
 
-            # Helper function to wrap and time each initialization task
-            async def timed_init(name: str, coro: Any) -> None:
-                t0 = time.time()
-                logger.info("[CONTEXT_INIT] Starting sub-task '%s'...", name)
-                try:
-                    await coro
-                    logger.info(
-                        "[CONTEXT_INIT] ✔ Sub-task '%s' finished in %.3fs",
-                        name,
-                        time.time() - t0,
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "[CONTEXT_INIT] ✖ Sub-task '%s' failed after %.3fs: %s",
-                        name,
-                        time.time() - t0,
-                        exc,
-                        exc_info=True,
-                    )
-                    raise
-
-            def _start_task(key: str, label: str, coro: Any) -> None:
-                task = asyncio.create_task(
-                    timed_init(label, coro),
-                    name=f"nyx_init_{key}",
-                )
-                self._init_failures.pop(key, None)
-                self._init_tasks[key] = task
-                task.add_done_callback(
-                    lambda t, task_key=key: self._on_init_task_done(task_key, t)
-                )
+            self._init_started_at = init_start_time
 
             if not warm_minimal:
                 if "memory" not in cached_ready:
-                    _start_task(
+                    self._launch_init_task(
                         "memory",
                         "Memory",
                         self._init_memory_orchestrator(warm_minimal=False),
                     )
                 if "lore" not in cached_ready:
-                    _start_task(
-                        "lore",
-                        "Lore",
-                        self._init_lore_orchestrator(warm_minimal=False),
-                    )
+                    if self._should_defer_lore_bootstrap():
+                        self._deferred_lore_bootstrap = True
+                    else:
+                        self._launch_init_task(
+                            "lore",
+                            "Lore",
+                            self._init_lore_orchestrator(warm_minimal=False, lazy_initialize=False),
+                        )
                 if "npc" not in cached_ready:
-                    _start_task(
+                    self._launch_init_task(
                         "npc",
                         "NPC",
                         self._init_npc_orchestrator(warm_minimal=False),
                     )
                 if "conflict" not in cached_ready:
-                    _start_task(
+                    self._launch_init_task(
                         "conflict",
                         "Conflict",
                         self._init_conflict_synthesizer(warm_minimal=False),
                     )
 
                 if WORLD_SIMULATION_AVAILABLE and "world" not in cached_ready:
-                    _start_task(
-                        "world",
-                        "World",
-                        self._init_world_systems(warm_minimal=False),
-                    )
+                    if self._should_defer_world_bootstrap():
+                        self._deferred_world_bootstrap = True
+                    else:
+                        self._launch_init_task(
+                            "world",
+                            "World",
+                            self._init_world_systems(warm_minimal=False),
+                        )
             else:
                 logger.info(
                     "[CONTEXT_INIT] Minimal warm requested; skipping heavy orchestrator bootstraps"
@@ -4615,7 +4836,7 @@ class NyxContext:
             if "context_broker" in cached_ready:
                 self.context_broker.ctx = self
             else:
-                _start_task(
+                self._launch_init_task(
                     "context_broker",
                     "ContextBroker",
                     self.context_broker.initialize(),
@@ -5303,7 +5524,12 @@ class NyxContext:
         except Exception as e:
             logger.error(f"Failed to initialize Memory Orchestrator: {e}")
 
-    async def _init_lore_orchestrator(self, *, warm_minimal: bool = False):
+    async def _init_lore_orchestrator(
+        self,
+        *,
+        warm_minimal: bool = False,
+        lazy_initialize: bool = False,
+    ):
         """Initialize lore orchestrator"""
         if warm_minimal:
             logger.info("Skipping lore orchestrator bootstrap during minimal warm phase")
@@ -5314,14 +5540,22 @@ class NyxContext:
             lore_config = OrchestratorConfig(
                 enable_governance=True,
                 enable_cache=True,
-                auto_initialize=True
+                auto_initialize=not lazy_initialize,
             )
             self.lore_orchestrator = await get_lore_orchestrator(
                 self.user_id,
                 self.conversation_id,
                 lore_config
             )
-            logger.info("Lore Orchestrator initialized")
+            self._pending_lore_initialize = False
+            if lazy_initialize:
+                self._pending_lore_initialize = True
+            else:
+                await self._ensure_governance_ready(minimal_warm=False)
+            logger.info(
+                "Lore Orchestrator initialized%s",
+                " (lazy)" if lazy_initialize else "",
+            )
             await self._cache_session_state(lore_orchestrator=self.lore_orchestrator)
         except Exception as e:
             logger.error(f"Failed to initialize Lore Orchestrator: {e}")
@@ -5738,7 +5972,22 @@ class NyxContext:
         self.context_broker._last_scene_key = scene_key
         self.context_broker._last_packed = packed
         self.context_broker._last_bundle = bundle
-        
+
+        if not self._first_turn_completed:
+            self._first_turn_completed = True
+            if self._deferred_lore_bootstrap or self._deferred_world_bootstrap:
+                background = asyncio.create_task(
+                    self._bootstrap_after_delay(0.35, "post-first-response"),
+                    name=f"nyx-deferred-bootstrap:{self.user_id}:{self.conversation_id}",
+                )
+                self._track_background_task(
+                    background,
+                    task_name="deferred_bootstrap",
+                    task_details={"reason": "post-first-response"},
+                )
+        elif self._deferred_lore_bootstrap or self._deferred_world_bootstrap:
+            self._schedule_deferred_bootstrap(reason="subsequent-turn")
+
         return packed
     
     async def calculate_conflict_tensions(self) -> Dict[str, float]:
