@@ -82,6 +82,26 @@ def _sanitize_meta(value: Any, *, depth: int = 0, max_depth: int = 5) -> Any:
     return str(value)
 
 
+def _should_skip_real_world_overlay(anchor: Anchor, meta: Optional[Dict[str, Any]]) -> bool:
+    """
+    Avoid background enrichment when we are clearly in a real-world context and
+    fictional overlays are not explicitly allowed.
+
+    This protects against unnecessary Places calls (e.g., Disneyland) when the
+    caller only wants grounded, real-world behavior.
+    """
+
+    if anchor.scope != "real":
+        return False
+
+    meta = meta or {}
+
+    if meta.get("force_fictional_overlay") or meta.get("allow_fictional_overlay"):
+        return False
+
+    return True
+
+
 @app.task(
     bind=True,
     base=NyxTask,
@@ -291,8 +311,15 @@ def enqueue(
     anchor: Anchor,
     result: ResolveResult,
     afc_max_calls: Optional[int] = None,
+    meta: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Enqueue the enrichment task with contextual metadata."""
+
+    if _should_skip_real_world_overlay(anchor, meta):
+        logger.info(
+            "[place_enrichment] Skipping enrichment for real-world query=%r", query.target
+        )
+        return
 
     candidate_places: List[Place] = [
         candidate.place for candidate in (result.candidates or [])
@@ -331,6 +358,13 @@ def enqueue_fictional_fallback(
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Enqueue a background fictional resolver pass."""
+
+    if _should_skip_real_world_overlay(anchor, meta):
+        logger.info(
+            "[place_enrichment] Skipping fictional fallback for real-world query=%r",
+            query.target,
+        )
+        return
 
     payload: Dict[str, Any] = {
         "user_id": str(user_id),
