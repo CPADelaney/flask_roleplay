@@ -8,6 +8,7 @@ import logging
 import math
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Dict, List, Any, Optional, Iterable, TYPE_CHECKING, Callable, Mapping
 from contextlib import asynccontextmanager
 
@@ -140,10 +141,15 @@ def _safe_time_budget(
     return parsed
 
 
-async def _execute_llm(request: LLMRequest):
-    """Execute an LLM request via the Nyx gateway."""
+async def _execute_llm(request: LLMRequest, *, timeout: Optional[float] = None):
+    """Execute an LLM request via the Nyx gateway with optional wall-clock timeout."""
 
-    return await execute(request)
+    try:
+        if timeout is not None and timeout > 0:
+            return await asyncio.wait_for(execute(request), timeout=timeout)
+        return await execute(request)
+    except asyncio.TimeoutError:
+        raise
 
 
 def _safe_json_object(text: str) -> Dict[str, Any]:
@@ -584,6 +590,33 @@ def _intents_are_movement_only(fast_result: Dict[str, Any]) -> bool:
             return False
 
     return True
+
+
+def _looks_like_movement_request(user_input: str) -> bool:
+    """Cheap heuristic to spot movement phrasing when intents are missing."""
+
+    if not isinstance(user_input, str):
+        return False
+
+    normalized = user_input.lower()
+    movement_phrases = [
+        " go to ",
+        " head to ",
+        " travel to ",
+        " walk to ",
+        " drive to ",
+        " run to ",
+        " move to ",
+        " going to ",
+        " heading to ",
+        " travelling to ",
+    ]
+
+    if any(phrase in normalized for phrase in movement_phrases):
+        return True
+
+    quick_tokens = {"go", "head", "travel", "walk", "drive", "move", "run"}
+    return bool(quick_tokens.intersection(normalized.split()))
 
 
 def _context_payload_for_router(nyx_context: NyxContext) -> Dict[str, Any]:
@@ -2063,6 +2096,13 @@ async def process_user_input(
                     "continuing to orchestrator + location resolver."
                 )
 
+        if not movement_fast_path and _looks_like_movement_request(user_input):
+            movement_fast_path = True
+            movement_only_intents = True
+            logger.info(
+                f"[{trace_id}] Movement heuristic triggered fallback fast path"
+            )
+
         # ---- STEP 1: Context initialization -----------------------------------
         async with _log_step("context_init", trace_id):
             nyx_context = NyxContext(user_id, conversation_id)
@@ -2432,8 +2472,27 @@ async def process_user_input(
                 },
             )
             agent_start = time.monotonic()
+            timed_out = False
             try:
-                result = await _execute_llm(request)
+                result = await _execute_llm(request, timeout=llm_timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                elapsed = time.monotonic() - agent_start
+                logger.warning(
+                    f"[{trace_id}] [agent_run] timed out after {elapsed:.2f}s (budget={llm_timeout:.2f}s)"
+                )
+                fallback_text = (
+                    "Time seems to skip forward as the narrator rushes to keep pace. "
+                    "Let's continue from here with concise narration."
+                )
+                fallback_raw = SimpleNamespace(
+                    final_output=fallback_text,
+                    output_text=fallback_text,
+                    text=fallback_text,
+                    data=None,
+                    messages=None,
+                )
+                result = SimpleNamespace(raw=fallback_raw)
             except Exception:
                 elapsed = time.monotonic() - agent_start
                 logger.exception(
@@ -2447,6 +2506,14 @@ async def process_user_input(
             )
 
             resp_stream = extract_runner_response(result.raw)
+            if timed_out:
+                nyx_context.current_context.setdefault("timeouts", []).append(
+                    {
+                        "stage": "agent_run",
+                        "elapsed": elapsed,
+                        "budget": llm_timeout,
+                    }
+                )
 
         post_run_narrative: str = ""
         defer_universal_updates = False
