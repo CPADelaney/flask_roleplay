@@ -238,8 +238,9 @@ class TransactionContext:
         await self.tx.start()
         DBConnectionManager.track_transaction_start()
         return self.conn
-        
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        commit_error = None
         try:
             if exc_type is not None:
                 # Exception occurred, rollback
@@ -247,9 +248,21 @@ class TransactionContext:
                 DBConnectionManager.track_transaction_rollback()
                 logger.debug(f"Transaction rolled back due to: {exc_val}")
             else:
-                # No exception, commit
-                await DBConnectionManager._safe_commit(self.tx)
-                DBConnectionManager.track_transaction_commit()
+                try:
+                    # No exception, commit
+                    await DBConnectionManager._safe_commit(self.tx)
+                    DBConnectionManager.track_transaction_commit()
+                except Exception as commit_exc:
+                    commit_error = commit_exc
+                    # Ensure the transaction is closed before releasing the connection
+                    await DBConnectionManager._safe_rollback(self.tx)
+                    DBConnectionManager.track_transaction_rollback()
+                    logger.warning(
+                        "Transaction commit failed; rolled back before releasing connection: %s",
+                        commit_exc,
+                        exc_info=True,
+                    )
+                    raise
 
                 # Log long-running transactions
                 elapsed = time.time() - self.start_time
@@ -257,7 +270,11 @@ class TransactionContext:
                     logger.warning(f"Long transaction detected: {elapsed:.2f}s")
         finally:
             # Always release the connection
-            await self.db_context.__aexit__(exc_type, exc_val, exc_tb)
+            await self.db_context.__aexit__(
+                exc_type or (commit_error.__class__ if commit_error else None),
+                exc_val or commit_error,
+                exc_tb or (commit_error.__traceback__ if commit_error else None),
+            )
 
 
 # New helper functions using the new connection pattern
