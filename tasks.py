@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from nyx.tasks.celery_app import app as celery_app
-from celery.signals import task_revoked
+from celery.signals import task_revoked, worker_process_init
 from celery import shared_task
 from billiard.exceptions import SoftTimeLimitExceeded
 from agents import trace, custom_span, RunContextWrapper
@@ -419,19 +419,38 @@ def warm_user_context_cache_task(user_id: int, conversation_id: int):
 # === Nyx SDK lazy singleton ====================================================
 
 _SDK: Optional[NyxAgentSDK] = None
+_SDK_LOCK = asyncio.Lock()
 
 
 async def _get_nyx_sdk() -> NyxAgentSDK:
     global _SDK
-    if _SDK is None:
+    if _SDK is not None:
+        return _SDK
+
+    async with _SDK_LOCK:
+        if _SDK is not None:
+            return _SDK
+
         sdk_config = NyxSDKConfig(
-            request_timeout_seconds=60.0,  # Customize as needed
+            request_timeout_seconds=55.0,  # Warmed at worker init; keep headroom for calls
             retry_on_failure=True,
             enable_telemetry=True,
         )
-        _SDK = NyxAgentSDK(sdk_config)
-        await _SDK.initialize_agent()
-    return _SDK
+        instance = NyxAgentSDK(sdk_config)
+        await instance.initialize_agent()
+        _SDK = instance
+        return _SDK
+
+
+@worker_process_init.connect(weak=False)
+def warm_nyx_sdk(**kwargs) -> None:
+    """Warm the Nyx SDK singleton when a Celery worker process starts."""
+
+    try:
+        run_async_in_worker_loop(_get_nyx_sdk())
+        logger.info("Nyx SDK warmed during worker init.")
+    except Exception:
+        logger.warning("Nyx SDK warm-up during worker init failed", exc_info=True)
 
 
 # === Small DB helpers ==========================================================
@@ -513,12 +532,12 @@ def background_chat_task_with_memory(
             )
             try:
                 # === Step-level timeout budget ===
-                SOFT_BUDGET = 170.0  # seconds (soft_limit=180 -> leave ~10s for publishing/cleanup)
+                SOFT_BUDGET = 165.0  # seconds (soft_limit=180 -> leave buffer now that SDK warms earlier)
                 STEP_MAX = {
                     "agg": 20.0,
                     "updates": 20.0,
                     "mem": 25.0,
-                    "sdk": 80.0,
+                    "sdk": 70.0,
                 }
                 t0 = time.time()
 
