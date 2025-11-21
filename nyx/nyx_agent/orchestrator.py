@@ -1427,6 +1427,15 @@ def _extract_current_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
     current_context = getattr(nyx_context, "current_context", {}) or {}
     snapshot_candidates = []
 
+    def _is_placeholder(value: Any) -> bool:
+        if value is None:
+            return True
+
+        if isinstance(value, str):
+            return NyxContext._is_placeholder_location_token(value)
+
+        return False
+
     for key in ("CurrentSnapshot", "current_snapshot", "currentSnapshot"):
         candidate = current_context.get(key)
         if isinstance(candidate, Mapping):
@@ -1462,11 +1471,22 @@ def _extract_current_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
         location_fallback = current_location
 
     snapshot_location = snapshot.get("location_name") or snapshot.get("location")
-    if (
-        location_fallback
-        and (snapshot_location is None or str(snapshot_location).strip().lower() in {"", "unknown", "n/a", "na"})
+    location_placeholder = _is_placeholder(snapshot_location)
+    if location_fallback and (
+        location_placeholder
+        or str(snapshot_location).strip().lower() in {"", "unknown", "n/a", "na"}
     ):
         snapshot["location_name"] = location_fallback
+
+        normalized_fallback = nyx_context._normalize_location_value(location_fallback)
+        normalized_scene = nyx_context._normalize_location_value(snapshot.get("scene_id"))
+
+        if not normalized_scene or (
+            normalized_fallback
+            and location_placeholder
+            and normalized_scene != normalized_fallback
+        ):
+            snapshot["scene_id"] = normalized_fallback or location_fallback
 
     return snapshot
 
