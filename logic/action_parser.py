@@ -40,7 +40,9 @@ INTENT_AGENT = Agent(
         " Keep responses terse."
     ),
     model="gpt-5-nano",
-    model_settings=ModelSettings(max_tokens=ACTION_INTENT_MAX_TOKENS, temperature=0.0),
+    # O-series Responses models (like gpt-5-nano) reject temperature; omit it while
+    # keeping explicit max_tokens for concise JSON output.
+    model_settings=ModelSettings(max_tokens=ACTION_INTENT_MAX_TOKENS),
 )
 
 def _strip_code_fences(s: str) -> str:
