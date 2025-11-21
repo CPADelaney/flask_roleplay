@@ -672,7 +672,11 @@ def background_chat_task_with_memory(
                     raise Exception(error_msg)
 
                 # 5) Prepare the final success payload for publishing
-                message_content = nyx_resp.narrative.strip() if nyx_resp.narrative else "…"
+                message_content = (
+                    nyx_resp.narrative.strip()
+                    if nyx_resp.narrative
+                    else "[internal error: empty Nyx result]"
+                )
 
                 full_response_payload = {
                     "conversation_id": conversation_id,
