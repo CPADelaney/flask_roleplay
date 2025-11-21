@@ -30,6 +30,7 @@ from nyx.nyx_agent.models import (
     BundleMetadata,
 )
 from nyx.nyx_agent.context import ContextBroker
+from nyx.nyx_agent.utils import _extract_last_assistant_text
 
 logger = logging.getLogger(__name__)
 
@@ -2213,6 +2214,16 @@ async def assemble_nyx_response(
     """
     asm = _get_assembler(**kwargs)
 
+    processing_metadata = processing_metadata or {}
+    post_run_narrative = processing_metadata.get("post_run_narrative", "")
+    resp_stream = processing_metadata.get("resp_stream") or agent_output or []
+
+    if post_run_narrative:
+        logger.info(
+            "[assembly_fallback] received post_run_narrative len=%s",
+            len(post_run_narrative),
+        )
+
     if agent_output is not None and context_bundle is not None and scene_scope is not None:
         return await asm.assemble_nyx_response(
             agent_output=agent_output,
@@ -2256,17 +2267,73 @@ async def assemble_nyx_response(
     except Exception:
         pass
 
-    # Last resort: minimal safe object so callers don't explode
+    narrative_source = None
+    narrative = post_run_narrative.strip()
+
+    if not narrative and resp_stream:
+        narrative = _extract_last_assistant_text(resp_stream)
+        narrative_source = "resp_stream" if narrative else None
+    elif narrative:
+        narrative_source = "post_run_narrative"
+
+    if narrative:
+        logger.warning(
+            "[assembly_fallback] returning non-stub narrative source=%s filters=%s",
+            narrative_source,
+            processing_metadata.get("filters"),
+        )
+        return NyxResponse(
+            id=str(uuid4()),
+            conversation_id=conversation_id or "",
+            narrative=narrative,
+            world_state=WorldState(),
+            npc_dialogues=[],
+            memory_highlights=[],
+            emergent_events=[],
+            choices=[
+                Choice(
+                    id="continue",
+                    text="Continue...",
+                    category="continuation",
+                    requirements={},
+                    consequences={},
+                    canon_alignment=1.0,
+                )
+            ],
+            metadata={
+                "fallback": True,
+                "fallback_reason": "assembled_from_existing",
+                "narrative_source": narrative_source,
+                "filters": processing_metadata.get("filters"),
+            },
+        )
+
+    safe_stub = (
+        "The narrator pauses as an internal issue interrupts the scene. The world holds steady; please try again."
+    )
+    logger.error(
+        "[assembly_fallback] using safe stub narrative; filters=%s post_run_present=%s resp_events=%s",
+        processing_metadata.get("filters"),
+        bool(post_run_narrative),
+        len(resp_stream) if resp_stream else 0,
+    )
+    # Last resort: minimal safe object so callers don't explode without echoing user input
     return NyxResponse(
         id=str(uuid4()),
         conversation_id=conversation_id or "",
-        narrative=user_input or "...",
+        narrative=safe_stub,
         world_state=WorldState(),
         npc_dialogues=[],
         memory_highlights=[],
         emergent_events=[],
         choices=[Choice(id="continue", text="Continue...", category="continuation", requirements={}, consequences={}, canon_alignment=1.0)],
-        metadata={"fallback": True},
+        metadata={
+            "fallback": True,
+            "error_stub": True,
+            "fallback_reason": "missing_response",
+            "narrative_source": "safe_stub",
+            "filters": processing_metadata.get("filters"),
+        },
     )
 
 async def resolve_scene_requests(
