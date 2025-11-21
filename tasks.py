@@ -705,6 +705,12 @@ def background_chat_task_with_memory(
                 if full_response_payload and redis_publisher:
                     channel = "chat-responses"
                     try:
+                        logger.info(
+                            "[BG Task %s] Preparing payload for publish (request_id=%s): %r",
+                            conversation_id,
+                            request_id,
+                            full_response_payload,
+                        )
                         safe_payload = serialize_for_celery(full_response_payload)
                         payload_json = json.dumps(safe_payload)
                         redis_publisher.publish(channel, payload_json)
