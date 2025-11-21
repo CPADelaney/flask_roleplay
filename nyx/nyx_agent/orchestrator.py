@@ -2542,6 +2542,8 @@ async def process_user_input(
         # ---- STEP 6: Post-run enforcement (updates/image hooks + punishment) ---
         async with _log_step("post_run_enforcement", trace_id):
             post_run_narrative = _extract_last_assistant_text(resp_stream)
+            preview = (post_run_narrative or "").replace("\n", " ")[:200]
+            logger.info("[%s] post_run_narrative preview=%r", trace_id, preview)
 
             if not _did_call_tool(resp_stream, "generate_universal_updates"):
                 defer_universal_updates = True
