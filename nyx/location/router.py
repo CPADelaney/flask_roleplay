@@ -1919,6 +1919,24 @@ async def resolve_place_or_travel(
     if not hasattr(res, "metadata"):
         res.metadata = metadata if isinstance(metadata, dict) else {}
 
+    def _movement_signature(name: Any, city_value: Any) -> Optional[tuple[str, Optional[str]]]:
+        if not isinstance(name, str):
+            return None
+
+        normalized_name = name.strip().casefold()
+        if not normalized_name:
+            return None
+
+        normalized_city = None
+        if isinstance(city_value, str):
+            city_candidate = city_value.strip()
+            if city_candidate:
+                normalized_city = city_candidate.casefold()
+
+        return (normalized_name, normalized_city)
+
+    tracked_movements: set[tuple[str, Optional[str]]] = set()
+
     # ✨ NEW: Track player movement if we have an exact match
     if res.status == STATUS_EXACT and res.candidates:
         top_candidate = res.candidates[0]
@@ -1981,6 +1999,10 @@ async def resolve_place_or_travel(
                     )
 
         # Track movement asynchronously (don't block on failure)
+        signature = _movement_signature(location_name, candidate_city)
+        if signature:
+            tracked_movements.add(signature)
+
         asyncio.create_task(
             _track_player_movement(
                 user_id,
@@ -1998,15 +2020,26 @@ async def resolve_place_or_travel(
             if isinstance(res.location.city, str) and res.location.city.strip()
             else candidate_city
         )
-        asyncio.create_task(
-            _track_player_movement(
-                user_id,
-                conversation_id,
+        signature = _movement_signature(res.location.location_name, location_city)
+        if signature in tracked_movements:
+            logger.debug(
+                "[ROUTER] Skipping duplicate movement tracking for %s (city=%s)",
                 res.location.location_name,
-                res.location.location_type,
-                city=location_city,
+                location_city,
             )
-        )
+        else:
+            if signature:
+                tracked_movements.add(signature)
+
+            asyncio.create_task(
+                _track_player_movement(
+                    user_id,
+                    conversation_id,
+                    res.location.location_name,
+                    res.location.location_type,
+                    city=location_city,
+                )
+            )
 
     if (
         not used_cache
