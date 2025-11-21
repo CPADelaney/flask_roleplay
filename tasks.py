@@ -155,6 +155,25 @@ def serialize_for_celery(obj: Any) -> Any:
     return str(obj)
 
 
+_SENSITIVE_TOKEN_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"bearer\s+[A-Za-z0-9._-]{10,}", re.IGNORECASE),
+    re.compile(r"[A-Fa-f0-9]{32,}"),
+]
+
+
+def _redact_sensitive_text(text: str) -> str:
+    """Best-effort redaction for secrets that may appear in logs."""
+
+    if not text:
+        return text
+
+    redacted = text
+    for pattern in _SENSITIVE_TOKEN_PATTERNS:
+        redacted = pattern.sub("<redacted>", redacted)
+    return redacted
+
+
 def get_preset_id(d: Dict[str, Any]) -> Optional[str]:
     """Extract preset story ID from various possible keys."""
     return d.get("preset_story_id") or d.get("story_id") or d.get("presetStoryId")
@@ -628,6 +647,15 @@ def background_chat_task_with_memory(
                         metadata=context,
                     ),
                     timeout=min(STEP_MAX["sdk"], time_left()),
+                )
+
+                redacted_resp_repr = _redact_sensitive_text(repr(nyx_resp))
+                logger.info(
+                    "[BG Task %s] Nyx SDK response resolved (conversation_id=%s request_id=%s): %s",
+                    conversation_id,
+                    conversation_id,
+                    request_id,
+                    redacted_resp_repr,
                 )
 
                 logger.info("[BG Task %s] Nyx SDK processing complete.", conversation_id)
