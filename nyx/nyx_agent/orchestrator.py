@@ -2523,7 +2523,7 @@ async def process_user_input(
                     }
                 )
                 timeout_response = {
-                    "success": False,
+                    "success": True,
                     "response": narrative,
                     "metadata": {
                         "degraded": True,
