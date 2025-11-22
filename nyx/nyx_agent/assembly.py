@@ -30,7 +30,7 @@ from nyx.nyx_agent.models import (
     BundleMetadata,
 )
 from nyx.nyx_agent.context import ContextBroker
-from nyx.nyx_agent.utils import _extract_last_assistant_text
+from nyx.nyx_agent.utils import _extract_last_assistant_text, _iter_response_events
 
 logger = logging.getLogger(__name__)
 
@@ -2217,6 +2217,7 @@ async def assemble_nyx_response(
     processing_metadata = processing_metadata or {}
     post_run_narrative = processing_metadata.get("post_run_narrative", "")
     resp_stream = processing_metadata.get("resp_stream") or agent_output or []
+    raw_resp_stream = processing_metadata.get("raw_response_stream") or resp_stream
 
     if post_run_narrative:
         logger.info(
@@ -2267,14 +2268,49 @@ async def assemble_nyx_response(
     except Exception:
         pass
 
-    narrative_source = None
-    narrative = post_run_narrative.strip()
+    narrator_tool_names = {
+        "narrate_slice_of_life_scene",
+        "tool_narrate_slice_of_life_scene",
+        "orchestrate_slice_scene",
+    }
 
-    if not narrative and resp_stream:
-        narrative = _extract_last_assistant_text(resp_stream)
-        narrative_source = "resp_stream" if narrative else None
-    elif narrative:
-        narrative_source = "post_run_narrative"
+    tool_narrative = ""
+    for ev in _iter_response_events(raw_resp_stream):
+        if ev.get("type") != "function_call_output" or ev.get("name") not in narrator_tool_names:
+            continue
+
+        narrative_candidate: Optional[str] = None
+        output = ev.get("output")
+        if isinstance(output, str):
+            try:
+                output = json.loads(output)
+            except Exception:
+                narrative_candidate = output.strip() if output.strip() else None
+
+        if isinstance(output, dict):
+            for key in ("narrative", "scene", "response", "text", "output"):
+                val = output.get(key)
+                if isinstance(val, str) and val.strip():
+                    narrative_candidate = val.strip()
+                    break
+
+        if narrative_candidate:
+            tool_narrative = narrative_candidate
+            break
+
+    assistant_narrative = (post_run_narrative or "").strip()
+    if not assistant_narrative and raw_resp_stream:
+        assistant_narrative = _extract_last_assistant_text(raw_resp_stream)
+
+    narrative_source = None
+    narrative = ""
+
+    if tool_narrative:
+        narrative = tool_narrative
+        narrative_source = "tool_output"
+    elif assistant_narrative:
+        narrative = assistant_narrative
+        narrative_source = "assistant_text"
 
     if narrative:
         logger.warning(
@@ -2312,7 +2348,7 @@ async def assemble_nyx_response(
         "The narrator pauses as an internal issue interrupts the scene. The world holds steady; please try again."
     )
     logger.error(
-        "[assembly_fallback] using safe stub narrative; filters=%s post_run_present=%s resp_events=%s",
+        "[assembly_fallback] no tool narrative or assistant text; using stub. filters=%s post_run_present=%s resp_events=%s",
         processing_metadata.get("filters"),
         bool(post_run_narrative),
         len(resp_stream) if resp_stream else 0,
@@ -2330,6 +2366,7 @@ async def assemble_nyx_response(
         metadata={
             "fallback": True,
             "error_stub": True,
+            "degraded": True,
             "fallback_reason": "missing_response",
             "narrative_source": "safe_stub",
             "filters": processing_metadata.get("filters"),
