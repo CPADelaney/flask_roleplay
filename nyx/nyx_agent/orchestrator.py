@@ -57,6 +57,7 @@ from .tools import (
 from .utils import (
     _did_call_tool,
     _extract_last_assistant_text,
+    _iter_response_events,
     _js,
     sanitize_agent_tools_in_place,
     log_strict_hits,
@@ -96,9 +97,9 @@ _MAIN_AGENT_RUN_LIMITS: Dict[str, Any] = {
     "max_tool_calls": 4,
     "max_auto_messages": 3,
     "max_output_tokens": 1800,
-    "default_total_timeout_budget": 6.0,
+    "default_total_timeout_budget": 12.0,
     "min_total_timeout_budget": 4.0,
-    "max_total_timeout_budget": 10.0,
+    "max_total_timeout_budget": 20.0,
     "per_turn_timeout": 1.25,
     "per_step_timeout": 0.75,
 }
@@ -2528,6 +2529,7 @@ async def process_user_input(
                         "degraded": True,
                         "reason": "timeout",
                         "reality_maintained": True,
+                        "universal_updates": False,
                         "telemetry": {
                             "timeout_stage": "agent_run",
                             "elapsed": elapsed,
@@ -2552,7 +2554,27 @@ async def process_user_input(
                 f"[{trace_id}] [agent_run] success elapsed={elapsed:.2f}s timeout={llm_timeout:.2f}s"
             )
 
-            resp_stream = extract_runner_response(result.raw)
+
+            raw_run = getattr(result, "raw", result)
+            resp_stream = extract_runner_response(raw_run)
+
+
+            event_source = resp_stream
+            if isinstance(event_source, (str, bytes)):
+                event_source = raw_run
+
+            try:
+                for ev in _iter_response_events(event_source or []):
+                    if ev.get("type") == "function_call":
+                        logger.info(
+                            "[DEBUG] tool call: name=%s args=%r", ev.get("name"), ev.get("arguments")
+                        )
+                    if ev.get("type") == "function_call_output":
+                        logger.info(
+                            "[DEBUG] tool output: name=%s raw=%r", ev.get("name"), ev.get("output")
+                        )
+            except Exception:
+                logger.debug("[%s] Failed to log response events", trace_id, exc_info=True)
 
         post_run_narrative: str = ""
         defer_universal_updates = False
@@ -2614,16 +2636,25 @@ async def process_user_input(
                 processing_metadata={
                     "feasibility": (feas or fast),
                     "punishment": nyx_context.current_context.get("punishment"),
+                    "post_run_narrative": post_run_narrative,
+                    "resp_stream": resp_stream,
+                    "raw_response_stream": raw_run,
                 },
                 user_input=user_input,
                 conversation_id=str(conversation_id),
                 nyx_context=nyx_context,
             )
 
+            assembled_meta = assembled.metadata or {}
             final_narrative = assembled.narrative or post_run_narrative
+            degraded = bool(
+                assembled_meta.get("error_stub")
+                or assembled_meta.get("narrative_source") == "safe_stub"
+                or assembled_meta.get("fallback_reason") == "missing_response"
+            )
 
             out = {
-                "success": True,
+                "success": not degraded,
                 "response": assembled.narrative,
                 "metadata": {
                     "world": getattr(assembled, "world_state", {}),
@@ -2641,6 +2672,9 @@ async def process_user_input(
                 "trace_id": trace_id,
                 "processing_time": time.time() - start_time,
             }
+
+            if degraded:
+                out["metadata"]["degraded"] = True
 
             async def perform_background_writes() -> None:
                 try:
