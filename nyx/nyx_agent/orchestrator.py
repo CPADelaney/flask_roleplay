@@ -1998,11 +1998,21 @@ async def process_user_input(
         """Reserve a healthy slice of time for the primary narrative agent."""
 
         remaining_budget = time_left()
-        if remaining_budget >= 6.0:
-            return 6.0
-        if remaining_budget >= 4.0:
-            return remaining_budget
-        return max(remaining_budget, 0.5)
+        min_budget = float(_MAIN_AGENT_RUN_LIMITS.get("min_total_timeout_budget") or 0.25)
+        max_budget = (
+            float(_MAIN_AGENT_RUN_LIMITS["max_total_timeout_budget"])
+            if _MAIN_AGENT_RUN_LIMITS.get("max_total_timeout_budget")
+            else None
+        )
+        default_budget = _safe_time_budget(
+            _MAIN_AGENT_RUN_LIMITS.get("default_total_timeout_budget"),
+            minimum=min_budget,
+            maximum=max_budget,
+        )
+
+        preferred_budget = default_budget if default_budget is not None else 6.0
+        budget = min(remaining_budget, preferred_budget)
+        return max(budget, 0.5)
 
     nyx_context: Optional[NyxContext] = None
     packed_context: Optional[PackedContext] = None
@@ -2493,27 +2503,42 @@ async def process_user_input(
                 },
             )
             agent_start = time.monotonic()
-            timed_out = False
+            timeout_response: Optional[Dict[str, Any]] = None
             try:
                 result = await _execute_llm(request, timeout=llm_timeout)
             except asyncio.TimeoutError:
-                timed_out = True
                 elapsed = time.monotonic() - agent_start
                 logger.warning(
                     f"[{trace_id}] [agent_run] timed out after {elapsed:.2f}s (budget={llm_timeout:.2f}s)"
                 )
-                fallback_text = (
-                    "Time seems to skip forward as the narrator rushes to keep pace. "
-                    "Let's continue from here with concise narration."
+                narrative = (
+                    "The narrator pauses as the world refuses to move. "
+                    "Something behind the curtain stalled; try again in a moment."
                 )
-                fallback_raw = SimpleNamespace(
-                    final_output=fallback_text,
-                    output_text=fallback_text,
-                    text=fallback_text,
-                    data=None,
-                    messages=None,
+                nyx_context.current_context.setdefault("timeouts", []).append(
+                    {
+                        "stage": "agent_run",
+                        "elapsed": elapsed,
+                        "budget": llm_timeout,
+                    }
                 )
-                result = SimpleNamespace(raw=fallback_raw)
+                timeout_response = {
+                    "success": False,
+                    "response": narrative,
+                    "metadata": {
+                        "degraded": True,
+                        "reason": "timeout",
+                        "reality_maintained": True,
+                        "universal_updates": False,
+                        "telemetry": {
+                            "timeout_stage": "agent_run",
+                            "elapsed": elapsed,
+                            "budget": llm_timeout,
+                        },
+                    },
+                    "trace_id": trace_id,
+                    "processing_time": time.time() - start_time,
+                }
             except Exception:
                 elapsed = time.monotonic() - agent_start
                 logger.exception(
@@ -2522,20 +2547,17 @@ async def process_user_input(
                 raise
 
             elapsed = time.monotonic() - agent_start
+            if timeout_response is not None:
+                return timeout_response
+
             logger.info(
                 f"[{trace_id}] [agent_run] success elapsed={elapsed:.2f}s timeout={llm_timeout:.2f}s"
             )
 
+
             raw_run = getattr(result, "raw", result)
             resp_stream = extract_runner_response(raw_run)
-            if timed_out:
-                nyx_context.current_context.setdefault("timeouts", []).append(
-                    {
-                        "stage": "agent_run",
-                        "elapsed": elapsed,
-                        "budget": llm_timeout,
-                    }
-                )
+
 
             event_source = resp_stream
             if isinstance(event_source, (str, bytes)):
