@@ -1462,32 +1462,41 @@ def _extract_current_snapshot(nyx_context: NyxContext) -> Dict[str, Any]:
 
     current_location = current_context.get("current_location") or nyx_context.current_location
     location_fallback = None
+    location_id_fallback = None
     if isinstance(current_location, Mapping):
         location_fallback = (
             current_location.get("location_name")
             or current_location.get("name")
             or current_location.get("location")
         )
+        location_id_fallback = (
+            current_location.get("location_id")
+            or current_location.get("id")
+            or current_location.get("pk")
+        )
     elif isinstance(current_location, str):
         location_fallback = current_location
 
     snapshot_location = snapshot.get("location_name") or snapshot.get("location")
     location_placeholder = _is_placeholder(snapshot_location)
+    normalized_scene = nyx_context._normalize_location_value(snapshot.get("scene_id"))
+    normalized_location_id = nyx_context._normalize_location_value(location_id_fallback)
+    normalized_fallback = nyx_context._normalize_location_value(location_fallback)
+
     if location_fallback and (
         location_placeholder
         or str(snapshot_location).strip().lower() in {"", "unknown", "n/a", "na"}
     ):
         snapshot["location_name"] = location_fallback
 
-        normalized_fallback = nyx_context._normalize_location_value(location_fallback)
-        normalized_scene = nyx_context._normalize_location_value(snapshot.get("scene_id"))
-
-        if not normalized_scene or (
-            normalized_fallback
-            and location_placeholder
-            and normalized_scene != normalized_fallback
-        ):
-            snapshot["scene_id"] = normalized_fallback or location_fallback
+    if not normalized_scene or location_placeholder:
+        candidate_scene = (
+            normalized_location_id
+            or normalized_fallback
+            or location_fallback
+        )
+        if candidate_scene:
+            snapshot["scene_id"] = candidate_scene
 
     return snapshot
 
@@ -2242,7 +2251,16 @@ async def process_user_input(
                     or fast_path_response.get("response")
                     or ""
                 )
+                movement_meta = metadata.get("movement_meta") or {}
+                movement_only_intent = metadata.get("movement_only_intent", False)
+                destination_same = movement_meta.get("destination_same_as_origin")
                 needs_clarification = bool(metadata.get("needs_travel_mode_choice"))
+
+                if movement_only_intent or destination_same:
+                    logger.info(
+                        f"[{trace_id}] Movement-only / within-location turn; returning fast path response."
+                    )
+                    return fast_path_response
 
                 if needs_clarification:
                     logger.info(

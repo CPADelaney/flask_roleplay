@@ -235,6 +235,13 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
     if not isinstance(meta, dict):
         return
 
+    def _meaningful(name: Any) -> bool:
+        return (
+            isinstance(name, str)
+            and name.strip()
+            and name.strip().lower() not in {"unknown", "n/a", "na"}
+        )
+
     # 1) Try canonical first
     li = meta.get("locationInfo") if isinstance(meta.get("locationInfo"), dict) else None
     display = None
@@ -246,6 +253,8 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
         if isinstance(display, str) and display.strip():
             display = display.strip()
         else:
+            display = None
+        if not _meaningful(display):
             display = None
         loc_id = li.get("id")
         try:
@@ -264,10 +273,22 @@ def _normalize_location_meta_inplace(meta: Dict[str, Any]) -> None:
             rp = {}
         rp_display, rp_id = _extract_location_from_mapping(rp)
         fb_display, fb_id = _extract_location_from_mapping(meta)  # last-resort loose read
+        scope_display, scope_id = _extract_location_from_mapping(meta.get("scene_scope", {}))
 
-        display = display or rp_display or fb_display or "Unknown"
+        display = next(
+            (
+                candidate
+                for candidate in (display, scope_display, rp_display, fb_display)
+                if _meaningful(candidate)
+            ),
+            display or rp_display or fb_display or scope_display or "Unknown",
+        )
+
         if loc_id is None:
-            loc_id = rp_id if rp_id is not None else fb_id
+            for candidate in (scope_id, rp_id, fb_id):
+                if candidate is not None:
+                    loc_id = candidate
+                    break
         slug = slug or _slugify_location(display)
 
     # 3) Stamp locationInfo if missing/incomplete
